@@ -1,0 +1,3 @@
+// Gallery: Console. Runs from M1.
+// expect: Hello, World!
+print("Hello, World!")

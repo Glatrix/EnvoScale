@@ -1,0 +1,3 @@
+// Gallery: AI. Runs from M12 (envo.ai). Output depends on the model, so there is no expect line.
+use envo.ai;
+print(ai.Load("tiny.gguf").Ask("Say hello"))

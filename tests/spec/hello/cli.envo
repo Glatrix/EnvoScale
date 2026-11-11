@@ -1,0 +1,3 @@
+// Gallery: CLI tool. Runs from M8 (envo.cli).
+// expect: Hello, World!
+[Command] void Greet(string name = "World") => print($"Hello, {name}!")

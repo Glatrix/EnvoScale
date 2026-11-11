@@ -1,0 +1,37 @@
+# CI adapter for GitHub Actions. See adapters/ci/github/README.md.
+# Contract: no build logic here. Every step calls a repository entry point
+# (bootstrap.ps1 / bootstrap.sh today; `envo` from milestone M5).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./bootstrap.sh check
+
+  stage0-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
+      - run: sudo apt-get install -y nasm
+      - run: ./bootstrap.sh test
+
+  stage0-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
+      - run: choco install nasm --no-progress -y
+      - run: .\bootstrap.ps1 check
+        shell: powershell
+      - run: .\bootstrap.ps1 test
+        shell: powershell

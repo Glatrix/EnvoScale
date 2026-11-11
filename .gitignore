@@ -1,0 +1,14 @@
+# Build output from bootstrap.ps1 / bootstrap.sh (and later `envo build`)
+/build/
+
+# Phase A bootstrap adapter: a locally downloaded assembler, never committed
+/adapters/bootstrap/nasm/.cache/
+/adapters/bootstrap/fasm/.cache/
+
+# Editor and OS noise
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

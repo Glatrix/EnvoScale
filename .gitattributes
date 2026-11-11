@@ -1,0 +1,14 @@
+# Every text file uses LF in the repository and in working trees, on every OS.
+# Golden test outputs and the bootstrap seed depend on exact bytes.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF so Windows PowerShell 5.1 reads them reliably.
+*.ps1 text eol=crlf
+
+# Test inputs whose exact bytes matter: invalid UTF-8, raw control bytes, a BOM,
+# and CRLF line endings (flags.envo). Git must never rewrite them.
+tests/spec/01-lexical/*.bin.envo binary
+tests/golden/lexer/*.envo -text
+
+*.exe binary
+*.bin binary

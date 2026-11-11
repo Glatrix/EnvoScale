@@ -1,0 +1,3 @@
+// Gallery: Website. Runs from M9 (envo.web, Lumen templates).
+use envo.web;
+site("Hello") { page("/") => Landing(title: "Hello, World!") }

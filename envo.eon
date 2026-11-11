@@ -1,0 +1,29 @@
+#eon 1
+// EnvoScale root workspace manifest. Format: docs/spec/eon.md.
+// Nothing reads this file until the `envo` CLI exists (milestone M5); until then
+// the bootstrap scripts are the build entry points. It is kept valid EON so the
+// first EON parser has a real file to load.
+
+workspace {
+    name    = "envoscale"
+    version = "0.0.1"
+    edition = "2027"
+
+    // Packages built as part of the workspace. Each member has its own envo.eon.
+    members = [
+        "compiler",
+        "runtime",
+        "lib",
+        "tools",
+        "adapters",
+        "examples/*",
+    ]
+}
+
+// The standard platform needs no packages at all (brief §11).
+dependencies {
+}
+
+targets {
+    default = ["native", "wasm"]
+}

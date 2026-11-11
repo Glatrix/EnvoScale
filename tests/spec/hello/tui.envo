@@ -1,0 +1,3 @@
+// Gallery: Terminal UI. Runs from M8 (envo.term).
+use envo.term;
+tui { Text("Hello, World!").Bold() }

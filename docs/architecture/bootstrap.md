@@ -1,0 +1,141 @@
+# Architecture: Stage 0 (`envoc0`)
+
+> **Status:** M1 in progress. Platform shims, runtime helpers and the lexer are written;
+> parser, checker and code generator are next.
+
+This note explains how Stage 0 is put together and why. The user-facing overview of the
+whole ladder is [`bootstrap/README.md`](../../bootstrap/README.md).
+
+## Goals, in order
+
+1. **Correct.** Every behaviour is pinned by a test.
+2. **Auditable.** Under ~15k lines of heavily commented assembly, readable top to bottom.
+3. **Small surface.** Only the `.eas` subset in [`eas.md`](../spec/eas.md), so the hex
+   seed can assemble it.
+4. **Fast enough.** No optimizer, simple algorithms. Speed is Stage 2's job.
+
+## Build units
+
+Stage 0 is assembled as **one flat binary per target**, from a top-level file that
+`%include`s everything else:
+
+```
+bootstrap/stage0/
+├── envoc0-windows.eas     top-level unit → build/stage0/envoc0.exe
+├── envoc0-linux.eas       top-level unit → build/stage0/envoc0
+├── platform/
+│   ├── windows.eas        PE header, kernel32 imports, shim, argv parsing, entry point
+│   └── linux.eas          ELF header, syscall shim, entry point
+└── src/                   identical for every target
+    ├── main.eas           command dispatch (lex, version, help)
+    ├── mem.eas            arena allocator, memory helpers
+    ├── io.eas             buffered writers, decimal output, whole-file reads, exit
+    ├── diag.eas           error reporting with line/column
+    ├── utf8.eas           UTF-8 validation
+    ├── tokens.eas         token kinds and the kind table
+    └── lexer.eas          the lexer
+```
+
+The platform file comes first (it holds the executable header), then `src/*`, then the
+top-level file defines `image_end` and, for PE, pads the file.
+
+## Executable layout
+
+Both formats use the simplest layout the loaders accept, so the headers fit on one
+screen and the seed only ever writes bytes:
+
+| | Windows (PE32+) | Linux (ELF64) |
+|---|---|---|
+| Base address | `0x400000` | `0x400000` |
+| Sections / segments | one section, `.text`, read+write+execute | one `PT_LOAD`, RWX, plus `PT_GNU_STACK` (RW) |
+| Alignment | file alignment = section alignment = `0x1000` | page alignment `0x1000` |
+| Relocations | none (`IMAGE_FILE_RELOCS_STRIPPED`, no ASLR) | none (`ET_EXEC`) |
+| Imports | `KERNEL32.dll` only, by name | none (raw syscalls) |
+| Timestamps | `TimeDateStamp = 0` | n/a |
+
+Because file alignment equals section alignment on PE, and the ELF segment maps the file
+from offset 0, **every label's file offset equals its RVA**: `label - $$` is used for
+both. One RWX region also means code and data can sit next to each other.
+
+*Trade-off:* RWX images and a fixed base are not what a production linker would emit.
+They are acceptable for a bootstrap tool that only ever reads source files and writes
+binaries, and they remove relocation handling from the seed entirely. Stage 2's linker
+(M3) emits proper W^X, ASLR-enabled images.
+
+## Calling convention inside Stage 0
+
+All Stage 0 routines use the **System V AMD64 register order on every OS**:
+
+- arguments: `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`; return in `rax` (and `rdx`)
+- callee-saved: `rbx`, `rbp`, `r12`–`r15`; everything else may be clobbered
+- `rsp` is 16-byte aligned at every `call`
+
+Routines that never return (`diag_error`, `fatal`, `exit_process`) realign the stack
+themselves, so they can be jumped to from anywhere.
+
+On Linux this is the kernel's own convention, so the shim is a handful of `syscall`s.
+On Windows, the shim converts to the Win64 convention at the kernel32 boundary: it
+realigns the stack, reserves the 32-byte shadow space, and moves arguments into `rcx`,
+`rdx`, `r8`, `r9` and stack slots. Win64 preserves `rsi`/`rdi` in callees, which is a
+superset of what our convention requires.
+
+## The platform shim
+
+Exactly eight routines, the whole OS interface of Stage 0:
+
+| Routine | In | Out |
+|---|---|---|
+| `sys_open` | `rdi` = NUL-terminated path, `rsi` = mode (0 read, 1 write/create/truncate, 2 same but executable) | `rax` = fd, or negative on error |
+| `sys_read` | `rdi` = fd, `rsi` = buffer, `rdx` = length | `rax` = bytes read (0 at end), negative on error |
+| `sys_write` | `rdi` = fd, `rsi` = buffer, `rdx` = length | `rax` = bytes written (may be partial), negative on error |
+| `sys_close` | `rdi` = fd | `rax` = 0 or negative |
+| `sys_alloc` | `rdi` = size | `rax` = zeroed, page-aligned memory, or 0 |
+| `sys_free` | `rdi` = pointer, `rsi` = size | — |
+| `sys_exit` | `rdi` = exit code | does not return |
+| `sys_args` | — | `rax` = argc, `rdx` = argv (array of NUL-terminated strings) |
+
+File descriptors 0, 1 and 2 are stdin, stdout and stderr on both OSes. On Windows they
+map to the handles from `GetStdHandle`; other fds are the kernel `HANDLE` values, which
+are never 0, 1 or 2.
+
+Windows builds `argv` from `GetCommandLineA` using the Microsoft C runtime's quoting
+rules (backslashes before quotes, `""` inside quotes). Known limitation: paths must be
+representable in the active code page (`STATUS.md`).
+
+## Memory
+
+One bump-pointer **arena** (`arena_alloc`) backed by 64 MiB chunks from `sys_alloc`.
+Nothing is freed: Stage 0 is a short-lived batch process, so freeing would only add code.
+Allocations larger than a chunk get a dedicated mapping. Memory from `sys_alloc` is
+zeroed by the OS, so arena memory is zeroed too.
+
+## Output and errors
+
+`io.eas` has two buffered writers (stdout, stderr, 64 KiB each). All output goes through
+them and every exit path flushes them (`exit_process`). Diagnostics follow the format in
+[`errors.md`](../spec/errors.md); Stage 0 stops at the first error.
+
+Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
+
+## The lexer
+
+- The whole file is read into memory (limit 16 MiB) and validated as UTF-8 once, up
+  front, so the lexer can treat any byte ≥ 0x80 as part of a valid sequence.
+- Tokens go into one array allocated for the worst case (`len + 1` tokens), so there is
+  no growth logic. Each token is 16 bytes: kind (u16), flags (u16), start offset (u32),
+  length (u32), line (u32). Columns are computed on demand, only for output.
+- Keywords and punctuation share one **kind table**: 16-byte entries of
+  `length, spelling`. Keyword lookup scans the keyword range; punctuation matching scans
+  the punctuation range, which is ordered longest spelling first, so the first match is
+  the maximal munch. Linear scans are slow in theory and irrelevant at Stage 0's scale.
+- Literal *values* are not computed by the lexer: it validates them and records their
+  spans. The parser converts the ones it needs.
+
+## Testing
+
+- `tests/golden/lexer/*.envo` → `*.tokens`: exact token dumps.
+- `tests/spec/01-lexical/*.envo`: one lexical error each, with
+  `// expect-error: EXXXX @ line:col`.
+
+The runners are in `bootstrap.ps1` and `bootstrap.sh` (OS tools only). Both binaries are
+assembled on every host; each host runs its native one.
