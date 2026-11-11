@@ -15,7 +15,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 |---|---|---|
 | M0 | Charter & skeleton | **Done** (see DoD record below) |
 | M1 | Stage 0 | **Done** (see DoD record below) |
-| M2 | Stage 1 | **In progress**: Envo-S1 and EIR v1 specified (RFCs 0002–0005); `envoc1` skeleton and support library built by `envoc0`; next the lexer |
+| M2 | Stage 1 | **In progress**: Envo-S1 and EIR v1 specified (RFCs 0002–0005); `envoc1` lexes, parses, checks Envo-Core, lowers to EIR and builds working Windows and Linux executables (M2.1–M2.7); next generics and interfaces (M2.8) |
 | M3–M13 | | Not started |
 
 ### M0 Definition of Done — record

@@ -8,10 +8,11 @@ programming, scripts, desktop apps, websites, terminals, graphics, AI, cryptogra
 networking. It has no third-party dependencies, and its compiler is bootstrapped from
 assembly so the whole chain can be audited.
 
-> **Status: very early.** The project is at milestone **M1** (Stage 0, the assembly
-> compiler). What exists today is the design, the specs, and the first part of
-> `envoc0`: a lexer for Envo-Core with a token-dump command. Nothing in the gallery
-> below runs yet. [`STATUS.md`](STATUS.md) is the honest, current picture.
+> **Status: early.** Milestones **M0** and **M1** are done: `envoc0`, the compiler written
+> in assembly, builds Envo-Core programs for Windows and Linux. **M2** is in progress:
+> `envoc1`, written in Envo-Core, already compiles the same programs end to end. Only the
+> console line of the gallery below runs today. [`STATUS.md`](STATUS.md) is the honest,
+> current picture.
 
 ## Why
 

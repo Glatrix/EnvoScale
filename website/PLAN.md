@@ -81,8 +81,8 @@ contact, not checkout.
 ## Organization profile README (now)
 
 Unlike the website, the public profile at [github.com/envoscale](https://github.com/envoscale)
-(`envoscale/.github`, `profile/README.md`) is plain Markdown and can be built now. It
-carries the home page's message with hand-written, self-contained animated SVGs (CSS
+(`envoscale/.github`, `profile/README.md`) is plain Markdown and is live. It
+carries the home page's message with self-contained animated SVGs (CSS
 animation only, no scripts or external services, reduced-motion aware):
 
 - a terminal typing `envoc0 build hello.envo` and running the result;
@@ -91,4 +91,5 @@ animation only, no scripts or external services, reduced-motion aware):
 - the Hello World Gallery cycling through its programs;
 - a progress strip of the milestones.
 
-It is refreshed at each milestone.
+It is refreshed at each milestone: the SVGs are plain text in `profile/assets/`, so updating
+a number or a milestone state is an edit to the SVG.
