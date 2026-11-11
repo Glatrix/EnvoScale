@@ -104,6 +104,13 @@ function Invoke-Test {
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc0: error: unknown command 'frobnicate'")) { Pass 'unknown command' } else { Bad 'unknown command' "exit $($r.Code), stderr: $($r.Err)" }
     $r = Invoke-Tool $exe @('lex', 'no such file.envo') $Root
     if ($r.Code -eq 1 -and $r.Err.StartsWith("envoc0: error: cannot open 'no such file.envo'")) { Pass 'missing file' } else { Bad 'missing file' "exit $($r.Code), stderr: $($r.Err)" }
+    # Paths are UTF-8 on every OS: a name with a space, a Latin, a CJK and a non-BMP character.
+    $tmp = Join-Path $Build 'tmp'
+    New-Item -ItemType Directory -Force $tmp | Out-Null
+    $uname = "u$([char]0x00FC)nicode $([char]0x65E5)$([char]::ConvertFromUtf32(0x1F600)).envo"
+    [IO.File]::WriteAllText((Join-Path $tmp $uname), "print(`"hi`")`n", $Utf8)
+    $r = Invoke-Tool $exe @('lex', $uname) $tmp
+    if ($r.Code -eq 0 -and $r.Out.StartsWith('1:1 n ident print')) { Pass 'unicode path' } else { Bad 'unicode path' "exit $($r.Code), stderr: $($r.Err)" }
 
     # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by `envoc0 <command>`.
     # Keep this list in step with bootstrap.sh.

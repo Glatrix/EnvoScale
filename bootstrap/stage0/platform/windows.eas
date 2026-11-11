@@ -27,6 +27,9 @@ STD_INPUT_HANDLE  equ -10
 STD_OUTPUT_HANDLE equ -11
 STD_ERROR_HANDLE  equ -12
 ERROR_BROKEN_PIPE equ 109
+CP_UTF8           equ 65001
+MB_ERR_INVALID_CHARS equ 8
+WPATH_CHARS       equ 32768             ; longest path, in UTF-16 units (the NTFS limit)
 
         org     IMAGE_BASE
 
@@ -111,9 +114,19 @@ _start:
         mov     ecx, STD_ERROR_HANDLE
         call    [__imp_GetStdHandle]
         mov     [win_std + 16], rax
+        ; Scratch buffer for UTF-16 paths in sys_open. Allocated once, so sys_open
+        ; needs no large stack frame (which would need stack probing on Windows).
+        mov     edi, WPATH_CHARS * 2
+        call    sys_alloc
+        test    rax, rax
+        jz      .oom
+        mov     [win_wpath], rax
         call    win_build_argv
         call    main
         mov     edi, eax
+        call    sys_exit
+.oom:
+        mov     edi, 70
         call    sys_exit
 
 ; win_handle - map an fd to a HANDLE.
@@ -130,19 +143,33 @@ win_handle:
 
 ; ---------------------------------------------------------------- shim
 ; sys_open - open a file.
-;   in:  rdi = NUL-terminated path (active code page), rsi = mode
+;   in:  rdi = NUL-terminated UTF-8 path, rsi = mode
 ;        (0 = read, 1 = write/create/truncate, 2 = same as 1 on Windows)
-;   out: rax = fd (a HANDLE), or -1 on failure
+;   out: rax = fd (a HANDLE), or -1 on failure (including a path that is not
+;        valid UTF-8 or is longer than WPATH_CHARS UTF-16 units)
+; Paths are UTF-8 on every OS; here they become UTF-16 for CreateFileW.
 sys_open:
         push    rbp
         mov     rbp, rsp
+        push    rbx
         and     rsp, -16
-        sub     rsp, 64                 ; shadow space + 3 stack arguments, aligned
-        mov     rcx, rdi                ; lpFileName
+        sub     rsp, 64                 ; shadow space + stack arguments, aligned
+        mov     rbx, rsi                ; mode
+        mov     ecx, CP_UTF8            ; CodePage
+        mov     edx, MB_ERR_INVALID_CHARS ; dwFlags: reject invalid UTF-8
+        mov     r8, rdi                 ; lpMultiByteStr
+        mov     r9d, -1                 ; cbMultiByte: NUL-terminated
+        mov     rax, [win_wpath]
+        mov     [rsp + 32], rax         ; lpWideCharStr
+        mov     qword [rsp + 40], WPATH_CHARS ; cchWideChar
+        call    [__imp_MultiByteToWideChar]
+        test    eax, eax
+        jz      .fail
+        mov     rcx, [win_wpath]        ; lpFileName
         mov     edx, 0x80000000         ; dwDesiredAccess: GENERIC_READ
         mov     r8d, 1                  ; dwShareMode: FILE_SHARE_READ
         mov     eax, 3                  ; dwCreationDisposition: OPEN_EXISTING
-        test    rsi, rsi
+        test    rbx, rbx
         jz      .go
         mov     edx, 0x40000000         ; GENERIC_WRITE
         xor     r8d, r8d                ; no sharing while we write
@@ -152,9 +179,14 @@ sys_open:
         mov     [rsp + 32], rax         ; dwCreationDisposition
         mov     qword [rsp + 40], 0x80  ; dwFlagsAndAttributes: FILE_ATTRIBUTE_NORMAL
         mov     qword [rsp + 48], 0     ; hTemplateFile = NULL
-        call    [__imp_CreateFileA]
+        call    [__imp_CreateFileW]
         ; INVALID_HANDLE_VALUE is -1, which is already our error value.
-        mov     rsp, rbp
+        jmp     .out
+.fail:
+        mov     rax, -1
+.out:
+        lea     rsp, [rbp - 8]
+        pop     rbx
         pop     rbp
         ret
 
@@ -291,7 +323,12 @@ sys_args:
         ret
 
 ; ---------------------------------------------------------------- argv
-; win_build_argv - split GetCommandLineA() into win_argc / win_argv.
+; win_build_argv - split the command line into win_argc / win_argv, as UTF-8.
+;
+; GetCommandLineW() is converted to UTF-8 first, so arguments (and the paths in
+; them) are UTF-8 on every OS. Splitting works on the UTF-8 bytes: every byte
+; the rules below look at (space, tab, quote, backslash) is ASCII, and those
+; bytes never occur inside a multi-byte UTF-8 sequence.
 ;
 ; Follows the Microsoft C runtime rules, so programs see the same arguments a
 ; C program would:
@@ -315,9 +352,38 @@ win_build_argv:
         push    r13
         push    r14
         push    r15
-        sub     rsp, 32                 ; entry rsp = 8 (mod 16); 5 pushes + 32 realigns
-        call    [__imp_GetCommandLineA]
-        mov     rbx, rax
+        sub     rsp, 64                 ; entry rsp = 8 (mod 16); 5 pushes + 64 realigns
+        call    [__imp_GetCommandLineW]
+        mov     r12, rax                ; UTF-16 command line
+        ; bytes needed = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL)
+        mov     ecx, CP_UTF8
+        xor     edx, edx
+        mov     r8, r12
+        mov     r9d, -1
+        mov     qword [rsp + 32], 0
+        mov     qword [rsp + 40], 0
+        mov     qword [rsp + 48], 0
+        mov     qword [rsp + 56], 0
+        call    [__imp_WideCharToMultiByte]
+        test    eax, eax
+        jz      .oom
+        mov     r13d, eax               ; size in bytes, including the NUL
+        mov     edi, eax
+        call    sys_alloc
+        test    rax, rax
+        jz      .oom
+        mov     rbx, rax                ; UTF-8 command line
+        mov     ecx, CP_UTF8
+        xor     edx, edx
+        mov     r8, r12
+        mov     r9d, -1
+        mov     [rsp + 32], rbx         ; lpMultiByteStr
+        mov     [rsp + 40], r13         ; cbMultiByte
+        mov     qword [rsp + 48], 0
+        mov     qword [rsp + 56], 0
+        call    [__imp_WideCharToMultiByte]
+        test    eax, eax
+        jz      .oom
         xor     ecx, ecx
 .len:
         cmp     byte [rbx + rcx], 0
@@ -467,7 +533,7 @@ win_build_argv:
         mov     qword [r13 + r15*8], 0
         mov     [win_argc], r15
         mov     [win_argv], r13
-        add     rsp, 32
+        add     rsp, 64
         pop     r15
         pop     r14
         pop     r13
@@ -482,6 +548,7 @@ win_build_argv:
 win_std:        dq 0, 0, 0              ; stdin, stdout, stderr handles
 win_argc:       dq 0
 win_argv:       dq 0
+win_wpath:      dq 0                    ; WPATH_CHARS UTF-16 units of scratch for sys_open
 
 ; ---------------------------------------------------------------- imports
 ; One IMAGE_IMPORT_DESCRIPTOR for KERNEL32.dll, then a null descriptor. The
@@ -499,8 +566,8 @@ win_import_dir_end:
 
 win_ilt:
         dq      win_hn_GetStdHandle - $$
-        dq      win_hn_GetCommandLineA - $$
-        dq      win_hn_CreateFileA - $$
+        dq      win_hn_GetCommandLineW - $$
+        dq      win_hn_CreateFileW - $$
         dq      win_hn_ReadFile - $$
         dq      win_hn_WriteFile - $$
         dq      win_hn_CloseHandle - $$
@@ -508,12 +575,14 @@ win_ilt:
         dq      win_hn_VirtualFree - $$
         dq      win_hn_GetLastError - $$
         dq      win_hn_ExitProcess - $$
+        dq      win_hn_MultiByteToWideChar - $$
+        dq      win_hn_WideCharToMultiByte - $$
         dq      0
 
 win_iat:
 __imp_GetStdHandle:     dq win_hn_GetStdHandle - $$
-__imp_GetCommandLineA:  dq win_hn_GetCommandLineA - $$
-__imp_CreateFileA:      dq win_hn_CreateFileA - $$
+__imp_GetCommandLineW:  dq win_hn_GetCommandLineW - $$
+__imp_CreateFileW:      dq win_hn_CreateFileW - $$
 __imp_ReadFile:         dq win_hn_ReadFile - $$
 __imp_WriteFile:        dq win_hn_WriteFile - $$
 __imp_CloseHandle:      dq win_hn_CloseHandle - $$
@@ -521,6 +590,8 @@ __imp_VirtualAlloc:     dq win_hn_VirtualAlloc - $$
 __imp_VirtualFree:      dq win_hn_VirtualFree - $$
 __imp_GetLastError:     dq win_hn_GetLastError - $$
 __imp_ExitProcess:      dq win_hn_ExitProcess - $$
+__imp_MultiByteToWideChar: dq win_hn_MultiByteToWideChar - $$
+__imp_WideCharToMultiByte: dq win_hn_WideCharToMultiByte - $$
         dq      0
 
 ; Hint/name entries: a 2-byte hint (0: let the loader search) and the name.
@@ -528,11 +599,11 @@ __imp_ExitProcess:      dq win_hn_ExitProcess - $$
 win_hn_GetStdHandle:    dw 0
         db      'GetStdHandle', 0
         align   2, db 0
-win_hn_GetCommandLineA: dw 0
-        db      'GetCommandLineA', 0
+win_hn_GetCommandLineW: dw 0
+        db      'GetCommandLineW', 0
         align   2, db 0
-win_hn_CreateFileA:     dw 0
-        db      'CreateFileA', 0
+win_hn_CreateFileW:     dw 0
+        db      'CreateFileW', 0
         align   2, db 0
 win_hn_ReadFile:        dw 0
         db      'ReadFile', 0
@@ -554,6 +625,12 @@ win_hn_GetLastError:    dw 0
         align   2, db 0
 win_hn_ExitProcess:     dw 0
         db      'ExitProcess', 0
+        align   2, db 0
+win_hn_MultiByteToWideChar: dw 0
+        db      'MultiByteToWideChar', 0
+        align   2, db 0
+win_hn_WideCharToMultiByte: dw 0
+        db      'WideCharToMultiByte', 0
         align   2, db 0
 win_dll_name:
         db      'KERNEL32.dll', 0

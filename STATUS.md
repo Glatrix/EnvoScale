@@ -33,10 +33,10 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 
 | Subsystem | Tier | What works | What's missing | Next step |
 |---|---|---|---|---|
-| **Docs: language spec** (`docs/spec`) | Experimental | Ch. 1 normative with rule IDs linked to tests; ch. 2–5 drafts; Envo-Core, EAS, EON drafts; error registry | Ch. 6+ (generics, modules in depth, async, comptime); EIR (M2) | Resolve RFC 0001; Envo-Core grammar (`envo-core.md` §5.1) is now normative and tested |
-| **RFCs** (`docs/rfcs`) | — | Template; RFC 0001 (normative example audit) proposed | Owner decision on RFC 0001 C1/C2 | Review RFC 0001 |
+| **Docs: language spec** (`docs/spec`) | Experimental | Ch. 1 normative with rule IDs linked to tests; ch. 2–5 drafts; Envo-Core, EAS, EON drafts; error registry | Ch. 6+ (generics, modules in depth, async, comptime); EIR (M2) | Envo-Core grammar (`envo-core.md` §5.1) is now normative and tested |
+| **RFCs** (`docs/rfcs`) | — | Template; RFC 0001 (normative example audit) accepted | — | Further RFCs as listed on the roadmap (EIR v1, function types, lifetimes) |
 | **Bootstrap: seed** (`bootstrap/seed`) | — | — | Everything (Phase B, required before 1.0) | After Stage 0 is complete, so the `.eas` subset is final |
-| **Bootstrap: Stage 0** (`bootstrap/stage0`) | Experimental | Assembles with NASM 3.02 into `envoc0.exe` (24,576 bytes) and `envoc0` (16,016 bytes), byte-identical on rebuild. PE and ELF headers; Windows (kernel32) and Linux (syscall) shims with argv parsing; arena; buffered I/O; diagnostics with line/column; UTF-8 validation; the lexer; the Envo-Core parser with E01xx/E0905 diagnostics and a 256-level depth limit; `envoc0 lex`, `parse`, `version`, `help`. **All 109 tests pass on Windows** (PowerShell and Git Bash runners, locally and in CI) **and on Linux** (CI) | Type checker, x86-64 code generation, PE/ELF writers for output programs, builtins | Type checker (PLAN.md §5, 1.6) |
+| **Bootstrap: Stage 0** (`bootstrap/stage0`) | Experimental | Assembles with NASM 3.02 into `envoc0.exe` (24,576 bytes) and `envoc0` (16,016 bytes), byte-identical on rebuild. PE and ELF headers; Windows (kernel32, UTF-8 paths and arguments via the wide APIs) and Linux (syscall) shims with argv parsing; arena; buffered I/O; diagnostics with line/column; UTF-8 validation; the lexer; the Envo-Core parser with E01xx/E0905 diagnostics and a 256-level depth limit; `envoc0 lex`, `parse`, `version`, `help`. **All 109 tests pass on Windows** (PowerShell and Git Bash runners, locally and in CI) **and on Linux** (CI) | Type checker, x86-64 code generation, PE/ELF writers for output programs, builtins | Type checker (PLAN.md §5, 1.6) |
 | **Bootstrap: Stage 1** (`bootstrap/stage1`) | — | — | Everything | M2 |
 | **Bootstrap adapter: NASM** (`adapters/bootstrap/nasm`) | Experimental | `assemble.ps1` / `assemble.sh` | — | Used by CI and local builds |
 | **Build entry points** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check` (layout, lib→adapters imports, gallery line limits), `build` and `test` all work on Windows PowerShell and Git Bash. Verified that `check` catches a planted forbidden import and that `test` catches a wrong token and a wrong error column | — | — |
@@ -53,9 +53,6 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 
 - **Linux is only exercised in CI.** The development machine runs Windows (WSL is broken
   there); the Linux binary is cross-assembled locally and run by the `stage0-linux` job.
-- **Windows paths must be in the active code page.** Stage 0 uses `CreateFileA` and
-  `GetCommandLineA`. (TODO(M1): decide whether UTF-8 paths are needed before Stage 1;
-  `docs/PLAN.md` open question 5.)
 - **Stage 0 source files are limited to 16 MiB**, reported as an error.
 - **The license and CLA have not had legal review.** `LICENSE` applies the PolyForm
   Noncommercial License 1.0.0 by reference to its official text and adds commercial

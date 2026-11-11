@@ -75,6 +75,11 @@ do_test() {
     if [ "$rc" -eq 2 ] && grep -q "^envoc0: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'unknown command' "exit $rc"; fi
     run "$ROOT" lex 'no such file.envo'
     if [ "$rc" -eq 1 ] && grep -q "^envoc0: error: cannot open 'no such file.envo'" "$TMP/err"; then pass; else bad 'missing file' "exit $rc"; fi
+    # Paths are UTF-8 on every OS: a name with a space, a Latin, a CJK and a non-BMP character.
+    uname=$(printf 'u\303\274nicode \346\227\245\360\237\230\200.envo')
+    printf 'print("hi")\n' > "$TMP/$uname"
+    run "$TMP" lex "$uname"
+    if [ "$rc" -eq 0 ] && head -n 1 "$TMP/out" | grep -q '^1:1 n ident print'; then pass; else bad 'unicode path' "exit $rc: $(cat "$TMP/err")"; fi
 
     # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by
     # `envoc0 <command>`. Keep this list in step with bootstrap.ps1.

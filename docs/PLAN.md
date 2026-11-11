@@ -52,7 +52,7 @@ These are interpretation choices, not deviations. Each is written down where it 
 Items marked **RFC** conflict with the brief as written and are tracked in an RFC
 (§0.7). The others are choices the project owner should confirm.
 
-1. **RFC 0001 — normative example audit.** Some §3.3 examples can't type-check under
+1. ~~**RFC 0001**~~ **Accepted 2026-11-11** (C1 `Copy` bound, C2 `Trimmed()`). Original question: **RFC 0001 — normative example audit.** Some §3.3 examples can't type-check under
    the brief's own rules: `Largest<T>` moves a non-`Copy` `T` out of a borrowed span
    ("no hidden copies"), and `ReadConfig` returns `text.Trim()` — a borrow of a local
    — as an owned `string`. See [`docs/rfcs/0001-normative-example-audit.md`](rfcs/0001-normative-example-audit.md).
@@ -67,7 +67,7 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    as an error with no explicit escape hatch yet.
 4. **Function types.** No syntax is given for function pointer / closure types.
    Deferred to an RFC alongside generics (needed by M2).
-5. **Unicode paths on Windows.** Stage 0 uses the `…A` kernel32 entry points, so paths
+5. ~~**Unicode paths on Windows.**~~ **Decided 2026-11-11: UTF-8 everywhere.** Stage 0 now uses the `…W` APIs and converts with kernel32's UTF-8 routines. Original question: Stage 0 uses the `…A` kernel32 entry points, so paths
    must be in the active code page. Fixing it means UTF-16 conversion in assembly;
    deferred unless it blocks someone (tracked in `STATUS.md`).
 6. **Edition name.** The brief uses `edition = "2027"` while the current year is 2026.

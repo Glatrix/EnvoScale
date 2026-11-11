@@ -98,9 +98,10 @@ File descriptors 0, 1 and 2 are stdin, stdout and stderr on both OSes. On Window
 map to the handles from `GetStdHandle`; other fds are the kernel `HANDLE` values, which
 are never 0, 1 or 2.
 
-Windows builds `argv` from `GetCommandLineA` using the Microsoft C runtime's quoting
-rules (backslashes before quotes, `""` inside quotes). Known limitation: paths must be
-representable in the active code page (`STATUS.md`).
+Paths and arguments are **UTF-8 on every OS**. Windows builds `argv` from
+`GetCommandLineW`, converted to UTF-8 with `WideCharToMultiByte`, using the Microsoft C
+runtime's quoting rules (backslashes before quotes, `""` inside quotes); `sys_open`
+converts its UTF-8 path with `MultiByteToWideChar` and calls `CreateFileW`.
 
 ## Memory
 
