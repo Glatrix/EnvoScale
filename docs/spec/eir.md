@@ -1,8 +1,10 @@
 # EIR — Envo Intermediate Representation, version 1
 
 > **Status:** Specified by [RFC 0005](../rfcs/0005-eir-v1.md) (accepted 2026-11-11).
-> Implemented by Stage 1 in M2.6 (data structures, text form, verifier) and M2.7
-> (lowering and the x86-64 backend). Tests: `tests/golden/eir/` (from M2.6).
+> Stage 1 implements the in-memory form, the text form and the verifier
+> (`envoc1 eir-check`, M2.6); lowering and the x86-64 backend follow in M2.7. The binary
+> form (§7) is implemented by Stage 2. Tests: `tests/golden/eir/` (round trips) and
+> `tests/spec/eir/` (verifier and syntax errors).
 
 EIR is the compiler's middle layer: every front end lowers to it, every optimization
 pass reads and writes it, every backend consumes it, and the script runtime and
@@ -108,6 +110,11 @@ Operand    = ValueName | Integer | Float | GlobalName | Type
   chapter 1 (`\n`, `\"`, `\\`, `\xHH`).
 - **[eir.text.3]** The first line is always `eir 1 target "<target>"`, for example
   `eir 1 target "x86_64-linux"`.
+- **[eir.text.4]** A function's entry block has no parameter list of its own: its
+  parameters are the function's. The reader accepts any value and block names and the
+  printer renumbers them ([eir.text.1]), so printing a parsed module gives its canonical
+  form, and printing that again gives the same text. Errors are E0601–E0614
+  (`errors.md`).
 
 Example: `int Add(int a, int b) => a + b;` with a checked add.
 
@@ -158,7 +165,7 @@ with the reason shown when their check fails ([eir.model.4]).
 | `add.chk I a, b` · `sub.chk` · `mul.chk` | `I` | may panic: `integer overflow` |
 | `neg.chk I a` | `I` | may panic: `integer overflow` (signed `MIN`, or unsigned non-zero) |
 | `div I a, b` · `rem I a, b` | `I` | signedness from `I`; may panic: `division by zero`, and `integer overflow` for signed `MIN / -1` |
-| `and I a, b` · `or` · `xor` · `not I a` | `I` | bitwise |
+| `and I a, b` · `or` · `xor` · `not I a` | `I` | bitwise; `I` may also be `bool` |
 | `shl I a, n` · `shr I a, n` | `I` | `shr` is arithmetic for signed `I`, logical for unsigned; `n` has type `I` and may panic: `shift amount out of range` unless `0 ≤ n < bits` |
 | `cmp.eq T a, b` · `cmp.ne` · `cmp.lt` · `cmp.le` · `cmp.gt` · `cmp.ge` | `bool` | integers by signedness, `bool`, `ptr` (unsigned) and floats (IEEE, false on NaN except `ne`) |
 | `select T c, a, b` | `T` | `a` if `c` is true, else `b` |

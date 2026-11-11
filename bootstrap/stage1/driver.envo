@@ -104,3 +104,21 @@ void CmdCheck(usize argi, bool core) {
     }
     Exit(EXIT_OK);
 }
+
+// `envoc1 eir-check <file.eir>`: reads and verifies EIR text, then prints it in canonical
+// form ([eir.text.4]).
+void CmdEirCheck(usize argi) {
+    if (argc() != argi + 1) {
+        Usage(2);
+        Exit(EXIT_USAGE);
+    }
+    LoadSources(argi, 1);
+    Module m;
+    unsafe {
+        ModuleInit(&m);
+        ReadEir(0, &m);
+        VerifyModule(&m);
+        PrintModule(&m, Out());
+    }
+    Exit(EXIT_OK);
+}

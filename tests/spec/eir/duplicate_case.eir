@@ -1,0 +1,9 @@
+; [eir.verify.7] switch keys are distinct.
+; expect-error: E0611 @ 6:26
+eir 1 target "x86_64-linux"
+func @F(%0: i32) -> void {
+^bb0:
+  switch i32 %0, [1: ^a, 1: ^a], ^a
+^a:
+  ret
+}

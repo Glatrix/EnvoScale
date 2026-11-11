@@ -15,7 +15,8 @@ marked retired, never reused.
 | E0200–E0299 | Names and modules |
 | E0300–E0499 | Types and interfaces |
 | E0500–E0599 | Ownership and borrowing |
-| E0600–E0899 | Reserved |
+| E0600–E0699 | EIR text and verifier ([`eir.md`](eir.md) §3, §6) |
+| E0700–E0899 | Reserved |
 | E0900–E0949 | "Not part of Envo-Core" (Stage 0, and `envoc1 --core`) |
 | E0950–E0999 | "Not part of Envo-S1" (Stage 1) |
 
@@ -132,3 +133,26 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | Code | Message |
 |---|---|
 | E0950 | not part of Envo-S1: X (the message names the construct; [s1.subset.4]) |
+
+## EIR (E0600–E0699)
+
+Reported by `envoc1 eir-check` for EIR text, at the token or instruction concerned. EIR
+that the compiler builds itself is verified the same way, and a failure there is an
+internal error.
+
+| Code | Message | Rule |
+|---|---|---|
+| E0601 | EIR syntax: expected X, found Y | [eir.text.1]–[eir.text.3] |
+| E0602 | unsupported EIR version N (this reader knows version 1) | [eir.ver.1] |
+| E0603 | unknown name | [eir.verify.1] |
+| E0604 | name defined twice | [eir.verify.1] |
+| E0605 | mismatched types in an instruction | [eir.verify.3] |
+| E0606 | a block must end with exactly one terminator | [eir.verify.2] |
+| E0607 | branch arguments do not match the target block's parameters | [eir.verify.2] |
+| E0608 | a value is used where its definition does not dominate | [eir.verify.4] |
+| E0609 | `slot` only at the start of the entry block | [eir.verify.5] |
+| E0610 | call or `ret` does not match the function's signature | [eir.verify.6] |
+| E0611 | invalid field index, duplicate `switch` key or unknown panic reason | [eir.verify.7] |
+| E0612 | struct type contains itself | [eir.verify.1] |
+| E0613 | constant does not fit its type | [eir.verify.3] |
+| E0614 | unknown instruction or intrinsic | [eir.text.1] |

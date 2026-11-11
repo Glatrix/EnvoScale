@@ -1,0 +1,9 @@
+; [eir.verify.5] slots come first in the entry block.
+; expect-error: E0609 @ 7:8
+eir 1 target "x86_64-linux"
+func @F() -> void {
+^bb0:
+  %0 = const i32 1
+  %1 = slot i32
+  ret
+}

@@ -1,0 +1,8 @@
+; [eir.verify.3] constants fit their type.
+; expect-error: E0613 @ 6:8
+eir 1 target "x86_64-linux"
+func @F() -> void {
+^bb0:
+  %0 = const u8 300
+  ret
+}

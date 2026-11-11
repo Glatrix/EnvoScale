@@ -1,0 +1,8 @@
+; [eir.text.1] a malformed instruction.
+; expect-error: E0601 @ 6:20
+eir 1 target "x86_64-linux"
+func @F() -> i32 {
+^bb0:
+  %0 = const i32 1 2
+  ret %0
+}

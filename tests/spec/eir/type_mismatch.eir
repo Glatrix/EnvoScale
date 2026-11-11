@@ -1,0 +1,8 @@
+; [eir.verify.3] operand types must match the instruction type.
+; expect-error: E0605 @ 6:24
+eir 1 target "x86_64-linux"
+func @F(%0: i32, %1: i64) -> i32 {
+^bb0:
+  %2 = add.chk i32 %0, %1
+  ret %2
+}

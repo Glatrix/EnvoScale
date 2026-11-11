@@ -1,0 +1,4 @@
+; [eir.verify.1] a struct cannot contain itself.
+; expect-error: E0612 @ 1:1
+eir 1 target "x86_64-linux"
+type $A = { i32, $A }

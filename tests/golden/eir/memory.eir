@@ -1,0 +1,32 @@
+; Types, globals, memory, calls, intrinsics, switch, panics and an extern.
+eir 1 target "x86_64-linux"
+type $Point = { i64, i64 }
+global @msg: [5 x u8] readonly = bytes "hello"
+global @origin: $Point = zero
+global @table: ptr = @msg
+func @Main() -> void {
+^bb0:
+  %p = slot $Point
+  %x = fieldaddr $Point %p, 0
+  %one = const i64 1
+  store i64 %one, %x
+  %m = addr @msg
+  %len = const u64 5
+  %fd = const i32 1
+  intrinsic write(%fd, %m, %len)
+  %v = load i64 %x
+  %s = call @Pick(%v)
+  switch i64 %s, [-1: ^neg, 0: ^zero], ^other
+^neg:
+  panic "integer overflow"
+^zero:
+  unreachable
+^other:
+  slot.end %p
+  ret
+}
+func @Pick(%n: i64) -> i64 {
+^bb0:
+  ret %n
+}
+extern @puts(%s: ptr) -> i32 abi "C"

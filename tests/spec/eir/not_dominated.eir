@@ -1,0 +1,12 @@
+; [eir.verify.4] a use must be dominated by its definition.
+; expect-error: E0608 @ 11:7
+eir 1 target "x86_64-linux"
+func @F(%c: bool) -> i32 {
+^bb0:
+  condbr %c, ^a, ^b
+^a:
+  %x = const i32 1
+  br ^b
+^b:
+  ret %x
+}

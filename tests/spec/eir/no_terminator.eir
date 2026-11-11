@@ -1,0 +1,7 @@
+; [eir.verify.2] every block ends with a terminator.
+; expect-error: E0606 @ 6:8
+eir 1 target "x86_64-linux"
+func @F() -> void {
+^bb0:
+  %0 = const i32 1
+}

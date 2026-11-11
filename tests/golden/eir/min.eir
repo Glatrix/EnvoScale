@@ -1,0 +1,11 @@
+; Names are free in the input; the printer renumbers values and blocks.
+eir 1 target "x86_64-windows"
+func @Min(%a: i32, %b: i32) -> i32 {
+^entry:
+  %gt = cmp.gt i32 %a, %b
+  condbr %gt, ^take_b, ^done(%a)
+^take_b:
+  br ^done(%b)
+^done(%r: i32):
+  ret %r
+}

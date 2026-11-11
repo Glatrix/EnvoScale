@@ -18,4 +18,8 @@ check/decl.envo
 check/stmt.envo
 check/expr.envo
 check/dump.envo
+eir/ir.envo
+eir/read.envo
+eir/print.envo
+eir/verify.envo
 driver.envo

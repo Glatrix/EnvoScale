@@ -1,0 +1,9 @@
+; [eir.verify.2] branch arguments match the block parameters.
+; expect-error: E0607 @ 6:6
+eir 1 target "x86_64-linux"
+func @F() -> void {
+^bb0:
+  br ^bb1
+^bb1(%0: i32):
+  ret
+}

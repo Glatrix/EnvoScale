@@ -314,6 +314,28 @@ function Invoke-Test {
         if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $d.Name }
         else { Bad "stage1 --core core-multi/$($d.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
     }
+    # EIR v1 (M2.6): canonical printing round-trips, and verifier errors.
+    Say 'stage 1 golden tests: tests/golden/eir'
+    $dir = Join-Path $Root 'tests\golden\eir'
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.eir' | Sort-Object Name) {
+        $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.eir$', '.out'), $Utf8))
+        foreach ($input in @($f.Name, ($f.Name -replace '\.eir$', '.out'))) {
+            $r = Invoke-Tool $envoc1 @('eir-check', $input) $dir
+            $actual = Normalize $r.Out
+            if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass $input }
+            else { Bad "golden/eir/$input" "exit $($r.Code), stderr: $($r.Err.Trim())"; Show-Diff $expected $actual }
+        }
+    }
+    Say 'stage 1 spec tests: tests/spec/eir'
+    $dir = Join-Path $Root 'tests\spec\eir'
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.eir' | Sort-Object Name) {
+        $m = [regex]::Match([IO.File]::ReadAllText($f.FullName, $Utf8), '(?m)^; expect-error: (E\d{4}) @ (\d+:\d+)')
+        if (-not $m.Success) { Bad "spec/eir/$($f.Name)" 'no ; expect-error: annotation'; continue }
+        $want = "$($f.Name):$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
+        $r = Invoke-Tool $envoc1 @('eir-check', $f.Name) $dir
+        if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $f.Name }
+        else { Bad "spec/eir/$($f.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+    }
     Say 'stage 1 self-check: envoc1 --core check bootstrap/stage1'
     $files = @(Get-Content -LiteralPath (Join-Path $Stage1 'files.txt') | Where-Object { $_.Trim() -ne '' })
     $r = Invoke-Tool $envoc1 (@('--core', 'check') + $files) $Stage1

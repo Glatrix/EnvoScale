@@ -9,6 +9,7 @@ output is byte-identical to the expected file (after normalizing CRLF to LF).
 | `parser/` | `envoc0 parse` | `name.envo` → `name.ast` |
 | `check/` | `envoc0 check` | `name.envo` → `name.check` |
 | `s1-parser/` | `envoc1 parse` (Envo-S1) | `name.envo` → `name.ast` |
+| `eir/` | `envoc1 eir-check` | `name.eir` → `name.out` (canonical form; `name.out` must also print as itself) |
 
 Planned: EIR (M2), assembly and diagnostics (M3).
 

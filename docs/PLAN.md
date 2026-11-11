@@ -121,8 +121,8 @@ the M2 epic on the roadmap project.
 | [2.3](https://github.com/envoscale/EnvoScale/issues/48) | Lexer for the full lexical grammar | lexer goldens and `01-lexical` must match `envoc0` (D14) | done: all 13 goldens and 41 lexical tests match in `--core` and S1 modes; all 275 test inputs lex identically |
 | [2.4](https://github.com/envoscale/EnvoScale/issues/49) | Parser for Envo-S1 | `core-syntax` (same codes and positions as `envoc0`), new S1 syntax tests | done: the Core grammar matches `envoc0` on every parser golden, `core-syntax` test and test input; the S1 grammar has 4 hand-checked goldens and 13 error tests |
 | [2.5](https://github.com/envoscale/EnvoScale/issues/50) | Names and types for Envo-Core | `core-types` (same codes and positions) | done: every `check` golden, `core-types` and `core-multi` test and test input gives the same output as `envoc0`; `envoc1` checks its own source |
-| [2.6](https://github.com/envoscale/EnvoScale/issues/51) | EIR v1: data structures, text form (print and parse, round-trip), verifier | `tests/golden/eir/` | in progress |
-| [2.7](https://github.com/envoscale/EnvoScale/issues/52) | Lowering Core to EIR; x86-64 backend; PE/ELF writer; runtime | `core-run`, `core-multi` under `envoc1` | |
+| [2.6](https://github.com/envoscale/EnvoScale/issues/51) | EIR v1: data structures, text form (print and parse, round-trip), verifier | `tests/golden/eir/` | done: `envoc1 eir-check`; 3 round-trip goldens and 13 verifier/syntax tests (`tests/spec/eir/`). The binary form ([eir.bin.*]) moves to Stage 2, where it is first needed |
+| [2.7](https://github.com/envoscale/EnvoScale/issues/52) | Lowering Core to EIR; x86-64 backend; PE/ELF writer; runtime | `core-run`, `core-multi` under `envoc1` | in progress |
 | [2.8](https://github.com/envoscale/EnvoScale/issues/53) | Generics and interfaces | S1 type and run tests | |
 | [2.9](https://github.com/envoscale/EnvoScale/issues/54) | Closures and function types | S1 type and run tests | |
 | [2.10](https://github.com/envoscale/EnvoScale/issues/55) | Ownership: moves, borrows, lifetime elision, basic borrow checker (E05xx) | S1 ownership tests | |

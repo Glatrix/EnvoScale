@@ -1,0 +1,12 @@
+; [eir.verify.6] calls match the callee.
+; expect-error: E0610 @ 6:3
+eir 1 target "x86_64-linux"
+func @F() -> void {
+^bb0:
+  call @G()
+  ret
+}
+func @G(%0: i32) -> void {
+^bb0:
+  ret
+}

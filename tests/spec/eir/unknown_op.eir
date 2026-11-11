@@ -1,0 +1,8 @@
+; [eir.text.1] unknown instructions are rejected.
+; expect-error: E0614 @ 6:8
+eir 1 target "x86_64-linux"
+func @F() -> void {
+^bb0:
+  %0 = frobnicate i32 1
+  ret
+}

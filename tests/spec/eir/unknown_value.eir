@@ -1,0 +1,7 @@
+; [eir.verify.1] every value used is defined.
+; expect-error: E0603 @ 6:7
+eir 1 target "x86_64-linux"
+func @F() -> i32 {
+^bb0:
+  ret %9
+}

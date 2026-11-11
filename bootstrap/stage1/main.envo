@@ -61,7 +61,10 @@ if (StrEq(command, "parse")) {
 if (StrEq(command, "check")) {
     CmdCheck(argi, coreOnly);
 }
-if (StrEq(command, "build") || StrEq(command, "eir") || StrEq(command, "eir-check")) {
+if (StrEq(command, "eir-check")) {
+    CmdEirCheck(argi);
+}
+if (StrEq(command, "build") || StrEq(command, "eir")) {
     *Buf e = Err();
     BufStr(e, "envoc1: error: '");
     BufStr(e, command);

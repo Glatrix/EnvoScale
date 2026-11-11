@@ -1,0 +1,3 @@
+; [eir.ver.1] an unknown version is rejected, naming both.
+; expect-error: E0602 @ 3:5
+eir 2 target "x86_64-linux"

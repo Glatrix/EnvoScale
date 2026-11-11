@@ -1,7 +1,8 @@
 # Stage 1 — `envoc1`
 
-> **Status:** Support library (M2.2), lexer (M2.3), parser (M2.4) and Envo-Core checker
-> (M2.5) done; EIR v1 is next (M2.6). The
+> **Status:** Support library (M2.2), lexer (M2.3), parser (M2.4), Envo-Core checker
+> (M2.5) and EIR v1 text form and verifier (M2.6) done; lowering and the x86-64 backend are
+> next (M2.7). The
 > plan, increments and decisions D11–D15 are in [`docs/PLAN.md`](../../docs/PLAN.md). It
 > accepts [Envo-S1](../../docs/spec/envo-s1.md) and compiles through
 > [EIR v1](../../docs/spec/eir.md).
@@ -40,6 +41,10 @@ Stage 0.
 | `check/stmt.envo` | statements, termination, `match` |
 | `check/expr.envo` | expressions, literals, constant evaluation |
 | `check/dump.envo` | the typed-tree dump of `check` |
+| `eir/ir.envo` | EIR v1 in memory: types and layout, module records, opcode table, intrinsics |
+| `eir/read.envo` | the EIR text reader |
+| `eir/print.envo` | the canonical EIR printer |
+| `eir/verify.envo` | the EIR verifier, with dominators |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
 | `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |
@@ -64,5 +69,5 @@ Stage 0.
 ## Commands
 
 `envoc1 version`, `help`, `selftest`, `lex`, `parse` (the whole Envo-S1 grammar) and `check`
-(Envo-Core names and types) work today. `build`, `eir` and `eir-check` arrive with
-increments 2.6–2.7, and S1 checking with 2.8–2.10 (Envo-S1 §9).
+(Envo-Core names and types) and `eir-check` work today. `build` and `eir` arrive with
+increment 2.7, and S1 checking with 2.8–2.10 (Envo-S1 §9).

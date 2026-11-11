@@ -302,6 +302,31 @@ do_test() {
         if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
         else bad "stage1 --core core-multi/$(basename "$d")" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
     done
+    # EIR v1 (M2.6): canonical printing round-trips, and verifier errors.
+    say 'stage 1 golden tests: tests/golden/eir'
+    dir="$ROOT/tests/golden/eir"
+    for f in "$dir"/*.eir; do
+        base=$(basename "$f")
+        tr -d '\r' < "${f%.eir}.out" > "$TMP/expected"
+        for input in "$base" "${base%.eir}.out"; do
+            run "$dir" eir-check "$input"
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+            else bad "golden/eir/$input" "exit $rc: $(tr -d '\r' < "$TMP/err")"; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+        done
+    done
+    say 'stage 1 spec tests: tests/spec/eir'
+    dir="$ROOT/tests/spec/eir"
+    for f in "$dir"/*.eir; do
+        base=$(basename "$f")
+        line=$(grep -m1 '^; expect-error: ' "$f" | tr -d '\r' || true)
+        code=$(printf '%s\n' "$line" | sed 's|^; expect-error: \(E[0-9]*\) @ .*|\1|')
+        pos=${line##* @ }; pos=${pos%% *}
+        want="$base:$pos: error[$code]"
+        run "$dir" eir-check "$base"
+        if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
+        else bad "spec/eir/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+    done
     say 'stage 1 self-check: envoc1 --core check bootstrap/stage1'
     set --
     while IFS= read -r f || [ -n "$f" ]; do
