@@ -129,8 +129,8 @@ the M2 epic on the roadmap project.
 | [2.8](https://github.com/envoscale/EnvoScale/issues/53) | Generics and interfaces | S1 type and run tests | done: generic functions and structs (monomorphized), methods and receivers, `in`/`ref` parameters, interfaces with default bodies and bounds; 31 type and 4 run tests ([`architecture/stage1.md`](architecture/stage1.md)) |
 | [2.9](https://github.com/envoscale/EnvoScale/issues/54) | Closures and function types | S1 type and run tests | next |
 | [2.10](https://github.com/envoscale/EnvoScale/issues/55) | Ownership: moves, borrows, lifetime elision, basic borrow checker (E05xx) | S1 ownership tests | |
-| 2.11 | Enums with payloads, `match` expressions with payload patterns and guards, `Option` and `Result`, `?:`, `??` and `?` | S1 type and run tests | |
-| 2.12 | The rest of Envo-S1: `foreach`, slicing, namespaces and `use`, the prelude (`string`, `List<T>`, `IDrop`) | S1 type and run tests | |
+| [2.11](https://github.com/envoscale/EnvoScale/issues/66) | Enums with payloads, `match` expressions with payload patterns and guards, `Option` and `Result`, `?:`, `??` and `?` | S1 type and run tests | |
+| [2.12](https://github.com/envoscale/EnvoScale/issues/67) | The rest of Envo-S1: `foreach`, slicing, namespaces and `use`, the prelude (`string`, `List<T>`, `IDrop`) | S1 type and run tests | |
 | [2.13](https://github.com/envoscale/EnvoScale/issues/56) | Envo-S1 spec suite green on Windows and Linux in CI; reproducible `envoc1`; no E0951 left | CI | |
 
 ## 6. Risks
