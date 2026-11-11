@@ -1,0 +1,187 @@
+; =============================================================================
+; platform/linux.eas - x86-64 Linux platform layer for envoc0 (Stage 0)
+;
+; Contents, in file order:
+;   1. the ELF64 header and program headers (this file must be included first)
+;   2. the process entry point
+;   3. the eight shim routines (sys_open ... sys_args), using raw syscalls
+;
+; Layout (see docs/architecture/bootstrap.md): one PT_LOAD segment mapping the
+; whole file read+write+execute at 0x400000, so every label's file offset equals
+; label - $$. No sections, no relocations, no dynamic linker.
+;
+; Calling convention: Stage 0 uses the System V order everywhere, which is also
+; the kernel's, so most shim routines are a register shuffle and a syscall.
+; The kernel clobbers rcx and r11 on syscall; both are caller-saved for us.
+; =============================================================================
+
+IMAGE_BASE      equ 0x400000
+
+SYS_READ        equ 0
+SYS_WRITE       equ 1
+SYS_OPEN        equ 2
+SYS_CLOSE       equ 3
+SYS_MMAP        equ 9
+SYS_MUNMAP      equ 11
+SYS_EXIT_GROUP  equ 231
+
+O_RDONLY        equ 0x0
+O_WRONLY        equ 0x1
+O_CREAT         equ 0x40
+O_TRUNC         equ 0x200
+O_CLOEXEC       equ 0x80000
+
+EINTR           equ 4
+
+        org     IMAGE_BASE
+
+; ---------------------------------------------------------------- ELF header
+elf_header:
+        db      0x7F, 'ELF'             ; e_ident magic
+        db      2                       ; EI_CLASS: ELFCLASS64
+        db      1                       ; EI_DATA: little-endian
+        db      1                       ; EI_VERSION: current
+        db      0                       ; EI_OSABI: System V
+        times 8 db 0                    ; EI_ABIVERSION + padding
+        dw      2                       ; e_type: ET_EXEC
+        dw      0x3E                    ; e_machine: EM_X86_64
+        dd      1                       ; e_version
+        dq      IMAGE_BASE + (_start - $$) ; e_entry (absolute address)
+        dq      elf_phdrs - $$          ; e_phoff
+        dq      0                       ; e_shoff: no section headers
+        dd      0                       ; e_flags
+        dw      64                      ; e_ehsize
+        dw      56                      ; e_phentsize
+        dw      2                       ; e_phnum
+        dw      0                       ; e_shentsize
+        dw      0                       ; e_shnum
+        dw      0                       ; e_shstrndx
+
+elf_phdrs:
+        ; PT_LOAD: map the whole file at IMAGE_BASE.
+        dd      1                       ; p_type: PT_LOAD
+        dd      7                       ; p_flags: R | W | X
+        dq      0                       ; p_offset
+        dq      IMAGE_BASE              ; p_vaddr
+        dq      IMAGE_BASE              ; p_paddr
+        dq      image_end - $$          ; p_filesz
+        dq      image_end - $$          ; p_memsz
+        dq      0x1000                  ; p_align
+        ; PT_GNU_STACK: ask for a non-executable stack.
+        dd      0x6474E551              ; p_type: PT_GNU_STACK
+        dd      6                       ; p_flags: R | W
+        dq      0, 0, 0, 0, 0
+        dq      16                      ; p_align
+
+plat_name:      db 'x86_64-linux'
+plat_name_len   equ $ - plat_name
+
+; ---------------------------------------------------------------- entry
+; The kernel starts us with rsp 16-byte aligned and
+;   [rsp] = argc, [rsp + 8] = argv[0], ..., NULL, envp...
+; main is called with rsp aligned, as the convention requires, and normally
+; exits through exit_process itself. If it ever returns, its eax is the exit code.
+_start:
+        mov     rax, [rsp]
+        mov     [plat_argc], rax
+        lea     rax, [rsp + 8]
+        mov     [plat_argv], rax
+        call    main
+        mov     edi, eax
+        call    sys_exit
+
+; ---------------------------------------------------------------- shim
+; sys_open - open a file.
+;   in:  rdi = NUL-terminated path, rsi = mode
+;        (0 = read, 1 = write/create/truncate 0644, 2 = same but 0755 executable)
+;   out: rax = fd >= 0, or -errno
+sys_open:
+        mov     eax, O_RDONLY | O_CLOEXEC
+        xor     edx, edx
+        test    rsi, rsi
+        jz      .go
+        mov     eax, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC
+        mov     edx, 0x1A4              ; 0644
+        cmp     rsi, 2
+        jne     .go
+        mov     edx, 0x1ED              ; 0755
+.go:
+        mov     esi, eax
+        mov     eax, SYS_OPEN
+        syscall
+        ret
+
+; sys_read - read up to rdx bytes.
+;   in:  rdi = fd, rsi = buffer, rdx = length
+;   out: rax = bytes read (0 at end of file), or -errno. Retries on EINTR.
+sys_read:
+        mov     eax, SYS_READ
+        syscall
+        cmp     rax, -EINTR
+        je      sys_read
+        ret
+
+; sys_write - write up to rdx bytes (may write fewer; callers loop).
+;   in:  rdi = fd, rsi = buffer, rdx = length
+;   out: rax = bytes written, or -errno. Retries on EINTR.
+sys_write:
+        mov     eax, SYS_WRITE
+        syscall
+        cmp     rax, -EINTR
+        je      sys_write
+        ret
+
+; sys_close - close a file descriptor. fds 0-2 are left open, as on Windows.
+;   in:  rdi = fd
+;   out: rax = 0 or -errno
+sys_close:
+        xor     eax, eax
+        cmp     rdi, 3
+        jb      .done
+        mov     eax, SYS_CLOSE
+        syscall
+.done:
+        ret
+
+; sys_alloc - get zeroed, page-aligned memory from the kernel.
+;   in:  rdi = size in bytes
+;   out: rax = pointer, or 0 on failure
+sys_alloc:
+        mov     rsi, rdi                ; length
+        xor     edi, edi                ; addr = NULL: kernel chooses
+        mov     edx, 3                  ; PROT_READ | PROT_WRITE
+        mov     r10d, 0x22              ; MAP_PRIVATE | MAP_ANONYMOUS
+        mov     r8, -1                  ; fd = -1
+        xor     r9d, r9d                ; offset = 0
+        mov     eax, SYS_MMAP
+        syscall
+        cmp     rax, -4095              ; -4095..-1 are errors (unsigned compare)
+        jb      .ok
+        xor     eax, eax
+.ok:
+        ret
+
+; sys_free - return memory obtained from sys_alloc.
+;   in:  rdi = pointer, rsi = size passed to sys_alloc
+sys_free:
+        mov     eax, SYS_MUNMAP
+        syscall
+        ret
+
+; sys_exit - terminate the process. Does not return.
+;   in:  rdi = exit code
+sys_exit:
+        mov     eax, SYS_EXIT_GROUP
+        syscall
+        ud2
+
+; sys_args - command-line arguments.
+;   out: rax = argc, rdx = argv (array of NUL-terminated strings, NULL-terminated)
+sys_args:
+        mov     rax, [plat_argc]
+        mov     rdx, [plat_argv]
+        ret
+
+        align   8, db 0
+plat_argc:      dq 0
+plat_argv:      dq 0

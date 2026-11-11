@@ -1,0 +1,9 @@
+// line comment
+/// doc comment
+a /* block */ b
+/* outer /* inner */ still comment */ c
+/**/d
+e/*
+*/f
+/* a * b / c ** / */ g
+// comment at end of file without a newline

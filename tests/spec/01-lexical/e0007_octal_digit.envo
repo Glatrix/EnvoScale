@@ -1,0 +1,2 @@
+// expect-error: E0007 @ 2:11
+var n = 0o8;

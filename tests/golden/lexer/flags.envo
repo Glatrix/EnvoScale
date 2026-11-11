@@ -1,0 +1,13 @@
+// Token spacing flags ([lex.flags.*]): n = newline before, s = space before, j = joint.
+var x = f()?;
+var y = a ? b : c;
+string? name = null;
+a?.b
+x /* c */ y
+p/**/q
+first // trailing comment
+second
+/* multi
+line */ third
+	tabbed
+crlf

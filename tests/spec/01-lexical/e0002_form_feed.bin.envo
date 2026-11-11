@@ -1,0 +1,2 @@
+// expect-error: E0002 @ 2:2
+ab

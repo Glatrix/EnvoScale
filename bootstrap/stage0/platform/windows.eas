@@ -1,0 +1,559 @@
+; =============================================================================
+; platform/windows.eas - x86-64 Windows platform layer for envoc0 (Stage 0)
+;
+; Contents, in file order:
+;   1. the PE32+ headers (this file must be included first)
+;   2. the process entry point
+;   3. the eight shim routines (sys_open ... sys_args), via kernel32.dll
+;   4. command-line splitting (Microsoft C runtime rules)
+;   5. the import table for KERNEL32.dll
+;
+; Layout (see docs/architecture/bootstrap.md): headers in the first 0x1000 bytes,
+; then one RWX section ".text" at RVA 0x1000. FileAlignment == SectionAlignment
+; == 0x1000, so a label's file offset equals its RVA, which is label - $$.
+; Fixed base 0x400000, relocations stripped, TimeDateStamp 0 (reproducible).
+;
+; Calling convention: Stage 0 routines use the System V register order. Each
+; shim routine converts to Win64 at the kernel32 call: realign the stack,
+; reserve 32 bytes of shadow space, arguments in rcx, rdx, r8, r9, then stack.
+; Win64 callees preserve rbx, rbp, rdi, rsi, r12-r15, a superset of what our
+; convention requires, so nothing else needs saving around the calls.
+; =============================================================================
+
+IMAGE_BASE      equ 0x400000
+PE_ALIGN        equ 0x1000              ; both FileAlignment and SectionAlignment
+
+STD_INPUT_HANDLE  equ -10
+STD_OUTPUT_HANDLE equ -11
+STD_ERROR_HANDLE  equ -12
+ERROR_BROKEN_PIPE equ 109
+
+        org     IMAGE_BASE
+
+; ---------------------------------------------------------------- DOS header
+pe_dos_header:
+        dw      'MZ'                    ; e_magic
+        times 0x3C - ($ - $$) db 0      ; the rest of the DOS header is unused
+        dd      pe_nt_headers - $$      ; e_lfanew
+
+; ---------------------------------------------------------------- NT headers
+pe_nt_headers:
+        dd      'PE'                    ; Signature "PE\0\0"
+        ; IMAGE_FILE_HEADER
+        dw      0x8664                  ; Machine: AMD64
+        dw      1                       ; NumberOfSections
+        dd      0                       ; TimeDateStamp: 0 for reproducible output
+        dd      0                       ; PointerToSymbolTable
+        dd      0                       ; NumberOfSymbols
+        dw      pe_opt_end - pe_opt_header ; SizeOfOptionalHeader
+        dw      0x0023                  ; RELOCS_STRIPPED | EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+pe_opt_header:
+        ; IMAGE_OPTIONAL_HEADER64
+        dw      0x020B                  ; Magic: PE32+
+        db      0, 0                    ; Major/MinorLinkerVersion
+        dd      pe_file_end - pe_section_start ; SizeOfCode
+        dd      0                       ; SizeOfInitializedData
+        dd      0                       ; SizeOfUninitializedData
+        dd      _start - $$             ; AddressOfEntryPoint (RVA)
+        dd      pe_section_start - $$   ; BaseOfCode
+        dq      IMAGE_BASE              ; ImageBase
+        dd      PE_ALIGN                ; SectionAlignment
+        dd      PE_ALIGN                ; FileAlignment
+        dw      6, 0                    ; Major/MinorOperatingSystemVersion (Vista+)
+        dw      0, 0                    ; Major/MinorImageVersion
+        dw      6, 0                    ; Major/MinorSubsystemVersion
+        dd      0                       ; Win32VersionValue
+        dd      pe_file_end - $$        ; SizeOfImage: the file is padded to PE_ALIGN,
+                                        ; which is also the section alignment
+        dd      pe_section_start - $$   ; SizeOfHeaders
+        dd      0                       ; CheckSum (not required for EXEs)
+        dw      3                       ; Subsystem: WINDOWS_CUI (console)
+        dw      0x8100                  ; DllCharacteristics: NX_COMPAT | TERMINAL_SERVER_AWARE
+        dq      0x100000                ; SizeOfStackReserve (1 MiB)
+        dq      0x1000                  ; SizeOfStackCommit
+        dq      0x100000                ; SizeOfHeapReserve
+        dq      0x1000                  ; SizeOfHeapCommit
+        dd      0                       ; LoaderFlags
+        dd      16                      ; NumberOfRvaAndSizes
+        ; Data directories
+        dd      0, 0                    ; [0] Export
+        dd      win_import_dir - $$, win_import_dir_end - win_import_dir ; [1] Import
+        times 14 dd 0, 0                ; [2..15] unused (the loader finds the IAT via [1])
+pe_opt_end:
+
+; ---------------------------------------------------------------- section table
+        db      '.text', 0, 0, 0        ; Name
+        dd      image_end - pe_section_start   ; VirtualSize
+        dd      pe_section_start - $$          ; VirtualAddress
+        dd      pe_file_end - pe_section_start ; SizeOfRawData (multiple of PE_ALIGN)
+        dd      pe_section_start - $$          ; PointerToRawData
+        dd      0, 0                    ; PointerToRelocations, PointerToLinenumbers
+        dw      0, 0                    ; NumberOfRelocations, NumberOfLinenumbers
+        dd      0xE0000020              ; CODE | MEM_EXECUTE | MEM_READ | MEM_WRITE
+
+        times PE_ALIGN - ($ - $$) db 0
+pe_section_start:
+
+plat_name:      db 'x86_64-windows'
+plat_name_len   equ $ - plat_name
+
+; ---------------------------------------------------------------- entry
+; Windows enters with rsp = 8 (mod 16), as if called. Reserve shadow space and
+; realign in one step; from here on rsp is aligned at every call.
+_start:
+        sub     rsp, 40
+        mov     ecx, STD_INPUT_HANDLE
+        call    [__imp_GetStdHandle]
+        mov     [win_std], rax
+        mov     ecx, STD_OUTPUT_HANDLE
+        call    [__imp_GetStdHandle]
+        mov     [win_std + 8], rax
+        mov     ecx, STD_ERROR_HANDLE
+        call    [__imp_GetStdHandle]
+        mov     [win_std + 16], rax
+        call    win_build_argv
+        call    main
+        mov     edi, eax
+        call    sys_exit
+
+; win_handle - map an fd to a HANDLE.
+;   in:  rdi = fd (0, 1, 2 = standard handles; anything else is a HANDLE value)
+;   out: rcx = HANDLE.  clobbers: rax
+win_handle:
+        mov     rcx, rdi
+        cmp     rdi, 3
+        jae     .done
+        lea     rax, [win_std]
+        mov     rcx, [rax + rdi*8]
+.done:
+        ret
+
+; ---------------------------------------------------------------- shim
+; sys_open - open a file.
+;   in:  rdi = NUL-terminated path (active code page), rsi = mode
+;        (0 = read, 1 = write/create/truncate, 2 = same as 1 on Windows)
+;   out: rax = fd (a HANDLE), or -1 on failure
+sys_open:
+        push    rbp
+        mov     rbp, rsp
+        and     rsp, -16
+        sub     rsp, 64                 ; shadow space + 3 stack arguments, aligned
+        mov     rcx, rdi                ; lpFileName
+        mov     edx, 0x80000000         ; dwDesiredAccess: GENERIC_READ
+        mov     r8d, 1                  ; dwShareMode: FILE_SHARE_READ
+        mov     eax, 3                  ; dwCreationDisposition: OPEN_EXISTING
+        test    rsi, rsi
+        jz      .go
+        mov     edx, 0x40000000         ; GENERIC_WRITE
+        xor     r8d, r8d                ; no sharing while we write
+        mov     eax, 2                  ; CREATE_ALWAYS
+.go:
+        xor     r9d, r9d                ; lpSecurityAttributes = NULL
+        mov     [rsp + 32], rax         ; dwCreationDisposition
+        mov     qword [rsp + 40], 0x80  ; dwFlagsAndAttributes: FILE_ATTRIBUTE_NORMAL
+        mov     qword [rsp + 48], 0     ; hTemplateFile = NULL
+        call    [__imp_CreateFileA]
+        ; INVALID_HANDLE_VALUE is -1, which is already our error value.
+        mov     rsp, rbp
+        pop     rbp
+        ret
+
+; sys_read - read up to rdx bytes.
+;   in:  rdi = fd, rsi = buffer, rdx = length
+;   out: rax = bytes read (0 at end of file or broken pipe), or -1 on error
+sys_read:
+        push    rbp
+        mov     rbp, rsp
+        and     rsp, -16
+        sub     rsp, 64
+        call    win_handle              ; rcx = HANDLE
+        mov     r8, rdx                 ; nNumberOfBytesToRead (a DWORD)
+        mov     eax, 0x40000000
+        cmp     r8, rax
+        cmova   r8, rax                 ; at most 1 GiB per call; callers loop
+        mov     rdx, rsi                ; lpBuffer
+        lea     r9, [rsp + 48]          ; lpNumberOfBytesRead
+        mov     qword [r9], 0
+        mov     qword [rsp + 32], 0     ; lpOverlapped = NULL
+        call    [__imp_ReadFile]
+        test    eax, eax
+        jz      .fail
+        mov     eax, [rsp + 48]         ; DWORD count, zero-extended
+        jmp     .out
+.fail:
+        call    [__imp_GetLastError]
+        cmp     eax, ERROR_BROKEN_PIPE  ; writer closed the pipe: that is end of file
+        mov     eax, 0
+        je      .out
+        mov     rax, -1
+.out:
+        mov     rsp, rbp
+        pop     rbp
+        ret
+
+; sys_write - write up to rdx bytes (may write fewer; callers loop).
+;   in:  rdi = fd, rsi = buffer, rdx = length
+;   out: rax = bytes written, or -1 on error
+sys_write:
+        push    rbp
+        mov     rbp, rsp
+        and     rsp, -16
+        sub     rsp, 64
+        call    win_handle
+        mov     r8, rdx                 ; nNumberOfBytesToWrite
+        mov     eax, 0x40000000
+        cmp     r8, rax
+        cmova   r8, rax
+        mov     rdx, rsi                ; lpBuffer
+        lea     r9, [rsp + 48]          ; lpNumberOfBytesWritten
+        mov     qword [r9], 0
+        mov     qword [rsp + 32], 0     ; lpOverlapped = NULL
+        call    [__imp_WriteFile]
+        test    eax, eax
+        jz      .fail
+        mov     eax, [rsp + 48]
+        jmp     .out
+.fail:
+        mov     rax, -1
+.out:
+        mov     rsp, rbp
+        pop     rbp
+        ret
+
+; sys_close - close a file. fds 0-2 (standard handles) are left open.
+;   in:  rdi = fd
+;   out: rax = 0, or -1 on failure
+sys_close:
+        xor     eax, eax
+        cmp     rdi, 3
+        jb      .done
+        push    rbp
+        mov     rbp, rsp
+        and     rsp, -16
+        sub     rsp, 32
+        mov     rcx, rdi
+        call    [__imp_CloseHandle]
+        mov     rsp, rbp
+        pop     rbp
+        test    eax, eax                ; BOOL: nonzero on success
+        mov     eax, 0
+        jnz     .done
+        mov     rax, -1
+.done:
+        ret
+
+; sys_alloc - get zeroed, page-aligned memory.
+;   in:  rdi = size in bytes
+;   out: rax = pointer, or 0 on failure
+sys_alloc:
+        push    rbp
+        mov     rbp, rsp
+        and     rsp, -16
+        sub     rsp, 32
+        xor     ecx, ecx                ; lpAddress = NULL
+        mov     rdx, rdi                ; dwSize
+        mov     r8d, 0x3000             ; MEM_COMMIT | MEM_RESERVE
+        mov     r9d, 4                  ; PAGE_READWRITE
+        call    [__imp_VirtualAlloc]
+        mov     rsp, rbp
+        pop     rbp
+        ret
+
+; sys_free - release memory from sys_alloc.
+;   in:  rdi = pointer, rsi = size (unused: MEM_RELEASE frees the whole block)
+sys_free:
+        push    rbp
+        mov     rbp, rsp
+        and     rsp, -16
+        sub     rsp, 32
+        mov     rcx, rdi                ; lpAddress
+        xor     edx, edx                ; dwSize = 0, required for MEM_RELEASE
+        mov     r8d, 0x8000             ; MEM_RELEASE
+        call    [__imp_VirtualFree]
+        mov     rsp, rbp
+        pop     rbp
+        ret
+
+; sys_exit - terminate the process. Does not return.
+;   in:  rdi = exit code
+sys_exit:
+        and     rsp, -16
+        sub     rsp, 32
+        mov     ecx, edi
+        call    [__imp_ExitProcess]
+        ud2
+
+; sys_args - command-line arguments.
+;   out: rax = argc, rdx = argv (array of NUL-terminated strings, NULL-terminated)
+sys_args:
+        mov     rax, [win_argc]
+        mov     rdx, [win_argv]
+        ret
+
+; ---------------------------------------------------------------- argv
+; win_build_argv - split GetCommandLineA() into win_argc / win_argv.
+;
+; Follows the Microsoft C runtime rules, so programs see the same arguments a
+; C program would:
+;   - argv[0] (the program): if it starts with a quote, everything up to the next
+;     quote; otherwise everything up to a space or tab. No escapes.
+;   - other arguments are separated by spaces/tabs outside quotes;
+;   - 2n backslashes then a quote: n backslashes, and the quote toggles quoting;
+;   - 2n+1 backslashes then a quote: n backslashes and a literal quote;
+;   - backslashes not followed by a quote are literal;
+;   - inside quotes, "" is a literal quote and quoting continues.
+;
+; Memory: an argument's text is never longer than the command line, and there are
+; at most len+1 arguments, so (len + 2) pointers plus 2*len + 2 bytes of text is
+; always enough. We allocate 10*len + 32 bytes once.
+;
+; Registers: rbx = command-line cursor, r12 = length, r13 = argv array,
+;            r14 = text output cursor, r15 = argc, r8d = in-quotes flag.
+win_build_argv:
+        push    rbx
+        push    r12
+        push    r13
+        push    r14
+        push    r15
+        sub     rsp, 32                 ; entry rsp = 8 (mod 16); 5 pushes + 32 realigns
+        call    [__imp_GetCommandLineA]
+        mov     rbx, rax
+        xor     ecx, ecx
+.len:
+        cmp     byte [rbx + rcx], 0
+        je      .len_done
+        inc     rcx
+        jmp     .len
+.len_done:
+        mov     r12, rcx
+        imul    rdi, r12, 10
+        add     rdi, 32
+        call    sys_alloc
+        test    rax, rax
+        jz      .oom
+        mov     r13, rax
+        lea     r14, [r12 + 2]
+        lea     r14, [rax + r14*8]      ; text area follows the pointer array
+        xor     r15d, r15d
+
+        ; --- argv[0]
+        mov     [r13], r14
+        inc     r15
+        cmp     byte [rbx], '"'
+        jne     .a0_plain
+        inc     rbx
+.a0_quoted:
+        movzx   eax, byte [rbx]
+        test    al, al
+        jz      .a0_end
+        inc     rbx
+        cmp     al, '"'
+        je      .a0_end
+        mov     [r14], al
+        inc     r14
+        jmp     .a0_quoted
+.a0_plain:
+        movzx   eax, byte [rbx]
+        test    al, al
+        jz      .a0_end
+        cmp     al, ' '
+        je      .a0_end
+        cmp     al, 9
+        je      .a0_end
+        mov     [r14], al
+        inc     r14
+        inc     rbx
+        jmp     .a0_plain
+.a0_end:
+        mov     byte [r14], 0
+        inc     r14
+
+        ; --- remaining arguments
+.skip_ws:
+        movzx   eax, byte [rbx]
+        cmp     al, ' '
+        je      .ws
+        cmp     al, 9
+        je      .ws
+        test    al, al
+        jz      .done
+        jmp     .arg_start
+.ws:
+        inc     rbx
+        jmp     .skip_ws
+
+.arg_start:
+        mov     [r13 + r15*8], r14
+        inc     r15
+        xor     r8d, r8d                ; not inside quotes
+.arg_loop:
+        movzx   eax, byte [rbx]
+        test    al, al
+        jz      .arg_end
+        cmp     al, 0x5C                ; backslash
+        je      .backslashes
+        cmp     al, '"'
+        je      .quote
+        test    r8d, r8d
+        jnz     .literal                ; inside quotes, whitespace is literal
+        cmp     al, ' '
+        je      .arg_end
+        cmp     al, 9
+        je      .arg_end
+.literal:
+        mov     [r14], al
+        inc     r14
+        inc     rbx
+        jmp     .arg_loop
+
+.backslashes:
+        xor     ecx, ecx                ; count the run of backslashes
+.bs_count:
+        cmp     byte [rbx + rcx], 0x5C
+        jne     .bs_counted
+        inc     rcx
+        jmp     .bs_count
+.bs_counted:
+        cmp     byte [rbx + rcx], '"'
+        je      .bs_quote
+        add     rbx, rcx                ; not before a quote: all literal
+.bs_literal:
+        mov     byte [r14], 0x5C
+        inc     r14
+        dec     rcx
+        jnz     .bs_literal
+        jmp     .arg_loop
+.bs_quote:
+        add     rbx, rcx                ; rbx now points at the quote
+        mov     rdx, rcx
+        shr     rdx, 1                  ; emit n = count / 2 backslashes
+        jz      .bs_half_done
+.bs_half:
+        mov     byte [r14], 0x5C
+        inc     r14
+        dec     rdx
+        jnz     .bs_half
+.bs_half_done:
+        test    ecx, 1
+        jz      .quote                  ; even count: the quote is a delimiter
+        mov     byte [r14], '"'         ; odd count: the quote is literal
+        inc     r14
+        inc     rbx
+        jmp     .arg_loop
+
+.quote:
+        inc     rbx
+        test    r8d, r8d
+        jz      .open_quote
+        cmp     byte [rbx], '"'         ; "" inside quotes: literal quote
+        jne     .close_quote
+        mov     byte [r14], '"'
+        inc     r14
+        inc     rbx
+        jmp     .arg_loop
+.close_quote:
+        xor     r8d, r8d
+        jmp     .arg_loop
+.open_quote:
+        mov     r8d, 1
+        jmp     .arg_loop
+
+.arg_end:
+        mov     byte [r14], 0
+        inc     r14
+        jmp     .skip_ws                ; sees the NUL and finishes if the line ended
+
+.done:
+        mov     qword [r13 + r15*8], 0
+        mov     [win_argc], r15
+        mov     [win_argv], r13
+        add     rsp, 32
+        pop     r15
+        pop     r14
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
+.oom:
+        mov     edi, 70
+        call    sys_exit
+
+        align   8, db 0
+win_std:        dq 0, 0, 0              ; stdin, stdout, stderr handles
+win_argc:       dq 0
+win_argv:       dq 0
+
+; ---------------------------------------------------------------- imports
+; One IMAGE_IMPORT_DESCRIPTOR for KERNEL32.dll, then a null descriptor. The
+; import lookup table (ILT) and the import address table (IAT) both list the
+; hint/name entries; the loader overwrites the IAT with function addresses.
+        align   8, db 0
+win_import_dir:
+        dd      win_ilt - $$            ; OriginalFirstThunk
+        dd      0                       ; TimeDateStamp
+        dd      0                       ; ForwarderChain
+        dd      win_dll_name - $$       ; Name
+        dd      win_iat - $$            ; FirstThunk
+        times 5 dd 0                    ; terminating null descriptor
+win_import_dir_end:
+
+win_ilt:
+        dq      win_hn_GetStdHandle - $$
+        dq      win_hn_GetCommandLineA - $$
+        dq      win_hn_CreateFileA - $$
+        dq      win_hn_ReadFile - $$
+        dq      win_hn_WriteFile - $$
+        dq      win_hn_CloseHandle - $$
+        dq      win_hn_VirtualAlloc - $$
+        dq      win_hn_VirtualFree - $$
+        dq      win_hn_GetLastError - $$
+        dq      win_hn_ExitProcess - $$
+        dq      0
+
+win_iat:
+__imp_GetStdHandle:     dq win_hn_GetStdHandle - $$
+__imp_GetCommandLineA:  dq win_hn_GetCommandLineA - $$
+__imp_CreateFileA:      dq win_hn_CreateFileA - $$
+__imp_ReadFile:         dq win_hn_ReadFile - $$
+__imp_WriteFile:        dq win_hn_WriteFile - $$
+__imp_CloseHandle:      dq win_hn_CloseHandle - $$
+__imp_VirtualAlloc:     dq win_hn_VirtualAlloc - $$
+__imp_VirtualFree:      dq win_hn_VirtualFree - $$
+__imp_GetLastError:     dq win_hn_GetLastError - $$
+__imp_ExitProcess:      dq win_hn_ExitProcess - $$
+        dq      0
+
+; Hint/name entries: a 2-byte hint (0: let the loader search) and the name.
+; Each entry must start on an even address.
+win_hn_GetStdHandle:    dw 0
+        db      'GetStdHandle', 0
+        align   2, db 0
+win_hn_GetCommandLineA: dw 0
+        db      'GetCommandLineA', 0
+        align   2, db 0
+win_hn_CreateFileA:     dw 0
+        db      'CreateFileA', 0
+        align   2, db 0
+win_hn_ReadFile:        dw 0
+        db      'ReadFile', 0
+        align   2, db 0
+win_hn_WriteFile:       dw 0
+        db      'WriteFile', 0
+        align   2, db 0
+win_hn_CloseHandle:     dw 0
+        db      'CloseHandle', 0
+        align   2, db 0
+win_hn_VirtualAlloc:    dw 0
+        db      'VirtualAlloc', 0
+        align   2, db 0
+win_hn_VirtualFree:     dw 0
+        db      'VirtualFree', 0
+        align   2, db 0
+win_hn_GetLastError:    dw 0
+        db      'GetLastError', 0
+        align   2, db 0
+win_hn_ExitProcess:     dw 0
+        db      'ExitProcess', 0
+        align   2, db 0
+win_dll_name:
+        db      'KERNEL32.dll', 0

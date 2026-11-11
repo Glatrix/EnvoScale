@@ -1,0 +1,2 @@
+// expect-error: E0010 @ 2:10
+var s = "\u0041";

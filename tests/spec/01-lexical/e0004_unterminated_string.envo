@@ -1,0 +1,2 @@
+// expect-error: E0004 @ 2:9
+var s = "abc

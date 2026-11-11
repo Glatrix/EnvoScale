@@ -1,0 +1,6 @@
+"" "hello" "with \"escapes\" \\ \n \r \t \0 \'" "\x41\x7F\x00"
+"\u{41}\u{1F600}\u{10FFFF}\u{0}\u{00e9}" "tab	inside"
+"héllo" x
+"日本語" y "😀" z
+'a' '\n' '\'' '"' '\x7F' '\u{E9}' 'é' '日' '😀' '	' z
+"// not a comment" "/* nor this */"

@@ -1,0 +1,26 @@
+1:1 n string ""
+1:4 s string "hello"
+1:12 s string "with \"escapes\" \\ \n \r \t \0 \'"
+1:49 s string "\x41\x7F\x00"
+2:1 n string "\u{41}\u{1F600}\u{10FFFF}\u{0}\u{00e9}"
+2:42 s string "tab	inside"
+3:1 n string "héllo"
+3:9 s ident x
+4:1 n string "日本語"
+4:7 s ident y
+4:9 s string "😀"
+4:13 s ident z
+5:1 n char 'a'
+5:5 s char '\n'
+5:10 s char '\''
+5:15 s char '"'
+5:19 s char '\x7F'
+5:26 s char '\u{E9}'
+5:35 s char 'é'
+5:39 s char '日'
+5:43 s char '😀'
+5:47 s char '	'
+5:51 s ident z
+6:1 n string "// not a comment"
+6:20 s string "/* nor this */"
+7:1 n eof

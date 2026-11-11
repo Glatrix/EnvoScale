@@ -1,0 +1,5 @@
+2:1 n ident print
+2:6 j punct (
+2:7 j string "hi"
+2:11 j punct )
+3:1 n eof

@@ -1,0 +1,4 @@
+1:1 n ident x
+1:3 s punct =
+1:5 s int 1
+2:1 n eof

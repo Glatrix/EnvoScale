@@ -1,0 +1,2 @@
+// expect-error: E0007 @ 2:9
+var f = 1e+;

@@ -1,0 +1,214 @@
+; =============================================================================
+; src/diag.eas - diagnostics
+;
+; Format (docs/spec/errors.md):
+;   <path>:<line>:<col>: error[E0004]: unterminated string literal
+; Lines and columns are 1-based; columns count Unicode scalar values, i.e. bytes
+; that are not UTF-8 continuation bytes (10xxxxxx). Stage 0 stops at the first
+; error, so diag_error never returns.
+;
+; diag_path / diag_src / diag_len describe the file being compiled and must be
+; set before any diagnostic is reported.
+; =============================================================================
+
+E_INVALID_UTF8          equ 1
+E_UNEXPECTED_CHAR       equ 2
+E_UNTERMINATED_COMMENT  equ 3
+E_UNTERMINATED_STRING   equ 4
+E_UNTERMINATED_CHAR     equ 5
+E_BAD_ESCAPE            equ 6
+E_BAD_NUMBER            equ 7
+E_BAD_SUFFIX            equ 8
+E_CHAR_LENGTH           equ 9
+E_BAD_UNICODE_ESCAPE    equ 10
+E_CONTROL_CHAR          equ 11
+E_CORE_INTERPOLATION    equ 901
+E_CORE_RAW_STRING       equ 902
+E_CORE_DIRECTIVE        equ 903
+E_CORE_NON_ASCII        equ 904
+
+; src_line - 1-based line number of a byte offset.
+;   in:  rdi = offset
+;   out: rax = line.  clobbers: rcx, rdx
+src_line:
+        mov     rdx, [diag_src]
+        mov     eax, 1
+        xor     ecx, ecx
+.loop:
+        cmp     rcx, rdi
+        jae     .done
+        cmp     byte [rdx + rcx], 10
+        jne     .next
+        inc     rax
+.next:
+        inc     rcx
+        jmp     .loop
+.done:
+        ret
+
+; src_col - 1-based column (in Unicode scalar values) of a byte offset.
+;   in:  rdi = offset
+;   out: rax = column.  clobbers: rcx, rdx, r8
+src_col:
+        mov     rdx, [diag_src]
+        mov     rcx, rdi                ; walk back to the start of the line
+.back:
+        test    rcx, rcx
+        jz      .count
+        cmp     byte [rdx + rcx - 1], 10
+        je      .count
+        dec     rcx
+        jmp     .back
+.count:
+        mov     eax, 1
+.loop:
+        cmp     rcx, rdi
+        jae     .done
+        movzx   r8d, byte [rdx + rcx]
+        and     r8d, 0xC0
+        cmp     r8d, 0x80               ; continuation bytes don't start a character
+        je      .next
+        inc     rax
+.next:
+        inc     rcx
+        jmp     .loop
+.done:
+        ret
+
+; diag_error - report an error at a source offset and exit with code 1.
+;   in:  edi = error code, rsi = byte offset
+diag_error:
+        and     rsp, -16                ; never returns: realign unconditionally
+        mov     ebx, edi                ; rbx = code
+        mov     r12, rsi                ; r12 = offset
+        lea     rdi, [w_err]
+        mov     rsi, [diag_path]
+        call    w_cstr
+        lea     rdi, [w_err]
+        mov     esi, ':'
+        call    w_byte
+        mov     rdi, r12
+        call    src_line
+        lea     rdi, [w_err]
+        mov     rsi, rax
+        call    w_u64
+        lea     rdi, [w_err]
+        mov     esi, ':'
+        call    w_byte
+        mov     rdi, r12
+        call    src_col
+        lea     rdi, [w_err]
+        mov     rsi, rax
+        call    w_u64
+        lea     rdi, [w_err]
+        lea     rsi, [msg_error_open]
+        mov     edx, msg_error_open_len
+        call    w_bytes
+        ; four-digit code, zero-padded
+        sub     rsp, 16
+        mov     eax, ebx
+        mov     ecx, 10
+        xor     edx, edx
+        div     ecx
+        add     dl, '0'
+        mov     [rsp + 3], dl
+        xor     edx, edx
+        div     ecx
+        add     dl, '0'
+        mov     [rsp + 2], dl
+        xor     edx, edx
+        div     ecx
+        add     dl, '0'
+        mov     [rsp + 1], dl
+        xor     edx, edx
+        div     ecx
+        add     dl, '0'
+        mov     [rsp], dl
+        lea     rdi, [w_err]
+        mov     rsi, rsp
+        mov     edx, 4
+        call    w_bytes
+        add     rsp, 16
+        lea     rdi, [w_err]
+        lea     rsi, [msg_error_close]
+        mov     edx, msg_error_close_len
+        call    w_bytes
+        mov     edi, ebx
+        call    diag_message            ; rax = NUL-terminated message
+        lea     rdi, [w_err]
+        mov     rsi, rax
+        call    w_cstr
+        lea     rdi, [w_err]
+        mov     esi, 10
+        call    w_byte
+        mov     edi, 1
+        call    exit_process
+
+; diag_message - look up the message for an error code.
+;   in:  edi = code
+;   out: rax = NUL-terminated message
+;   clobbers: rcx, rdx
+; The table is a sequence of (dw code, NUL-terminated text), ended by dw 0.
+diag_message:
+        lea     rax, [diag_messages]
+.entry:
+        movzx   ecx, word [rax]
+        test    ecx, ecx
+        jz      .unknown
+        add     rax, 2
+        cmp     ecx, edi
+        je      .found
+.skip:
+        cmp     byte [rax], 0
+        lea     rax, [rax + 1]          ; lea leaves the flags alone
+        jne     .skip
+        jmp     .entry
+.found:
+        ret
+.unknown:
+        lea     rax, [msg_unknown_error]
+        ret
+
+msg_error_open:         db ': error[E'
+msg_error_open_len      equ $ - msg_error_open
+msg_error_close:        db ']: '
+msg_error_close_len     equ $ - msg_error_close
+msg_unknown_error:      db '(no message for this error code)', 0
+
+diag_messages:
+        dw      E_INVALID_UTF8
+        db      'source file is not valid UTF-8', 0
+        dw      E_UNEXPECTED_CHAR
+        db      'unexpected character', 0
+        dw      E_UNTERMINATED_COMMENT
+        db      'unterminated block comment', 0
+        dw      E_UNTERMINATED_STRING
+        db      'unterminated string literal', 0
+        dw      E_UNTERMINATED_CHAR
+        db      'unterminated character literal', 0
+        dw      E_BAD_ESCAPE
+        db      'unknown or malformed escape sequence', 0
+        dw      E_BAD_NUMBER
+        db      'malformed numeric literal', 0
+        dw      E_BAD_SUFFIX
+        db      'invalid suffix on numeric literal', 0
+        dw      E_CHAR_LENGTH
+        db      'character literal must contain exactly one character', 0
+        dw      E_BAD_UNICODE_ESCAPE
+        db      'invalid Unicode escape', 0
+        dw      E_CONTROL_CHAR
+        db      'control character in literal; use an escape sequence', 0
+        dw      E_CORE_INTERPOLATION
+        db      'interpolated strings are not part of Envo-Core', 0
+        dw      E_CORE_RAW_STRING
+        db      'raw string literals are not part of Envo-Core', 0
+        dw      E_CORE_DIRECTIVE
+        db      'directives are not part of Envo-Core', 0
+        dw      E_CORE_NON_ASCII
+        db      'non-ASCII characters outside literals and comments are not supported in Envo-Core', 0
+        dw      0
+
+        align   8, db 0
+diag_path:      dq 0
+diag_src:       dq 0
+diag_len:       dq 0

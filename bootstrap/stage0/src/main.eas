@@ -1,0 +1,233 @@
+; =============================================================================
+; src/main.eas - envoc0 command dispatch
+;
+;   envoc0 lex <file.envo>     print the token stream
+;   envoc0 version             print the version (also --version)
+;   envoc0 help                print usage (also --help)
+;
+; Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
+; Every command ends in exit_process, so main never returns.
+; =============================================================================
+
+; main - entry from the platform layer, with rsp aligned before the call.
+main:
+        sub     rsp, 8
+        call    io_init
+        call    sys_args
+        mov     [g_argc], rax
+        mov     [g_argv], rdx
+        cmp     rax, 2
+        jb      .usage_error
+
+        lea     rsi, [s_cmd_lex]
+        mov     edx, s_cmd_lex_len
+        call    arg1_is
+        test    eax, eax
+        jnz     .lex
+        lea     rsi, [s_cmd_version]
+        mov     edx, s_cmd_version_len
+        call    arg1_is
+        test    eax, eax
+        jnz     .version
+        lea     rsi, [s_cmd_dash_version]
+        mov     edx, s_cmd_dash_version_len
+        call    arg1_is
+        test    eax, eax
+        jnz     .version
+        lea     rsi, [s_cmd_help]
+        mov     edx, s_cmd_help_len
+        call    arg1_is
+        test    eax, eax
+        jnz     .help
+        lea     rsi, [s_cmd_dash_help]
+        mov     edx, s_cmd_dash_help_len
+        call    arg1_is
+        test    eax, eax
+        jnz     .help
+
+        ; unknown command
+        lea     rdi, [w_err]
+        lea     rsi, [s_unknown_command]
+        mov     edx, s_unknown_command_len
+        call    w_bytes
+        mov     rdx, [g_argv]
+        lea     rdi, [w_err]
+        mov     rsi, [rdx + 8]
+        call    w_cstr
+        lea     rdi, [w_err]
+        mov     esi, 0x27
+        call    w_byte
+        lea     rdi, [w_err]
+        mov     esi, 10
+        call    w_byte
+        jmp     .usage_error
+
+.lex:
+        cmp     qword [g_argc], 3
+        jne     .usage_error
+        mov     rdx, [g_argv]
+        mov     rdi, [rdx + 16]
+        call    cmd_lex                 ; does not return
+
+.version:
+        lea     rdi, [w_out]
+        lea     rsi, [s_version]
+        mov     edx, s_version_len
+        call    w_bytes
+        lea     rdi, [w_out]
+        lea     rsi, [plat_name]
+        mov     edx, plat_name_len
+        call    w_bytes
+        lea     rdi, [w_out]
+        mov     esi, ')'
+        call    w_byte
+        lea     rdi, [w_out]
+        mov     esi, 10
+        call    w_byte
+        xor     edi, edi
+        call    exit_process
+
+.help:
+        lea     rdi, [w_out]
+        lea     rsi, [s_usage]
+        mov     edx, s_usage_len
+        call    w_bytes
+        xor     edi, edi
+        call    exit_process
+
+.usage_error:
+        lea     rdi, [w_err]
+        lea     rsi, [s_usage]
+        mov     edx, s_usage_len
+        call    w_bytes
+        mov     edi, 2
+        call    exit_process
+
+; arg1_is - is argv[1] equal to the given string?
+;   in:  rsi = string, rdx = length
+;   out: eax = 1 or 0.  clobbers: rcx, rdi
+arg1_is:
+        mov     rdi, [g_argv]
+        mov     rdi, [rdi + 8]
+        jmp     cstr_eq
+
+; cmd_lex - read, validate and tokenize one file, and print its tokens.
+;   in:  rdi = NUL-terminated path. Does not return.
+cmd_lex:
+        push    rbx
+        push    r12
+        push    r13
+        mov     rbx, rdi
+        mov     [diag_path], rdi
+        call    read_file
+        test    rax, rax
+        jz      .read_failed
+        ; [lex.src.2] ignore a UTF-8 byte order mark
+        cmp     rdx, 3
+        jb      .no_bom
+        cmp     word [rax], 0xBBEF
+        jne     .no_bom
+        cmp     byte [rax + 2], 0xBF
+        jne     .no_bom
+        add     rax, 3
+        sub     rdx, 3
+.no_bom:
+        mov     [diag_src], rax
+        mov     [diag_len], rdx
+        mov     r12, rax
+        mov     r13, rdx
+        mov     rdi, rax
+        mov     rsi, rdx
+        call    utf8_validate           ; [lex.src.1]
+        cmp     rax, -1
+        je      .valid
+        mov     edi, E_INVALID_UTF8
+        mov     rsi, rax
+        call    diag_error
+.valid:
+        mov     rdi, r12
+        mov     rsi, r13
+        call    lex
+        mov     rdi, rax
+        mov     rsi, rdx
+        call    lex_dump
+        xor     edi, edi
+        call    exit_process
+
+.read_failed:
+        mov     r12, rdx                ; reason: 1 open, 2 read, 3 too large
+        lea     rdi, [w_err]
+        lea     rsi, [s_err_prefix]
+        mov     edx, s_err_prefix_len
+        call    w_bytes
+        lea     rsi, [s_cannot_open]
+        mov     edx, s_cannot_open_len
+        cmp     r12, 1
+        je      .reason
+        lea     rsi, [s_cannot_read]
+        mov     edx, s_cannot_read_len
+        cmp     r12, 2
+        je      .reason
+        lea     rsi, [s_too_large]
+        mov     edx, s_too_large_len
+.reason:
+        lea     rdi, [w_err]
+        call    w_bytes
+        lea     rdi, [w_err]
+        mov     rsi, rbx
+        call    w_cstr
+        lea     rdi, [w_err]
+        mov     esi, 0x27
+        call    w_byte
+        cmp     r12, 3
+        jne     .newline
+        lea     rdi, [w_err]
+        lea     rsi, [s_size_limit]
+        mov     edx, s_size_limit_len
+        call    w_bytes
+.newline:
+        lea     rdi, [w_err]
+        mov     esi, 10
+        call    w_byte
+        mov     edi, 1
+        call    exit_process
+
+s_cmd_lex:              db 'lex'
+s_cmd_lex_len           equ $ - s_cmd_lex
+s_cmd_version:          db 'version'
+s_cmd_version_len       equ $ - s_cmd_version
+s_cmd_dash_version:     db '--version'
+s_cmd_dash_version_len  equ $ - s_cmd_dash_version
+s_cmd_help:             db 'help'
+s_cmd_help_len          equ $ - s_cmd_help
+s_cmd_dash_help:        db '--help'
+s_cmd_dash_help_len     equ $ - s_cmd_dash_help
+
+s_version:              db 'envoc0 0.1.0-dev (EnvoScale stage 0, Envo-Core; '
+s_version_len           equ $ - s_version
+
+s_usage:
+        db      'usage: envoc0 <command> [arguments]', 10
+        db      10
+        db      'commands:', 10
+        db      '  lex <file.envo>   print the token stream of an Envo-Core source file', 10
+        db      '  version           print the version', 10
+        db      '  help              print this message', 10
+s_usage_len             equ $ - s_usage
+
+s_unknown_command:      db "envoc0: error: unknown command '"
+s_unknown_command_len   equ $ - s_unknown_command
+s_err_prefix:           db 'envoc0: error: '
+s_err_prefix_len        equ $ - s_err_prefix
+s_cannot_open:          db "cannot open '"
+s_cannot_open_len       equ $ - s_cannot_open
+s_cannot_read:          db "cannot read '"
+s_cannot_read_len       equ $ - s_cannot_read
+s_too_large:            db "file too large: '"
+s_too_large_len         equ $ - s_too_large
+s_size_limit:           db ' (Stage 0 accepts source files up to 16 MiB)'
+s_size_limit_len        equ $ - s_size_limit
+
+        align   8, db 0
+g_argc:         dq 0
+g_argv:         dq 0

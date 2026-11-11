@@ -1,0 +1,2 @@
+// expect-error: E0009 @ 2:9
+var c = '';
