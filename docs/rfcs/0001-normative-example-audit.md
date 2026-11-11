@@ -1,6 +1,7 @@
 # RFC 0001: Normative example audit (§3.3)
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-11). The owner asked for open decisions to follow the
+  brief's core principles; "no hidden copies, no hidden allocations" (brief §3.6) decides C1 and C2.
 - **Author(s):** founding engineer
 - **Affects:** language (chapters 2, 3, 5), the founding brief's §3.3 examples
 - **Tracking:** must be resolved before Stage 2 type checking (M3)
@@ -127,9 +128,9 @@ lambdas), C# (`?` and `?:`).
 
 ## Unresolved questions
 
-- Owner approval for C1 and C2. Until then, `tests/spec/` will carry these two examples
-  as `expect-error` tests that document the conflict, plus the corrected versions as
-  passing tests.
+None. C1 and C2 are accepted as proposed: the corrected examples are the normative ones.
+When Stage 2 type-checks them (M3), `tests/spec/` gets the brief's original versions as
+`expect-error` tests (E0502 for C1, E0504 for C2) and the corrected versions as passing tests.
 
 ## Migration / edition impact
 

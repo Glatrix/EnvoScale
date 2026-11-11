@@ -17,4 +17,4 @@ founding brief is ambiguous or contradicts itself (brief §0.7).
 
 | # | Title | Status |
 |---|---|---|
-| [0001](0001-normative-example-audit.md) | Normative example audit (§3.3) | Proposed |
+| [0001](0001-normative-example-audit.md) | Normative example audit (§3.3) | Accepted |
