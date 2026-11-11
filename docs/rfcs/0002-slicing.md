@@ -86,8 +86,8 @@ meaning chapter 3 gives them; this RFC only defines them as an index.
   `a` (chapter 5), so `a` may not be moved, dropped or mutated while the result is
   live ([own.borrow.1]–[own.borrow.3]). Slicing an array that is not a place (a call
   result, for example) is **E0329**, because the view would outlive its storage.
-  Elements are read through the view; writing through a slice is defined by the
-  lifetimes RFC (#31), which settles shared and exclusive views together.
+  Elements are read through the view. Writing needs an exclusive view, `mut T[]`,
+  defined by [RFC 0004](0004-lifetimes-and-views.md) ([view.1]–[view.6]).
 - **[expr.slice.5]** `T[] slice_from<T>(*T ptr, usize len)` is a built-in that makes a
   view of `len` values at `ptr`. It needs `unsafe` (E0306): the caller vouches that the
   memory holds `len` valid `T`s and stays alive while the view is used. It is the
@@ -131,8 +131,8 @@ from-the-end index is left out; it can come later without breaking anything.
 
 ## Unresolved questions
 
-- Writing through a view (C#'s `Span<T>` vs `ReadOnlySpan<T>`, Rust's `&mut [T]`):
-  decided with lifetimes in #31.
+- ~~Writing through a view~~: decided by [RFC 0004](0004-lifetimes-and-views.md),
+  `mut T[]`.
 - A from-the-end index (`a[^1]`, `a[..^1]`): later RFC if wanted.
 
 ## Migration / edition impact

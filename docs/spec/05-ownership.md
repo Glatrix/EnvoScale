@@ -62,18 +62,24 @@ requests ownership and is an error if that would move out of a borrow.)
 **[own.life.1]** Every borrow has a lifetime the compiler infers. In function signatures
 lifetimes are **elided**:
 
+0. If a function returns a borrow and has no borrowed parameters, the result borrows
+   static data ([life.infer.1]).
 1. If a function returns a borrow and has exactly one borrowed parameter (counting
    `this`), the result borrows from that parameter.
 2. If it has a borrowed `this`, the result borrows from `this`.
-3. Otherwise the elision fails (E0506) and the signature must be clarified.
+3. Otherwise, a function that is not exported from a library has its result's origins
+   inferred from its body ([life.infer.2]); an exported one needs a `from` clause (E0506).
 
 **[own.life.2]** A struct or enum with borrowed fields (for example a `str` or `T[]`
 field) implicitly takes a lifetime parameter, inferred at each use.
 
-**[own.life.3]** The spelling of explicit lifetimes is **not yet decided** (open question
-3 in `docs/PLAN.md`): Rust's `'a` collides with character literals in a C#-style lexer.
-Until an RFC settles it, code that needs an explicit lifetime must be restructured;
-E0506 explains how.
+**[own.life.3]** Explicit lifetimes name where a borrow comes from:
+`str Longest(in str a, in str b) from a, b`, and `ref` parameters can say what may be
+stored into them (`ref List<str> names from name`). See
+[RFC 0004](../rfcs/0004-lifetimes-and-views.md), [life.origin.1]–[life.infer.4].
+
+**[own.view.1]** `T[]` is a shared, read-only view; `mut T[]` is an exclusive view that can
+be written through ([RFC 0004](../rfcs/0004-lifetimes-and-views.md), [view.1]–[view.6]).
 
 ## 5.5 Error messages
 

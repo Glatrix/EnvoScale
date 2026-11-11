@@ -20,3 +20,4 @@ founding brief is ambiguous or contradicts itself (brief §0.7).
 | [0001](0001-normative-example-audit.md) | Normative example audit (§3.3) | Accepted |
 | [0002](0002-slicing.md) | Slicing | Accepted |
 | [0003](0003-function-types.md) | Function and closure types | Accepted |
+| [0004](0004-lifetimes-and-views.md) | Explicit lifetimes (`from`) and writable views | Accepted |

@@ -72,7 +72,9 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    below is the original question.
    `LICENSE` was MIT with "The EnvoScale contributors" as a placeholder
    choice. The owner should confirm or replace it before the first public release.
-3. **Explicit lifetime syntax.** The brief says explicit lifetimes "exist but are
+3. ~~**Explicit lifetime syntax.**~~ **Decided 2026-11-11 by [RFC 0004](rfcs/0004-lifetimes-and-views.md):**
+   borrow origins (`from a, b`), inferred for functions a library does not export, and `mut T[]` for
+   writable views. Original question: the brief says explicit lifetimes "exist but are
    rarely needed" without giving a spelling. Rust's `'a` collides with char literals
    in a C#-style lexer. Deferred to an RFC ([#31](https://github.com/envoscale/EnvoScale/issues/31));
    the draft spec reports elision failures as an error with no explicit escape hatch yet.

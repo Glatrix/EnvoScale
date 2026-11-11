@@ -131,7 +131,8 @@ can use them without breaking code.
 
 These are ordinary identifiers except in the positions chapter 3–4 give them meaning:
 `get`, `set`, `init`, `value`, `component`, `unchecked`, and `fn`, `mut`, `once`, `move`
-(function types and lambdas, [RFC 0003](../rfcs/0003-function-types.md) [fn.syn.1]).
+(function types and lambdas, [RFC 0003](../rfcs/0003-function-types.md) [fn.syn.1]; `mut` also
+before slice types, [RFC 0004](../rfcs/0004-lifetimes-and-views.md) [view.2]), and `from` (borrow origins, [life.from.1]).
 
 ### 1.6.3 Predeclared names
 

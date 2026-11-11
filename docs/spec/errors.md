@@ -99,6 +99,7 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0330 | cannot infer the type of lambda parameter `x`; write its type | [fn.lam.1] (Envo-S1, RFC 0003) |
 | E0331 | this lambda changes (or moves) `x`, but the target is a `fn` (or `mut fn`) | [fn.type.4] (Envo-S1, RFC 0003) |
 | E0332 | calling a `mut fn` needs `ref` or owned access, not a shared borrow | [fn.type.3] (Envo-S1, RFC 0003) |
+| E0333 | `mut` only applies to `fn` types and slices | [view.2] (Envo-S1, RFC 0004) |
 
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
 
@@ -110,6 +111,8 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0504 | value moved or dropped while borrowed |
 | E0505 | `out` parameter not assigned on every path |
 | E0506 | cannot infer the lifetime of a returned borrow |
+| E0507 | this returns (or stores) a borrow of `x`, but the signature does not say `from x` ([life.from.3], RFC 0004) |
+| E0508 | `from` can only name a borrowed parameter or `this` ([life.from.2], RFC 0004) |
 | E0510 | allocation in a `[NoAlloc]` function |
 
 ## Not part of Envo-Core (E0900–E0999)
