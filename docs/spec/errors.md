@@ -96,6 +96,9 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0327 | `void` is only allowed as a return type | [core.type.1] |
 | E0328 | cannot slice `T` | [expr.slice.1] (Envo-S1, RFC 0002) |
 | E0329 | cannot slice a temporary array; store it in a variable first | [expr.slice.4] (Envo-S1, RFC 0002) |
+| E0330 | cannot infer the type of lambda parameter `x`; write its type | [fn.lam.1] (Envo-S1, RFC 0003) |
+| E0331 | this lambda changes (or moves) `x`, but the target is a `fn` (or `mut fn`) | [fn.type.4] (Envo-S1, RFC 0003) |
+| E0332 | calling a `mut fn` needs `ref` or owned access, not a shared borrow | [fn.type.3] (Envo-S1, RFC 0003) |
 
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
 

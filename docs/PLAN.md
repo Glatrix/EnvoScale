@@ -76,8 +76,10 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    rarely needed" without giving a spelling. Rust's `'a` collides with char literals
    in a C#-style lexer. Deferred to an RFC ([#31](https://github.com/envoscale/EnvoScale/issues/31));
    the draft spec reports elision failures as an error with no explicit escape hatch yet.
-4. **Function types.** No syntax is given for function pointer / closure types.
-   Deferred to an RFC alongside generics (needed by M2; [#30](https://github.com/envoscale/EnvoScale/issues/30)).
+4. ~~**Function types.**~~ **Decided 2026-11-11 by [RFC 0003](rfcs/0003-function-types.md):**
+   `fn(A) -> R`, with closure kinds `fn` / `mut fn` / `once fn`, generic in parameter
+   position and a code + environment value elsewhere; `extern "C" fn` for C. Original
+   question: no syntax is given for function pointer / closure types.
 5. ~~**Unicode paths on Windows.**~~ **Decided 2026-11-11: UTF-8 everywhere.** Stage 0 now uses the `…W` APIs and converts with kernel32's UTF-8 routines. Original question: Stage 0 uses the `…A` kernel32 entry points, so paths
    must be in the active code page. Fixing it means UTF-16 conversion in assembly;
    deferred unless it blocks someone (tracked in `STATUS.md`).

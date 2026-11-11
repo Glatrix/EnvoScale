@@ -58,7 +58,9 @@ intermediate allocation.
 ### 3.2.6 Lambdas
 `x => e`, `(x, y) => e`, `(int x) => { … }`, `() => e`. Captures are inferred: by shared
 borrow if only read, by exclusive borrow if mutated, by move if the lambda escapes (or
-with an explicit `move` prefix — reserved word TBD in RFC).
+with the contextual `move` prefix: `move () => …`). Function types, closure kinds
+(`fn`, `mut fn`, `once fn`) and the full capture rules are in
+[RFC 0003](../rfcs/0003-function-types.md) ([fn.type.1]–[fn.lam.3]).
 
 ## 3.3 Postfix expressions
 

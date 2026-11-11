@@ -88,6 +88,7 @@ beginners hit, with error messages that suggest the cast.
 | `T?` | optional | sugar for `Option<T>`; `null` is `Option<T>.None` |
 | `*T` | raw pointer | address of a `T`; dereferencing requires `unsafe` |
 | `Result<T, E>` | result | `Ok(T)` or `Err(E)`; the standard error type |
+| `fn(A, B) -> R` | function | a closure or function; `mut fn` / `once fn` may change / use up their captures; generic as a parameter, a code + environment pair elsewhere; `extern "C" fn` is a C function pointer ([RFC 0003](../rfcs/0003-function-types.md)) |
 
 **[type.array.1]** Indexing an array or slice checks the bounds and panics when out of
 range. The optimizer removes checks it can prove redundant (brief §4.3).
