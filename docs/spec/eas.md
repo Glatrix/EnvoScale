@@ -75,6 +75,10 @@ comment   = ';' any-text-to-end-of-line
   (issue #20). With explicit sizes, the bytes are a function of the source text alone,
   and the seed needs no relaxation pass. When editing, write `short`; if the assembler
   reports the target out of range, change that jump to `near`.
+- **Write the instruction you mean, in its shortest spelling.** Assemblers may quietly
+  substitute an equivalent shorter instruction (NASM 3 turns `movsxd rax, eax` into
+  `cdqe`; NASM 2.16 does not), so the source must already use the short form: `cdqe`,
+  not `movsxd rax, eax`. Found by comparing NASM 2.16 and 3.02 output (issue #20).
 - **Immediates and displacements** whose value is known use the shortest encoding: a
   sign-extended 8-bit immediate or displacement when the value fits, otherwise 32 bits
   (NASM's default `-Ox`). Because constants are defined before the code that uses them
@@ -103,7 +107,7 @@ push pop call ret jmp      (jmp also through a 64-bit register)
 setcc lodsb
 jcc   (jo jno jb jae je jne jbe ja js jns jp jnp jl jge jle jg, and aliases jc jnc jz jnz)
 setcc cmovcc   (same condition codes)
-cqo cdq
+cqo cdq cdqe
 rep movsb   rep stosb
 syscall nop ud2 int3 hlt
 ```

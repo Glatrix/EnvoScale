@@ -542,7 +542,7 @@ rtw_bi_open:
         mov     rdi, rbx
         movsxd  rsi, dword [rsp + 32]           ; mode
         call    rtw_sys_open
-        movsxd  rax, eax                        ; an i32 result, normalized
+        cdqe                                    ; an i32 result, normalized
         pop     r13
         pop     r12
         pop     rbx

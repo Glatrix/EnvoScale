@@ -227,7 +227,7 @@ b_patch_imports:
         add     [rcx + 16], eax         ; FirstThunk
         lea     rcx, [rdx + (win_ilt - rtw_begin)]
         lea     r8, [rdx + (win_iat - rtw_begin)]
-        movsxd  rax, eax
+        cdqe
 .entry:
         mov     r9, [rcx]
         test    r9, r9
