@@ -239,6 +239,40 @@ do_test() {
     if [ "$rc" -eq 2 ] && grep -q '^usage: envoc1' "$TMP/err"; then pass; else bad 'envoc1 no arguments' "exit $rc"; fi
     run "$ROOT" frobnicate
     if [ "$rc" -eq 2 ] && grep -q "^envoc1: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc1 unknown command' "exit $rc"; fi
+
+    # Differential tests (PLAN D14): envoc1 must print the same token dumps as envoc0's
+    # expected files, and report the same lexical errors at the same positions, both in
+    # --core mode and in Envo-S1 mode (where E0901-E0904 become E0950).
+    for mode in --core s1; do
+        say "stage 1 golden tests ($mode): tests/golden/lexer"
+        dir="$ROOT/tests/golden/lexer"
+        for f in "$dir"/*.envo; do
+            base=$(basename "$f")
+            name="stage1 $mode golden/lexer/$base"
+            if [ "$mode" = --core ]; then run "$dir" --core lex "$base"; else run "$dir" lex "$base"; fi
+            if [ "$rc" -ne 0 ]; then bad "$name" "exit $rc: $(tr -d '\r' < "$TMP/err")"; continue; fi
+            tr -d '\r' < "${f%.envo}.tokens" > "$TMP/expected"
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if cmp -s "$TMP/expected" "$TMP/actual"; then pass
+            else bad "$name" 'output differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+        done
+        say "stage 1 spec tests ($mode): tests/spec/01-lexical"
+        dir="$ROOT/tests/spec/01-lexical"
+        for f in "$dir"/*.envo; do
+            base=$(basename "$f")
+            name="stage1 $mode spec/01-lexical/$base"
+            line=$(LC_ALL=C grep -a -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
+            code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9][0-9][0-9][0-9]\).*|\1|')
+            if [ "$mode" = s1 ]; then
+                case "$code" in E090[1-4]) code=E0950 ;; esac
+            fi
+            pos=${line##* @ }; pos=${pos%% *}
+            want="$base:$pos: error[$code]"
+            if [ "$mode" = --core ]; then run "$dir" --core lex "$base"; else run "$dir" lex "$base"; fi
+            if [ "$rc" -eq 1 ] && LC_ALL=C grep -a -q -F "$want" "$TMP/err"; then pass
+            else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+        done
+    done
     EXE=$stage0_exe
 
     say ''

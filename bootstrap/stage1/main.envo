@@ -52,7 +52,10 @@ if (StrEq(command, "selftest")) {
     SelfTest();
     Exit(EXIT_OK);
 }
-if (StrEq(command, "lex") || StrEq(command, "parse") || StrEq(command, "check") ||
+if (StrEq(command, "lex")) {
+    CmdLex(argi, coreOnly);
+}
+if (StrEq(command, "parse") || StrEq(command, "check") ||
     StrEq(command, "build") || StrEq(command, "eir") || StrEq(command, "eir-check")) {
     *Buf e = Err();
     BufStr(e, "envoc1: error: '");

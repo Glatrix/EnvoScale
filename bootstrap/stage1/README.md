@@ -1,6 +1,6 @@
 # Stage 1 — `envoc1`
 
-> **Status:** Skeleton and support library done (M2.2); the lexer is next (M2.3). The
+> **Status:** Support library (M2.2) and lexer (M2.3) done; the parser is next (M2.4). The
 > plan, increments and decisions D11–D15 are in [`docs/PLAN.md`](../../docs/PLAN.md). It
 > accepts [Envo-S1](../../docs/spec/envo-s1.md) and compiles through
 > [EIR v1](../../docs/spec/eir.md).
@@ -27,6 +27,9 @@ Stage 0.
 | File | Contents |
 |---|---|
 | `main.envo` | entry file: command-line dispatch |
+| `driver.envo` | commands: loading sources, `lex` |
+| `syntax/tokens.envo` | token kinds and spellings, generated from Stage 0's `tokens.eas` |
+| `syntax/lexer.envo` | the lexer, step for step like Stage 0's, plus the `lex` dump |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
 | `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |
@@ -50,5 +53,5 @@ Stage 0.
 
 ## Commands
 
-`envoc1 version`, `help` and `selftest` work today. `lex`, `parse`, `check`, `build`,
-`eir` and `eir-check` arrive with increments 2.3–2.7 (Envo-S1 §9).
+`envoc1 version`, `help`, `selftest` and `lex` work today. `parse`, `check`, `build`, `eir`
+and `eir-check` arrive with increments 2.4–2.7 (Envo-S1 §9).

@@ -247,6 +247,38 @@ function Invoke-Test {
     $r = Invoke-Tool $envoc1 @('frobnicate') $Root
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc1: error: unknown command 'frobnicate'")) { Pass 'envoc1 unknown command' } else { Bad 'envoc1 unknown command' "exit $($r.Code), stderr: $($r.Err)" }
 
+    # Differential tests (PLAN D14): envoc1 must print the same token dumps as envoc0's
+    # expected files, and report the same lexical errors at the same positions, both in
+    # --core mode and in Envo-S1 mode (where E0901-E0904 become E0950).
+    foreach ($mode in @('--core', 's1')) {
+        $pre = @()
+        if ($mode -eq '--core') { $pre = @('--core') }
+        Say "stage 1 golden tests ($mode): tests/golden/lexer"
+        $dir = Join-Path $Root 'tests\golden\lexer'
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+            $name = "stage1 $mode golden/lexer/$($f.Name)"
+            $r = Invoke-Tool $envoc1 ($pre + @('lex', $f.Name)) $dir
+            if ($r.Code -ne 0) { Bad $name "exit $($r.Code), stderr: $($r.Err.Trim())"; continue }
+            $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.envo$', '.tokens'), $Utf8))
+            $actual = Normalize $r.Out
+            if ([string]::Equals($expected, $actual)) { Pass $name } else { Bad $name 'output differs'; Show-Diff $expected $actual }
+        }
+        Say "stage 1 spec tests ($mode): tests/spec/01-lexical"
+        $dir = Join-Path $Root 'tests\spec\01-lexical'
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+            $name = "stage1 $mode spec/01-lexical/$($f.Name)"
+            $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($f.FullName))
+            $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\d+:\d+)')
+            if (-not $m.Success) { Bad $name 'no // expect-error: annotation with a position'; continue }
+            $code = $m.Groups[1].Value
+            if ($mode -eq 's1' -and $code -match '^E090[1-4]$') { $code = 'E0950' }
+            $want = "$($f.Name):$($m.Groups[2].Value): error[$code]"
+            $r = Invoke-Tool $envoc1 ($pre + @('lex', $f.Name)) $dir
+            if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
+            else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+        }
+    }
+
     Say ''
     Say "$($script:passed) passed, $($script:failed) failed"
     if ($script:failed -gt 0) { exit 1 }

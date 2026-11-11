@@ -1,0 +1,45 @@
+// Commands: loading source files and running the compiler's passes, with the same
+// messages and exit codes as envoc0 (envo-core.md section 7).
+
+const usize MAX_SOURCE = 16 << 20;     // 16 MiB per file, as in Stage 0
+
+// Reads every path given on the command line, in order, and adds it to the source file
+// table. Reports the first file that cannot be read, as envoc0 does, and exits.
+void LoadSources(usize first, usize count) {
+    for (usize i = 0; i < count; i++) {
+        str path = arg(first + i);
+        Buf text = BufNew(0);
+        bool ok;
+        unsafe { ok = FileRead(path, &text); }
+        if (!ok) {
+            *Buf e = Err();
+            BufStr(e, "envoc1: error: cannot open '");
+            BufStr(e, path);
+            BufStr(e, "'\n");
+            Exit(EXIT_ERRORS);
+        }
+        if (text.Len > MAX_SOURCE) {
+            *Buf e = Err();
+            BufStr(e, "envoc1: error: file too large: '");
+            BufStr(e, path);
+            BufStr(e, "' (Stage 1 accepts source files up to 16 MiB)\n");
+            Exit(EXIT_ERRORS);
+        }
+        unsafe { SrcAdd(path, BufView(&text)); }
+    }
+}
+
+// `envoc1 lex <file.envo>`
+void CmdLex(usize argi, bool core) {
+    if (argc() != argi + 1) {
+        Usage(2);
+        Exit(EXIT_USAGE);
+    }
+    LoadSources(argi, 1);
+    Vec toks = VecNew(sizeof(Token), 1024);
+    unsafe {
+        Lex(0, &toks, core);
+        LexDump(&toks);
+    }
+    Exit(EXIT_OK);
+}
