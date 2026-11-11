@@ -1,0 +1,3 @@
+// expect-error: E0336 @ 3:24
+// [type.gen.2] a bound is an interface
+T Id<T>(T x) where T : i64 => x;

@@ -1,0 +1,4 @@
+// expect-error: E0338 @ 4:9
+// [s1.expr.7] explicit type arguments match the function's parameters
+T Id<T>(T x) => x;
+i64 y = Id<i64, i64>(1);

@@ -1,0 +1,4 @@
+// expect-error: E0202 @ 3:20
+// [type.gen.2] a `where` clause names a type parameter
+T Id<T>(T x) where U : I => x;
+interface I { }

@@ -1,0 +1,142 @@
+// Interfaces: `impl I for T`, `struct T : I`, generic interfaces, default bodies that
+// call the implementation, bounds on generic functions and methods, impls for primitive
+// types and enums, static dispatch only ([item.iface.1], [item.impl.1], [s1.item.5],
+// [type.gen.2]).
+// expect: 9 3
+// expect: area 12 perimeter 14
+// expect: area 9 perimeter 12
+// expect: 2 -1 0
+// expect: red green other
+// expect: 5 7
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+interface IComparable<T> { i32 Compare(in T other); }
+
+impl IComparable<i64> for i64 {
+    i32 Compare(in i64 other) {
+        if (this < other) return -1;
+        if (this > other) return 1;
+        return 0;
+    }
+}
+
+T Max<T>(T a, T b) where T : IComparable<T> {
+    if (a.Compare(b) >= 0) return a;
+    return b;
+}
+
+T Min<T>(T a, T b) where T : IComparable<T> {
+    if (Max(a, b).Compare(a) == 0) return b;
+    return a;
+}
+
+// a default body calling the implementation's methods through `this`
+interface IShape {
+    i64 Area();
+    i64 Perimeter();
+    void Describe() {
+        write(1, "area ");
+        write(1, Num(this.Area()));
+        write(1, " perimeter ");
+        print(Num(this.Perimeter()));
+    }
+}
+
+struct Rect : IShape {
+    i64 W;
+    i64 H;
+    i64 Area() => this.W * this.H;
+    i64 Perimeter() => 2 * (this.W + this.H);
+}
+
+struct Square { i64 Side; }
+
+impl IShape for Square {
+    i64 Area() => this.Side * this.Side;
+    i64 Perimeter() => 4 * this.Side;
+    void Describe() {
+        write(1, "area ");
+        write(1, Num(this.Area()));
+        write(1, " perimeter ");
+        print(Num(this.Perimeter()));
+    }
+}
+
+void Show<S>(in S shape) where S : IShape { shape.Describe(); }
+
+// a generic struct implementing a generic interface
+struct Version : IComparable<Version> {
+    i64 Major;
+    i64 Minor;
+    i32 Compare(in Version other) {
+        if (this.Major != other.Major) return this.Major.Compare(other.Major);
+        return this.Minor.Compare(other.Minor);
+    }
+}
+
+i32 Order<T>(T a, T b) where T : IComparable<T> => a.Compare(b);
+
+enum Color { Red, Green, Blue }
+
+interface INamed { str Name(); }
+
+impl INamed for Color {
+    str Name() {
+        match this {
+            Color.Red => { return "red"; }
+            Color.Green => { return "green"; }
+            _ => { return "other"; }
+        }
+    }
+}
+
+void Say<T>(T x, bool last) where T : INamed {
+    if (last) print(x.Name());
+    else {
+        write(1, x.Name());
+        write(1, " ");
+    }
+}
+
+// a bound on a generic struct's method
+struct Cell<T> {
+    T Value;
+    T Bigger(T other) where T : IComparable<T> => Max(this.Value, other);
+}
+
+W(Max<i64>(4, 9));
+print(Num(Min<i64>(4, 3)));
+
+Show(new Rect { W = 3, H = 4 });
+Show(new Square { Side = 3 });
+
+var v1 = new Version { Major = 1, Minor = 4 };
+var v2 = new Version { Major = 1, Minor = 2 };
+W(Order(v1, v2) as i64 + 1);
+W(Order(v2, v1) as i64);
+print(Num(Order(v1, v1) as i64));
+
+Say(Color.Red, false);
+Say(Color.Green, false);
+Say(Color.Blue, true);
+
+var cell = new Cell<i64> { Value = 5 };
+W(cell.Bigger(2));
+print(Num(cell.Bigger(7)));

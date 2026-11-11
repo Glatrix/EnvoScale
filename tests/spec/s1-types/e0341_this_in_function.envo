@@ -1,0 +1,3 @@
+// expect-error: E0341 @ 3:10
+// [item.method.1] only methods have a receiver
+i64 F(in this) => 1;

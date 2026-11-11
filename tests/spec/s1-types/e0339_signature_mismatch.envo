@@ -1,0 +1,6 @@
+// expect-error: E0339 @ 5:9
+// [item.iface.1] an implementation keeps the interface's signature
+interface IComparable<T> { i32 Compare(in T other); }
+impl IComparable<i64> for i64 {
+    i32 Compare(i64 other) => 0;
+}

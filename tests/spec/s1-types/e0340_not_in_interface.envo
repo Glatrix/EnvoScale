@@ -1,0 +1,7 @@
+// expect-error: E0340 @ 6:9
+// [item.impl.1] an interface implementation holds only the interface's methods
+interface I { i64 F(); }
+impl I for i64 {
+    i64 F() => 1;
+    i64 G() => 2;
+}

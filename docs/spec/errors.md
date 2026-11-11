@@ -102,6 +102,16 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0331 | this lambda changes (or moves) `x`, but the target is a `fn` (or `mut fn`) | [fn.type.4] (Envo-S1, RFC 0003) |
 | E0332 | calling a `mut fn` needs `ref` or owned access, not a shared borrow | [fn.type.3] (Envo-S1, RFC 0003) |
 | E0333 | `mut` only applies to `fn` types and slices | [view.2] (Envo-S1, RFC 0004) |
+| E0334 | `T` does not implement `I` | [type.gen.2] (Envo-S1) |
+| E0335 | cannot infer type argument `T`; write it explicitly | [s1.expr.7] (Envo-S1) |
+| E0336 | `X` is not an interface | [type.gen.2], [item.impl.1] (Envo-S1) |
+| E0337 | `T` does not implement `M` from `I` | [item.iface.1] (Envo-S1) |
+| E0338 | wrong number of type arguments: expected N, found M | [type.gen.1], [s1.expr.7] (Envo-S1) |
+| E0339 | method `M` does not match its declaration in `I` | [item.iface.1] (Envo-S1) |
+| E0340 | `M` is not a method of `I` | [item.impl.1] (Envo-S1) |
+| E0341 | `this` is only allowed as the first parameter of a method | [item.method.1] (Envo-S1) |
+| E0342 | this parameter is `ref`; write `ref` before the argument / only `ref` parameters take `ref` arguments | [own.mode.1] (Envo-S1) |
+| E0343 | `M` takes `this`; call it on a value / `M` is static; call it on its type | [s1.expr.6] (Envo-S1) |
 | E0350 | generic instantiation too deep | [s1.type.2] (Envo-S1) |
 
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
@@ -133,6 +143,7 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | Code | Message |
 |---|---|
 | E0950 | not part of Envo-S1: X (the message names the construct; [s1.subset.4]) |
+| E0951 | not supported by envoc1 yet: X. **Temporary**: an Envo-S1 construct a later M2 increment implements (`docs/architecture/stage1.md`); M2.13 removes the code |
 
 ## EIR (E0600–E0699)
 

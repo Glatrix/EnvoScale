@@ -1,0 +1,8 @@
+// expect-error: E0343 @ 8:11
+// [s1.expr.6] a static method is called on its type
+struct P {
+    i64 X;
+    static P Origin() => new P { X = 0 };
+}
+var p = P.Origin();
+var q = p.Origin();

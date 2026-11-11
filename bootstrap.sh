@@ -169,12 +169,16 @@ do_test() {
     stage0_exe=$EXE
     for compiler in envoc0 envoc1; do
     if [ "$compiler" = envoc1 ]; then EXE="$BUILD1/envoc1$(host_suffix)"; else EXE=$stage0_exe; fi
-        say "run tests ($compiler): tests/spec/core-run"
         rundir="$ROOT/build/run-$compiler"
         mkdir -p "$rundir"
-        for f in "$ROOT"/tests/spec/core-run/*.envo; do
+        # Envo-S1 programs (tests/spec/s1-run) run under Stage 1 only.
+        run_suites=core-run
+        [ "$compiler" = envoc1 ] && run_suites="core-run s1-run"
+        for suite in $run_suites; do
+        say "run tests ($compiler): tests/spec/$suite"
+        for f in "$ROOT"/tests/spec/$suite/*.envo; do
             base=$(basename "$f" .envo)
-            name="$compiler spec/core-run/$base.envo"
+            name="$compiler spec/$suite/$base.envo"
             sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
             want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
             panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
@@ -193,6 +197,7 @@ do_test() {
             if [ "$rc" -ne "$want_code" ]; then bad "$name" "exit code $rc, expected $want_code: $(cat "$TMP/err")"; continue; fi
             if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "stderr: $(cat "$TMP/err")"; continue; fi
             pass
+        done
         done
 
         # Multi-file programs: one folder per test. main.envo is the entry file and holds
@@ -290,7 +295,7 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core core-types:check:core s1-syntax:parse:s1; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core core-types:check:core s1-syntax:parse:s1 s1-types:check:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue

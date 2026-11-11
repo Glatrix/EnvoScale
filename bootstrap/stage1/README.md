@@ -39,7 +39,8 @@ Stage 0.
 | `check/scope.envo` | checker state, interned types, symbols, scopes, diagnostics, built-ins |
 | `check/decl.envo` | the three passes; types, layouts, enums, constants, statics, signatures |
 | `check/stmt.envo` | statements, termination, `match` |
-| `check/expr.envo` | expressions, literals, constant evaluation |
+| `check/expr.envo` | expressions, literals, constant evaluation; calls, method calls, inference at a call |
+| `check/generic.envo` | Envo-S1 generics: instances, substitution, inference, method tables, interfaces and impls, bounds, instantiation |
 | `check/dump.envo` | the typed-tree dump of `check` |
 | `eir/ir.envo` | EIR v1 in memory: types and layout, module records, opcode table, intrinsics |
 | `eir/read.envo` | the EIR text reader |

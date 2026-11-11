@@ -159,7 +159,7 @@ void LowerSimple(*Lower l, u32 n) {
     Node node = CNode(c, n);
     u16 k = node.Kind;
     if (k == NK_VAR) {
-        u32 t = NType(c, n);
+        u32 t = LNType(l, n);
         u32 v = 0;
         if (node.B != 0) v = LowerExpr(l, node.B);
         u32 slot = LocalSlotFor(l, n, t);
@@ -172,7 +172,7 @@ void LowerSimple(*Lower l, u32 n) {
         return;
     }
     if (k == NK_ASSIGN) {
-        u32 t = NType(c, node.A);
+        u32 t = LNType(l, node.A);
         str op = TokText(c, node.Tok);
         if (op.Len == 1) {
             u32 v = LowerExpr(l, node.B);
@@ -187,13 +187,13 @@ void LowerSimple(*Lower l, u32 n) {
         u32 v = 0;
         // compound: the operator is the text before '='
         str opBase = StrSub(op, 0, op.Len - 1);
-        if (StrEq(opBase, "<<") || StrEq(opBase, ">>")) v = LowerShift(l, StrEq(opBase, "<<"), t, old, r, NType(c, node.B));
+        if (StrEq(opBase, "<<") || StrEq(opBase, ">>")) v = LowerShift(l, StrEq(opBase, "<<"), t, old, r, LNType(l, node.B));
         else v = LBin(l, ArithOp(opBase, IsSignedType(c, t)), et, old, r);
         LStore(l, et, v, p);
         return;
     }
     // NK_INC, NK_DEC
-    u32 t = NType(c, node.A);
+    u32 t = LNType(l, node.A);
     u32 et = LType(l, t);
     u32 p = LowerPlace(l, node.A);
     u32 old = LLoad(l, et, p);
@@ -231,7 +231,7 @@ void LowerMatch(*Lower l, u32 n) {
     *Checker c = LC(l);
     *Module m = LM(l);
     Node mt = CNode(c, n);
-    u32 st = NType(c, mt.A);
+    u32 st = LNType(l, mt.A);
     u32 et = LType(l, st);
     u32 v = LowerExpr(l, mt.A);
     u32 join = LNewBlock(l);

@@ -1,0 +1,4 @@
+// expect-error: E0338 @ 4:1
+// [type.gen.1] a generic type takes all its type arguments
+struct Box<T> { T Item; }
+Box<i64, bool> b;

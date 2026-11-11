@@ -1,0 +1,9 @@
+// expect-error: E0337 @ 7:1
+// [item.iface.1] an implementation provides every method without a default body
+interface IShape {
+    i64 Area();
+    i64 Sides();
+}
+impl IShape for i64 {
+    i64 Area() => 1;
+}

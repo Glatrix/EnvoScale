@@ -1,0 +1,4 @@
+// expect-error: E0336 @ 4:6
+// [item.impl.1] `impl X for T` names an interface
+struct S { }
+impl S for i64 { }

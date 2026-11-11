@@ -1,0 +1,5 @@
+// expect-error: E0334 @ 5:20
+// [type.gen.2] a type parameter meets a bound only through its own bounds
+interface IComparable<T> { i32 Compare(in T other); }
+T Max<T>(T a, T b) where T : IComparable<T> => a;
+T Twice<T>(T a) => Max(a, a);

@@ -1,0 +1,4 @@
+// expect-error: E0206 @ 4:25
+// [type.gen.2] a generic body uses only what its bounds provide
+interface IComparable<T> { i32 Compare(in T other); }
+i32 F<T>(T a, T b) => a.Compare(b);

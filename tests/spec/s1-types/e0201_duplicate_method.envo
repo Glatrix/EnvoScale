@@ -1,0 +1,7 @@
+// expect-error: E0201 @ 6:9
+// [s1.item.4] a type's methods have distinct names
+struct P {
+    i64 X;
+    i64 Get() => this.X;
+    i64 Get() => 0;
+}

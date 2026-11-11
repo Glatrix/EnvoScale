@@ -1,7 +1,7 @@
 # Envo-S1
 
 > **Status:** Draft, accepted for M2 (2026-11-11). Implemented by Stage 1 (`envoc1`,
-> milestone M2, increments 2.3–2.11 in [`docs/PLAN.md`](../PLAN.md) §5). Tests:
+> milestone M2, increments 2.3–2.13 in [`docs/PLAN.md`](../PLAN.md) §5). Tests:
 > `tests/spec/s1-*` (from M2.4).
 
 Envo-S1 is the language `envoc1` accepts: **Envo-Core plus what a compiler needs to be
@@ -75,7 +75,9 @@ Everything in Envo-Core (`envo-core.md` §4), plus:
 - **[s1.item.5] Interfaces.** `interface I<T> { … }` with method signatures and default
   bodies; `impl I for T { … }` and `struct T : I { … }` ([item.iface.1],
   [item.impl.1]). Interface methods are called through generic parameters only (static
-  dispatch).
+  dispatch). An interface may be implemented for any named type, primitives included
+  (`impl IHash for i64`). A generic `impl<T, U>` implements for `S<T, U>` with exactly its
+  parameters, in order.
 - **[s1.item.6] Parameter modes** `in` and `ref` ([own.mode.1]), and `from` clauses
   ([life.from.1], [life.from.4]). Not in S1: `out`, default and named arguments.
 - **[s1.item.7]** Not in S1: classes, properties, attributes, `async`, `extern`,
@@ -105,6 +107,12 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   from arguments where possible, and `new S<T> { … }`. In an expression, `<` starts type
   arguments only when it is joint with the name before it and the closing `>` is followed
   by `(` or `.`; otherwise it is a comparison. A closing `>>` is split ([lex.punct.2]).
+  Inference matches each parameter type against its argument's type, arguments with a
+  type of their own first; an untyped literal then takes the type already inferred, or
+  `i32` ([core.expr.2]). The call's expected type is not used. A type argument left
+  unknown is E0335; one that misses a bound is E0334.
+- **[s1.expr.9] Static calls** `T.M(…)` and `S<A>.M(…)` name a static method; a method
+  with a receiver is called on a value, and a static one on its type (E0343).
 - **[s1.stmt.1] `foreach (var x in e)`** over arrays, slices, `str` (yielding `u8`) and
   integer ranges `lo..hi`. In a `foreach` over an array or slice that is not `Copy`, `x`
   is an `in` borrow of each element ([own.borrow.4]).
@@ -189,7 +197,7 @@ instantiation (E0350). Larger limits are allowed.
 |---|---|
 | `tests/spec/core-*`, `tests/golden/lexer/` | run under `envoc1 --core`, must match `envoc0` (D14) |
 | `tests/spec/s1-syntax/` | parser tests for the S1 additions (M2.4) |
-| `tests/spec/s1-types/` | type tests: generics, interfaces, methods, closures, Option/Result (M2.8, M2.9) |
-| `tests/spec/s1-run/` | compiled and run, with `// expect:` lines (M2.7–M2.10) |
+| `tests/spec/s1-types/` | type tests: generics, interfaces, methods, closures, Option/Result (M2.8–M2.12) |
+| `tests/spec/s1-run/` | compiled and run, with `// expect:` lines (M2.8–M2.12) |
 | `tests/spec/s1-own/` | ownership errors E0501–E0508 (M2.10) |
 | `tests/golden/eir/` | EIR text round-trips and verifier errors (M2.6) |

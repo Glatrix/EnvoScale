@@ -189,7 +189,8 @@ bool NodeHasText(u16 kind) {
 
 // Items, as opposed to statements, at the top level of a file.
 bool NodeIsItem(u16 kind) {
-    return kind == NK_FN || kind == NK_STRUCT || kind == NK_ENUM || kind == NK_CONST || kind == NK_STATIC;
+    return kind == NK_FN || kind == NK_STRUCT || kind == NK_ENUM || kind == NK_CONST || kind == NK_STATIC ||
+           kind == NK_INTERFACE || kind == NK_IMPL || kind == NK_NAMESPACE || kind == NK_USE;
 }
 
 // Token classes for the parser (Stage 0's tok_class): binary operator level 1-9 in the

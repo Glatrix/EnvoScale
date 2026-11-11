@@ -1,0 +1,6 @@
+// expect-error: E0303 @ 5:13
+// [core.type.2] a generic struct may not contain itself
+struct Node<T> {
+    T Value;
+    Node<T> Next;
+}

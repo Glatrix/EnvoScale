@@ -1,0 +1,4 @@
+// expect-error: E0950 @ 4:11
+// [s1.type.3] Envo-S1 has no dynamic interface values
+interface IShape { i64 Area(); }
+i64 Total(IShape s) => s.Area();

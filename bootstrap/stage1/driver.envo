@@ -85,20 +85,7 @@ void CmdCheck(usize argi, bool core) {
         LexAll(&toks, &starts, core);
         u32 program = ParseFiles(&toks, &starts, &nodes, core);
         usize count = VecLen(&nodes);
-        Checker c;
-        c.Toks = &toks;
-        c.Nodes = &nodes;
-        c.Core = core;
-        c.NType = SideTable(4, count);
-        c.NValue = SideTable(8, count);
-        c.NSym = SideTable(4, count);
-        c.NMatched = SideTable(1, count);
-        c.Types = VecNew(sizeof(Type), 256);
-        c.Syms = VecNew(sizeof(Sym), 1024);
-        c.Global = MapNew(1024);
-        c.Derived = MapNew(256);
-        c.Locals = VecNew(4, 256);
-        c.ParamTypes = VecNew(4, 1024);
+        Checker c = NewChecker(&toks, &nodes, core, false);
         CheckProgram(&c, program);
         CheckDump(&c, program, 0);
     }
@@ -171,6 +158,16 @@ Checker NewChecker(*Vec toks, *Vec nodes, bool core, bool runtime) {
     c.Derived = MapNew(256);
     c.Locals = VecNew(4, 256);
     c.ParamTypes = VecNew(4, 1024);
+    c.TypeArgs = VecNew(4, 256);
+    c.Instances = MapNew(64);
+    c.Methods = MapNew(256);
+    c.Impls = VecNew(sizeof(ImplRec), 32);
+    c.Bounds = VecNew(4, 64);
+    c.Calls = VecNew(4, 1024);
+    c.MainCalls = VecNew(4, 64);
+    c.Insts = VecNew(sizeof(Inst), 256);
+    c.InstMap = MapNew(256);
+    unsafe { VecPush(&c.TypeArgs); }      // index 0: "no environment"
     return c;
 }
 

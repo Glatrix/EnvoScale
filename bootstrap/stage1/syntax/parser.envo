@@ -782,7 +782,11 @@ u32 ParsePostfix(*Parser p) {
             u32 tok = PAdvance(p);
             NodeList args;
             while (PKind(p) != TK_RPAREN) {
+                // [own.mode.1] `ref x` passes an exclusive borrow
+                bool refArg = !PCore(p) && PKind(p) == TK_KW_REF;
+                if (refArg) PAdvance(p);
                 u32 a = ParseExpr(p);
+                if (refArg) unsafe { PNode(p, a).Flags = PNode(p, a).Flags | NF_REF; }
                 if (PKind(p) == TK_COLON) PErrNotCore(p, "named arguments", PPos(p));
                 unsafe { ListAdd(p, &args, a); }
                 if (!PAccept(p, TK_COMMA)) break;

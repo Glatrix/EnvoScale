@@ -271,11 +271,13 @@ bool IsAddressable(*Checker c, u32 n) {
 // assign: slices and str are read-only; for `&` any element has an address.
 bool PlaceCheck(*Checker c, u32 n, bool assign) {
     Node node = CNode(c, n);
-    if (node.Kind == NK_NAME) {
+    if (node.Kind == NK_NAME || node.Kind == NK_THIS) {
         u32 s = NSym(c, n);
         if (s == 0) return false;
-        u8 k = SymGet(c, s).Kind;
-        return k == SK_LOCAL || k == SK_STATIC;
+        Sym sym = SymGet(c, s);
+        // an `in` parameter or receiver is read-only ([own.mode.1])
+        if (assign && sym.Flags & SF_READONLY != 0) return false;
+        return sym.Kind == SK_LOCAL || sym.Kind == SK_STATIC;
     }
     if (node.Kind == NK_MEMBER) {
         u32 t = NType(c, node.A);

@@ -1,0 +1,9 @@
+// expect-error: E0315 @ 8:5
+// [s1.expr.6] a `ref this` method needs a mutable place
+struct C {
+    i64 N;
+    void Bump(ref this) { this.N++; }
+}
+void F(in C c) {
+    c.Bump();
+}

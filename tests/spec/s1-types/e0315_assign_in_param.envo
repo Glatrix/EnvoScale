@@ -1,0 +1,5 @@
+// expect-error: E0315 @ 4:7
+// [own.mode.1] an `in` parameter is read-only
+void F(in i64 x) {
+    x = 2;
+}

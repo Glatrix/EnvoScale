@@ -1,0 +1,60 @@
+// Generic functions: explicit and inferred type arguments, generic calls inside generic
+// bodies, recursion, sizeof of a type parameter ([type.gen.1], [s1.type.2], [s1.expr.7]).
+// expect: 7 -3 9
+// expect: 1 2 4 8 16
+// expect: 3 4
+// expect: 8 1 16 8
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+T Id<T>(T x) => x;
+T First<T, U>(T a, U b) => a;
+U Second<T, U>(T a, U b) => Id(b);
+
+// a generic function calling itself with the same type arguments
+T After<T>(T x, i64 n) {
+    if (n == 0) return x;
+    return After(x, n - 1);
+}
+
+usize Size<T>() => sizeof(T);
+usize Align<T>() => alignof(T);
+
+struct Pair { i64 A; i64 B; }
+
+i64 seven = Id<i64>(7);
+W(seven);
+W(First(-3 as i64, true));
+print(Num(Second<bool, i64>(false, 9)));
+
+i64[5] powers;
+for (usize i = 0; i < 5; i++) powers[i] = 1 << i;
+for (usize i = 0; i < 4; i++) W(After(powers[i], 3));
+print(Num(After<i64>(powers[4], 10)));
+
+str[2] words;
+words[0] = "abc";
+words[1] = "defg";
+W(Id(words[0]).Len as i64);
+print(Num(Id(words[1]).Len as i64));
+
+W(Size<i64>() as i64);
+W(Size<bool>() as i64);
+W(Size<Pair>() as i64);
+print(Num(Align<Pair>() as i64));

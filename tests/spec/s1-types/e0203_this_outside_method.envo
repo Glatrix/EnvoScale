@@ -1,0 +1,5 @@
+// expect-error: E0203 @ 4:12
+// [item.method.1] `this` exists only in methods
+i64 F() {
+    return this;
+}

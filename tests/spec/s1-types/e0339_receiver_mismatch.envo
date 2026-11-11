@@ -1,0 +1,7 @@
+// expect-error: E0339 @ 6:10
+// [item.iface.1] an implementation keeps the interface's receiver
+interface IReset { void Reset(ref this); }
+struct C : IReset {
+    i64 N;
+    void Reset() { }
+}

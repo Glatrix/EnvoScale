@@ -1,0 +1,6 @@
+// expect-error: E0315 @ 5:27
+// [item.method.1] the default receiver `in this` is read-only
+struct C {
+    i64 N;
+    void Reset() { this.N = 0; }
+}

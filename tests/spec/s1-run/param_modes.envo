@@ -1,0 +1,94 @@
+// Parameter modes and receivers: `in` borrows implicitly, `ref` is written at the call and
+// changes the caller's place, a by-value `this` is a copy, methods through pointers
+// ([own.mode.1], [item.method.1], [s1.item.4], [s1.item.6], [s1.expr.6]).
+// expect: 2 1
+// expect: b a
+// expect: 11 10
+// expect: 30 5
+// expect: 6 6
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+void Swap<T>(ref T a, ref T b) {
+    T t = a;
+    a = b;
+    b = t;
+}
+
+struct Counter {
+    i64 N;
+    void Bump(ref this) { this.N++; }
+    // by value: changes a copy
+    i64 Bumped(this) {
+        this.N++;
+        return this.N;
+    }
+    i64 Get(in this) => this.N;
+}
+
+struct Big { i64[4] Parts; }
+
+i64 Sum(in Big b) {
+    i64 s = 0;
+    for (usize i = 0; i < 4; i++) s += b.Parts[i];
+    return s;
+}
+
+void Scale(ref Big b, i64 k) {
+    for (usize i = 0; i < 4; i++) b.Parts[i] *= k;
+}
+
+i64 Twice(in i64 x) => x * 2;
+
+i64 x = 1;
+i64 y = 2;
+Swap(ref x, ref y);
+W(x);
+print(Num(y));
+
+str s = "a";
+str t = "b";
+Swap(ref s, ref t);
+write(1, s);
+write(1, " ");
+print(t);
+
+Counter c = new Counter { N = 10 };
+i64 copy = c.Bumped();
+W(copy);
+print(Num(c.Get()));
+
+Big big;
+for (usize i = 0; i < 4; i++) big.Parts[i] = i as i64;
+Scale(ref big, 5);
+W(Sum(big));
+print(Num(Twice(1) + Twice(x) - Twice(y) + 1));
+
+Counter[2] counters;
+counters[1].Bump();
+counters[1].Bump();
+unsafe {
+    *Counter p = &counters[1];
+    p.Bump();
+    p.Bump();
+    p.Bump();
+    p.Bump();
+    W(p.Get());
+}
+print(Num(counters[1].N));

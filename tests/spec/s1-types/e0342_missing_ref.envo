@@ -1,0 +1,5 @@
+// expect-error: E0342 @ 5:5
+// [own.mode.1] `ref` is written at the call
+void Inc(ref i64 x) { x++; }
+i64 n = 1;
+Inc(n);

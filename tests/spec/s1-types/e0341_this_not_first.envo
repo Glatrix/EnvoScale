@@ -1,0 +1,5 @@
+// expect-error: E0341 @ 4:22
+// [item.method.1] the receiver comes first
+struct S {
+    i64 F(i64 x, ref this) => x;
+}

@@ -17,6 +17,7 @@ check/scope.envo
 check/decl.envo
 check/stmt.envo
 check/expr.envo
+check/generic.envo
 check/dump.envo
 eir/ir.envo
 eir/read.envo

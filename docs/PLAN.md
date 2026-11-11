@@ -126,10 +126,12 @@ the M2 epic on the roadmap project.
 | [2.5](https://github.com/envoscale/EnvoScale/issues/50) | Names and types for Envo-Core | `core-types` (same codes and positions) | done: every `check` golden, `core-types` and `core-multi` test and test input gives the same output as `envoc0`; `envoc1` checks its own source |
 | [2.6](https://github.com/envoscale/EnvoScale/issues/51) | EIR v1: data structures, text form (print and parse, round-trip), verifier | `tests/golden/eir/` | done: `envoc1 eir-check`; 3 round-trip goldens and 13 verifier/syntax tests (`tests/spec/eir/`). The binary form ([eir.bin.*]) moves to Stage 2, where it is first needed |
 | [2.7](https://github.com/envoscale/EnvoScale/issues/52) | Lowering Core to EIR; x86-64 backend; PE/ELF writer; runtime | `core-run`, `core-multi` under `envoc1` | done: every `core-run` and `core-multi` program built by `envoc1` gives the same output and exit code as under `envoc0`, on both OSes ([`architecture/stage1.md`](architecture/stage1.md)) |
-| [2.8](https://github.com/envoscale/EnvoScale/issues/53) | Generics and interfaces | S1 type and run tests | next |
-| [2.9](https://github.com/envoscale/EnvoScale/issues/54) | Closures and function types | S1 type and run tests | |
+| [2.8](https://github.com/envoscale/EnvoScale/issues/53) | Generics and interfaces | S1 type and run tests | done: generic functions and structs (monomorphized), methods and receivers, `in`/`ref` parameters, interfaces with default bodies and bounds; 31 type and 4 run tests ([`architecture/stage1.md`](architecture/stage1.md)) |
+| [2.9](https://github.com/envoscale/EnvoScale/issues/54) | Closures and function types | S1 type and run tests | next |
 | [2.10](https://github.com/envoscale/EnvoScale/issues/55) | Ownership: moves, borrows, lifetime elision, basic borrow checker (E05xx) | S1 ownership tests | |
-| [2.11](https://github.com/envoscale/EnvoScale/issues/56) | Envo-S1 spec suite green on Windows and Linux in CI; reproducible `envoc1` | CI | |
+| 2.11 | Enums with payloads, `match` expressions with payload patterns and guards, `Option` and `Result`, `?:`, `??` and `?` | S1 type and run tests | |
+| 2.12 | The rest of Envo-S1: `foreach`, slicing, namespaces and `use`, the prelude (`string`, `List<T>`, `IDrop`) | S1 type and run tests | |
+| [2.13](https://github.com/envoscale/EnvoScale/issues/56) | Envo-S1 spec suite green on Windows and Linux in CI; reproducible `envoc1`; no E0951 left | CI | |
 
 ## 6. Risks
 

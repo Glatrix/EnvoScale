@@ -1,0 +1,5 @@
+// expect-error: E0201 @ 5:1
+// [item.impl.1] one implementation of an interface per type
+interface I { i64 F(); }
+impl I for i64 { i64 F() => 1; }
+impl I for i64 { i64 F() => 2; }

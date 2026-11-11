@@ -20,7 +20,7 @@ void CheckDumpExtra(*Buf b, *Checker c, u32 n, Node node) {
         u32 s = NSym(c, n);
         if (s == 0) return;
         Sym sym = SymGet(c, s);
-        if (sym.LState != 2) return;
+        if (sym.LState != 2 || sym.NEnv > 0) return;     // a generic struct has no one size
         BufStr(b, " size ");
         BufU64(b, sym.Aux as u64);
         BufStr(b, " align ");

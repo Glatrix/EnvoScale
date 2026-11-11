@@ -1,0 +1,5 @@
+// expect-error: E0206 @ 5:3
+// [s1.expr.6] a method call names a method of the type
+struct P { i64 X; }
+var p = new P { X = 1 };
+p.Missing();

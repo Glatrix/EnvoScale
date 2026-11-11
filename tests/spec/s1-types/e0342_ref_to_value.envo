@@ -1,0 +1,5 @@
+// expect-error: E0342 @ 5:10
+// [own.mode.1] only `ref` parameters take `ref` arguments
+void Show(i64 x) { }
+i64 n = 1;
+Show(ref n);

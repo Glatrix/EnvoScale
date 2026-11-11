@@ -17,6 +17,8 @@ void CheckProgram(*Checker c, u32 program) {
         else if (k == NK_ENUM) sk = SK_ENUM;
         else if (k == NK_CONST) sk = SK_CONST;
         else if (k == NK_STATIC) sk = SK_STATIC;
+        else if (k == NK_INTERFACE) sk = SK_IFACE;
+        else if (k == NK_NAMESPACE || k == NK_USE) CNotYet(c, "namespaces and `use`", NTok(c, n));
         if (sk != 0) DefineItem(c, n, sk);
         n = CNode(c, n).Next;
     }
@@ -25,13 +27,18 @@ void CheckProgram(*Checker c, u32 program) {
     while (n != 0) {
         u16 k = NKind(c, n);
         u32 s = NSym(c, n);
-        if (k == NK_STRUCT) StructLayout(c, s, 0);
-        else if (k == NK_ENUM) EnumDeclare(c, s);
+        if (k == NK_STRUCT) {
+            StructLayout(c, s, 0);
+            DeclareStructMethods(c, s);
+        } else if (k == NK_ENUM) EnumDeclare(c, s);
         else if (k == NK_CONST) ConstResolve(c, s, 0);
         else if (k == NK_STATIC) StaticDeclare(c, s);
         else if (k == NK_FN) FnSignature(c, s);
+        else if (k == NK_INTERFACE) DeclareIfaceMethods(c, s);
+        else if (k == NK_IMPL) DeclareImpl(c, n);
         n = CNode(c, n).Next;
     }
+    CheckImpls(c);
     // pass 3: bodies; the top-level statements are the body of main
     unsafe {
         c.LSP = 0;
@@ -42,6 +49,12 @@ void CheckProgram(*Checker c, u32 program) {
         u16 k = NKind(c, n);
         if (k == NK_FN) {
             FnBody(c, NSym(c, n));
+        } else if (k == NK_STRUCT) {
+            MethodBodies(c, CNode(c, n).G);
+        } else if (k == NK_IMPL) {
+            MethodBodies(c, CNode(c, n).C);
+        } else if (k == NK_INTERFACE) {
+            MethodBodies(c, CNode(c, n).A);
         } else if (!NodeIsItem(k)) {
             unsafe {
                 c.Ret = T_I32;
@@ -53,6 +66,15 @@ void CheckProgram(*Checker c, u32 program) {
         }
         n = CNode(c, n).Next;
     }
+    CollectInstances(c);
+}
+
+// The bodies of a list of methods (an interface method without a body is skipped).
+void MethodBodies(*Checker c, u32 m) {
+    while (m != 0) {
+        if (CNode(c, m).C != 0) FnBody(c, NSym(c, m));
+        m = CNode(c, m).Next;
+    }
 }
 
 // Pass 1 for one item: its symbol (E0201 if the name is taken).
@@ -61,19 +83,48 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
     if (GFind(c, TokText(c, tok)) != 0) CFailName(c, tok, E_DUPLICATE, "`", tok, "` is already defined");
     u32 s = SymNew(c, kind, n);
     SetNSym(c, n, s);
+    u32 tps = CNode(c, n).E;
+    if (kind == SK_ENUM && tps != 0) CNotYet(c, "generic enums", NTok(c, tps));
     if (kind == SK_STRUCT || kind == SK_ENUM) {
         u8 tk = TYK_STRUCT;
         if (kind == SK_ENUM) tk = TYK_ENUM;
-        u32 t = TypeNamed(c, tk, s);
+        u32 t = 0;
+        if (tps == 0) {
+            t = TypeNamed(c, tk, s);
+        } else {
+            u32 count = DeclareTParams(c, tps, 0);
+            t = SelfInstance(c, TYK_STRUCT, s, tps, count);
+            unsafe {
+                SymPtr(c, s).NEnv = count;
+                SymPtr(c, s).Flags = SF_GENERIC;
+            }
+        }
         unsafe { SymPtr(c, s).Type = t; }
     }
+    if (kind == SK_FN && tps != 0) {
+        u32 count = DeclareTParams(c, tps, 0);
+        unsafe {
+            SymPtr(c, s).NEnv = count;
+            SymPtr(c, s).Flags = SF_GENERIC;
+        }
+    }
     GAdd(c, s);
+    if (kind == SK_IFACE) DeclareIfaceItem(c, s);
 }
 
 // The type a type node denotes ([core.name.3], [core.type.1]).
 u32 ResolveType(*Checker c, u32 n, bool voidOk) {
+    return ResolveTypeEx(c, n, voidOk, false);
+}
+
+// ifaceOk: an interface may be named (a bound or an `impl`); elsewhere it would be a
+// dynamic interface value, which Envo-S1 leaves out ([s1.type.3]).
+u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
     Node node = CNode(c, n);
     u32 t = 0;
+    if (node.Kind == NK_TOPT) CNotYet(c, "optional types `T?`", node.Tok);
+    if (node.Kind == NK_TFN) CNotYet(c, "function types", node.Tok);
+    if (node.Kind == NK_TSLICE && node.Flags & NF_MUT != 0) CNotYet(c, "`mut` views", node.Tok);
     if (node.Kind == NK_TPTR) {
         t = TypePtrTo(c, ResolveType(c, node.A, false));
     } else if (node.Kind == NK_TSLICE) {
@@ -103,15 +154,41 @@ u32 ResolveType(*Checker c, u32 n, bool voidOk) {
         if (count < 0x80000000) saturated = count as u32;
         t = TypeDerived(c, TYK_ARRAY, elem, saturated);
     } else {
-        u32 tok = node.Tok;
-        u32 s = GFind(c, TokText(c, tok));
-        if (s == 0) CFailName(c, tok, E_UNKNOWN_TYPE, "unknown type `", tok, "`");
-        u8 k = SymGet(c, s).Kind;
-        if (k != SK_TYPE && k != SK_STRUCT && k != SK_ENUM) CFailName(c, tok, E_NOT_A_TYPE, "`", tok, "` is not a type");
-        t = SymGet(c, s).Type;
+        t = ResolveTypeName(c, node.Tok, node.E, node.F);
     }
+    if (TyKind(c, t) == TYK_IFACE && !ifaceOk) CNotCore(c, "interface values; use a generic parameter with a `where` bound", node.Tok);
     if (t == T_VOID && !voidOk) CError(c, E_VOID_TYPE, node.Tok);
     return t;
+}
+
+// The type named by token tok with type arguments args (a list of type nodes): a type
+// parameter in scope, or a program-scope type ([type.gen.1]).
+u32 ResolveTypeName(*Checker c, u32 tok, u32 args, u32 quals) {
+    if (quals != 0) CNotYet(c, "qualified names", tok);
+    u32 have = ListCount(c, args);
+    u32 tp = FindTParam(c, tok);
+    if (tp != 0) {
+        if (have != 0) TypeArgCount(c, tok, 0, have);
+        return SymGet(c, tp).Type;
+    }
+    u32 s = GFind(c, TokText(c, tok));
+    if (s == 0) CFailName(c, tok, E_UNKNOWN_TYPE, "unknown type `", tok, "`");
+    Sym sym = SymGet(c, s);
+    u8 k = sym.Kind;
+    if (k != SK_TYPE && k != SK_STRUCT && k != SK_ENUM && k != SK_IFACE) CFailName(c, tok, E_NOT_A_TYPE, "`", tok, "` is not a type");
+    u32 want = 0;
+    if (k == SK_STRUCT || k == SK_IFACE) want = sym.NEnv;
+    if (have != want) TypeArgCount(c, tok, want, have);
+    if (want == 0) return sym.Type;
+    u32 env = EnvNew(c, want);
+    u32 a = args;
+    for (u32 i = 0; i < want; i++) {
+        EnvSet(c, env, i, ResolveType(c, a, false));
+        a = CNode(c, a).Next;
+    }
+    u8 kind = TYK_STRUCT;
+    if (k == SK_IFACE) kind = TYK_IFACE;
+    return TypeInstance(c, kind, s, env, want);
 }
 
 // Size and alignment of a type, laying out structs on demand. blame is the token to
@@ -119,6 +196,19 @@ u32 ResolveType(*Checker c, u32 n, bool voidOk) {
 u64 SizeOf(*Checker c, u32 t, u32 blame, *u64 align) {
     Type ty = TypeGet(c, t);
     unsafe {
+        if (ty.Kind == TYK_PARAM) {
+            // laid out per instance (an abstract layout only finds cycles)
+            *align = 1;
+            return 0;
+        }
+        if (ty.Kind == TYK_STRUCT && ty.NArgs > 0) {
+            StructLayout(c, ty.Sym, blame);
+            if (HasParams(c, t)) {
+                *align = 1;
+                return 0;
+            }
+            return InstanceLayout(c, t, blame, align);
+        }
         if (ty.Kind == TYK_STRUCT) {
             StructLayout(c, ty.Sym, blame);
             Sym s = SymGet(c, ty.Sym);
@@ -148,7 +238,16 @@ void StructLayout(*Checker c, u32 s, u32 blame) {
     Sym sym = SymGet(c, s);
     if (sym.LState == 2) return;
     if (sym.LState == 1) CFailName(c, blame, E_RECURSIVE, "struct `", NTok(c, sym.Node), "` contains itself");
-    unsafe { SymPtr(c, s).LState = 1; }
+    u32 s1;
+    u32 s2;
+    unsafe {
+        SymPtr(c, s).LState = 1;
+        // a generic struct's fields name its parameters
+        s1 = c.Scope1;
+        s2 = c.Scope2;
+        c.Scope1 = CNode(c, sym.Node).E;
+        c.Scope2 = 0;
+    }
     u64 offset = 0;
     u64 maxAlign = 1;
     u32 first = CNode(c, sym.Node).A;
@@ -174,7 +273,45 @@ void StructLayout(*Checker c, u32 s, u32 blame) {
         p.Aux = offset as u32;
         p.Aux2 = maxAlign as u32;
         p.LState = 2;
+        c.Scope1 = s1;
+        c.Scope2 = s2;
     }
+}
+
+// Size and alignment of generic struct instance t with concrete arguments.
+u64 InstanceLayout(*Checker c, u32 t, u32 blame, *u64 align) {
+    Type ty = TypeGet(c, t);
+    unsafe {
+        if (ty.LState == 2) {
+            *align = ty.Align as u64;
+            return ty.Size as u64;
+        }
+        if (ty.LState == 1) CFailName(c, blame, E_RECURSIVE, "struct `", NTok(c, SymGet(c, ty.Sym).Node), "` contains itself");
+        TypePtr(c, t).LState = 1;
+    }
+    u64 offset = 0;
+    u64 maxAlign = 1;
+    u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
+    while (f != 0) {
+        u64 fa;
+        u64 size;
+        unsafe { size = SizeOf(c, FieldType(c, t, f), blame, &fa); }
+        offset = (offset + fa - 1) & ~(fa - 1);
+        if (maxAlign < fa) maxAlign = fa;
+        offset += size;
+        if (offset > MAX_TYPE_SIZE) CError(c, E_TOO_LARGE, blame);
+        f = CNode(c, f).Next;
+    }
+    offset = (offset + maxAlign - 1) & ~(maxAlign - 1);
+    if (offset > MAX_TYPE_SIZE) CError(c, E_TOO_LARGE, blame);
+    unsafe {
+        *Type p = TypePtr(c, t);
+        p.Size = offset as u32;
+        p.Align = maxAlign as u32;
+        p.LState = 2;
+        *align = maxAlign;
+    }
+    return offset;
 }
 
 // E0201 if node n's name matches an earlier node in the list starting at first.
@@ -275,13 +412,29 @@ bool IsScalarValue(*Checker c, u32 t) {
     return k == TYK_INT || k == TYK_BOOL || k == TYK_ENUM;
 }
 
-// Return and parameter types of function symbol s.
+// Return and parameter types of function symbol s (for a method, without the receiver),
+// and its `where` bounds.
 void FnSignature(*Checker c, u32 s) {
-    Node fn = CNode(c, SymGet(c, s).Node);
+    Sym fs = SymGet(c, s);
+    Node fn = CNode(c, fs.Node);
+    u32 s1;
+    u32 s2;
+    unsafe {
+        s1 = c.Scope1;
+        s2 = c.Scope2;
+        c.Scope1 = fs.OwnerTP;
+        c.Scope2 = fn.E;
+    }
     u32 ret = ResolveType(c, fn.A, true);
     u32 count = 0;
-    u32 p = fn.B;
+    u32 first = fn.B;
+    if (first != 0 && IsReceiver(c, first)) {
+        if (fs.Flags & SF_METHOD == 0) CError(c, E_BAD_THIS, NTok(c, first));
+        first = CNode(c, first).Next;
+    }
+    u32 p = first;
     while (p != 0) {
+        if (IsReceiver(c, p)) CError(c, E_BAD_THIS, NTok(c, p));
         count++;
         p = CNode(c, p).Next;
     }
@@ -292,7 +445,6 @@ void FnSignature(*Checker c, u32 s) {
         sym.Params = VecLen(&c.ParamTypes) as u32;
         for (u32 i = 0; i < count; i++) VecPush(&c.ParamTypes);
     }
-    u32 first = fn.B;
     p = first;
     u32 i = 0;
     while (p != 0) {
@@ -306,6 +458,32 @@ void FnSignature(*Checker c, u32 s) {
         SetNType(c, p, pt);
         i++;
         p = CNode(c, p).Next;
+    }
+    // bounds: an interface method's implementing type implements the interface; then the
+    // `where` clauses ([type.gen.2])
+    unsafe {
+        u32 nb = (VecLen(&c.Bounds) / 2) as u32;
+        SymPtr(c, s).Bounds = nb;
+        if (fs.Iface != 0) {
+            MemStoreU32(VecPush(&c.Bounds), fs.OwnerType);
+            MemStoreU32(VecPush(&c.Bounds), SymGet(c, fs.Iface).Type);
+        }
+        u32 w = fn.F;
+        while (w != 0) {
+            u32 tp = FindTParam(c, NTok(c, w));
+            if (tp == 0) CFailName(c, NTok(c, w), E_UNKNOWN_TYPE, "unknown type `", NTok(c, w), "`");
+            u32 b = CNode(c, w).A;
+            while (b != 0) {
+                u32 it = ResolveIface(c, b);
+                MemStoreU32(VecPush(&c.Bounds), SymGet(c, tp).Type);
+                MemStoreU32(VecPush(&c.Bounds), it);
+                b = CNode(c, b).Next;
+            }
+            w = CNode(c, w).Next;
+        }
+        SymPtr(c, s).NBounds = (VecLen(&c.Bounds) / 2) as u32 - nb;
+        c.Scope1 = s1;
+        c.Scope2 = s2;
     }
 }
 
@@ -321,11 +499,37 @@ void FnBody(*Checker c, u32 s) {
         c.Top = false;
         c.Unsafe = 0;
         c.Loops = 0;
+        c.Scope1 = sym.OwnerTP;
+        c.Scope2 = fn.E;
+        c.CurFn = s;
+        c.CurBounds = sym.Bounds;
+        c.NCurBounds = sym.NBounds;
+        SymPtr(c, s).Calls = VecLen(&c.Calls) as u32;
     }
-    // the parameters are the first locals
+    // the receiver and the parameters are the first locals; `in` and `ref` ones are
+    // reached through a pointer ([own.mode.1])
     u32 p = fn.B;
+    if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0) {
+        u32 recv = 0;
+        if (p != 0 && IsReceiver(c, p)) {
+            recv = LocalPush(c, p, sym.OwnerType);
+            p = CNode(c, p).Next;
+        } else {
+            recv = LocalPushNamed(c, "this", sym.OwnerType);
+        }
+        unsafe {
+            if (sym.Flags & SF_RECV_IN != 0) SymPtr(c, recv).Flags = SF_BYREF | SF_READONLY;
+            if (sym.Flags & SF_RECV_REF != 0) SymPtr(c, recv).Flags = SF_BYREF;
+            SymPtr(c, s).Recv = recv;
+        }
+    }
     while (p != 0) {
-        LocalPush(c, p, NType(c, p));
+        u32 local = LocalPush(c, p, NType(c, p));
+        u32 mode = CNode(c, p).Flags;
+        unsafe {
+            if (mode & NF_IN != 0) SymPtr(c, local).Flags = SF_BYREF | SF_READONLY;
+            if (mode & NF_REF != 0) SymPtr(c, local).Flags = SF_BYREF;
+        }
         p = CNode(c, p).Next;
     }
     bool terminates = false;
@@ -343,5 +547,12 @@ void FnBody(*Checker c, u32 s) {
     unsafe {
         c.LSP = saved;
         c.LBase = 0;
+        *Sym ps = SymPtr(c, s);
+        ps.NCalls = VecLen(&c.Calls) as u32 - ps.Calls;
+        c.Scope1 = 0;
+        c.Scope2 = 0;
+        c.CurFn = 0;
+        c.CurBounds = 0;
+        c.NCurBounds = 0;
     }
 }

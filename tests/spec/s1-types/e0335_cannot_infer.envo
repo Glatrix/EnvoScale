@@ -1,0 +1,7 @@
+// expect-error: E0335 @ 7:9
+// [s1.expr.7] type arguments not inferable from the arguments are written
+T Zero<T>() {
+    T z;
+    return z;
+}
+i64 x = Zero();

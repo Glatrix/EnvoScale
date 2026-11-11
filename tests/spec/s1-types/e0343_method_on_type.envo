@@ -1,0 +1,7 @@
+// expect-error: E0343 @ 7:11
+// [s1.expr.6] a method with a receiver is called on a value
+struct P {
+    i64 X;
+    i64 Get() => this.X;
+}
+i64 x = P.Get();

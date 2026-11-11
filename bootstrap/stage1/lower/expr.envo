@@ -5,7 +5,7 @@
 u32 LowerExpr(*Lower l, u32 n) {
     *Checker c = LC(l);
     Node node = CNode(c, n);
-    u32 t = NType(c, n);
+    u32 t = LNType(l, n);
     u16 k = node.Kind;
     // constant expressions the checker already evaluated
     if (k != NK_CALL && t != 0 && IsUntyped(c, n)) return LConst(l, LType(l, t), WrapValue(c, NValue(c, n), IntReprType(c, t)));
@@ -21,7 +21,17 @@ u32 LowerExpr(*Lower l, u32 n) {
         return LConst(l, ET_BOOL, 0);
     }
     if (k == NK_STRING) return StrTemp(l, StringValue(l, n));
-    if (k == NK_SIZEOF || k == NK_ALIGNOF) return LConst(l, ET_U64, NValue(c, n));
+    if (k == NK_SIZEOF || k == NK_ALIGNOF) {
+        // a generic operand is measured per instance
+        u32 ot = NSym(c, n);
+        if (!HasParams(c, ot)) return LConst(l, ET_U64, NValue(c, n));
+        u64 align;
+        u64 size;
+        unsafe { size = SizeOf(c, LSubst(l, ot), node.Tok, &align); }
+        if (k == NK_ALIGNOF) size = align;
+        return LConst(l, ET_U64, size);
+    }
+    if (k == NK_THIS) return LoadPlace(l, t, LowerPlace(l, n));
     if (k == NK_NAME) {
         Sym sym = SymGet(c, NSym(c, n));
         if (sym.Kind == SK_CONST) {
@@ -36,7 +46,7 @@ u32 LowerExpr(*Lower l, u32 n) {
             u32 v = EnumVariantNamed(c, t, n);
             return LConst(l, LType(l, t), NValue(c, v));
         }
-        u32 objType = NType(c, node.A);
+        u32 objType = LNType(l, node.A);
         u8 ok = TyKind(c, objType);
         if (ok == TYK_STR || ok == TYK_SLICE) {
             u32 obj = LowerExpr(l, node.A);
@@ -57,7 +67,7 @@ u32 LowerExpr(*Lower l, u32 n) {
         return LEmit(l, 17, et, 0, 0, et, 1, OpV(v), NoOp(), NoOp());     // ~ and !
     }
     if (k == NK_BINARY) return LowerBinary(l, n, node, t);
-    if (k == NK_CAST) return LowerCast(l, NType(c, node.A), t, LowerExpr(l, node.A));
+    if (k == NK_CAST) return LowerCast(l, LNType(l, node.A), t, LowerExpr(l, node.A));
     if (k == NK_CALL) return LowerCall(l, n, node, t);
     // NK_NEW: a zeroed temporary with the given fields
     u32 et = LType(l, t);
@@ -67,7 +77,7 @@ u32 LowerExpr(*Lower l, u32 n) {
     while (init != 0) {
         u32 field = StructFieldNamed(c, t, init);
         u32 v = LowerExpr(l, CNode(c, init).A);
-        StoreTo(l, NType(c, field), v, LField(l, et, tmp, FieldIndex(c, t, field)));
+        StoreTo(l, FieldType(c, t, field), v, LField(l, et, tmp, FieldIndex(c, t, field)));
         init = CNode(c, init).Next;
     }
     return tmp;
@@ -117,6 +127,7 @@ u32 LowerPlace(*Lower l, u32 n) {
     *Checker c = LC(l);
     *Module m = LM(l);
     Node node = CNode(c, n);
+    if (node.Kind == NK_THIS) return SymSlot(l, NSym(c, n));
     if (node.Kind == NK_NAME) {
         u32 s = NSym(c, n);
         Sym sym = SymGet(c, s);
@@ -133,7 +144,7 @@ u32 LowerPlace(*Lower l, u32 n) {
         return SymSlot(l, s);
     }
     if (node.Kind == NK_MEMBER) {
-        u32 objType = NType(c, node.A);
+        u32 objType = LNType(l, node.A);
         u32 st = objType;
         u32 addrBase = 0;
         if (TyKind(c, objType) == TYK_PTR) {
@@ -146,21 +157,21 @@ u32 LowerPlace(*Lower l, u32 n) {
         return LField(l, LType(l, st), addrBase, FieldIndex(c, st, field));
     }
     if (node.Kind == NK_INDEX) {
-        u32 objType = NType(c, node.A);
+        u32 objType = LNType(l, node.A);
         Type obj = TypeGet(c, objType);
-        u32 et = LType(l, NType(c, n));
-        u32 idx = Index64(l, NType(c, node.B), LowerExpr(l, node.B));
+        u32 et = LType(l, LNType(l, n));
+        u32 idx = Index64(l, LNType(l, node.B), LowerExpr(l, node.B));
         if (obj.Kind == TYK_PTR) return LElem(l, et, LowerExpr(l, node.A), idx);
         if (obj.Kind == TYK_ARRAY) {
             u32 addrBase = LowerExpr(l, node.A);
-            BoundsCheck(l, NType(c, node.B), idx, LConst(l, ET_U64, obj.Count as u64));
+            BoundsCheck(l, LNType(l, node.B), idx, LConst(l, ET_U64, obj.Count as u64));
             return LElem(l, et, addrBase, idx);
         }
         // str or slice: { ptr, len }
         u32 view = LowerExpr(l, node.A);
         u32 st = StrTypeOf(l);
         u32 len = LLoad(l, ET_U64, LField(l, st, view, 1));
-        BoundsCheck(l, NType(c, node.B), idx, len);
+        BoundsCheck(l, LNType(l, node.B), idx, len);
         return LElem(l, et, LLoad(l, ET_PTR, LField(l, st, view, 0)), idx);
     }
     // *p
@@ -211,11 +222,11 @@ u32 LowerBinary(*Lower l, u32 n, Node node, u32 t) {
         LStart(l, join);
         return LLoad(l, ET_BOOL, tmp);
     }
-    u32 lt = NType(c, node.A);
+    u32 lt = LNType(l, node.A);
     u32 et = LType(l, lt);
     u32 a = LowerExpr(l, node.A);
     u32 b = LowerExpr(l, node.B);
-    if (op == TK_SHL || op == TK_SHR) return LowerShift(l, op == TK_SHL, lt, a, b, NType(c, node.B));
+    if (op == TK_SHL || op == TK_SHR) return LowerShift(l, op == TK_SHL, lt, a, b, LNType(l, node.B));
     if (TokClass(op) & TC_PREC == PREC_COMPARE) {
         u16 cmp = 20;
         if (op == TK_NOT_EQ) cmp = 21;
@@ -297,6 +308,8 @@ u32 ConvTo(*Lower l, u32 a, u32 b, bool signed, u32 v) {
 u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     *Checker c = LC(l);
     *Module m = LM(l);
+    u32 cs = NSym(c, n);
+    if (cs != 0 && NeedsInst(c, cs)) return LowerInstCall(l, n, node, t);
     u32 s = NSym(c, node.A);
     if (s == 0) s = Lookup(c, NTok(c, node.A));
     Sym sym = SymGet(c, s);
@@ -309,20 +322,17 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     }
     u32 a = node.B;
     u32 i = 0;
+    u32 p = 0;
+    if (sym.Kind == SK_FN) p = FirstParam(c, s);
     while (a != 0) {
         u32 at = sym.Type;
         unsafe { at = ParamType(c, s, i); }
-        u32 v = LowerExpr(l, a);
-        if (IsAggregate(l, at)) {
-            // the callee owns a copy
-            u32 et = LType(l, at);
-            u32 copy = LSlot(l, et);
-            LCopy(l, copy, v, ESizeOf(l, et) as u64);
-            v = copy;
-        }
+        bool byref = p != 0 && CNode(c, p).Flags & (NF_IN | NF_REF) != 0;
+        u32 v = LowerArg(l, a, at, byref);
         unsafe { MemStoreU32(VecPush(&args), v); }
         i++;
         a = CNode(c, a).Next;
+        if (p != 0) p = CNode(c, p).Next;
     }
     u32 f = 0;
     if (sym.Kind == SK_BUILTIN) {
@@ -355,6 +365,96 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     } else {
         unsafe { f = MemLoadU32(VecAt(&l.FuncIds, s as usize)); }
     }
+    unsafe { return EmitCall(l, f, &args, retTmp); }
+}
+
+// An argument of parameter type at: a borrowed (`in`, `ref`) one is passed by address; an
+// aggregate by a pointer to a copy the callee owns; a scalar by value.
+u32 LowerArg(*Lower l, u32 a, u32 at, bool byref) {
+    if (byref) return LowerAddress(l, a, at);
+    u32 v = LowerExpr(l, a);
+    if (IsAggregate(l, at)) {
+        // the callee owns a copy
+        u32 et = LType(l, at);
+        u32 copy = LSlot(l, et);
+        LCopy(l, copy, v, ESizeOf(l, et) as u64);
+        v = copy;
+    }
+    return v;
+}
+
+// The address of expression a of type t: a place's own, or a temporary's.
+u32 LowerAddress(*Lower l, u32 a, u32 t) {
+    if (IsAggregate(l, t)) return LowerExpr(l, a);     // already an address
+    if (IsAddressable(LC(l), a)) return LowerPlace(l, a);
+    u32 et = LType(l, t);
+    u32 tmp = LSlot(l, et);
+    LStore(l, et, LowerExpr(l, a), tmp);
+    return tmp;
+}
+
+// A call to a generic function or a method: the instance for this environment, the
+// receiver first, then the arguments.
+u32 LowerInstCall(*Lower l, u32 n, Node node, u32 t) {
+    *Checker c = LC(l);
+    u32 s;
+    u32 env;
+    u32 ne;
+    unsafe { CallTarget(c, n, l.Env, l.NEnv, &s, &env, &ne); }
+    u32 f = InstAt(c, InstGet(c, s, env, ne, 0, 0)).Func;
+    Sym sym = SymGet(c, s);
+    Vec args = VecNew(4, 8);
+    u32 retTmp = 0;
+    if (IsAggregate(l, t)) {
+        retTmp = LSlot(l, LType(l, t));
+        unsafe { MemStoreU32(VecPush(&args), retTmp); }
+    }
+    if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0) {
+        u32 obj = CNode(c, node.A).A;
+        u32 ot = LNType(l, obj);
+        u32 rt = Subst(c, sym.OwnerType, env, ne);
+        bool byref = sym.Flags & (SF_RECV_IN | SF_RECV_REF) != 0;
+        u32 v = 0;
+        if (TyKind(c, ot) == TYK_PTR) {
+            // through a pointer: the pointer is the receiver's address
+            u32 addr = LowerExpr(l, obj);
+            if (byref) v = addr;
+            else v = LowerArgAt(l, addr, rt);
+        } else {
+            v = LowerArg(l, obj, rt, byref);
+        }
+        unsafe { MemStoreU32(VecPush(&args), v); }
+    }
+    u32 a = node.B;
+    u32 i = 0;
+    u32 p = FirstParam(c, s);
+    while (a != 0) {
+        u32 at = Subst(c, ParamType(c, s, i), env, ne);
+        bool byref = CNode(c, p).Flags & (NF_IN | NF_REF) != 0;
+        u32 v = LowerArg(l, a, at, byref);
+        unsafe { MemStoreU32(VecPush(&args), v); }
+        i++;
+        a = CNode(c, a).Next;
+        p = CNode(c, p).Next;
+    }
+    unsafe { return EmitCall(l, f, &args, retTmp); }
+}
+
+// A by-value argument of type t read from address p.
+u32 LowerArgAt(*Lower l, u32 p, u32 t) {
+    if (!IsAggregate(l, t)) return LLoad(l, LType(l, t), p);
+    u32 et = LType(l, t);
+    u32 copy = LSlot(l, et);
+    LCopy(l, copy, p, ESizeOf(l, et) as u64);
+    return copy;
+}
+
+// Calls EIR function f with args; returns the result value, or retTmp for an aggregate
+// result.
+u32 EmitCall(*Lower l, u32 f, *Vec argv, u32 retTmp) {
+    *Module m = LM(l);
+    Vec args;
+    unsafe { args = *argv; }
     EFunc callee = EFuncGet(m, f);
     u32 result = 0;
     unsafe {

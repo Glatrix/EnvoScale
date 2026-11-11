@@ -1,0 +1,7 @@
+// expect-error: E0350 @ 5:20
+// [s1.type.2] instantiation deeper than 64 levels
+struct Box<T> { T Item; }
+void Grow<T>(T x, i64 n) {
+    if (n > 0) Grow(new Box<T> { Item = x }, n - 1);
+}
+Grow<i64>(1, 3);

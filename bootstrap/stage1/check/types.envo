@@ -8,8 +8,11 @@ struct Type {
     u32 Align;
     u32 Elem;       // element type (ptr, slice, array)
     u32 Count;      // array length (saturated at 2^31)
-    u32 Sym;        // symbol (struct, enum)
+    u32 Sym;        // symbol (struct, enum, interface, type parameter)
     str Name;
+    u32 Args;       // generic instance: first type argument in Checker.TypeArgs
+    u32 NArgs;      // generic instance: number of type arguments (0: not an instance)
+    u8 LState;      // generic instance with concrete arguments: 2 once Size/Align are set
 }
 
 const u8 TYK_VOID = 1;
@@ -21,6 +24,8 @@ const u8 TYK_SLICE = 6;
 const u8 TYK_ARRAY = 7;
 const u8 TYK_STRUCT = 8;
 const u8 TYK_ENUM = 9;
+const u8 TYK_PARAM = 10;    // a generic type parameter (Envo-S1)
+const u8 TYK_IFACE = 11;    // an interface, only as a bound or in `impl` (Envo-S1)
 
 // Fixed type indices, in Stage 0's order. 0 means "no type".
 const u32 T_VOID = 1;
@@ -50,6 +55,18 @@ struct Sym {
     u32 Aux;        // struct size; enum representation type; parameter count
     u32 Aux2;       // struct alignment; built-in id
     u32 Params;     // index of the first parameter type in Checker.ParamTypes
+    // Envo-S1 (check/generic.envo)
+    u32 Flags;      // SF_*
+    u32 NEnv;       // generic environment size: the owner's parameters, then the item's own
+    u32 NOwn;       // how many of them come from the owner (struct, impl or interface)
+    u32 OwnerTP;    // the owner's type parameter list (first node), for name lookup
+    u32 OwnerType;  // a method's receiver type, in the owner's generic form
+    u32 Iface;      // an interface method's interface symbol
+    u32 Recv;       // a method's `this` local
+    u32 Bounds;     // first (parameter type, interface type) pair in Checker.Bounds
+    u32 NBounds;
+    u32 Calls;      // first call node of the body in Checker.Calls
+    u32 NCalls;
 }
 
 const u8 SK_TYPE = 1;
@@ -60,6 +77,17 @@ const u8 SK_STATIC = 5;
 const u8 SK_FN = 6;
 const u8 SK_BUILTIN = 7;
 const u8 SK_LOCAL = 8;
+const u8 SK_TPARAM = 9;     // Value: index in the environment; Type: its TYK_PARAM type
+const u8 SK_IFACE = 10;
+
+// Symbol flags (Envo-S1).
+const u32 SF_METHOD = 1;
+const u32 SF_STATIC = 2;        // a method without a receiver
+const u32 SF_RECV_IN = 4;       // `in this` (also the default)
+const u32 SF_RECV_REF = 8;      // `ref this`
+const u32 SF_GENERIC = 16;      // has a generic environment (NEnv > 0)
+const u32 SF_BYREF = 32;        // a local reached through a pointer (`in`/`ref` parameter, receiver)
+const u32 SF_READONLY = 64;     // an `in` local
 
 // Built-in ids (envo-core.md section 6), in Stage 0's order from 1.
 const u32 B_EXIT = 7;
@@ -103,6 +131,18 @@ const u32 E_VOID_VALUE = 322;
 const u32 E_DUPLICATE_VALUE = 323;
 const u32 E_BAD_REPR = 324;
 const u32 E_VOID_TYPE = 327;
+const u32 E_NOT_IMPLEMENTED = 334;
+const u32 E_CANNOT_INFER = 335;
+const u32 E_NOT_AN_IFACE = 336;
+const u32 E_MISSING_METHOD = 337;
+const u32 E_TYPE_ARG_COUNT = 338;
+const u32 E_METHOD_MISMATCH = 339;
+const u32 E_NOT_IN_IFACE = 340;
+const u32 E_BAD_THIS = 341;
+const u32 E_ARG_MODE = 342;
+const u32 E_STATIC_CALL = 343;
+const u32 E_INST_TOO_DEEP = 350;
+const u32 E_NOT_YET = 951;
 
 // The fixed message of an error that has no arguments.
 str CheckMessage(u32 code) {
@@ -123,6 +163,8 @@ str CheckMessage(u32 code) {
         E_DUPLICATE_VALUE => { return "duplicate enum value"; }
         E_BAD_REPR => { return "enum representation must be an integer type"; }
         E_VOID_TYPE => { return "`void` is only allowed as a return type"; }
+        E_BAD_THIS => { return "`this` is only allowed as the first parameter of a method"; }
+        E_INST_TOO_DEEP => { return "generic instantiation too deep"; }
         _ => { return "?"; }
     }
 }

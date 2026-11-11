@@ -1,0 +1,5 @@
+// expect-error: E0334 @ 5:10
+// [type.gen.2] type arguments meet their bounds
+interface IComparable<T> { i32 Compare(in T other); }
+T Max<T>(T a, T b) where T : IComparable<T> => a;
+bool m = Max(true, false);

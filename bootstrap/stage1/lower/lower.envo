@@ -23,6 +23,21 @@ struct Lower {
     u32 RetType;        // the checker type the function returns
     bool Top;           // lowering __main
     u32 Target;
+    u32 Env;            // the generic environment of the function being lowered
+    u32 NEnv;
+}
+
+// The type of checked node n in the function being lowered (its type arguments
+// substituted).
+u32 LNType(*Lower l, u32 n) {
+    return LSubst(l, NType(LC(l), n));
+}
+
+u32 LSubst(*Lower l, u32 t) {
+    unsafe {
+        if (l.NEnv == 0) return t;
+        return Subst(l.C, t, l.Env, l.NEnv);
+    }
 }
 
 // ------------------------------------------------------------------ builder
@@ -195,7 +210,11 @@ u32 LType(*Lower l, u32 t) {
     *Checker c = LC(l);
     *Module m = LM(l);
     u32 known;
-    unsafe { known = MemLoadU32(VecAt(&l.TypeIds, t as usize)); }
+    unsafe {
+        // substitution makes types after the table was sized
+        while (VecLen(&l.TypeIds) <= t as usize) MemStoreU32(VecPush(&l.TypeIds), 0);
+        known = MemLoadU32(VecAt(&l.TypeIds, t as usize));
+    }
     if (known != 0) return known;
     Type ty = TypeGet(c, t);
     u32 r = 0;
@@ -212,13 +231,22 @@ u32 LType(*Lower l, u32 t) {
     } else if (ty.Kind == TYK_ARRAY) {
         r = EArrayType(m, LType(l, ty.Elem), ty.Count);
     } else {
-        // a struct: its fields in order, with C layout like Stage 0
-        r = EStructType(m, ty.Name);
+        // a struct: its fields in order, with C layout like Stage 0; a generic instance is
+        // named after its arguments
+        str name = ty.Name;
+        if (ty.NArgs > 0) {
+            Buf b = BufNew(32);
+            unsafe {
+                BufMangle(&b, c, t);
+                name = BufCopy(&b);
+            }
+        }
+        r = EStructType(m, name);
         unsafe { MemStoreU32(VecAt(&l.TypeIds, t as usize), r); }
         u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
         Vec fields = VecNew(4, 8);
         while (f != 0) {
-            unsafe { MemStoreU32(VecPush(&fields), LType(l, NType(c, f))); }
+            unsafe { MemStoreU32(VecPush(&fields), LType(l, FieldType(c, t, f))); }
             f = CNode(c, f).Next;
         }
         unsafe {
@@ -283,22 +311,60 @@ void LowerProgram(*Lower l, u32 program) {
         st.NFields = 2;
         st.Defined = true;
     }
-    // declare every function and static first, so calls can refer forward
+    // declare every function and static first, so calls can refer forward; generic
+    // functions and methods are declared once per instance
     u32 n = CNode(c, program).A;
     while (n != 0) {
         u16 k = NKind(c, n);
-        if (k == NK_FN) DeclareFunc(l, NSym(c, n), TokText(c, NTok(c, n)));
+        if (k == NK_FN && !NeedsInst(c, NSym(c, n))) DeclareFunc(l, NSym(c, n), TokText(c, NTok(c, n)));
         if (k == NK_STATIC) DeclareStatic(l, NSym(c, n));
         n = CNode(c, n).Next;
     }
+    u32 ninst;
+    unsafe { ninst = VecLen(&c.Insts) as u32; }
+    for (u32 i = 0; i < ninst; i++) DeclareInst(l, i);
     // __main: the top-level statements
     u32 mainFn = AddFunc(l, "__main", 0, ET_I32);
     n = CNode(c, program).A;
     while (n != 0) {
-        if (NKind(c, n) == NK_FN) LowerFunc(l, NSym(c, n));
+        if (NKind(c, n) == NK_FN && !NeedsInst(c, NSym(c, n))) LowerFunc(l, NSym(c, n));
         n = CNode(c, n).Next;
     }
+    for (u32 i = 0; i < ninst; i++) {
+        Inst inst = InstAt(c, i);
+        LowerFuncEnv(l, inst.Sym, inst.Func, inst.Env, inst.NEnv);
+    }
     LowerMain(l, mainFn, CNode(c, program).A);
+}
+
+// The EIR function of instance i, named after its type arguments.
+void DeclareInst(*Lower l, u32 i) {
+    *Checker c = LC(l);
+    *Module m = LM(l);
+    Inst inst = InstAt(c, i);
+    str name = InstName(c, i);
+    u64 taken;
+    unsafe {
+        if (MapGet(&m.Names, name, &taken)) {
+            // mangled names are unique by construction; this keeps them so regardless
+            Buf b = BufNew(32);
+            BufStr(&b, name);
+            BufStr(&b, ".i");
+            BufU64(&b, i as u64);
+            name = BufCopy(&b);
+        }
+    }
+    Sym sym = SymGet(c, inst.Sym);
+    u32 count = sym.Aux;
+    if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0) count++;
+    u32 rt = Subst(c, sym.Type, inst.Env, inst.NEnv);
+    u32 ret = LType(l, rt);
+    if (IsAggregate(l, rt)) {
+        count++;
+        ret = ET_VOID;
+    }
+    u32 f = AddFunc(l, name, count, ret);
+    unsafe { (VecAt(&c.Insts, i as usize) as *Inst).Func = f; }
 }
 
 // A new EIR function with nparams parameters (their values are added by the caller).
@@ -530,60 +596,88 @@ u32 SymSlot(*Lower l, u32 s) {
 }
 
 void LowerFunc(*Lower l, u32 s) {
+    u32 f;
+    unsafe { f = MemLoadU32(VecAt(&l.FuncIds, s as usize)); }
+    LowerFuncEnv(l, s, f, 0, 0);
+}
+
+// Lowers function symbol s into EIR function f, with type arguments (env, n).
+void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
     *Checker c = LC(l);
     *Module m = LM(l);
     Sym sym = SymGet(c, s);
     Node fn = CNode(c, sym.Node);
-    u32 f;
-    unsafe { f = MemLoadU32(VecAt(&l.FuncIds, s as usize)); }
     EFunc ef = EFuncGet(m, f);
+    unsafe {
+        l.Env = env;
+        l.NEnv = n;
+    }
     BeginFunc(l, f, ef.NParams);
     Vec stores = VecNew(4, 16);
     u32 first = EFuncGet(m, f).FirstValue;
     u32 k = 0;
+    u32 ret = LSubst(l, sym.Type);
     unsafe {
         l.Top = false;
-        l.RetType = sym.Type;
+        l.RetType = ret;
         l.RetSlot = 0;
-        if (IsAggregate(l, sym.Type)) {
+        if (IsAggregate(l, ret)) {
             *EVal rv = VecAt(&m.Vals, first as usize) as *EVal;
             rv.Type = ET_PTR;
             l.RetSlot = first;
             k = 1;
         }
     }
-    // each parameter gets a slot (Core parameters are mutable locals)
+    // the receiver: a pointer for `in this` and `ref this`, else a value like a parameter
     u32 p = fn.B;
+    if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0) {
+        bool byref = sym.Flags & (SF_RECV_IN | SF_RECV_REF) != 0;
+        unsafe { LowerParam(l, sym.Recv, LSubst(l, sym.OwnerType), byref, first + k, &stores); }
+        k++;
+        if (p != 0 && IsReceiver(c, p)) p = CNode(c, p).Next;
+    }
+    // each parameter gets a slot (Core parameters are mutable locals)
     while (p != 0) {
-        u32 pt = NType(c, p);
-        u32 v = first + k;
-        u32 et = LType(l, pt);
-        unsafe {
-            *EVal pv = VecAt(&m.Vals, v as usize) as *EVal;
-            if (IsAggregate(l, pt)) {
-                // the caller passes a pointer to a copy this function owns
-                pv.Type = ET_PTR;
-                SetSymSlot(l, ParamSym(l, p), v);
-            } else {
-                pv.Type = et;
-                u32 slot = LSlot(l, et);
-                MemStoreU32(VecPush(&stores), v);
-                MemStoreU32(VecPush(&stores), slot);
-                MemStoreU32(VecPush(&stores), et);
-                SetSymSlot(l, ParamSym(l, p), slot);
-            }
-        }
+        bool byref = CNode(c, p).Flags & (NF_IN | NF_REF) != 0;
+        unsafe { LowerParam(l, ParamSym(l, p), LNType(l, p), byref, first + k, &stores); }
         k++;
         p = CNode(c, p).Next;
     }
     if (NKind(c, fn.C) == NK_BLOCK) {
         LowerStmt(l, fn.C);
-    } else if (sym.Type == T_VOID) {
+    } else if (ret == T_VOID) {
         LowerExpr(l, fn.C);
     } else {
         LowerReturnValue(l, fn.C);
     }
     EndFunc(l, stores);
+    unsafe {
+        l.Env = 0;
+        l.NEnv = 0;
+    }
+}
+
+// Parameter value v for local s of type pt: an aggregate or a borrowed (`in`, `ref`)
+// parameter arrives as a pointer, which is the local's address; a scalar is stored in a
+// slot of its own.
+void LowerParam(*Lower l, u32 s, u32 pt, bool byref, u32 v, *Vec stores) {
+    *Module m = LM(l);
+    u32 et = LType(l, pt);
+    unsafe {
+        *EVal pv = VecAt(&m.Vals, v as usize) as *EVal;
+        if (byref || IsAggregate(l, pt)) {
+            // the caller passes a pointer to a copy this function owns, or to the borrowed place
+            pv.Type = ET_PTR;
+            SetSymSlot(l, s, v);
+        } else {
+            pv.Type = et;
+            u32 slot = LSlot(l, et);
+            MemStoreU32(VecPush(stores), v);
+            MemStoreU32(VecPush(stores), slot);
+            MemStoreU32(VecPush(stores), et);
+            SetSymSlot(l, s, slot);
+        }
+    }
 }
 
 // The local symbol the checker made for parameter node p.

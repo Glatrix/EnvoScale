@@ -23,6 +23,21 @@ struct Checker {
     Vec ParamTypes;     // u32: parameter types of functions and built-ins
     bool Core;          // --core
     bool Runtime;       // compiling with the runtime: the target built-ins exist
+    // Envo-S1 generics, methods and interfaces (check/generic.envo)
+    Vec TypeArgs;       // u32: type arguments of instances and of call environments
+    Map Instances;      // interned generic instance types
+    Map Methods;        // "<owner key>.<name>" -> method symbol | (impl index + 1) << 32
+    Vec Impls;          // ImplRec
+    Vec Bounds;         // u32 pairs: (parameter type, interface type)
+    Vec Calls;          // u32: generic and method call nodes, grouped by function body
+    Vec MainCalls;      // the same for the top-level statements
+    Vec Insts;          // Inst: the functions to compile, one per generic environment
+    Map InstMap;        // "<symbol>:<types>" -> Inst index
+    u32 Scope1;         // type parameter lists visible by name: the owner's,
+    u32 Scope2;         // and the function's own
+    u32 CurFn;          // the function whose body is being checked (0: top level)
+    u32 CurBounds;      // its bounds
+    u32 NCurBounds;
 }
 
 // ------------------------------------------------------------------ side tables
@@ -188,6 +203,14 @@ void BufType(*Buf b, *Checker c, u32 t) {
         BufByte(b, '?');
     } else {
         BufStr(b, ty.Name);
+        if (ty.NArgs > 0) {
+            BufByte(b, '<');
+            for (u32 i = 0; i < ty.NArgs; i++) {
+                if (i > 0) BufStr(b, ", ");
+                BufType(b, c, EnvGet(c, ty.Args, i));
+            }
+            BufByte(b, '>');
+        }
     }
 }
 
@@ -241,8 +264,21 @@ u32 LocalFind(*Checker c, u32 tok) {
 }
 
 // Adds a local symbol for node n with type t.
-void LocalPush(*Checker c, u32 n, u32 t) {
+u32 LocalPush(*Checker c, u32 n, u32 t) {
     u32 s = SymNew(c, SK_LOCAL, n);
+    LocalPushSym(c, s, t);
+    return s;
+}
+
+// Adds a local without a declaring node (a method's implicit `this`).
+u32 LocalPushNamed(*Checker c, str name, u32 t) {
+    u32 s = SymNew(c, SK_LOCAL, 0);
+    unsafe { SymPtr(c, s).Name = name; }
+    LocalPushSym(c, s, t);
+    return s;
+}
+
+void LocalPushSym(*Checker c, u32 s, u32 t) {
     unsafe {
         SymPtr(c, s).Type = t;
         if (c.LSP == VecLen(&c.Locals)) VecPush(&c.Locals);
@@ -358,6 +394,17 @@ void CNotCore(*Checker c, str what, u32 tok) {
         }
         BufStr(&b, what);
         CFail(c, tok, code, BufView(&b));
+    }
+}
+
+// E0951 for an Envo-S1 construct this version of envoc1 does not compile yet. The code
+// is temporary: M2.11 removes the last use (docs/spec/errors.md).
+void CNotYet(*Checker c, str what, u32 tok) {
+    Buf b = BufNew(64);
+    unsafe {
+        BufStr(&b, "not supported by envoc1 yet: ");
+        BufStr(&b, what);
+        CFail(c, tok, E_NOT_YET, BufView(&b));
     }
 }
 

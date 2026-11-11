@@ -1,0 +1,96 @@
+// Generic structs: instances with different arguments, nesting, pointers to instances,
+// static and instance methods, methods calling methods ([type.gen.1], [s1.item.3],
+// [s1.item.4], [s1.expr.7]).
+// expect: 5 hi 2
+// expect: 42 7
+// expect: 3 2 1
+// expect: 24 16
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+struct Box<T> {
+    T Item;
+    static Box<T> Of(T x) => new Box<T> { Item = x };
+    T Get() => this.Item;
+    void Set(ref this, T x) { this.Item = x; }
+}
+
+struct Pair<A, B> {
+    A First;
+    B Second;
+    static Pair<A, B> Make(A a, B b) => new Pair<A, B> { First = a, Second = b };
+    Pair<B, A> Swap() => Pair<B, A>.Make(this.Second, this.First);
+}
+
+// a linked stack of T, through raw pointers
+struct Node<T> {
+    T Value;
+    *Node<T> Next;
+}
+
+struct Stack<T> {
+    *Node<T> Top;
+    usize Count;
+    void Push(ref this, T v) {
+        unsafe {
+            *Node<T> n = alloc(sizeof(Node<T>)) as *Node<T>;
+            n.Value = v;
+            n.Next = this.Top;
+            this.Top = n;
+        }
+        this.Count++;
+    }
+    T Pop(ref this) {
+        unsafe {
+            *Node<T> n = this.Top;
+            this.Top = n.Next;
+            this.Count--;
+            return n.Value;
+        }
+    }
+    bool IsEmpty() => this.Count == 0;
+}
+
+var b = Box<i64>.Of(5);
+var s = Box<str>.Of("hi");
+W(b.Get());
+write(1, s.Get());
+write(1, " ");
+print(Num(s.Item.Len as i64));
+
+b.Set(42);
+var bb = Box<Box<i64>>.Of(Box<i64>.Of(7));
+W(b.Item);
+print(Num(bb.Get().Get()));
+
+Stack<i64> st;
+st.Push(1);
+st.Push(2);
+st.Push(3);
+while (!st.IsEmpty()) {
+    i64 v = st.Pop();
+    if (st.IsEmpty()) print(Num(v));
+    else W(v);
+}
+
+var p = Pair<i64, Box<u8>>.Make(1, Box<u8>.Of(2));
+var q = p.Swap();
+W(sizeof(Pair<i64, Pair<i64, bool>>) as i64);
+print(Num(sizeof(Pair<u8, i64>) as i64));
+if (q.First.Item != 2 || q.Second != 1) exit(1);

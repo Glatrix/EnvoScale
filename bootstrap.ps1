@@ -186,11 +186,15 @@ function Invoke-Test {
     $stage0Exe = $exe
     foreach ($compiler in @('envoc0', 'envoc1')) {
     if ($compiler -eq 'envoc1') { $exe = Join-Path $Build1 'envoc1.exe' } else { $exe = $stage0Exe }
-        Say "run tests ($compiler): tests/spec/core-run"
         $runDir = Join-Path $Root "build\run-$compiler"
         New-Item -ItemType Directory -Force $runDir | Out-Null
-        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envo' | Sort-Object Name) {
-            $name = "$compiler spec/core-run/$($f.Name)"
+        # Envo-S1 programs (tests/spec/s1-run) run under Stage 1 only.
+        $runSuites = @('core-run')
+        if ($compiler -eq 'envoc1') { $runSuites += 's1-run' }
+        foreach ($suite in $runSuites) {
+        Say "run tests ($compiler): tests/spec/$suite"
+        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envo' | Sort-Object Name) {
+            $name = "$compiler spec/$suite/$($f.Name)"
             $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
             $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
             $wantOut = ''
@@ -209,6 +213,7 @@ function Invoke-Test {
             if ($r.Code -ne $wantCode) { Bad $name "exit code $($r.Code), expected $wantCode; stderr: $($r.Err.Trim())"; continue }
             if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value)")) { Bad $name "stderr: $($r.Err.Trim())"; continue }
             Pass $name
+        }
         }
 
         # Multi-file programs: one folder per test. main.envo is the entry file and holds
@@ -301,7 +306,8 @@ function Invoke-Test {
         @{ Dir = '01-lexical';  Command = 'lex';   Modes = @('--core', 's1') },
         @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
         @{ Dir = 'core-types';  Command = 'check'; Modes = @('--core') },
-        @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') }
+        @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') },
+        @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') }
     )
     foreach ($suite in $stage1Spec) {
       foreach ($mode in $suite.Modes) {
