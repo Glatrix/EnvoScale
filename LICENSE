@@ -1,21 +1,51 @@
-MIT License
+EnvoScale License
+=================
 
-Copyright (c) 2026 The EnvoScale contributors
+Copyright (c) 2026 Glatrix. All rights reserved except as granted below.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+EnvoScale (this repository: the compiler, bootstrap, runtime, standard platform,
+adapters, tools, templates, examples and documentation) is offered under two
+licenses. You may use it under whichever one applies to you.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+
+1. Community License: PolyForm Noncommercial License 1.0.0
+-----------------------------------------------------------
+
+For noncommercial purposes, EnvoScale is licensed under the PolyForm
+Noncommercial License 1.0.0. Its official terms are at:
+
+    https://polyformproject.org/licenses/noncommercial/1.0.0
+    (source: https://github.com/polyformproject/polyform-licenses/blob/1.0.0/PolyForm-Noncommercial-1.0.0.md)
+
+Those terms allow personal use, research, experiment, testing, education,
+hobby projects, and use by charitable organizations, educational and public
+research institutions, public safety and health organizations, environmental
+protection organizations and government institutions, as the terms define.
+
+Required Notice: Copyright (c) 2026 Glatrix (https://github.com/envoscale)
+
+
+2. Commercial License
+---------------------
+
+Any use that the Community License does not permit requires a commercial
+license from the copyright holder. In particular, use by or on behalf of a
+business, or as part of a commercial product or service, needs a commercial
+license.
+
+Commercial licenses are available for companies of every size. See
+LICENSING.md for what each license covers and how to obtain one.
+
+
+3. Contributions
+----------------
+
+Contributions are accepted only under the Contributor License Agreement in
+CLA.md, which lets the copyright holder offer contributed work under both
+licenses above.
+
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+IMPLIED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE, EXCEPT AS
+A SIGNED COMMERCIAL LICENSE AGREEMENT EXPRESSLY PROVIDES.

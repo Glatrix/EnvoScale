@@ -127,7 +127,7 @@ do_check() {
     problems=0
     problem() { printf 'check: %s\n' "$*" >&2; problems=$((problems + 1)); }
 
-    for f in README.md CHARTER.md STATUS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md \
+    for f in README.md CHARTER.md STATUS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md LICENSING.md CLA.md \
              LICENSE envo.eon bootstrap.sh bootstrap.ps1 docs/PLAN.md docs/rfcs/0000-template.md \
              docs/porting/CHECKLIST.md; do
         [ -f "$ROOT/$f" ] || problem "missing file: $f"

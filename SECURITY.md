@@ -14,6 +14,10 @@ you; the default is 90 days after the report or when a fix ships, whichever is s
 EnvoScale has not had a release. Until 1.0, only the `main` branch is supported, and
 every subsystem is **Experimental** unless [`STATUS.md`](STATUS.md) says otherwise.
 
+From 1.0, commercial licensees get long-term-support releases and advance notice of
+security fixes, as their license agreement specifies (see [`LICENSING.md`](LICENSING.md)).
+The public response process above applies to everyone.
+
 ## Cryptography audit status
 
 `envo.crypto` does not exist yet (milestone M7). When it lands it stays

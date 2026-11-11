@@ -3,6 +3,13 @@
 Thank you for helping. EnvoScale is meant to last for decades, so the rules below
 favour things that stay true over things that are quick.
 
+## Licensing of contributions
+
+EnvoScale is dual-licensed (free Community License, paid commercial licenses; see
+[`LICENSING.md`](LICENSING.md)). Every contribution must be made under the
+[Contributor License Agreement](CLA.md): say in your first pull request that you agree to
+it. Pull requests without that statement are not merged.
+
 ## Ground rules
 
 1. **Original work only.** Study any codebase, paper or spec you like, then write your

@@ -57,5 +57,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
   `GetCommandLineA`. (TODO(M1): decide whether UTF-8 paths are needed before Stage 1;
   `docs/PLAN.md` open question 5.)
 - **Stage 0 source files are limited to 16 MiB**, reported as an error.
-- **The license is a placeholder choice** (MIT) pending owner confirmation
-  (`docs/PLAN.md` open question 2).
+- **The license and CLA have not had legal review.** `LICENSE` applies the PolyForm
+  Noncommercial License 1.0.0 by reference to its official text and adds commercial
+  terms; `CLA.md` is an original draft. Both should be reviewed by a lawyer before
+  commercial licenses are sold.

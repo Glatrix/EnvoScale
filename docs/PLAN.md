@@ -56,7 +56,10 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    the brief's own rules: `Largest<T>` moves a non-`Copy` `T` out of a borrowed span
    ("no hidden copies"), and `ReadConfig` returns `text.Trim()` — a borrow of a local
    — as an owned `string`. See [`docs/rfcs/0001-normative-example-audit.md`](rfcs/0001-normative-example-audit.md).
-2. **License.** `LICENSE` is MIT with "The EnvoScale contributors" as a placeholder
+2. ~~**License.**~~ **Decided 2026-11-11 by the owner:** free for individuals and
+   noncommercial use (PolyForm Noncommercial 1.0.0), commercial licenses for companies,
+   contributions under a CLA. See `LICENSING.md`. The text below is the original question.
+   `LICENSE` was MIT with "The EnvoScale contributors" as a placeholder
    choice. The owner should confirm or replace it before the first public release.
 3. **Explicit lifetime syntax.** The brief says explicit lifetimes "exist but are
    rarely needed" without giving a spelling. Rust's `'a` collides with char literals

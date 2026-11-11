@@ -99,4 +99,7 @@ the [RFC process](docs/rfcs/README.md). Security issues: see [`SECURITY.md`](SEC
 
 ## License
 
-[MIT](LICENSE).
+EnvoScale is **free for individuals and noncommercial use** under the PolyForm
+Noncommercial License 1.0.0. **Companies need a commercial license.** See
+[`LICENSING.md`](LICENSING.md) for who needs which license, and [`LICENSE`](LICENSE) for
+the terms.

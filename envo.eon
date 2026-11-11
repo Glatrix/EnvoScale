@@ -8,6 +8,7 @@ workspace {
     name    = "envoscale"
     version = "0.0.1"
     edition = "2027"
+    license = "PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial"
 
     // Packages built as part of the workspace. Each member has its own envo.eon.
     members = [
