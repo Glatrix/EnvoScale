@@ -64,7 +64,7 @@ void __w_build_args() {
     *u8 line = __rt_alloc(need as usize);
     __wincall(__W_WIDECHARTOMULTIBYTE, 65001, 0, w, -1, __w_ptr(line), need, 0, 0);
     usize len = __rt_cstr_len(line);
-    *str args = __rt_alloc((len + 2) * 16) as *str;
+    *str args = __rt_str_array(len + 2);
     *u8 text = __rt_alloc(len + 1);
     usize argc = 0;
     usize i = 0;

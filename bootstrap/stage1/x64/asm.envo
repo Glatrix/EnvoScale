@@ -328,6 +328,13 @@ void CallIndirectLabel(*Asm a, u32 label) {
     Rel32(a, label);
 }
 
+// call [r]
+void CallMem(*Asm a, u8 r) {
+    Rex(a, false, 0, r, false);
+    B(a, 0xFF);
+    ModMem(a, 2, r, 0);
+}
+
 // call r
 void CallR(*Asm a, u8 r) {
     Rex(a, false, 0, r, false);

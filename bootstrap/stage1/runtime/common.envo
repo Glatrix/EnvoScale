@@ -122,3 +122,8 @@ usize __rt_cstr_len(*u8 p) {
     }
     return n;
 }
+
+// Room for n str values.
+*str __rt_str_array(usize n) {
+    unsafe { return __rt_alloc(n * 16) as *str; }
+}

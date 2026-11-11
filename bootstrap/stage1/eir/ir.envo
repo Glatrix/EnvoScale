@@ -529,6 +529,7 @@ struct Intrinsic {
     u32 P1;
     u32 P2;
     u32 Ret;
+    bool AllI64;    // every argument is an i64 (the target intrinsics)
 }
 
 Intrinsic IntrinsicNamed(str name) {
@@ -544,6 +545,8 @@ Intrinsic IntrinsicNamed(str name) {
     else if (StrEq(name, "argc")) { x.N = 0; x.Ret = ET_U64; }
     else if (StrEq(name, "arg")) { x.N = 2; x.P0 = ET_U64; x.P1 = ET_PTR; }
     else if (StrEq(name, "panic.msg")) { x.N = 2; x.P0 = ET_PTR; x.P1 = ET_U64; }
+    else if (StrEq(name, "syscall")) { x.N = 7; x.AllI64 = true; x.Ret = ET_I64; }
+    else if (StrEq(name, "wincall")) { x.N = 9; x.AllI64 = true; x.Ret = ET_I64; }
     else x.Name = "";
     return x;
 }

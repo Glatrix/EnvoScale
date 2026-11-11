@@ -164,68 +164,75 @@ do_test() {
 
     # Programs compiled and run: `// expect:` stdout lines, `// expect-exit: N`,
     # `// expect-panic: <reason>` (exit 101 and "panic: <reason>" on stderr).
-    say 'run tests: tests/spec/core-run'
-    rundir="$BUILD/run"
-    mkdir -p "$rundir"
-    for f in "$ROOT"/tests/spec/core-run/*.envo; do
-        base=$(basename "$f" .envo)
-        name="spec/core-run/$base.envo"
-        sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
-        want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
-        panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
-        [ -n "$want_code" ] || want_code=0
-        [ -z "$panic" ] || want_code=101
-        program="$rundir/$base"
-        case "$EXE" in *.exe) program="$program.exe" ;; esac
-        run "$rundir" build "$f" -o "$program"
-        if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
-        set +e
-        (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
-        rc=$?
-        set -e
-        tr -d '\r' < "$TMP/out" > "$TMP/actual"
-        if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
-        if [ "$rc" -ne "$want_code" ]; then bad "$name" "exit code $rc, expected $want_code: $(cat "$TMP/err")"; continue; fi
-        if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "stderr: $(cat "$TMP/err")"; continue; fi
-        pass
-    done
-
-    # Multi-file programs: one folder per test. main.envo is the entry file and holds
-    # the annotations; the other .envo files follow in name order. Either
-    # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
-    say 'multi-file tests: tests/spec/core-multi'
-    for d in "$ROOT"/tests/spec/core-multi/*/; do
-        d=${d%/}
-        base=$(basename "$d")
-        name="spec/core-multi/$base"
-        set -- main.envo
-        for f in "$d"/*.envo; do
-            f=$(basename "$f")
-            [ "$f" = main.envo ] || set -- "$@" "$f"
+    # Programs compiled and run: by Stage 0, then by Stage 1, which must give the same
+    # output and exit codes (M2.7, PLAN D14).
+    stage0_exe=$EXE
+    for compiler in envoc0 envoc1; do
+    if [ "$compiler" = envoc1 ]; then EXE="$BUILD1/envoc1$(host_suffix)"; else EXE=$stage0_exe; fi
+        say "run tests ($compiler): tests/spec/core-run"
+        rundir="$ROOT/build/run-$compiler"
+        mkdir -p "$rundir"
+        for f in "$ROOT"/tests/spec/core-run/*.envo; do
+            base=$(basename "$f" .envo)
+            name="$compiler spec/core-run/$base.envo"
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
+            want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
+            panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+            [ -n "$want_code" ] || want_code=0
+            [ -z "$panic" ] || want_code=101
+            program="$rundir/$base"
+            case "$EXE" in *.exe) program="$program.exe" ;; esac
+            run "$rundir" build "$f" -o "$program"
+            if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+            set +e
+            (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
+            rc=$?
+            set -e
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
+            if [ "$rc" -ne "$want_code" ]; then bad "$name" "exit code $rc, expected $want_code: $(cat "$TMP/err")"; continue; fi
+            if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "stderr: $(cat "$TMP/err")"; continue; fi
+            pass
         done
-        line=$(grep -m1 '^// expect-error: ' "$d/main.envo" | tr -d '\r' || true)
-        if [ -n "$line" ]; then
-            code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
-            want="${line##* @ }: error[$code]"
-            run "$d" check "$@"
-            if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
-            else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
-            continue
-        fi
-        sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
-        program="$rundir/multi-$base"
-        case "$EXE" in *.exe) program="$program.exe" ;; esac
-        run "$d" build "$@" -o "$program"
-        if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
-        set +e
-        (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
-        rc=$?
-        set -e
-        tr -d '\r' < "$TMP/out" > "$TMP/actual"
-        if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
-        if [ "$rc" -ne 0 ]; then bad "$name" "exit code $rc: $(cat "$TMP/err")"; continue; fi
-        pass
+
+        # Multi-file programs: one folder per test. main.envo is the entry file and holds
+        # the annotations; the other .envo files follow in name order. Either
+        # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
+        say "multi-file tests ($compiler): tests/spec/core-multi"
+        for d in "$ROOT"/tests/spec/core-multi/*/; do
+            d=${d%/}
+            base=$(basename "$d")
+            name="$compiler spec/core-multi/$base"
+            set -- main.envo
+            for f in "$d"/*.envo; do
+                f=$(basename "$f")
+                [ "$f" = main.envo ] || set -- "$@" "$f"
+            done
+            line=$(grep -m1 '^// expect-error: ' "$d/main.envo" | tr -d '\r' || true)
+            if [ -n "$line" ]; then
+                code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
+                want="${line##* @ }: error[$code]"
+                run "$d" check "$@"
+                if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
+                else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+                continue
+            fi
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
+            program="$rundir/multi-$base"
+            case "$EXE" in *.exe) program="$program.exe" ;; esac
+            run "$d" build "$@" -o "$program"
+            if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+            set +e
+            (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
+            rc=$?
+            set -e
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
+            if [ "$rc" -ne 0 ]; then bad "$name" "exit code $rc: $(cat "$TMP/err")"; continue; fi
+            pass
+        done
     done
+    EXE=$stage0_exe
 
     say ''
     say 'stage 1 smoke tests'

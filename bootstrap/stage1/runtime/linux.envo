@@ -11,7 +11,7 @@ void __os_init(i64 sp) {
         *u64 stack = sp as isize as *u64;
         usize argc = stack[0] as usize;
         **u8 argv = &stack[1] as **u8;
-        *str args = __rt_alloc(argc * 16) as *str;
+        *str args = __rt_str_array(argc);
         for (usize i = 0; i < argc; i++) {
             *u8 a = argv[i];
             args[i] = str_from(a, __rt_cstr_len(a));

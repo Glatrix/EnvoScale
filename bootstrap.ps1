@@ -181,59 +181,66 @@ function Invoke-Test {
 
     # Programs compiled and run: `// expect:` stdout lines, `// expect-exit: N`,
     # `// expect-panic: <reason>` (exit 101 and "panic: <reason>" on stderr).
-    Say 'run tests: tests/spec/core-run'
-    $runDir = Join-Path $Build 'run'
-    New-Item -ItemType Directory -Force $runDir | Out-Null
-    foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envo' | Sort-Object Name) {
-        $name = "spec/core-run/$($f.Name)"
-        $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
-        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
-        $wantOut = ''
-        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
-        $wantCode = 0
-        $m = [regex]::Match($text, '(?m)^// expect-exit: (\d+)')
-        if ($m.Success) { $wantCode = [int]$m.Groups[1].Value }
-        $panic = [regex]::Match($text, '(?m)^// expect-panic: (.*)$')
-        if ($panic.Success) { $wantCode = 101 }
-        $program = Join-Path $runDir ($f.BaseName + '.exe')
-        $r = Invoke-Tool $exe @('build', $f.FullName, '-o', $program) $runDir
-        if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
-        $r = Invoke-Tool $program @() $runDir
-        $out = Normalize $r.Out
-        if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
-        if ($r.Code -ne $wantCode) { Bad $name "exit code $($r.Code), expected $wantCode; stderr: $($r.Err.Trim())"; continue }
-        if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value)")) { Bad $name "stderr: $($r.Err.Trim())"; continue }
-        Pass $name
-    }
-
-    # Multi-file programs: one folder per test. main.envo is the entry file and holds
-    # the annotations; the other .envo files follow in name order. Either
-    # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
-    Say 'multi-file tests: tests/spec/core-multi'
-    foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-multi') -Directory | Sort-Object Name) {
-        $name = "spec/core-multi/$($d.Name)"
-        $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
-        $text = Normalize ([IO.File]::ReadAllText((Join-Path $d.FullName 'main.envo'), $Utf8))
-        $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)$')
-        if ($m.Success) {
-            $want = "$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
-            $r = Invoke-Tool $exe (@('check') + $files) $d.FullName
-            if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
-            else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
-            continue
+    # Programs compiled and run: by Stage 0, then by Stage 1, which must give the same
+    # output and exit codes (M2.7, PLAN D14).
+    $stage0Exe = $exe
+    foreach ($compiler in @('envoc0', 'envoc1')) {
+    if ($compiler -eq 'envoc1') { $exe = Join-Path $Build1 'envoc1.exe' } else { $exe = $stage0Exe }
+        Say "run tests ($compiler): tests/spec/core-run"
+        $runDir = Join-Path $Root "build\run-$compiler"
+        New-Item -ItemType Directory -Force $runDir | Out-Null
+        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envo' | Sort-Object Name) {
+            $name = "$compiler spec/core-run/$($f.Name)"
+            $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
+            $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+            $wantOut = ''
+            if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+            $wantCode = 0
+            $m = [regex]::Match($text, '(?m)^// expect-exit: (\d+)')
+            if ($m.Success) { $wantCode = [int]$m.Groups[1].Value }
+            $panic = [regex]::Match($text, '(?m)^// expect-panic: (.*)$')
+            if ($panic.Success) { $wantCode = 101 }
+            $program = Join-Path $runDir ($f.BaseName + '.exe')
+            $r = Invoke-Tool $exe @('build', $f.FullName, '-o', $program) $runDir
+            if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+            $r = Invoke-Tool $program @() $runDir
+            $out = Normalize $r.Out
+            if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
+            if ($r.Code -ne $wantCode) { Bad $name "exit code $($r.Code), expected $wantCode; stderr: $($r.Err.Trim())"; continue }
+            if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value)")) { Bad $name "stderr: $($r.Err.Trim())"; continue }
+            Pass $name
         }
-        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
-        $wantOut = ''
-        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
-        $program = Join-Path $runDir ("multi-" + $d.Name + '.exe')
-        $r = Invoke-Tool $exe (@('build') + $files + @('-o', $program)) $d.FullName
-        if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
-        $r = Invoke-Tool $program @() $runDir
-        $out = Normalize $r.Out
-        if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
-        if ($r.Code -ne 0) { Bad $name "exit code $($r.Code); stderr: $($r.Err.Trim())"; continue }
-        Pass $name
+
+        # Multi-file programs: one folder per test. main.envo is the entry file and holds
+        # the annotations; the other .envo files follow in name order. Either
+        # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
+        Say "multi-file tests ($compiler): tests/spec/core-multi"
+        foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-multi') -Directory | Sort-Object Name) {
+            $name = "$compiler spec/core-multi/$($d.Name)"
+            $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
+            $text = Normalize ([IO.File]::ReadAllText((Join-Path $d.FullName 'main.envo'), $Utf8))
+            $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)$')
+            if ($m.Success) {
+                $want = "$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
+                $r = Invoke-Tool $exe (@('check') + $files) $d.FullName
+                if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
+                else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+                continue
+            }
+            $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+            $wantOut = ''
+            if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+            $program = Join-Path $runDir ("multi-" + $d.Name + '.exe')
+            $r = Invoke-Tool $exe (@('build') + $files + @('-o', $program)) $d.FullName
+            if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+            $r = Invoke-Tool $program @() $runDir
+            $out = Normalize $r.Out
+            if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
+            if ($r.Code -ne 0) { Bad $name "exit code $($r.Code); stderr: $($r.Err.Trim())"; continue }
+            Pass $name
+        }
     }
+    $exe = $stage0Exe
 
     Say ''
     Say 'stage 1 smoke tests'

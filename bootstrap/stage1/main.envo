@@ -71,7 +71,13 @@ if (StrEq(command, "embed")) {
 if (StrEq(command, "eir-check")) {
     CmdEirCheck(argi);
 }
-if (StrEq(command, "build") || StrEq(command, "eir")) {
+if (StrEq(command, "build")) {
+    CmdBuild(argi, coreOnly);
+}
+if (StrEq(command, "eir")) {
+    CmdEir(argi, coreOnly);
+}
+if (StrEq(command, "never")) {
     *Buf e = Err();
     BufStr(e, "envoc1: error: '");
     BufStr(e, command);

@@ -26,4 +26,7 @@ x64/asm.envo
 x64/image.envo
 x64/gen.envo
 runtime/embedded.envo
+lower/lower.envo
+lower/stmt.envo
+lower/expr.envo
 driver.envo

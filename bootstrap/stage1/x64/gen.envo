@@ -438,6 +438,12 @@ void GenIntrinsic(*Gen g, EInst inst) {
         if (args > 4) stackArgs = args - 4;
         i32 reserve = ((32 + 8 * stackArgs + 15) & ~15) as i32;
         AluImm(a, 5, RSP, reserve);
+        // the import's IAT slot: iat + 8 * k, in r10 (not an argument register)
+        unsafe { LeaLabel(a, R10, g.Imports.Iat); }
+        LoadOp(g, R11, f);
+        MovRI(a, RAX, 8);
+        ImulRR(a, R11, RAX);
+        Alu(a, ALU_ADD, R10, R11);
         for (u32 k = 4; k < args; k++) {
             LoadOp(g, RAX, f + 1 + k);
             Store(a, RSP, (32 + 8 * (k - 4)) as i32, RAX, 8);
@@ -448,13 +454,7 @@ void GenIntrinsic(*Gen g, EInst inst) {
         regs[2] = R8;
         regs[3] = R9;
         for (u32 k = 0; k < args && k < 4; k++) LoadOp(g, regs[k], f + 1 + k);
-        u64 index = ConstOf(g, OpRef(g, f));
-        u32 slot = NewLabel(a);
-        unsafe {
-            u64 iat = VecGetU64(&a.Labels, g.Imports.Iat as usize);
-            VecSetU64(&a.Labels, slot as usize, iat + 8 * index);
-        }
-        CallIndirectLabel(a, slot);
+        CallMem(a, R10);
         AluImm(a, 0, RSP, reserve);
     } else {
         Bug("x64: portable intrinsics reach the backend only through the runtime");

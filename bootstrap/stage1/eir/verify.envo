@@ -162,9 +162,13 @@ void VInst(*Module m, u32 i, u32 func) {
     } else if (sh == SH_INTRINSIC) {
         Intrinsic x = IntrinsicNamed(inst.Str);
         if (n != x.N) VFail(m, pos, 610, "wrong number of arguments");
-        if (n > 0) VExpect(m, f, x.P0, "argument type differs from the intrinsic's parameter");
-        if (n > 1) VExpect(m, f + 1, x.P1, "argument type differs from the intrinsic's parameter");
-        if (n > 2) VExpect(m, f + 2, x.P2, "argument type differs from the intrinsic's parameter");
+        if (x.AllI64) {
+            for (u32 k = 0; k < n; k++) VExpect(m, f + k, ET_I64, "the target intrinsics take `i64` arguments");
+        } else {
+            if (n > 0) VExpect(m, f, x.P0, "argument type differs from the intrinsic's parameter");
+            if (n > 1) VExpect(m, f + 1, x.P1, "argument type differs from the intrinsic's parameter");
+            if (n > 2) VExpect(m, f + 2, x.P2, "argument type differs from the intrinsic's parameter");
+        }
     } else if (sh == SH_BR) {
         VTarget(m, f, func);
     } else if (sh == SH_CONDBR) {
