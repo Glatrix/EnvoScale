@@ -5,7 +5,9 @@ or back (brief §0.4, §14.5). Stability tiers are defined in brief §14.4:
 **Experimental** (may change or vanish), **Preview** (breaking changes need an RFC),
 **Stable** (SemVer + editions). "—" means the subsystem does not exist yet.
 
-_Last updated: 2026-11-11._
+_Last updated: 2026-11-11._ Work is tracked on the
+[EnvoScale Roadmap](https://github.com/orgs/envoscale/projects/3) project: one epic issue per
+milestone, increments as sub-issues, and owner decisions marked **Needs Decision**.
 
 ## Milestones
 
@@ -38,7 +40,7 @@ _Last updated: 2026-11-11._
 | **Bootstrap: Stage 1** (`bootstrap/stage1`) | — | — | Everything | M2 |
 | **Bootstrap adapter: NASM** (`adapters/bootstrap/nasm`) | Experimental | `assemble.ps1` / `assemble.sh` | — | Used by CI and local builds |
 | **Build entry points** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check` (layout, lib→adapters imports, gallery line limits), `build` and `test` all work on Windows PowerShell and Git Bash. Verified that `check` catches a planted forbidden import and that `test` catches a wrong token and a wrong error column | `bootstrap.sh` not yet run on Linux | First CI run |
-| **CI adapter** (`adapters/ci/github`) | Experimental | Workflow: `check`; Stage 0 build+test on Linux and Windows | Has never run (no remote yet); no cross-host byte-identity check | Push to GitHub; then compare the envoc0 SHA-256 printed by both jobs automatically |
+| **CI adapter** (`adapters/ci/github`) | Experimental | Runs on [envoscale/EnvoScale](https://github.com/envoscale/EnvoScale/actions). `check` passes on Linux. `stage0-windows` passes 58/58 on a clean runner and produces envoc0 binaries byte-identical (same SHA-256) to the local build | `stage0-linux` has not yet installed NASM: the runner's Ubuntu apt mirror failed DNS resolution on all three attempts on 2026-11-11 | Re-run when the mirror recovers; then automate the cross-host hash comparison |
 | **Tests** (`tests/`) | — | 13 lexer golden tests, 41 lexical `expect-error` spec tests, 4 CLI smoke tests, Hello World Gallery files with line limits | Everything that needs a parser or code generator | Parser golden tests (M1.5) |
 | **Compiler: Stage 2** (`compiler/`) | — | — | Everything | M3 |
 | **Runtime** (`runtime/`) | — | — | Everything | M3 (startup/panic/ARC), M6 (VM) |
