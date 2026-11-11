@@ -1,7 +1,8 @@
 # `adapters/ci/github` — GitHub Actions adapter
 
-> **Status:** Active. Runs `check` on every push and pull request, and the Stage 0
-> build and tests on Windows and Linux.
+> **Status:** Active. Runs `check` on every push and pull request, the Stage 0 build
+> and tests on Windows and Linux, and `reproducible`, which requires the two hosts'
+> builds to be byte-identical (`./bootstrap.sh compare`).
 
 GitHub only reads workflows from `.github/workflows/`, so this adapter is that folder
 plus this README. Switching CI providers means deleting `.github/` and adding a sibling
