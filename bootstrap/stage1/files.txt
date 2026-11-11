@@ -9,4 +9,6 @@ support/diag.envo
 support/selftest.envo
 syntax/tokens.envo
 syntax/lexer.envo
+syntax/nodes.envo
+syntax/parser.envo
 driver.envo

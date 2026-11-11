@@ -72,3 +72,12 @@ u64 VecGetU64(*Vec v, usize i) {
 void VecSetU64(*Vec v, usize i, u64 x) {
     MemStoreU64(VecAt(v, i), x);
 }
+
+// Shrinks v to len elements, zeroing the removed ones (used to backtrack).
+void VecTruncate(*Vec v, usize len) {
+    unsafe {
+        if (len > v.Len) panic("VecTruncate: longer than the vector");
+        MemZero(&v.Ptr[len * v.Elem], (v.Len - len) * v.Elem);
+        v.Len = len;
+    }
+}

@@ -30,6 +30,8 @@ Stage 0.
 | `driver.envo` | commands: loading sources, `lex` |
 | `syntax/tokens.envo` | token kinds and spellings, generated from Stage 0's `tokens.eas` |
 | `syntax/lexer.envo` | the lexer, step for step like Stage 0's, plus the `lex` dump |
+| `syntax/nodes.envo` | syntax tree node kinds, dump table and token classes (Stage 0's `nodes.eas`) |
+| `syntax/parser.envo` | the parser, routine for routine like Stage 0's, plus the `parse` dump |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
 | `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |
@@ -53,5 +55,6 @@ Stage 0.
 
 ## Commands
 
-`envoc1 version`, `help`, `selftest` and `lex` work today. `parse`, `check`, `build`, `eir`
-and `eir-check` arrive with increments 2.4–2.7 (Envo-S1 §9).
+`envoc1 version`, `help`, `selftest`, `lex` and `parse` (Envo-Core grammar) work today.
+The Envo-S1 grammar, `check`, `build`, `eir` and `eir-check` arrive with increments 2.4–2.7
+(Envo-S1 §9).

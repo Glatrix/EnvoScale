@@ -43,3 +43,30 @@ void CmdLex(usize argi, bool core) {
     }
     Exit(EXIT_OK);
 }
+
+// Lexes every loaded source file into toks, recording each file's first token in starts.
+void LexAll(*Vec toks, *Vec starts, bool core) {
+    usize files = VecLen(Files());
+    for (usize f = 0; f < files; f++) {
+        VecPushU64(starts, VecLen(toks) as u64);
+        Lex(f as u32, toks, core);
+    }
+}
+
+// `envoc1 parse <file.envo>`
+void CmdParse(usize argi, bool core) {
+    if (argc() != argi + 1) {
+        Usage(2);
+        Exit(EXIT_USAGE);
+    }
+    LoadSources(argi, 1);
+    Vec toks = VecNew(sizeof(Token), 1024);
+    Vec starts = VecNew(8, 4);
+    Vec nodes = VecNew(sizeof(Node), 4096);
+    unsafe {
+        LexAll(&toks, &starts, core);
+        u32 program = ParseFiles(&toks, &starts, &nodes, core);
+        AstDump(&toks, &nodes, program, 0);
+    }
+    Exit(EXIT_OK);
+}
