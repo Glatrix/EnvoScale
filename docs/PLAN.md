@@ -90,9 +90,12 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
 7. ~~**Slices in Envo-Core.**~~ **Decided 2026-11-11 by [RFC 0002](rfcs/0002-slicing.md):**
    `a[lo..hi]` in full Envo and Envo-S1; Core keeps no slicing (Stage 0's budget), so
    Stage 1's source uses a pointer and a length.
-8. **How Stage 1 programs get their runtime.** Stage 0 copies its own assembled runtime
-   block into each output program. `envoc1` cannot do that (it is a Core program), so
-   it must emit the OS shim with its own x86-64 encoder. Decided in increment 2.7.
+8. ~~**How Stage 1 programs get their runtime.**~~ **Decided 2026-11-11 (M2.7):** the
+   Stage 1 runtime is written in Envo-Core and compiled into every program `envoc1`
+   builds, on top of two target intrinsics the backend encodes (`syscall` on Linux,
+   `wincall` for `KERNEL32.dll` imports on Windows). See
+   [`architecture/stage1.md`](architecture/stage1.md). Original question: Stage 0 copies
+   its own assembled runtime block into each output program; `envoc1` cannot do that.
 
 ## 4. Done milestones
 
