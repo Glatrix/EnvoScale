@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
-      - run: sudo apt-get install -y nasm
+      - run: sudo apt-get update && sudo apt-get install -y nasm
       - run: ./bootstrap.sh test
 
   stage0-windows:
