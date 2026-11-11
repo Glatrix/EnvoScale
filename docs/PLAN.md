@@ -117,8 +117,8 @@ the M2 epic on the roadmap project.
 | # | Increment | Tested by | State |
 |---|---|---|---|
 | [2.1](https://github.com/envoscale/EnvoScale/issues/46) | Specs and RFCs: `envo-s1.md`; RFCs for slices (#45), function types (#30), lifetimes (#31), EIR v1 (#29) | review | done: [`envo-s1.md`](spec/envo-s1.md), RFCs [0002](rfcs/0002-slicing.md)–[0005](rfcs/0005-eir-v1.md) |
-| [2.2](https://github.com/envoscale/EnvoScale/issues/47) | Stage 1 skeleton: build with `envoc0`, support library (arena, buffers, strings, hash map, files, diagnostics), `envoc1 version`; scripts and CI build it | smoke tests | in progress |
-| [2.3](https://github.com/envoscale/EnvoScale/issues/48) | Lexer for the full lexical grammar | lexer goldens and `01-lexical` must match `envoc0` (D14) | |
+| [2.2](https://github.com/envoscale/EnvoScale/issues/47) | Stage 1 skeleton: build with `envoc0`, support library (arena, buffers, strings, hash map, files, diagnostics), `envoc1 version`; scripts and CI build it | smoke tests | done: support library, `envoc1 version` / `selftest`, built for both OSes by the scripts and CI |
+| [2.3](https://github.com/envoscale/EnvoScale/issues/48) | Lexer for the full lexical grammar | lexer goldens and `01-lexical` must match `envoc0` (D14) | in progress |
 | [2.4](https://github.com/envoscale/EnvoScale/issues/49) | Parser for Envo-S1 | `core-syntax` (same codes and positions as `envoc0`), new S1 syntax tests | |
 | [2.5](https://github.com/envoscale/EnvoScale/issues/50) | Names and types for Envo-Core | `core-types` (same codes and positions) | |
 | [2.6](https://github.com/envoscale/EnvoScale/issues/51) | EIR v1: data structures, text form (print and parse, round-trip), verifier | `tests/golden/eir/` | |

@@ -1,0 +1,9 @@
+main.envo
+support/mem.envo
+support/text.envo
+support/buf.envo
+support/vec.envo
+support/map.envo
+support/io.envo
+support/diag.envo
+support/selftest.envo

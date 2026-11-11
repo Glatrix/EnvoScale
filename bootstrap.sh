@@ -2,8 +2,9 @@
 # EnvoScale bootstrap entry point for POSIX systems (Linux, macOS, Git Bash on Windows).
 # Uses only POSIX shell tools, plus NASM through adapters/bootstrap/nasm (Phase A).
 #
-#   ./bootstrap.sh build   assemble Stage 0: build/stage0/envoc0 and build/stage0/envoc0.exe
-#   ./bootstrap.sh test    build, then run the Stage 0 test suites with the native binary
+#   ./bootstrap.sh build   assemble Stage 0 (build/stage0/envoc0, envoc0.exe), then build
+#                          Stage 1 with it (build/stage1/envoc1, envoc1.exe)
+#   ./bootstrap.sh test    build, then run the Stage 0 and Stage 1 tests with the native binaries
 #   ./bootstrap.sh check   repository checks: layout, lib->adapters imports, gallery limits
 #   ./bootstrap.sh clean   delete build/
 #   ./bootstrap.sh help
@@ -13,7 +14,9 @@ set -eu
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
 BUILD="$ROOT/build/stage0"
+BUILD1="$ROOT/build/stage1"
 STAGE0="$ROOT/bootstrap/stage0"
+STAGE1="$ROOT/bootstrap/stage1"
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -22,6 +25,15 @@ sha256() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
     elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
     else echo "(no sha256 tool)"; fi
+}
+
+# host_suffix: "" on Linux, ".exe" on Windows; the native binaries' file suffix.
+host_suffix() {
+    case "$(uname -s)" in
+        Linux) printf '' ;;
+        MINGW*|MSYS*|CYGWIN*) printf '.exe' ;;
+        *) fail "no native Stage 0 for $(uname -s) yet (supported: Linux, Windows); see docs/porting/CHECKLIST.md" ;;
+    esac
 }
 
 # ------------------------------------------------------------------- build
@@ -37,6 +49,25 @@ do_build() {
         say "          $size bytes  sha256 $(sha256 "$BUILD/$out")"
     done
     chmod +x "$BUILD/envoc0"
+
+    # Stage 1 is an Envo-Core program (PLAN D11); the native envoc0 builds it for both OSes.
+    mkdir -p "$BUILD1"
+    envoc0="$BUILD/envoc0$(host_suffix)"
+    set --
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$STAGE1/files.txt"
+    for unit in "x86_64-linux:envoc1" "x86_64-windows:envoc1.exe"; do
+        target=${unit%%:*}
+        out=${unit#*:}
+        say "build     bootstrap/stage1 -> build/stage1/$out"
+        (cd "$STAGE1" && "$envoc0" build "$@" -o "$BUILD1/$out" --target "$target") \
+            || fail "building Stage 1 ($target) failed"
+        size=$(wc -c < "$BUILD1/$out" | tr -d ' ')
+        say "          $size bytes  sha256 $(sha256 "$BUILD1/$out")"
+    done
+    chmod +x "$BUILD1/envoc1"
 }
 
 # ------------------------------------------------------------------- test
@@ -57,11 +88,8 @@ run() {
 
 do_test() {
     do_build
-    case "$(uname -s)" in
-        Linux) EXE="$BUILD/envoc0" ;;
-        MINGW*|MSYS*|CYGWIN*) EXE="$BUILD/envoc0.exe" ;;
-        *) fail "no native Stage 0 for $(uname -s) yet (supported: Linux, Windows); see docs/porting/CHECKLIST.md" ;;
-    esac
+    EXE="$BUILD/envoc0$(host_suffix)"
+    ENVOC1="$BUILD1/envoc1$(host_suffix)"
     TMP=$(mktemp -d)
     trap 'rm -rf "$TMP"' EXIT
 
@@ -200,6 +228,20 @@ do_test() {
     done
 
     say ''
+    say 'stage 1 smoke tests'
+    stage0_exe=$EXE
+    EXE=$ENVOC1
+    run "$ROOT" version
+    if [ "$rc" -eq 0 ] && grep -q '^envoc1 ' "$TMP/out"; then pass; else bad 'envoc1 version' "exit $rc"; fi
+    run "$ROOT" selftest
+    if [ "$rc" -eq 0 ] && grep -q '^selftest: ok' "$TMP/out"; then pass; else bad 'envoc1 selftest' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    run "$ROOT"
+    if [ "$rc" -eq 2 ] && grep -q '^usage: envoc1' "$TMP/err"; then pass; else bad 'envoc1 no arguments' "exit $rc"; fi
+    run "$ROOT" frobnicate
+    if [ "$rc" -eq 2 ] && grep -q "^envoc1: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc1 unknown command' "exit $rc"; fi
+    EXE=$stage0_exe
+
+    say ''
     say "$passed passed, $failed failed"
     [ "$failed" -eq 0 ] || exit 1
 }
@@ -254,11 +296,12 @@ do_check() {
 }
 
 # ------------------------------------------------------------------- compare
-# compare <dir-a> <dir-b>: both Stage 0 builds must be byte-identical (brief 4.1).
+# compare <dir-a> <dir-b>: both builds (each a copy of build/, with stage0/ and stage1/)
+# must be byte-identical (brief 4.1).
 do_compare() {
     [ "$#" -eq 2 ] || fail "usage: ./bootstrap.sh compare <dir-a> <dir-b>"
     differ=0
-    for f in envoc0 envoc0.exe; do
+    for f in stage0/envoc0 stage0/envoc0.exe stage1/envoc1 stage1/envoc1.exe; do
         [ -f "$1/$f" ] || fail "missing $1/$f"
         [ -f "$2/$f" ] || fail "missing $2/$f"
         say "$f"
@@ -278,10 +321,10 @@ case "${1:-help}" in
     clean) rm -rf "$ROOT/build"; say 'removed build/' ;;
     help|*)
         say 'usage: ./bootstrap.sh <build|test|check|clean|help>'
-        say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md)'
-        say '  test    build, then run the Stage 0 test suites'
+        say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md), then build Stage 1'
+        say '  test    build, then run the Stage 0 and Stage 1 tests'
         say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
-        say '  compare <dir-a> <dir-b>   require two Stage 0 builds to be byte-identical'
+        say '  compare <dir-a> <dir-b>   require two builds (copies of build/) to be byte-identical'
         say '  clean   delete build/'
         [ "${1:-help}" = help ] || exit 2 ;;
 esac

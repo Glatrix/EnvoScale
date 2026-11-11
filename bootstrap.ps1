@@ -2,8 +2,9 @@
 EnvoScale bootstrap entry point for Windows (Windows PowerShell 5.1 or PowerShell 7).
 Uses only what Windows ships with, plus NASM through adapters/bootstrap/nasm (Phase A).
 
-  .\bootstrap.ps1 build   assemble Stage 0: build\stage0\envoc0.exe and build\stage0\envoc0
-  .\bootstrap.ps1 test    build, then run the Stage 0 test suites with the Windows binary
+  .\bootstrap.ps1 build   assemble Stage 0 (build\stage0\envoc0.exe, envoc0), then build
+                          Stage 1 with it (build\stage1\envoc1.exe, envoc1)
+  .\bootstrap.ps1 test    build, then run the Stage 0 and Stage 1 tests with the Windows binaries
   .\bootstrap.ps1 check   repository checks: layout, lib->adapters imports, gallery limits
   .\bootstrap.ps1 clean   delete build\
   .\bootstrap.ps1 help
@@ -15,7 +16,9 @@ param([string]$Command = 'help')
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 $Build = Join-Path $Root 'build\stage0'
+$Build1 = Join-Path $Root 'build\stage1'
 $Stage0 = Join-Path $Root 'bootstrap\stage0'
+$Stage1 = Join-Path $Root 'bootstrap\stage1'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Say([string]$msg) { Write-Host $msg }
@@ -35,6 +38,20 @@ function Invoke-Build {
         Say "assemble  bootstrap/stage0/$($u.Src) -> build/stage0/$($u.Out)"
         & $adapter $src $out $Stage0
         if ($LASTEXITCODE -ne 0) { Fail "assembling $($u.Src) failed (exit $LASTEXITCODE)" }
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
+        $size = (Get-Item -LiteralPath $out).Length
+        Say ("          {0,8} bytes  sha256 {1}" -f $size, $hash)
+    }
+
+    # Stage 1 is an Envo-Core program (PLAN D11); envoc0 builds it for both OSes.
+    New-Item -ItemType Directory -Force $Build1 | Out-Null
+    $envoc0 = Join-Path $Build 'envoc0.exe'
+    $files = @(Get-Content -LiteralPath (Join-Path $Stage1 'files.txt') | Where-Object { $_.Trim() -ne '' })
+    foreach ($u in @(@{ Target = 'x86_64-windows'; Out = 'envoc1.exe' }, @{ Target = 'x86_64-linux'; Out = 'envoc1' })) {
+        $out = Join-Path $Build1 $u.Out
+        Say "build     bootstrap/stage1 -> build/stage1/$($u.Out)"
+        $r = Invoke-Tool $envoc0 (@('build') + $files + @('-o', $out, '--target', $u.Target)) $Stage1
+        if ($r.Code -ne 0) { Fail "building Stage 1 ($($u.Target)) failed: $($r.Err.Trim())" }
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
         $size = (Get-Item -LiteralPath $out).Length
         Say ("          {0,8} bytes  sha256 {1}" -f $size, $hash)
@@ -219,6 +236,18 @@ function Invoke-Test {
     }
 
     Say ''
+    Say 'stage 1 smoke tests'
+    $envoc1 = Join-Path $Build1 'envoc1.exe'
+    $r = Invoke-Tool $envoc1 @('version') $Root
+    if ($r.Code -eq 0 -and $r.Out.StartsWith('envoc1 ')) { Pass 'envoc1 version' } else { Bad 'envoc1 version' "exit $($r.Code), stdout: $($r.Out)" }
+    $r = Invoke-Tool $envoc1 @('selftest') $Root
+    if ($r.Code -eq 0 -and $r.Out.StartsWith('selftest: ok')) { Pass 'envoc1 selftest' } else { Bad 'envoc1 selftest' "exit $($r.Code), output: $($r.Out)$($r.Err)" }
+    $r = Invoke-Tool $envoc1 @() $Root
+    if ($r.Code -eq 2 -and $r.Err.StartsWith('usage: envoc1')) { Pass 'envoc1 no arguments' } else { Bad 'envoc1 no arguments' "exit $($r.Code), stderr: $($r.Err)" }
+    $r = Invoke-Tool $envoc1 @('frobnicate') $Root
+    if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc1: error: unknown command 'frobnicate'")) { Pass 'envoc1 unknown command' } else { Bad 'envoc1 unknown command' "exit $($r.Code), stderr: $($r.Err)" }
+
+    Say ''
     Say "$($script:passed) passed, $($script:failed) failed"
     if ($script:failed -gt 0) { exit 1 }
 }
@@ -288,8 +317,8 @@ switch ($Command) {
     'clean' { if (Test-Path -LiteralPath (Join-Path $Root 'build')) { Remove-Item -Recurse -Force (Join-Path $Root 'build') }; Say 'removed build/' }
     default {
         Say 'usage: .\bootstrap.ps1 <build|test|check|clean|help>'
-        Say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md)'
-        Say '  test    build, then run the Stage 0 test suites'
+        Say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md), then build Stage 1'
+        Say '  test    build, then run the Stage 0 and Stage 1 tests'
         Say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
         Say '  clean   delete build/'
         if ($Command -ne 'help') { exit 2 }

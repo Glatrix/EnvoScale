@@ -1,12 +1,54 @@
 # Stage 1 — `envoc1`
 
-> **Status:** Specified (M2.1); implementation starts with M2.2. The plan, increments and
-> decisions D11–D15 are in [`docs/PLAN.md`](../../docs/PLAN.md). It accepts
-> [Envo-S1](../../docs/spec/envo-s1.md) and compiles through [EIR v1](../../docs/spec/eir.md).
+> **Status:** Skeleton and support library done (M2.2); the lexer is next (M2.3). The
+> plan, increments and decisions D11–D15 are in [`docs/PLAN.md`](../../docs/PLAN.md). It
+> accepts [Envo-S1](../../docs/spec/envo-s1.md) and compiles through
+> [EIR v1](../../docs/spec/eir.md).
 
 A fuller compiler written in Envo-Core and built by `envoc0`. It adds generics, interfaces, closures, a basic borrow checker and EIR, which is enough to compile the real compiler in `compiler/`. It stays buildable forever as part of the diverse double-compiling trust check.
 
-How it will be built (decision D11): `bootstrap/stage1/` is a multi-file Envo-Core
-program, compiled by `envoc0 build` with the files in the order listed in `files.txt`
-(`main.envo`, the entry file, first). Every Envo-Core test runs under both `envoc0` and
-`envoc1` and must give the same result (D14).
+## How it is built
+
+`bootstrap/stage1/` is a multi-file Envo-Core program (D11). `envoc0 build` compiles the
+files in the order listed in [`files.txt`](files.txt), `main.envo` (the entry file)
+first. `bootstrap.ps1 build` and `bootstrap.sh build` do this after assembling Stage 0,
+for both operating systems:
+
+```
+build/stage1/envoc1.exe    Windows
+build/stage1/envoc1        Linux
+```
+
+CI checks that the builds made on Linux and on Windows are byte-identical, as for
+Stage 0.
+
+## Layout
+
+| File | Contents |
+|---|---|
+| `main.envo` | entry file: command-line dispatch |
+| `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
+| `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
+| `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |
+| `support/vec.envo` | `Vec`, a growable array of fixed-size elements |
+| `support/map.envo` | `Map`, a `str` → `u64` hash map |
+| `support/io.envo` | process state (`Ctx`), buffered output, files, host detection |
+| `support/diag.envo` | source files, positions and diagnostics in `envoc0`'s format |
+| `support/selftest.envo` | `envoc1 selftest`: unit tests for the support files |
+
+## Conventions
+
+- **No generics in Core**, so containers (`Vec`, `Map`) store raw bytes or `u64`s and
+  callers cast element pointers inside `unsafe`.
+- **One static.** All process state lives in a `Ctx` on the heap, reached through
+  `TheCtx()`; nothing else uses a static.
+- **Memory is never freed.** `alloc` is an arena (`envo-core.md` §6), and so are the
+  containers built on it. A compiler run is short, so this is the simplest correct
+  choice.
+- **Same messages as `envoc0`.** Diagnostics, exit codes and positions match Stage 0, so
+  every Envo-Core test can run under both compilers (D14).
+
+## Commands
+
+`envoc1 version`, `help` and `selftest` work today. `lex`, `parse`, `check`, `build`,
+`eir` and `eir-check` arrive with increments 2.3–2.7 (Envo-S1 §9).
