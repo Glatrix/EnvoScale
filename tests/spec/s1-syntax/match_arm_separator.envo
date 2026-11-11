@@ -1,0 +1,3 @@
+// Expression-form match arms are separated by `,` or a line break ([expr.match.1]).
+// expect-error: E0101 @ 3:26
+var x = match y { 1 => 2 3 => 4 };

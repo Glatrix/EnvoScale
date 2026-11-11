@@ -1,0 +1,3 @@
+// Const generics are not in Envo-S1 ([s1.type.3]).
+// expect-error: E0950 @ 3:10
+struct M<const usize N> { }

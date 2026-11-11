@@ -1,0 +1,3 @@
+T Max<T>(T a, T b) where T : IComparable<T> => a;
+var m = Max<i64>(1, 2);
+List<int> xs;

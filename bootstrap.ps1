@@ -254,10 +254,13 @@ function Invoke-Test {
     # Keep these lists in step with bootstrap.sh.
     $stage1Golden = @(
         @{ Dir = 'lexer';  Command = 'lex';   Ext = '.tokens' },
-        @{ Dir = 'parser'; Command = 'parse'; Ext = '.ast' }
+        @{ Dir = 'parser'; Command = 'parse'; Ext = '.ast' },
+        @{ Dir = 's1-parser'; Command = 'parse'; Ext = '.ast'; Modes = @('s1') }
     )
     foreach ($suite in $stage1Golden) {
-      foreach ($mode in @('--core', 's1')) {
+      $modes = @('--core', 's1')
+      if ($suite.Modes) { $modes = $suite.Modes }
+      foreach ($mode in $modes) {
         $pre = @()
         if ($mode -eq '--core') { $pre = @('--core') }
         Say "stage 1 golden tests ($mode): tests/golden/$($suite.Dir)"
@@ -274,7 +277,8 @@ function Invoke-Test {
     }
     $stage1Spec = @(
         @{ Dir = '01-lexical';  Command = 'lex';   Modes = @('--core', 's1') },
-        @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') }
+        @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
+        @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') }
     )
     foreach ($suite in $stage1Spec) {
       foreach ($mode in $suite.Modes) {

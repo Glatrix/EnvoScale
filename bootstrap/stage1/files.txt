@@ -11,4 +11,5 @@ syntax/tokens.envo
 syntax/lexer.envo
 syntax/nodes.envo
 syntax/parser.envo
+syntax/parser_s1.envo
 driver.envo

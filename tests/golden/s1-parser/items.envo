@@ -1,0 +1,13 @@
+namespace app.core;
+use envo.text as tx;
+enum Shape { Circle(i64 r), Square(i64 side) }
+interface IArea { i64 Area(); }
+impl IArea for Shape {
+    i64 Area() => match this { Circle(r) => r * r, Square(s) if s > 0 => s, _ => 0 };
+}
+struct Box<T> {
+    T Item;
+    static Box<T> Of(T x) => new Box<T> { Item = x };
+    void Set(ref this, T x) from x { }
+}
+foreach (var i in 0..3) print("x");

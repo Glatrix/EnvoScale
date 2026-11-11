@@ -15,9 +15,22 @@ struct Node {
     u32 D;
     u32 Next;
     u32 Flags;      // NF_*
+    u32 E;          // Envo-S1 extras, dumped only when set (so Core trees print as in
+    u32 F;          // Stage 0): generic parameters, interfaces, where clauses, origins,
+    u32 G;          // methods, guards
 }
 
 const u32 NF_PAREN = 1;     // written in parentheses
+// Envo-S1 flags; the dump prints them in brackets.
+const u32 NF_IN = 2;            // parameter or fn-type parameter mode `in`
+const u32 NF_REF = 4;           // mode `ref`
+const u32 NF_MUT = 8;           // `mut fn`, `mut T[]`
+const u32 NF_ONCE = 16;         // `once fn`
+const u32 NF_MOVE = 32;         // `move` lambda
+const u32 NF_STATIC = 64;       // static method
+const u32 NF_PUBLIC = 128;
+const u32 NF_INTERNAL = 256;
+const u32 NF_EXPR = 512;        // `match` in expression form
 
 const u16 NK_NONE = 0;
 const u16 NK_PROGRAM = 1;
@@ -64,7 +77,23 @@ const u16 NK_SIZEOF = 41;
 const u16 NK_ALIGNOF = 42;
 const u16 NK_NEW = 43;
 const u16 NK_INIT = 44;
-const u16 NK_COUNT = 45;
+// Envo-S1 kinds.
+const u16 NK_NAMESPACE = 45;    // A path (names)
+const u16 NK_USE = 46;          // A path, B imported names, C alias
+const u16 NK_INTERFACE = 47;    // A methods; E generic parameters
+const u16 NK_IMPL = 48;         // A type, B interface, C methods; E generic parameters
+const u16 NK_TPARAM = 49;       // generic parameter; A constraints
+const u16 NK_WHERE = 50;        // where clause for a parameter; A constraints
+const u16 NK_TOPT = 51;         // T?; A inner type
+const u16 NK_TFN = 52;          // fn(...) -> R; A parameter types, B result
+const u16 NK_THIS = 53;
+const u16 NK_NULL = 54;
+const u16 NK_LAMBDA = 55;       // A parameters, B body
+const u16 NK_TRY = 56;          // postfix ?; A operand
+const u16 NK_COND = 57;         // c ? a : b
+const u16 NK_RANGE = 58;        // lo .. hi; A lo, B hi (either may be empty)
+const u16 NK_FOREACH = 59;      // A variable (name), B sequence, C body
+const u16 NK_COUNT = 60;
 
 // The dump name of a kind, how many child slots the dump prints, and whether it prints
 // the node's token text (Stage 0's node_table).
@@ -114,19 +143,36 @@ str NodeName(u16 kind) {
         NK_ALIGNOF => { return "alignof"; }
         NK_NEW => { return "new"; }
         NK_INIT => { return "init"; }
+        NK_NAMESPACE => { return "namespace"; }
+        NK_USE => { return "use"; }
+        NK_INTERFACE => { return "interface"; }
+        NK_IMPL => { return "impl"; }
+        NK_TPARAM => { return "tparam"; }
+        NK_WHERE => { return "where"; }
+        NK_TOPT => { return "optional"; }
+        NK_TFN => { return "fntype"; }
+        NK_THIS => { return "this"; }
+        NK_NULL => { return "null"; }
+        NK_LAMBDA => { return "lambda"; }
+        NK_TRY => { return "try"; }
+        NK_COND => { return "cond"; }
+        NK_RANGE => { return "range"; }
+        NK_FOREACH => { return "foreach"; }
         _ => { return "none"; }
     }
 }
 
 u32 NodeSlots(u16 kind) {
     match kind {
-        NK_FN | NK_IF => { return 3; }
+        NK_FN | NK_IF | NK_USE | NK_IMPL | NK_COND | NK_FOREACH => { return 3; }
         NK_FOR => { return 4; }
         NK_ENUM | NK_CONST | NK_STATIC | NK_TARRAY | NK_WHILE | NK_MATCH | NK_ARM | NK_VAR |
-        NK_ASSIGN | NK_CALL | NK_INDEX | NK_BINARY | NK_CAST | NK_NEW => { return 2; }
+        NK_ASSIGN | NK_CALL | NK_INDEX | NK_BINARY | NK_CAST | NK_NEW | NK_TFN | NK_LAMBDA |
+        NK_RANGE => { return 2; }
         NK_PROGRAM | NK_PARAM | NK_STRUCT | NK_FIELD | NK_VARIANT | NK_TPTR | NK_TSLICE |
         NK_BLOCK | NK_UNSAFE | NK_RETURN | NK_EXPR | NK_INC | NK_DEC | NK_MEMBER | NK_UNARY |
-        NK_SIZEOF | NK_ALIGNOF | NK_INIT => { return 1; }
+        NK_SIZEOF | NK_ALIGNOF | NK_INIT | NK_NAMESPACE | NK_INTERFACE | NK_TPARAM | NK_WHERE |
+        NK_TOPT | NK_TRY => { return 1; }
         _ => { return 0; }
     }
 }
@@ -135,7 +181,8 @@ bool NodeHasText(u16 kind) {
     match kind {
         NK_FN | NK_PARAM | NK_STRUCT | NK_FIELD | NK_ENUM | NK_VARIANT | NK_CONST | NK_STATIC |
         NK_TNAME | NK_VAR | NK_ASSIGN | NK_INT | NK_CHAR | NK_STRING | NK_BOOL | NK_NAME |
-        NK_MEMBER | NK_UNARY | NK_BINARY | NK_INIT => { return true; }
+        NK_MEMBER | NK_UNARY | NK_BINARY | NK_INIT | NK_INTERFACE | NK_TPARAM | NK_WHERE |
+        NK_RANGE => { return true; }
         _ => { return false; }
     }
 }
@@ -175,4 +222,29 @@ u32 TokClass(u16 kind) {
         TK_STAR | TK_SLASH | TK_PERCENT | TK_WRAP_MUL => { return 9; }
         _ => { return 0; }
     }
+}
+
+// The Envo-S1 flags of a node, as the dump prints them: " [in mut ...]", or nothing.
+void BufNodeFlags(*Buf b, u32 flags) {
+    flags = flags & ~(NF_PAREN | NF_PUBLIC | NF_INTERNAL);     // visibility is not printed
+    if (flags == 0) return;
+    BufStr(b, " [");
+    bool first = true;
+    for (u32 bit = 2; bit <= NF_EXPR; bit <<= 1) {
+        if (flags & bit == 0) continue;
+        if (!first) BufByte(b, ' ');
+        first = false;
+        match bit {
+            NF_IN => BufStr(b, "in"),
+            NF_REF => BufStr(b, "ref"),
+            NF_MUT => BufStr(b, "mut"),
+            NF_ONCE => BufStr(b, "once"),
+            NF_MOVE => BufStr(b, "move"),
+            NF_STATIC => BufStr(b, "static"),
+            NF_PUBLIC => BufStr(b, "public"),
+            NF_INTERNAL => BufStr(b, "internal"),
+            _ => BufStr(b, "expr"),
+        }
+    }
+    BufByte(b, ']');
 }

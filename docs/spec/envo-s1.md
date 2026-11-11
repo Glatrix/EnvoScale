@@ -68,7 +68,8 @@ Everything in Envo-Core (`envo-core.md` §4), plus:
   ([life.infer.4]).
 - **[s1.item.3] Generic functions and types** with `where` constraints naming S1
   interfaces or function types ([fn.pos.2]).
-- **[s1.item.4] Methods.** Inside a `struct` or `enum` body, or in `impl T { … }`, with
+- **[s1.item.4] Methods.** Inside a `struct` body, or in `impl T { … }` (the only place for
+  an enum's methods), with
   the receivers of [item.method.1]: none (`in this`), `ref this`, `this`, or `static`.
   Called as `x.M(…)` and `T.M(…)`.
 - **[s1.item.5] Interfaces.** `interface I<T> { … }` with method signatures and default
@@ -101,7 +102,9 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   and `ref this` receivers (`ref this` needs `x` to be a mutable place, E0315), and
   static calls `T.M(args)`.
 - **[s1.expr.7] Generic calls and literals:** `Max<i64>(a, b)`, type arguments inferred
-  from arguments where possible, and `new S<T> { … }`.
+  from arguments where possible, and `new S<T> { … }`. In an expression, `<` starts type
+  arguments only when it is joint with the name before it and the closing `>` is followed
+  by `(` or `.`; otherwise it is a comparison. A closing `>>` is split ([lex.punct.2]).
 - **[s1.stmt.1] `foreach (var x in e)`** over arrays, slices, `str` (yielding `u8`) and
   integer ranges `lo..hi`. In a `foreach` over an array or slice that is not `Copy`, `x`
   is an `in` borrow of each element ([own.borrow.4]).
@@ -109,6 +112,12 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   destructuring, `new()` without a type, object initializers for classes, `await`,
   `yield`, `throw`/`try`/`catch` (not in Envo at all), and operators on non-primitive
   types.
+
+## 5a. Syntax tree
+
+`envoc1 parse` prints the tree in the format of `tests/golden/README.md`. Envo-Core
+programs print exactly as under `envoc0`; the S1 additions add extra children and
+bracketed markers, tested by `tests/golden/s1-parser/` and `tests/spec/s1-syntax/`.
 
 ## 6. Ownership
 
@@ -147,7 +156,7 @@ Every S1 program is compiled with the prelude, which is S1 source shipped with `
 |---|---|
 | `enum Option<T> { None, Some(T value) }` | `IsSome`, `IsNone`, `Unwrap()` (panics on `None`), `UnwrapOr(T)` |
 | `enum Result<T, E> { Ok(T value), Err(E error) }` | `IsOk`, `IsErr`, `Unwrap()`, `UnwrapErr()` |
-| `struct List<T>` | `new List<T>()`, `Len`, `Push(ref this, T)`, `Pop(ref this) -> T?`, `Get(i) -> in T`, `Set(ref this, i, T)`, `AsSlice() -> T[]`, `AsMutSlice(ref this) -> mut T[]`, `IDrop` |
+| `struct List<T>` | `List<T>.New()`, `Len`, `Push(ref this, T)`, `Pop(ref this) -> T?`, `Get(i) -> in T`, `Set(ref this, i, T)`, `AsSlice() -> T[]`, `AsMutSlice(ref this) -> mut T[]`, `IDrop` |
 | `struct string` | `string.From(str)`, `Len`, `Append(ref this, str)`, `AppendByte(ref this, u8)`, `AsStr() -> str`, `Equals(str)`, `IDrop` |
 | `interface IDrop` | `void Drop(ref this)` |
 | `interface IEquatable<T>` | `bool Equals(in T other)` |

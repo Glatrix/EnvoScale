@@ -1,0 +1,30 @@
+program @1:1
+  var f @1:26
+    fntype @1:1
+      type int @1:4
+      type str [ref] @1:13
+      type bool @1:21
+    -
+  var g @2:10
+    fntype [mut] @2:5
+      -
+      -
+    -
+  var h @3:14
+    fntype [once] @3:6
+      type int @3:9
+      -
+    -
+  var view @4:10
+    slice [mut] @4:7
+      type u8 @4:5
+    -
+  var name @5:9
+    optional @5:7
+      type string @5:1
+    null @5:16
+  var q @6:7
+    type C @6:5
+      name a @6:1
+      name b @6:3
+    -

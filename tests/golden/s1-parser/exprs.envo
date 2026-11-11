@@ -1,0 +1,6 @@
+var r = a ?? b;
+var c = x > 0 ? 1 : 2;
+var s = buf[1..n];
+var t = f()?;
+var l = (int x, y) => x + y;
+var k = move v => v;

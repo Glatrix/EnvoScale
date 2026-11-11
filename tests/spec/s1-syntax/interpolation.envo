@@ -1,0 +1,3 @@
+// Interpolated strings are not in Envo-S1 ([s1.expr.8]).
+// expect-error: E0950 @ 3:9
+var s = $"x";

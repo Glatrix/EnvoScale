@@ -1,0 +1,83 @@
+program @1:1
+  namespace @1:1
+    name app @1:11
+    name core @1:15
+  use @2:1
+    name envo @2:5
+    name text @2:10
+    -
+    name tx @2:18
+  enum Shape @3:6
+    -
+    variant Circle @3:14
+      -
+      param r @3:25
+        type i64 @3:21
+    variant Square @3:29
+      -
+      param side @3:40
+        type i64 @3:36
+  interface IArea @4:11
+    fn Area @4:23
+      type i64 @4:19
+      -
+      -
+  impl @5:1
+    type Shape @5:16
+    type IArea @5:6
+    fn Area @6:9
+      type i64 @6:5
+      -
+      match [expr] @6:19
+        this @6:25
+        arm @6:42
+          call @6:38
+            name Circle @6:32
+            name r @6:39
+          binary * @6:47
+            name r @6:45
+            name r @6:49
+        arm @6:71
+          call @6:58
+            name Square @6:52
+            name s @6:59
+          name s @6:74
+          binary > @6:67
+            name s @6:65
+            int 0 @6:69
+        arm @6:79
+          wild @6:77
+          int 0 @6:82
+  struct Box @8:8
+    field Item @9:7
+      type T @9:5
+    tparam T @8:12
+      -
+    fn Of [static] @10:19
+      type Box @10:12
+        type T @10:16
+      param x @10:24
+        type T @10:22
+      new @10:30
+        type Box @10:34
+          type T @10:38
+        init Item @10:43
+          name x @10:50
+    fn Set @11:10
+      type void @11:5
+      param this [ref] @11:18
+        -
+      param x @11:26
+        type T @11:24
+      block @11:36
+        -
+      name x @11:34
+  foreach @13:1
+    name i @13:14
+    range .. @13:20
+      int 0 @13:19
+      int 3 @13:22
+    expr @13:25
+      call @13:30
+        name print @13:25
+        string "x" @13:31

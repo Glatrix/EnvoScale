@@ -1,6 +1,7 @@
 # Stage 1 — `envoc1`
 
-> **Status:** Support library (M2.2) and lexer (M2.3) done; the parser is next (M2.4). The
+> **Status:** Support library (M2.2), lexer (M2.3) and parser (M2.4) done; names and types
+> are next (M2.5). The
 > plan, increments and decisions D11–D15 are in [`docs/PLAN.md`](../../docs/PLAN.md). It
 > accepts [Envo-S1](../../docs/spec/envo-s1.md) and compiles through
 > [EIR v1](../../docs/spec/eir.md).
@@ -32,6 +33,7 @@ Stage 0.
 | `syntax/lexer.envo` | the lexer, step for step like Stage 0's, plus the `lex` dump |
 | `syntax/nodes.envo` | syntax tree node kinds, dump table and token classes (Stage 0's `nodes.eas`) |
 | `syntax/parser.envo` | the parser, routine for routine like Stage 0's, plus the `parse` dump |
+| `syntax/parser_s1.envo` | the Envo-S1 grammar, reached where Stage 0 reports E0905 |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
 | `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |
@@ -55,6 +57,5 @@ Stage 0.
 
 ## Commands
 
-`envoc1 version`, `help`, `selftest`, `lex` and `parse` (Envo-Core grammar) work today.
-The Envo-S1 grammar, `check`, `build`, `eir` and `eir-check` arrive with increments 2.4–2.7
-(Envo-S1 §9).
+`envoc1 version`, `help`, `selftest`, `lex` and `parse` (the whole Envo-S1 grammar) work
+today. `check`, `build`, `eir` and `eir-check` arrive with increments 2.5–2.7 (Envo-S1 §9).

@@ -245,9 +245,10 @@ do_test() {
     # S1). Spec suites: the same error code at the same position; lexical tests run in
     # both modes (E0901-E0904 become E0950 in S1), syntax tests in --core mode.
     # Keep these lists in step with bootstrap.ps1.
-    for suite in lexer:lex:.tokens:both parser:parse:.ast:both; do
-      sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; rest=${rest#*:}; ext=${rest%%:*}
+    for suite in lexer:lex:.tokens:both parser:parse:.ast:both s1-parser:parse:.ast:s1; do
+      sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; rest=${rest#*:}; ext=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
+        [ "$modes" = s1 ] && [ "$mode" = --core ] && continue
         say "stage 1 golden tests ($mode): tests/golden/$sdir"
         dir="$ROOT/tests/golden/$sdir"
         for f in "$dir"/*.envo; do
@@ -262,10 +263,11 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue
+        [ "$modes" = s1 ] && [ "$mode" = --core ] && continue
         say "stage 1 spec tests ($mode): tests/spec/$sdir"
         dir="$ROOT/tests/spec/$sdir"
         for f in "$dir"/*.envo; do

@@ -1,0 +1,3 @@
+// `async` is not in Envo-S1 ([s1.item.7]).
+// expect-error: E0950 @ 3:1
+async void F() { }

@@ -1,0 +1,3 @@
+// Named arguments are not in Envo-S1 ([s1.item.6]).
+// expect-error: E0950 @ 3:4
+F(x: 1);

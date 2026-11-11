@@ -1,0 +1,6 @@
+fn(int, ref str) -> bool f;
+mut fn() g;
+once fn(int) h;
+mut u8[] view;
+string? name = null;
+a.b.C q;

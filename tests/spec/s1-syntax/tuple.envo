@@ -1,0 +1,3 @@
+// Tuples are not in Envo-S1 ([s1.expr.8]).
+// expect-error: E0950 @ 3:11
+var t = (1, 2);

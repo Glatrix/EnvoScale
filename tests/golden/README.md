@@ -8,6 +8,7 @@ output is byte-identical to the expected file (after normalizing CRLF to LF).
 | `lexer/` | `envoc0 lex` | `name.envo` → `name.tokens` |
 | `parser/` | `envoc0 parse` | `name.envo` → `name.ast` |
 | `check/` | `envoc0 check` | `name.envo` → `name.check` |
+| `s1-parser/` | `envoc1 parse` (Envo-S1) | `name.envo` → `name.ast` |
 
 Planned: EIR (M2), assembly and diagnostics (M3).
 
@@ -26,6 +27,11 @@ Planned: EIR (M2), assembly and diagnostics (M3).
   and a slot holding a list prints every element. For example `fn` prints
   return type, parameters, body; `for` prints init, condition, step, body.
 - Parentheses do not appear in the tree.
+- Envo-S1 trees (`s1-parser/`) add, after the fixed slots, the extra children a node has
+  (generic parameters, interfaces, `where` clauses, origins, methods, payloads, guards),
+  and print modes and markers in brackets before the position: `param this [ref] @11:18`,
+  `fntype [mut] @2:5`, `match [expr] @6:19`. Envo-Core trees never have either, so they
+  print exactly as under `envoc0`.
 
 ## Typed tree format (`envoc0 check`)
 

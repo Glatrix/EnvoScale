@@ -1,0 +1,3 @@
+// Default parameter values are not in Envo-S1 ([s1.item.6]).
+// expect-error: E0950 @ 3:14
+void F(int x = 1) { }
