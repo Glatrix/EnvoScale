@@ -65,6 +65,9 @@ if (StrEq(command, "parse")) {
 if (StrEq(command, "check")) {
     CmdCheck(argi, coreOnly);
 }
+if (StrEq(command, "embed")) {
+    CmdEmbed(argi);
+}
 if (StrEq(command, "eir-check")) {
     CmdEirCheck(argi);
 }

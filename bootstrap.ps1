@@ -247,6 +247,12 @@ function Invoke-Test {
     $r = Invoke-Tool $envoc1 @('frobnicate') $Root
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc1: error: unknown command 'frobnicate'")) { Pass 'envoc1 unknown command' } else { Bad 'envoc1 unknown command' "exit $($r.Code), stderr: $($r.Err)" }
 
+    # The runtime embedded in envoc1 must be generated from the current runtime sources.
+    $r = Invoke-Tool $envoc1 @('embed', 'runtime/common.envo', 'runtime/linux.envo', 'runtime/windows.envo') $Stage1
+    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Stage1 'runtime\embedded.envo'), $Utf8))
+    if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc1 embedded runtime' }
+    else { Bad 'envoc1 embedded runtime' 'bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)' }
+
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     $t42 = Join-Path $tmp 't42.exe'
     $r = Invoke-Tool $envoc1 @('selftest-image', $t42, 'windows') $Root

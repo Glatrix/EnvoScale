@@ -240,6 +240,13 @@ do_test() {
     run "$ROOT" frobnicate
     if [ "$rc" -eq 2 ] && grep -q "^envoc1: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc1 unknown command' "exit $rc"; fi
 
+    # The runtime embedded in envoc1 must be generated from the current runtime sources.
+    run "$STAGE1" embed runtime/common.envo runtime/linux.envo runtime/windows.envo
+    tr -d '\r' < "$STAGE1/runtime/embedded.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc1 embedded runtime' "bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)"; fi
+
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
     run "$TMP" selftest-image "$TMP/t42" "$host_os"

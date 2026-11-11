@@ -65,6 +65,8 @@ const u8 SK_LOCAL = 8;
 const u32 B_EXIT = 7;
 const u32 B_PANIC = 10;
 const u32 B_STR_FROM = 11;
+const u32 B_SYSCALL = 12;
+const u32 B_WINCALL = 13;
 
 const u64 MAX_TYPE_SIZE = 0x7FFFFFFF;
 

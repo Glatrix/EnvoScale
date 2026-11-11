@@ -22,6 +22,7 @@ struct Checker {
     bool Brk;           // a break left the innermost loop
     Vec ParamTypes;     // u32: parameter types of functions and built-ins
     bool Core;          // --core
+    bool Runtime;       // compiling with the runtime: the target built-ins exist
 }
 
 // ------------------------------------------------------------------ side tables
@@ -425,6 +426,29 @@ void InitScope(*Checker c) {
     AddBuiltin(c, "arg", 9, T_STR, 1, T_USIZE, 0, 0);
     AddBuiltin(c, "panic", B_PANIC, T_VOID, 1, T_STR, 0, 0);
     AddBuiltin(c, "str_from", B_STR_FROM, T_STR, 2, T_PTR_U8, T_USIZE, 0);
+    bool runtime;
+    unsafe { runtime = c.Runtime; }
+    if (runtime) {
+        // target intrinsics for the runtime's OS layer (docs/architecture/stage1.md)
+        AddBuiltinN(c, "__syscall", B_SYSCALL, T_I64, 7, T_I64);
+        AddBuiltinN(c, "__wincall", B_WINCALL, T_I64, 9, T_I64);
+    }
+}
+
+// A built-in with n parameters of one type.
+void AddBuiltinN(*Checker c, str name, u32 id, u32 ret, u32 n, u32 p) {
+    u32 s = SymNew(c, SK_BUILTIN, 0);
+    unsafe {
+        u32 first = VecLen(&c.ParamTypes) as u32;
+        for (u32 i = 0; i < n; i++) MemStoreU32(VecPush(&c.ParamTypes), p);
+        *Sym sym = SymPtr(c, s);
+        sym.Name = name;
+        sym.Type = ret;
+        sym.Aux = n;
+        sym.Aux2 = id;
+        sym.Params = first;
+    }
+    GAdd(c, s);
 }
 
 u32 ParamType(*Checker c, u32 s, u32 i) {

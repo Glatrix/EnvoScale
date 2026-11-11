@@ -1,0 +1,124 @@
+// The Stage 1 runtime, part 1: the Envo-Core built-ins (envo-core.md section 6), the
+// heap and panics, with Stage 0's behaviour and messages (docs/architecture/stage1.md).
+// It is compiled into every program envoc1 builds, together with the OS layer
+// (runtime/linux.envo or runtime/windows.envo), which provides the __os_* functions.
+// Names starting with __rt_ and __os_ are reserved for the runtime.
+
+static usize __rt_heap_cur = 0;
+static usize __rt_heap_end = 0;
+static usize __rt_argc_value = 0;
+static usize __rt_argv_value = 0;      // *str, argc entries
+
+const usize __RT_HEAP_CHUNK = 0x4000000;      // 64 MiB, as in Stage 0
+
+// The entry point calls __rt_init with the initial stack pointer, then __main, then
+// __rt_exit with its result.
+void __rt_init(i64 sp) {
+    __os_init(sp);
+}
+
+void __rt_exit(i32 code) {
+    __os_exit(code);
+}
+
+// Writes all of a buffer, retrying partial writes; errors end the write silently.
+void __rt_write_all(i32 fd, *u8 p, usize n) {
+    while (n > 0) {
+        isize w = __os_write(fd, p, n);
+        if (w <= 0) return;
+        unsafe { p = &p[w as usize]; }
+        n -= w as usize;
+    }
+}
+
+void __rt_print(str s) {
+    __rt_write_all(1, s.Ptr, s.Len);
+    __rt_write_all(1, "\n".Ptr, 1);
+}
+
+void __rt_write(i32 fd, str s) {
+    __rt_write_all(fd, s.Ptr, s.Len);
+}
+
+isize __rt_read(i32 fd, *u8 buf, usize n) {
+    return __os_read(fd, buf, n);
+}
+
+i32 __rt_open(str path, i32 mode) {
+    return __os_open(path.Ptr, path.Len, mode);
+}
+
+void __rt_close(i32 fd) {
+    __os_close(fd);
+}
+
+// Zeroed, 16-byte-aligned memory: a bump pointer over 64 MiB chunks, never freed.
+*u8 __rt_alloc(usize n) {
+    n = (n + 15) & ~15;
+    unsafe {
+        if (n > __rt_heap_end - __rt_heap_cur) {
+            usize chunk = __RT_HEAP_CHUNK;
+            if (n > chunk) chunk = (n + 0xFFF) & ~0xFFF;
+            *u8 p = __os_pages(chunk);
+            if (p as usize == 0) __rt_trap(3);
+            __rt_heap_cur = p as usize;
+            __rt_heap_end = p as usize + chunk;
+        }
+        usize at = __rt_heap_cur;
+        __rt_heap_cur = at + n;
+        return at as *u8;
+    }
+}
+
+usize __rt_argc() {
+    unsafe { return __rt_argc_value; }
+}
+
+// Argument i, or an index-out-of-bounds panic.
+str __rt_arg(usize i) {
+    unsafe {
+        if (i >= __rt_argc_value) __rt_trap(1);
+        *str args = __rt_argv_value as *str;
+        return args[i];
+    }
+}
+
+// "panic: <msg>" on stderr, exit code 101.
+void __rt_panic(str msg) {
+    __rt_write_all(2, "panic: ".Ptr, 7);
+    __rt_write_all(2, msg.Ptr, msg.Len);
+    __rt_write_all(2, "\n".Ptr, 1);
+    __os_exit(101);
+}
+
+// A run-time check failed; reason as in eir.md [eir.panic.1].
+void __rt_trap(i64 reason) {
+    str msg = "unreachable code reached";
+    match reason {
+        0 => msg = "integer overflow",
+        1 => msg = "index out of bounds",
+        2 => msg = "division by zero",
+        3 => msg = "out of memory",
+        4 => msg = "shift amount out of range",
+        6 => msg = "str slice is not on a character boundary",
+        _ => msg = "unreachable code reached",
+    }
+    __rt_panic(msg);
+}
+
+// Records the arguments: count and a *str array (both runtime layers build one).
+void __rt_set_args(usize argc, *str argv) {
+    unsafe {
+        __rt_argc_value = argc;
+        __rt_argv_value = argv as usize;
+    }
+}
+
+// The length of a NUL-terminated byte string.
+usize __rt_cstr_len(*u8 p) {
+    usize n = 0;
+    unsafe {
+        while (p[n] != 0) n++;
+    }
+    return n;
+}
