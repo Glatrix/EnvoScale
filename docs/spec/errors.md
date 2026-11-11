@@ -94,6 +94,8 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0323 | duplicate enum value | [core.type.4] |
 | E0324 | enum representation must be an integer type | [core.type.4] |
 | E0327 | `void` is only allowed as a return type | [core.type.1] |
+| E0328 | cannot slice `T` | [expr.slice.1] (Envo-S1, RFC 0002) |
+| E0329 | cannot slice a temporary array; store it in a variable first | [expr.slice.4] (Envo-S1, RFC 0002) |
 
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
 

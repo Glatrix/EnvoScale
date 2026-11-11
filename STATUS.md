@@ -65,9 +65,9 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 - **Linux is only exercised in CI.** The development machine runs Windows (WSL is broken
   there); the Linux binary is cross-assembled locally and run by the `stage0-linux` job.
 - **Stage 0 source files are limited to 16 MiB**, reported as an error.
-- **Envo-Core has no way to make a non-empty slice.** `T[]` exists, but there is no
-  slicing syntax or built-in yet, so Core code uses a pointer and a length instead.
-  To be settled with the Stage 1 RFCs (M2, [#45](https://github.com/envoscale/EnvoScale/issues/45)).
+- **Envo-Core has no way to make a non-empty slice.** `T[]` exists, but slicing
+  ([RFC 0002](docs/rfcs/0002-slicing.md)) is in full Envo and Envo-S1 only, so Core code
+  (including Stage 1's source) uses a pointer and a length instead.
 - **The license and CLA have not had legal review.** `LICENSE` applies the PolyForm
   Noncommercial License 1.0.0 by reference to its official text and adds commercial
   terms; `CLA.md` is an original draft. Both should be reviewed by a lawyer before

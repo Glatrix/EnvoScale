@@ -83,7 +83,7 @@ beginners hit, with error messages that suggest the cast.
 | Syntax | Name | Meaning |
 |---|---|---|
 | `T[N]` | fixed array | `N` values of `T` stored inline; `N` is a constant expression |
-| `T[]` | slice | sugar for `Span<T>`: a borrowed view of contiguous `T`s (pointer + length) |
+| `T[]` | slice | sugar for `Span<T>`: a borrowed view of contiguous `T`s (pointer + length); made by slicing, `a[lo..hi]` ([RFC 0002](../rfcs/0002-slicing.md), [expr.slice.1]) |
 | `(A, B)` / `(A a, B b)` | tuple | anonymous product type, optionally with element names |
 | `T?` | optional | sugar for `Option<T>`; `null` is `Option<T>.None` |
 | `*T` | raw pointer | address of a `T`; dereferencing requires `unsafe` |

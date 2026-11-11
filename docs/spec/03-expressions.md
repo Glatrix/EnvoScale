@@ -67,6 +67,7 @@ with an explicit `move` prefix — reserved word TBD in RFC).
 | `f(a, b, name: c)` | call, with optional named arguments |
 | `f(ref x)`, `f(out var y)` | passing to `ref` / `out` parameters must be marked at the call site; `in` is implicit |
 | `a[i]` | index (bounds-checked) |
+| `a[lo..hi]` | slice: a view of part of an array, slice or `str` ([RFC 0002](../rfcs/0002-slicing.md), [expr.slice.1]–[expr.slice.5]) |
 | `a.b` | member access; auto-borrows and auto-dereferences |
 | `e?` | propagation: on `Err(e)` / `None`, return it from the current function (converting the error with `IFrom`); otherwise unwrap |
 | `f(args) { … }` / `f { … }` | call with a **trailing block** (see §3.8) |

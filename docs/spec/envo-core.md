@@ -47,7 +47,7 @@ Float literals lex normally and are rejected by the parser (E0905).
 | `str` | pointer + length, immutable UTF-8. String literals have this type |
 | `void` | return type only |
 | `T[N]` | fixed array, `N` an integer constant |
-| `T[]` | slice: pointer + length |
+| `T[]` | slice: pointer + length. Core has no slicing ([RFC 0002](../rfcs/0002-slicing.md) adds `a[lo..hi]` to full Envo and Envo-S1 only), so a Core program's slices are empty; use a pointer and a length |
 | `*T` | raw pointer; deref inside `unsafe` |
 | `struct` types | fields only |
 | `enum` types | fieldless; optional `: u8`/`u16`/`u32`/`u64`/`i…` representation (default `i32`) |

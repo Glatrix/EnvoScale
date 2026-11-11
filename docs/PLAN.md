@@ -77,9 +77,9 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    deferred unless it blocks someone (tracked in `STATUS.md`).
 6. **Edition name.** The brief uses `edition = "2027"` while the current year is 2026.
    Kept as written; the first stable edition will be named when it ships.
-7. **Slices in Envo-Core.** Core has `T[]` but no way to make a non-empty one
-   ([#45](https://github.com/envoscale/EnvoScale/issues/45)). Stage 1's source uses a
-   pointer and a length until this is decided.
+7. ~~**Slices in Envo-Core.**~~ **Decided 2026-11-11 by [RFC 0002](rfcs/0002-slicing.md):**
+   `a[lo..hi]` in full Envo and Envo-S1; Core keeps no slicing (Stage 0's budget), so
+   Stage 1's source uses a pointer and a length.
 8. **How Stage 1 programs get their runtime.** Stage 0 copies its own assembled runtime
    block into each output program. `envoc1` cannot do that (it is a Core program), so
    it must emit the OS shim with its own x86-64 encoder. Decided in increment 2.7.
