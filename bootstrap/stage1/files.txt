@@ -12,4 +12,10 @@ syntax/lexer.envo
 syntax/nodes.envo
 syntax/parser.envo
 syntax/parser_s1.envo
+check/types.envo
+check/scope.envo
+check/decl.envo
+check/stmt.envo
+check/expr.envo
+check/dump.envo
 driver.envo

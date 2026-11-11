@@ -245,7 +245,7 @@ do_test() {
     # S1). Spec suites: the same error code at the same position; lexical tests run in
     # both modes (E0901-E0904 become E0950 in S1), syntax tests in --core mode.
     # Keep these lists in step with bootstrap.ps1.
-    for suite in lexer:lex:.tokens:both parser:parse:.ast:both s1-parser:parse:.ast:s1; do
+    for suite in lexer:lex:.tokens:both parser:parse:.ast:both check:check:.check:both s1-parser:parse:.ast:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; rest=${rest#*:}; ext=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = s1 ] && [ "$mode" = --core ] && continue
@@ -263,7 +263,7 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core core-types:check:core s1-syntax:parse:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue
@@ -286,6 +286,30 @@ do_test() {
         done
       done
     done
+    # Multi-file error tests, and Stage 1 checking its own source (D14).
+    say "stage 1 multi-file tests (--core): tests/spec/core-multi"
+    for d in "$ROOT"/tests/spec/core-multi/*/; do
+        line=$(grep -m1 '^// expect-error: ' "$d/main.envo" | tr -d '\r' || true)
+        [ -n "$line" ] || continue
+        set -- main.envo
+        for f in "$d"*.envo; do
+            f=$(basename "$f")
+            [ "$f" = main.envo ] || set -- "$@" "$f"
+        done
+        code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
+        want="${line##* @ }: error[$code]"
+        run "$d" --core check "$@"
+        if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
+        else bad "stage1 --core core-multi/$(basename "$d")" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+    done
+    say 'stage 1 self-check: envoc1 --core check bootstrap/stage1'
+    set --
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$STAGE1/files.txt"
+    run "$STAGE1" --core check "$@"
+    if [ "$rc" -eq 0 ]; then pass; else bad 'stage1 self-check' "exit $rc: $(head -c 300 "$TMP/err")"; fi
     EXE=$stage0_exe
 
     say ''

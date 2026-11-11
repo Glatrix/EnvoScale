@@ -255,6 +255,7 @@ function Invoke-Test {
     $stage1Golden = @(
         @{ Dir = 'lexer';  Command = 'lex';   Ext = '.tokens' },
         @{ Dir = 'parser'; Command = 'parse'; Ext = '.ast' },
+        @{ Dir = 'check';  Command = 'check'; Ext = '.check' },
         @{ Dir = 's1-parser'; Command = 'parse'; Ext = '.ast'; Modes = @('s1') }
     )
     foreach ($suite in $stage1Golden) {
@@ -278,6 +279,7 @@ function Invoke-Test {
     $stage1Spec = @(
         @{ Dir = '01-lexical';  Command = 'lex';   Modes = @('--core', 's1') },
         @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
+        @{ Dir = 'core-types';  Command = 'check'; Modes = @('--core') },
         @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') }
     )
     foreach ($suite in $stage1Spec) {
@@ -300,6 +302,23 @@ function Invoke-Test {
         }
       }
     }
+    # Multi-file error tests, and Stage 1 checking its own source (D14).
+    Say 'stage 1 multi-file tests (--core): tests/spec/core-multi'
+    foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-multi') -Directory | Sort-Object Name) {
+        $main = Join-Path $d.FullName 'main.envo'
+        $m = [regex]::Match([IO.File]::ReadAllText($main, $Utf8), '(?m)^// expect-error: (E\d{4}) @ (\S+)')
+        if (-not $m.Success) { continue }
+        $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
+        $want = "$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
+        $r = Invoke-Tool $envoc1 (@('--core', 'check') + $files) $d.FullName
+        if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $d.Name }
+        else { Bad "stage1 --core core-multi/$($d.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+    }
+    Say 'stage 1 self-check: envoc1 --core check bootstrap/stage1'
+    $files = @(Get-Content -LiteralPath (Join-Path $Stage1 'files.txt') | Where-Object { $_.Trim() -ne '' })
+    $r = Invoke-Tool $envoc1 (@('--core', 'check') + $files) $Stage1
+    if ($r.Code -eq 0) { Pass 'stage1 self-check' } else { Bad 'stage1 self-check' "exit $($r.Code), stderr: $($r.Err.Trim())" }
+
     Say ''
     Say "$($script:passed) passed, $($script:failed) failed"
     if ($script:failed -gt 0) { exit 1 }

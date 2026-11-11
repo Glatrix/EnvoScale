@@ -1,0 +1,713 @@
+// Expressions, literals and constants ([core.expr.*], [core.const.*]). Follows Stage 0's
+// check_expr, check_binary, the literal helpers and const_eval.
+
+// Checks node n against type t exactly (E0301).
+void ExpectType(*Checker c, u32 n, u32 t) {
+    u32 got = CheckValue(c, n, t);
+    if (got != t) Mismatch(c, t, NTok(c, n), got);
+}
+
+// CheckExpr, but a void value is E0322 ([core.expr.11]).
+u32 CheckValue(*Checker c, u32 n, u32 expected) {
+    u32 t = CheckExpr(c, n, expected);
+    if (t == T_VOID) CError(c, E_VOID_VALUE, NTok(c, n));
+    return t;
+}
+
+// [core.expr.2] is this an unsuffixed literal expression?
+bool IsUntyped(*Checker c, u32 n) {
+    Node node = CNode(c, n);
+    if (node.Kind == NK_INT) return LiteralSuffixLen(c, node.Tok) == 0;
+    if (node.Kind == NK_UNARY) {
+        if (node.Op != TK_MINUS && node.Op != TK_TILDE) return false;
+        return IsUntyped(c, node.A);
+    }
+    if (node.Kind != NK_BINARY) return false;
+    if (node.Op == TK_AND_AND || node.Op == TK_OR_OR) return false;
+    if (TokClass(node.Op) & TC_PREC == PREC_COMPARE) return false;
+    return IsUntyped(c, node.A) && IsUntyped(c, node.B);
+}
+
+// Gives an untyped literal expression type t, checking each literal fits (E0304) and
+// `-` has a signed type (E0302).
+void TypeUntyped(*Checker c, u32 n, u32 t) {
+    SetNType(c, n, t);
+    Node node = CNode(c, n);
+    if (node.Kind == NK_INT) {
+        bool overflow;
+        u64 v;
+        unsafe { v = LiteralValue(c, node.Tok, &overflow); }
+        if (overflow || v > TypeMax(c, t)) DoesNotFit(c, node.Tok, t);
+        return;
+    }
+    if (node.Kind == NK_UNARY) {
+        if (node.Op == TK_MINUS) {
+            if (!TypeGet(c, t).Signed) BadOperand(c, t, node.Tok);
+            if (NKind(c, node.A) == NK_INT) {
+                // -128 fits i8 even though 128 does not
+                SetNType(c, node.A, t);
+                u32 tok = NTok(c, node.A);
+                bool overflow;
+                u64 v;
+                unsafe { v = LiteralValue(c, tok, &overflow); }
+                if (overflow || v > TypeMax(c, t) + 1) DoesNotFit(c, tok, t);
+                return;
+            }
+        }
+        TypeUntyped(c, node.A, t);
+        return;
+    }
+    TypeUntyped(c, node.A, t);
+    TypeUntyped(c, node.B, t);
+}
+
+// Types an expression and records it ([core.expr.*]). expected may be 0.
+u32 CheckExpr(*Checker c, u32 n, u32 expected) {
+    if (IsUntyped(c, n)) {
+        u32 t = IntegerOrI32(c, expected);
+        TypeUntyped(c, n, t);
+        ConstEval(c, n);
+        return t;
+    }
+    u32 t = CheckExprInner(c, n, expected);
+    SetNType(c, n, t);
+    return t;
+}
+
+u32 IntegerOrI32(*Checker c, u32 t) {
+    if (t != 0 && IsIntType(c, t)) return t;
+    return T_I32;
+}
+
+void NeedsUnsafe(*Checker c, u32 n) {
+    usize depth;
+    unsafe { depth = c.Unsafe; }
+    if (depth == 0) CError(c, E_NEEDS_UNSAFE, NTok(c, n));
+}
+
+u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
+    Node node = CNode(c, n);
+    u16 k = node.Kind;
+    if (k == NK_INT) {
+        // a suffixed literal
+        u32 t = SuffixType(c, node.Tok);
+        if (t == 0xFFFFFFFF) CNotCore(c, "128-bit integers", node.Tok);
+        bool overflow;
+        u64 v;
+        unsafe { v = LiteralValue(c, node.Tok, &overflow); }
+        if (overflow || v > TypeMax(c, t)) DoesNotFit(c, node.Tok, t);
+        return t;
+    }
+    if (k == NK_CHAR) {
+        if (CharValue(c, node.Tok) > 0x7F) CNotCore(c, "non-ASCII character literals", node.Tok);
+        return T_U8;
+    }
+    if (k == NK_STRING) return T_STR;
+    if (k == NK_BOOL) return T_BOOL;
+    if (k == NK_NAME) {
+        u32 s = Lookup(c, node.Tok);
+        if (s == 0) CFailName(c, node.Tok, E_UNKNOWN_NAME, "unknown name `", node.Tok, "`");
+        SetNSym(c, n, s);
+        u8 sk = SymGet(c, s).Kind;
+        if (sk == SK_LOCAL || sk == SK_STATIC) return SymGet(c, s).Type;
+        if (sk == SK_CONST) {
+            ConstResolve(c, s, node.Tok);
+            return SymGet(c, s).Type;
+        }
+        if (sk == SK_FN || sk == SK_BUILTIN) CNotCore(c, "function values", node.Tok);
+        CFailName(c, node.Tok, E_NOT_A_VALUE, "`", node.Tok, "` is a type, not a value");
+    }
+    if (k == NK_CALL) return CheckCall(c, n);
+    if (k == NK_INDEX) {
+        u32 objType = CheckValue(c, node.A, 0);
+        Type obj = TypeGet(c, objType);
+        u32 elem = obj.Elem;
+        if (obj.Kind == TYK_PTR) {
+            NeedsUnsafe(c, n);
+        } else if (obj.Kind == TYK_STR) {
+            elem = T_U8;
+        } else if (obj.Kind != TYK_ARRAY && obj.Kind != TYK_SLICE) {
+            BadOperand(c, objType, node.Tok);
+        }
+        if (IsUntyped(c, node.B)) {
+            CheckExpr(c, node.B, T_USIZE);
+        } else {
+            u32 it = CheckValue(c, node.B, 0);
+            if (!IsIntType(c, it)) {
+                Buf b = BufNew(64);
+                unsafe {
+                    BufStr(&b, "mismatched types: expected an integer type, found `");
+                    BufType(&b, c, it);
+                    BufByte(&b, '`');
+                    CFail(c, NTok(c, node.B), E_MISMATCH, BufView(&b));
+                }
+            }
+        }
+        return elem;
+    }
+    if (k == NK_MEMBER) return CheckMember(c, n);
+    if (k == NK_UNARY) {
+        u32 op = node.Tok;
+        if (node.Op == TK_MINUS) {
+            u32 t = CheckValue(c, node.A, expected);
+            Type ty = TypeGet(c, t);
+            if (ty.Kind != TYK_INT || !ty.Signed) BadOperand(c, t, op);
+            return t;
+        }
+        if (node.Op == TK_TILDE) {
+            u32 t = CheckValue(c, node.A, expected);
+            if (!IsIntType(c, t)) BadOperand(c, t, op);
+            return t;
+        }
+        if (node.Op == TK_BANG) {
+            u32 t = CheckValue(c, node.A, 0);
+            if (t != T_BOOL) BadOperand(c, t, op);
+            return t;
+        }
+        if (node.Op == TK_STAR) {
+            NeedsUnsafe(c, n);
+            u32 t = CheckValue(c, node.A, 0);
+            Type ty = TypeGet(c, t);
+            if (ty.Kind != TYK_PTR) BadOperand(c, t, op);
+            return ty.Elem;
+        }
+        // '&'
+        NeedsUnsafe(c, n);
+        u32 t = CheckValue(c, node.A, 0);
+        if (!IsAddressable(c, node.A)) CError(c, E_NOT_ADDRESSABLE, op);
+        return TypePtrTo(c, t);
+    }
+    if (k == NK_BINARY) return CheckBinary(c, n, expected);
+    if (k == NK_CAST) {
+        // [core.expr.9]
+        u32 from = CheckValue(c, node.A, 0);
+        u32 to = ResolveType(c, node.B, false);
+        u32 kind = CastKind(c, from, to);
+        if (kind == 0) {
+            Buf b = BufNew(64);
+            unsafe {
+                BufStr(&b, "cannot convert `");
+                BufType(&b, c, from);
+                BufStr(&b, "` to `");
+                BufType(&b, c, to);
+                BufByte(&b, '`');
+                CFail(c, node.Tok, E_BAD_CAST, BufView(&b));
+            }
+        }
+        if (kind == 2) NeedsUnsafe(c, n);
+        return to;
+    }
+    if (k == NK_SIZEOF || k == NK_ALIGNOF) {
+        u32 t = ResolveType(c, node.A, false);
+        u64 align;
+        u64 size;
+        unsafe { size = SizeOf(c, t, node.Tok, &align); }
+        if (k == NK_SIZEOF) SetNValue(c, n, size);
+        else SetNValue(c, n, align);
+        return T_USIZE;
+    }
+    // NK_NEW [core.expr.10]
+    u32 t = ResolveType(c, node.A, false);
+    if (TyKind(c, t) != TYK_STRUCT) BadOperand(c, t, node.Tok);
+    StructLayout(c, TypeGet(c, t).Sym, node.Tok);
+    u32 init = node.B;
+    while (init != 0) {
+        u32 tok = NTok(c, init);
+        u32 field = StructFieldNamed(c, t, init);
+        if (field == 0) NoMember(c, tok, t);
+        if (FindEarlierName(c, node.B, init)) CFailName(c, tok, E_FIELD_TWICE, "field `", tok, "` is set twice");
+        ExpectType(c, CNode(c, init).A, NType(c, field));
+        init = CNode(c, init).Next;
+    }
+    return t;
+}
+
+u32 CheckCall(*Checker c, u32 n) {
+    Node node = CNode(c, n);
+    if (NKind(c, node.A) != NK_NAME) CError(c, E_NOT_CALLABLE, node.Tok);
+    u32 calleeTok = NTok(c, node.A);
+    u32 s = Lookup(c, calleeTok);
+    if (s == 0) CFailName(c, calleeTok, E_UNKNOWN_NAME, "unknown name `", calleeTok, "`");
+    Sym sym = SymGet(c, s);
+    if (sym.Kind != SK_FN && sym.Kind != SK_BUILTIN) CError(c, E_NOT_CALLABLE, node.Tok);
+    // str_from vouches for raw memory
+    if (sym.Kind == SK_BUILTIN && sym.Aux2 == B_STR_FROM) NeedsUnsafe(c, n);
+    // [core.expr.8] count the arguments first
+    u32 count = 0;
+    u32 a = node.B;
+    while (a != 0) {
+        count++;
+        a = CNode(c, a).Next;
+    }
+    if (count != sym.Aux) {
+        Buf b = BufNew(64);
+        unsafe {
+            BufStr(&b, "wrong number of arguments: expected ");
+            BufU64(&b, sym.Aux as u64);
+            BufStr(&b, ", found ");
+            BufU64(&b, count as u64);
+            CFail(c, node.Tok, E_ARG_COUNT, BufView(&b));
+        }
+    }
+    a = node.B;
+    u32 i = 0;
+    while (a != 0) {
+        ExpectType(c, a, ParamType(c, s, i));
+        i++;
+        a = CNode(c, a).Next;
+    }
+    return sym.Type;
+}
+
+u32 CheckMember(*Checker c, u32 n) {
+    Node node = CNode(c, n);
+    u32 name = node.Tok;
+    // Enum.Variant ([core.expr.7])
+    if (NKind(c, node.A) == NK_NAME) {
+        u32 s = Lookup(c, NTok(c, node.A));
+        if (s != 0 && SymGet(c, s).Kind == SK_ENUM) {
+            EnumDeclare(c, s);
+            u32 et = SymGet(c, s).Type;
+            if (EnumVariantNamed(c, et, n) == 0) NoMember(c, name, et);
+            return et;
+        }
+    }
+    u32 objType = CheckValue(c, node.A, 0);
+    u32 st = objType;       // the struct type after auto-deref
+    Type obj = TypeGet(c, objType);
+    if (obj.Kind == TYK_PTR && TyKind(c, obj.Elem) == TYK_STRUCT) {
+        NeedsUnsafe(c, n);
+        st = obj.Elem;
+    }
+    if (TyKind(c, st) == TYK_STRUCT) {
+        StructLayout(c, TypeGet(c, st).Sym, name);
+        u32 field = StructFieldNamed(c, st, n);
+        if (field != 0) return NType(c, field);
+    }
+    if (obj.Kind == TYK_STR || obj.Kind == TYK_SLICE) {
+        str text = TokText(c, name);
+        if (StrEq(text, "Len")) return T_USIZE;
+        if (StrEq(text, "Ptr")) {
+            if (obj.Kind == TYK_STR) return T_PTR_U8;
+            return TypePtrTo(c, obj.Elem);
+        }
+    }
+    NoMember(c, name, objType);
+    return 0;
+}
+
+// Does a node before n in the list starting at first share its name?
+bool FindEarlierName(*Checker c, u32 first, u32 n) {
+    u32 tok = NTok(c, n);
+    u32 m = first;
+    while (m != n) {
+        if (SameName(c, NTok(c, m), tok)) return true;
+        m = CNode(c, m).Next;
+    }
+    return false;
+}
+
+// The field node of struct type t named by node n's token, or 0.
+u32 StructFieldNamed(*Checker c, u32 t, u32 n) {
+    u32 tok = NTok(c, n);
+    u32 f = CNode(c, SymGet(c, TypeGet(c, t).Sym).Node).A;
+    while (f != 0) {
+        if (SameName(c, NTok(c, f), tok)) return f;
+        f = CNode(c, f).Next;
+    }
+    return 0;
+}
+
+// [core.expr.9]: 0 invalid, 1 allowed, 2 allowed in unsafe only.
+u32 CastKind(*Checker c, u32 from, u32 to) {
+    u8 fk = TyKind(c, from);
+    u8 tk = TyKind(c, to);
+    if (tk == TYK_INT) {
+        if (fk == TYK_INT || fk == TYK_BOOL || fk == TYK_ENUM) return 1;
+        if (fk == TYK_PTR && (to == T_USIZE || to == T_ISIZE)) return 2;
+    } else if (tk == TYK_PTR) {
+        if (fk == TYK_PTR || from == T_USIZE || from == T_ISIZE) return 2;
+    }
+    if (from == to) return 1;
+    return 0;
+}
+
+// [core.expr.3], [core.expr.4]
+u32 CheckBinary(*Checker c, u32 n, u32 expected) {
+    Node node = CNode(c, n);
+    u16 op = node.Op;
+    if (op == TK_AND_AND || op == TK_OR_OR) {
+        ExpectType(c, node.A, T_BOOL);
+        ExpectType(c, node.B, T_BOOL);
+        return T_BOOL;
+    }
+    if (op == TK_SHL || op == TK_SHR) {
+        u32 lt = 0;
+        if (IsUntyped(c, node.A)) {
+            lt = IntegerOrI32(c, expected);
+            TypeUntyped(c, node.A, lt);
+            ConstEval(c, node.A);
+        } else {
+            lt = CheckValue(c, node.A, expected);
+        }
+        if (!IsIntType(c, lt)) BadOperand(c, lt, node.Tok);
+        u32 rt = CheckValue(c, node.B, 0);
+        if (!IsIntType(c, rt)) BadOperand(c, rt, node.Tok);
+        return lt;
+    }
+    bool compare = TokClass(op) & TC_PREC == PREC_COMPARE;
+    if (compare) expected = 0;      // comparisons ignore the expected type
+    u32 t = 0;
+    if (IsUntyped(c, node.A)) {
+        if (IsUntyped(c, node.B)) {
+            t = IntegerOrI32(c, expected);
+            TypeUntyped(c, node.A, t);
+            ConstEval(c, node.A);
+            TypeUntyped(c, node.B, t);
+            ConstEval(c, node.B);
+        } else {
+            t = CheckValue(c, node.B, expected);
+            if (!IsIntType(c, t)) {
+                Buf b = BufNew(64);
+                unsafe {
+                    BufStr(&b, "mismatched types: expected `");
+                    BufType(&b, c, t);
+                    BufStr(&b, "`, found an integer literal");
+                    CFail(c, NTok(c, node.A), E_MISMATCH, BufView(&b));
+                }
+            }
+            TypeUntyped(c, node.A, t);
+            ConstEval(c, node.A);
+        }
+    } else {
+        t = CheckValue(c, node.A, expected);
+        ExpectType(c, node.B, t);
+    }
+    if (compare) {
+        u8 k = TyKind(c, t);
+        if (op == TK_EQ_EQ || op == TK_NOT_EQ) {
+            if (k != TYK_INT && k != TYK_BOOL && k != TYK_ENUM && k != TYK_PTR) BadOperand(c, t, node.Tok);
+        } else if (k != TYK_INT) {
+            BadOperand(c, t, node.Tok);
+        }
+        return T_BOOL;
+    }
+    if (!IsIntType(c, t)) BadOperand(c, t, node.Tok);
+    return t;
+}
+
+// ------------------------------------------------------------------ literals
+
+// An integer literal's parts ([lex.int.1]): base, digits (after any 0x/0b/0o,
+// underscores included) and the suffix, which starts at the first 'i' or 'u'.
+struct LiteralParts {
+    u64 Base;
+    str Digits;
+    str Suffix;
+}
+
+LiteralParts LiteralSplit(*Checker c, u32 tok) {
+    str text = TokText(c, tok);
+    LiteralParts parts;
+    parts.Base = 10;
+    usize start = 0;
+    if (text.Len >= 2 && text[0] == '0') {
+        if (text[1] == 'x') parts.Base = 16;
+        if (text[1] == 'b') parts.Base = 2;
+        if (text[1] == 'o') parts.Base = 8;
+        if (parts.Base != 10) start = 2;
+    }
+    usize i = start;
+    while (i < text.Len && text[i] != 'i' && text[i] != 'u') i++;
+    parts.Digits = StrSub(text, start, i);
+    parts.Suffix = StrSub(text, i, text.Len);
+    return parts;
+}
+
+usize LiteralSuffixLen(*Checker c, u32 tok) {
+    return LiteralSplit(c, tok).Suffix.Len;
+}
+
+// The value of integer literal tok; *overflow is set if it does not fit in 64 bits.
+u64 LiteralValue(*Checker c, u32 tok, *bool overflow) {
+    LiteralParts parts = LiteralSplit(c, tok);
+    u64 v = 0;
+    bool over = false;
+    for (usize i = 0; i < parts.Digits.Len; i++) {
+        u8 ch = parts.Digits[i];
+        if (ch == '_') continue;
+        u64 d = DigitValue(ch) as u64;
+        if (v > (18446744073709551615 - d) / parts.Base) over = true;
+        v = v *% parts.Base +% d;
+    }
+    unsafe { *overflow = over; }
+    return v;
+}
+
+// The type an integer literal's suffix names: 0 without one, 0xFFFFFFFF for i128/u128.
+u32 SuffixType(*Checker c, u32 tok) {
+    str s = LiteralSplit(c, tok).Suffix;
+    if (s.Len == 0) return 0;
+    if (StrEq(s, "i8")) return T_I8;
+    if (StrEq(s, "i16")) return T_I16;
+    if (StrEq(s, "i32")) return T_I32;
+    if (StrEq(s, "i64")) return T_I64;
+    if (StrEq(s, "isize")) return T_ISIZE;
+    if (StrEq(s, "u8")) return T_U8;
+    if (StrEq(s, "u16")) return T_U16;
+    if (StrEq(s, "u32")) return T_U32;
+    if (StrEq(s, "u64")) return T_U64;
+    if (StrEq(s, "usize")) return T_USIZE;
+    return 0xFFFFFFFF;
+}
+
+// The largest value of integer type t, as stored.
+u64 TypeMax(*Checker c, u32 t) {
+    Type ty = TypeGet(c, t);
+    u64 bits = ty.Size as u64 * 8;
+    if (ty.Signed) bits--;
+    if (bits == 64) return 18446744073709551615;
+    return (1 << bits) - 1;
+}
+
+// Does stored value v fit type t (integer, bool or enum)?
+bool ValueFits(*Checker c, u64 v, u32 t) {
+    Type ty = TypeGet(c, t);
+    if (ty.Kind == TYK_BOOL) return v <= 1;
+    if (ty.Kind == TYK_ENUM) ty = TypeGet(c, SymGet(c, ty.Sym).Aux);
+    u64 bits = ty.Size as u64 * 8;
+    if (bits == 64) return true;    // every 64-bit pattern is a valid i64/u64
+    if (ty.Signed) {
+        // sign-extending the low bits must give the value back
+        u64 shift = 64 - bits;
+        return ((v << shift) as i64 >> shift) as u64 == v;
+    }
+    return v >> bits == 0;
+}
+
+// v reduced to the bit width of integer type t, sign- or zero-extended as stored.
+u64 WrapValue(*Checker c, u64 v, u32 t) {
+    Type ty = TypeGet(c, t);
+    u64 bits = ty.Size as u64 * 8;
+    if (bits == 64) return v;
+    u64 shift = 64 - bits;
+    if (ty.Signed) return ((v << shift) as i64 >> shift) as u64;
+    return (v << shift) >> shift;
+}
+
+// The value of a character literal (the lexer validated it).
+u64 CharValue(*Checker c, u32 tok) {
+    str text = TokText(c, tok);
+    u8 b = text[1];
+    if (b == 0x5C) {
+        u8 e = text[2];
+        if (e == 'n') return 10;
+        if (e == 'r') return 13;
+        if (e == 't') return 9;
+        if (e == '0') return 0;
+        usize i = 0;
+        if (e == 'x') i = 3;
+        else if (e == 'u') i = 4;
+        else return e as u64;      // \\ \' \"
+        u64 v = 0;
+        while (text[i] != '}' && text[i] != 0x27) {
+            v = (v << 4) | DigitValue(text[i]) as u64;
+            i++;
+        }
+        return v;
+    }
+    if (b < 0x80) return b as u64;
+    // a multi-byte UTF-8 scalar
+    u64 v = 0;
+    usize more = 0;
+    if (b < 0xE0) {
+        v = (b & 0x1F) as u64;
+        more = 1;
+    } else if (b < 0xF0) {
+        v = (b & 0x0F) as u64;
+        more = 2;
+    } else {
+        v = (b & 0x07) as u64;
+        more = 3;
+    }
+    for (usize i = 0; i < more; i++) v = (v << 6) | (text[2 + i] & 0x3F) as u64;
+    return v;
+}
+
+// ------------------------------------------------------------------ constants
+
+// The value of a checked constant expression (E0310, E0311).
+u64 ConstEval(*Checker c, u32 n) {
+    u64 v = ConstEvalInner(c, n);
+    SetNValue(c, n, v);
+    return v;
+}
+
+void ConstFailed(*Checker c, u32 n) {
+    CError(c, E_CONST_FAILED, NTok(c, n));
+}
+
+void NotConstant(*Checker c, u32 n) {
+    CError(c, E_NOT_CONSTANT, NTok(c, n));
+}
+
+u64 ConstEvalInner(*Checker c, u32 n) {
+    Node node = CNode(c, n);
+    u32 t = NType(c, n);
+    u16 k = node.Kind;
+    if (k == NK_INT) {
+        bool overflow;
+        unsafe { return LiteralValue(c, node.Tok, &overflow); }
+    }
+    if (k == NK_STRING) return 0;
+    if (k == NK_CHAR) return CharValue(c, node.Tok);
+    if (k == NK_BOOL) {
+        if (StrEq(TokText(c, node.Tok), "true")) return 1;
+        return 0;
+    }
+    if (k == NK_SIZEOF || k == NK_ALIGNOF) return NValue(c, n);
+    if (k == NK_NAME) {
+        u32 s = NSym(c, n);
+        if (s == 0) s = Lookup(c, node.Tok);
+        if (s != 0 && SymGet(c, s).Kind == SK_CONST) {
+            ConstResolve(c, s, node.Tok);
+            return SymGet(c, s).Value;
+        }
+        if (t != 0 && TyKind(c, t) == TYK_ENUM) {
+            u32 v = EnumVariantNamed(c, t, n);
+            if (v != 0) return NValue(c, v);
+        }
+        NotConstant(c, n);
+    }
+    if (k == NK_MEMBER) {
+        if (NKind(c, node.A) == NK_NAME) {
+            u32 s = Lookup(c, NTok(c, node.A));
+            if (s != 0 && SymGet(c, s).Kind == SK_ENUM) {
+                u32 v = EnumVariantNamed(c, SymGet(c, s).Type, n);
+                if (v != 0) return NValue(c, v);
+            }
+        }
+        NotConstant(c, n);
+    }
+    if (k == NK_UNARY) {
+        if (node.Op == TK_MINUS) {
+            // an untyped -literal was range-checked as a whole by TypeUntyped
+            if (NKind(c, node.A) == NK_INT && IsUntyped(c, n)) {
+                bool overflow;
+                u64 lit;
+                unsafe { lit = LiteralValue(c, NTok(c, node.A), &overflow); }
+                return 0 -% lit;
+            }
+            u64 x = ConstEval(c, node.A);
+            if (x == 0x8000000000000000) ConstFailed(c, n);     // -(-2^63)
+            u64 r = 0 -% x;
+            if (!ValueFits(c, r, t)) ConstFailed(c, n);
+            return r;
+        }
+        if (node.Op == TK_TILDE) return WrapValue(c, ~ConstEval(c, node.A), t);
+        if (node.Op == TK_BANG) return ConstEval(c, node.A) ^ 1;
+        NotConstant(c, n);
+    }
+    if (k == NK_CAST) {
+        u64 x = ConstEval(c, node.A);
+        if (!IsIntType(c, t)) NotConstant(c, n);
+        return WrapValue(c, x, t);
+    }
+    if (k == NK_BINARY) return ConstBinary(c, n, node, t);
+    NotConstant(c, n);
+    return 0;
+}
+
+u64 ConstBinary(*Checker c, u32 n, Node node, u32 t) {
+    u16 op = node.Op;
+    if (op == TK_AND_AND || op == TK_OR_OR) NotConstant(c, n);
+    u64 a = ConstEval(c, node.A);
+    u64 b = ConstEval(c, node.B);
+    bool signed = TypeGet(c, NType(c, node.A)).Signed;     // the operands' type decides
+    i64 sa = a as i64;
+    i64 sb = b as i64;
+    if (op == TK_EQ_EQ) return (a == b) as u64;
+    if (op == TK_NOT_EQ) return (a != b) as u64;
+    if (op == TK_LT) {
+        if (signed) return (sa < sb) as u64;
+        return (a < b) as u64;
+    }
+    if (op == TK_GT) {
+        if (signed) return (sa > sb) as u64;
+        return (a > b) as u64;
+    }
+    if (op == TK_LT_EQ) {
+        if (signed) return (sa <= sb) as u64;
+        return (a <= b) as u64;
+    }
+    if (op == TK_GT_EQ) {
+        if (signed) return (sa >= sb) as u64;
+        return (a >= b) as u64;
+    }
+    u64 r = 0;
+    if (op == TK_PLUS || op == TK_MINUS || op == TK_STAR) {
+        bool over = false;
+        if (op == TK_PLUS) {
+            r = a +% b;
+            if (signed) {
+                i64 sr = r as i64;
+                over = (sa >= 0 && sb >= 0 && sr < 0) || (sa < 0 && sb < 0 && sr >= 0);
+            } else {
+                over = r < a;
+            }
+        } else if (op == TK_MINUS) {
+            r = a -% b;
+            if (signed) {
+                i64 sr = r as i64;
+                over = (sa >= 0 && sb < 0 && sr < 0) || (sa < 0 && sb >= 0 && sr >= 0);
+            } else {
+                over = b > a;
+            }
+        } else {
+            r = a *% b;
+            if (signed) {
+                if (sa != 0 && sb != 0) {
+                    if ((sa == -1 && b == 0x8000000000000000) || (sb == -1 && a == 0x8000000000000000)) over = true;
+                    else if ((r as i64) / sb != sa) over = true;
+                }
+            } else if (a != 0 && r / a != b) {
+                over = true;
+            }
+        }
+        if (over || !ValueFits(c, r, t)) ConstFailed(c, n);
+        return r;
+    }
+    if (op == TK_WRAP_ADD) return WrapValue(c, a +% b, t);
+    if (op == TK_WRAP_SUB) return WrapValue(c, a -% b, t);
+    if (op == TK_WRAP_MUL) return WrapValue(c, a *% b, t);
+    if (op == TK_SLASH || op == TK_PERCENT) {
+        if (b == 0) ConstFailed(c, n);
+        if (signed) {
+            // MIN / -1 overflows
+            if (sb == -1 && a == 0x8000000000000000) ConstFailed(c, n);
+            if (op == TK_SLASH) r = (sa / sb) as u64;
+            else r = (sa % sb) as u64;
+        } else {
+            if (op == TK_SLASH) r = a / b;
+            else r = a % b;
+        }
+        if (!ValueFits(c, r, t)) ConstFailed(c, n);
+        return r;
+    }
+    if (op == TK_AMP) return a & b;
+    if (op == TK_PIPE) return a | b;
+    if (op == TK_CARET) return a ^ b;
+    if (op == TK_SHL || op == TK_SHR) {
+        // the amount must be 0 <= b < bits of the result type, judged by the right
+        // operand's own signedness
+        bool rightSigned = TypeGet(c, NType(c, node.B)).Signed;
+        u64 bits = TypeGet(c, t).Size as u64 * 8;
+        if (rightSigned && sb < 0) ConstFailed(c, n);
+        if (b >= bits) ConstFailed(c, n);
+        if (op == TK_SHL) return WrapValue(c, a << b, t);
+        if (signed) return (sa >> b) as u64;
+        return a >> b;
+    }
+    NotConstant(c, n);
+    return 0;
+}
