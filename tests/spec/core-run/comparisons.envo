@@ -1,0 +1,55 @@
+// Comparisons and logic ([core.expr.4]): unsigned values compare as unsigned,
+// signed values as signed, and && || evaluate the right side only when needed.
+// expect: unsigned ok
+// expect: signed ok
+// expect: narrow ok
+// expect: enum ok
+// expect: pointer ok
+// expect: bool ok
+// expect: calls 2
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+static i32 calls;
+bool Touch(bool v) { calls++; return v; }
+enum Level : u8 { Low, Mid = 100, High }
+u64 big = 18446744073709551615;
+u64 one = 1;
+if (big > one && one < big && big >= big && !(big < one)) print("unsigned ok");
+i64 neg = -1;
+i64 pos = 1;
+if (neg < pos && pos > neg && neg <= neg && !(neg > pos)) print("signed ok");
+u8 b200 = 200;
+u8 b100 = 100;
+i8 m = -100;
+i8 p = 100;
+if (b200 > b100 && m < p && b200 != b100) print("narrow ok");
+Level l = Level.High;
+if (l == Level.High && l != Level.Mid && (l as u8) == 101) print("enum ok");
+unsafe {
+    *u8 a = alloc(8);
+    *u8 c = a;
+    if (a == c && (a as usize) != 0) print("pointer ok");
+}
+bool t = true;
+if (t == true && t != false && (false || t) && !(t && false)) print("bool ok");
+bool r1 = false && Touch(true);
+bool r2 = true || Touch(true);
+bool r3 = true && Touch(true);
+bool r4 = false || Touch(false);
+write(1, "calls ");
+print(Num(calls as i64));

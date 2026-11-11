@@ -1,0 +1,57 @@
+// `as` ([core.expr.9], [type.conv.1]): narrowing truncates the bit pattern;
+// widening sign-extends signed values and zero-extends unsigned ones.
+// expect: 44
+// expect: -56
+// expect: 200
+// expect: -1
+// expect: 255
+// expect: 65535
+// expect: 4294967295
+// expect: -1
+// expect: 1 0
+// expect: 2
+// expect: 128
+// expect: 8
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+enum Shade : u16 { Light, Dark, Darker }
+i32 x = 300;
+print(Num((x as u8) as i64));
+u8 b = 200;
+print(Num((b as i8) as i64));
+print(Num(b as i64));
+i8 m = -1;
+print(Num(m as i64));
+print(Num((m as u8) as i64));
+print(Num((m as u16) as i64));
+print(Num((m as u32) as i64));
+u64 all = 18446744073709551615;
+print(Num(all as i64));
+bool yes = true;
+bool no = false;
+write(1, Num(yes as i64));
+write(1, " ");
+print(Num(no as i64));
+print(Num(Shade.Darker as i64));
+i64 wide = 640;
+print(Num((wide as u8) as i64));
+unsafe {
+    *u64 p = alloc(16) as *u64;
+    *u64 q = ((p as usize) + 8) as *u64;
+    print(Num(((q as usize) - (p as usize)) as i64));
+}

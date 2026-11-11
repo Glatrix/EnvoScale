@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M0 (charter and skeleton) → done this session; M1 (Stage 0) started.
+- **Current milestone:** M0 and M1 done; M2 (Stage 1) next. This file is rewritten when M2 starts.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -91,7 +91,7 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
 **DoD:** every item above exists, `bootstrap.ps1 check` and `bootstrap.sh check` pass,
 and `STATUS.md` records M0 as done.
 
-## 5. M1 — Stage 0 (started this session)
+## 5. M1 — Stage 0 (done)
 
 The milestone is large, so it is cut into increments that each end tested.
 
@@ -105,7 +105,7 @@ The milestone is large, so it is cut into increments that each end tested.
 | 1.6 | Type checker for Envo-Core | `tests/golden/check/`, `tests/spec/core-types/` | done (208/208 on Windows) |
 | 1.7 | x86-64 code generation + PE/ELF writers for *output* programs | `tests/spec/core-run/` | done |
 | 1.8 | Builtins (`print`, file I/O, `alloc`, args, `str_from`) for output programs | `tests/spec/core-run/` | done |
-| 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | in progress: multi-file programs done (240/240); next: a run test per spec rule |
+| 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | done (249/249 on Windows and Linux) |
 
 Nothing is marked done until its tests pass. The Linux half of each increment counts as
 done only once the `stage0-linux` CI job passes.

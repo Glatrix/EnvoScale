@@ -1,0 +1,78 @@
+// Compound assignment on every kind of place ([core.stmt.3]); the place is
+// evaluated once.
+// expect: 17 12 60 6 2 3 7 4 32 8
+// expect: field 15 element 9 static 6 deref 20
+// expect: index calls 2 value 3
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+void L(i64 v) { print(Num(v)); }
+struct Box { i32 N; i32[3] Items; }
+static i32 st = 3;
+static i32 idx_calls;
+usize Idx() {
+    idx_calls++;
+    return 1;
+}
+i32 v = 10;
+v += 7;
+W(v as i64);
+v -= 5;
+W(v as i64);
+v *= 5;
+W(v as i64);
+v /= 10;
+W(v as i64);
+v %= 4;
+W(v as i64);
+v |= 1;
+W(v as i64);
+v ^= 4;
+W(v as i64);
+v &= 12;
+W(v as i64);
+v <<= 3;
+W(v as i64);
+v >>= 2;
+L(v as i64);
+Box bx;
+bx.N = 10;
+bx.N += 5;
+bx.Items[1] = 4;
+bx.Items[1] += 5;
+st *= 2;
+write(1, "field ");
+W(bx.N as i64);
+write(1, "element ");
+W(bx.Items[1] as i64);
+write(1, "static ");
+W(st as i64);
+unsafe {
+    *i32 q = alloc(4) as *i32;
+    *q = 4;
+    *q *= 5;
+    write(1, "deref ");
+    L(*q as i64);
+}
+i32[3] arr;
+arr[Idx()] += 2;
+arr[Idx()]++;
+write(1, "index calls ");
+W(idx_calls as i64);
+write(1, "value ");
+L(arr[1] as i64);

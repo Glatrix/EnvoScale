@@ -1,0 +1,57 @@
+// sizeof and alignof follow C layout ([core.type.2], [core.type.3]).
+// expect: 1 1 2 4 8 8 8 16 16
+// expect: 24 8
+// expect: 0 1
+// expect: 6 2
+// expect: 12 4
+// expect: 1 2 4
+// expect: 7 8 8
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+void L(i64 v) { print(Num(v)); }
+struct Mixed { u8 A; i64 B; u16 C; }
+struct Empty { }
+struct Shorts { u8 A; u16 B; u8 C; }
+struct Arr { u8[5] A; i32 B; }
+enum Small : u8 { A }
+enum Middle : u16 { A }
+enum Plain { A }
+W(sizeof(bool) as i64);
+W(sizeof(u8) as i64);
+W(sizeof(i16) as i64);
+W(sizeof(u32) as i64);
+W(sizeof(i64) as i64);
+W(sizeof(usize) as i64);
+W(sizeof(*u8) as i64);
+W(sizeof(str) as i64);
+L(sizeof(u8[]) as i64);
+W(sizeof(Mixed) as i64);
+L(alignof(Mixed) as i64);
+W(sizeof(Empty) as i64);
+L(alignof(Empty) as i64);
+W(sizeof(Shorts) as i64);
+L(alignof(Shorts) as i64);
+W(sizeof(Arr) as i64);
+L(alignof(Arr) as i64);
+W(sizeof(Small) as i64);
+W(sizeof(Middle) as i64);
+L(sizeof(Plain) as i64);
+W(sizeof(u8[7]) as i64);
+W(alignof(i64[3]) as i64);
+L(alignof(str) as i64);

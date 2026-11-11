@@ -1,0 +1,82 @@
+// Enum values ([core.type.4]) and match on enums, integers and characters
+// ([core.stmt.7]).
+// expect: 0 1 10 11 -3 -2
+// expect: low mid high other
+// expect: neg zero few big
+// expect: letter digit other
+// expect: const pattern
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+void L(i64 v) { print(Num(v)); }
+enum Code : i8 { A, B, C = 10, D, E = -3, F }
+enum Level { Low, Mid, High, Max }
+const i32 SEVEN = 7;
+str Name(Level l) {
+    match l {
+        Low => { return "low"; }
+        Mid => { return "mid"; }
+        High => { return "high"; }
+        _ => { return "other"; }
+    }
+}
+str Range(i64 n) {
+    match n {
+        -1 | -2 | -3 => { return "neg"; }
+        0 => { return "zero"; }
+        1 | 2 | 3 => { return "few"; }
+        _ => { return "big"; }
+    }
+}
+str Kind(u8 c) {
+    match c {
+        'a' | 'b' | 'z' => { return "letter"; }
+        '0' | '9' => { return "digit"; }
+        _ => { return "other"; }
+    }
+}
+W(Code.A as i64);
+W(Code.B as i64);
+W(Code.C as i64);
+W(Code.D as i64);
+W(Code.E as i64);
+L(Code.F as i64);
+write(1, Name(Level.Low));
+write(1, " ");
+write(1, Name(Level.Mid));
+write(1, " ");
+write(1, Name(Level.High));
+write(1, " ");
+print(Name(Level.Max));
+write(1, Range(-2));
+write(1, " ");
+write(1, Range(0));
+write(1, " ");
+write(1, Range(3));
+write(1, " ");
+print(Range(4));
+write(1, Kind('z'));
+write(1, " ");
+write(1, Kind('9'));
+write(1, " ");
+print(Kind('A'));
+i32 seven = 7;
+match seven {
+    SEVEN => print("const pattern"),
+    _ => print("no match"),
+}

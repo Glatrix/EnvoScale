@@ -1,0 +1,45 @@
+// Constants are computed at compile time in their own type
+// ([core.const.1]-[core.const.3]).
+// expect: 255 -128 32 16 3
+// expect: 7 65 3 1
+// expect: 40
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+void L(i64 v) { print(Num(v)); }
+struct Pair { i32 A; i32 B; }
+const u8 MAXB = 200 + 55;
+const i8 MINB = -128;
+const usize SZ = sizeof(i64) * 4;
+const u16 SHIFTED = 1 << 4;
+const i32 MASKED = 7 & ~4;
+const i64 SEVEN = 7;
+const u8 LETTER = 'A';
+const str TEXT = "abc";
+const bool YES = !false;
+const usize N = SZ + sizeof(Pair);
+W(MAXB as i64);
+W(MINB as i64);
+W(SZ as i64);
+W(SHIFTED as i64);
+L(MASKED as i64);
+W(SEVEN);
+W(LETTER as i64);
+W(TEXT.Len as i64);
+L(YES as i64);
+L(N as i64);

@@ -1,0 +1,24 @@
+// A zero-initialized slice is empty, and indexing it is bounds-checked
+// ([core.stmt.1], [core.expr.6]).
+// expect: 0
+// expect-panic: index out of bounds
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+u8[] s;
+print(Num(s.Len as i64));
+var c = s[0];

@@ -1,0 +1,58 @@
+// Calls ([core.expr.8]): recursion, many parameters of mixed types, structs
+// and str passed by value, calls nested in arguments.
+// expect: fib 6765
+// expect: sum 45
+// expect: a-1-2-3-b-4
+// expect: nested 24
+// expect: depth 1000
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+struct Pair { i64 A; i64 B; }
+i64 Fib(i64 n) {
+    if (n < 2) return n;
+    return Fib(n - 1) + Fib(n - 2);
+}
+i64 Sum9(i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i) => a + b + c + d + e + f + g + h + i;
+void Mixed(str a, u8 x, Pair p, str b, i16 y) {
+    write(1, a);
+    write(1, "-");
+    write(1, Num(x as i64));
+    write(1, "-");
+    write(1, Num(p.A));
+    write(1, "-");
+    write(1, Num(p.B));
+    write(1, "-");
+    write(1, b);
+    write(1, "-");
+    print(Num(y as i64));
+}
+i64 Add(i64 a, i64 b) => a + b;
+i64 Mul(i64 a, i64 b) => a * b;
+i64 Depth(i64 n) {
+    if (n == 0) return 0;
+    return 1 + Depth(n - 1);
+}
+write(1, "fib ");
+print(Num(Fib(20)));
+write(1, "sum ");
+print(Num(Sum9(1, 2, 3, 4, 5, 6, 7, 8, 9)));
+Mixed("a", 1, new Pair { A = 2, B = 3 }, "b", 4);
+write(1, "nested ");
+print(Num(Mul(Add(1, 2), Add(3, Mul(1, 5)))));
+write(1, "depth ");
+print(Num(Depth(1000)));

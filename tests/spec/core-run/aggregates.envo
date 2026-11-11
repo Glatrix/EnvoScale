@@ -1,0 +1,48 @@
+// Aggregates in expressions: fields of call results, arrays of structs inside
+// structs, nested places, copies ([core.expr.6], [core.expr.7], [core.expr.10]).
+// expect: 7 14
+// expect: 1 4 9
+// expect: 30
+// expect: 1 99
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+void L(i64 v) { print(Num(v)); }
+struct P { i64 X; i64 Y; }
+struct Poly { P[3] Pts; i64 N; }
+P Make(i64 x) => new P { X = x, Y = x * 2 };
+i64 SumY(Poly p) {
+    i64 s = 0;
+    for (var i = 0; i < 3; i++) { s += p.Pts[i].Y; }
+    return s;
+}
+W(Make(7).X);
+L(Make(7).Y);
+Poly g;
+for (var i = 0; i < 3; i++) {
+    g.Pts[i].X = ((i + 1) * (i + 1)) as i64;
+    g.Pts[i].Y = 10;
+}
+W(g.Pts[0].X);
+W(g.Pts[1].X);
+L(g.Pts[2].X);
+L(SumY(g));
+Poly h = g;
+h.Pts[0].X = 99;
+W(g.Pts[0].X);
+L(h.Pts[0].X);
