@@ -8,7 +8,8 @@ hex seed is being written (brief §5.4). It is **outside the core** and never ne
 
 ## Installing NASM
 
-Any NASM 2.14 or newer works. NASM is not committed to this repository.
+Any NASM 2.14 or newer works; CI and local builds with NASM 2.16, 3.01 and 3.02 produce
+identical bytes. NASM is not committed to this repository.
 
 | OS | Command |
 |---|---|
@@ -32,6 +33,13 @@ nothing except run NASM in flat-binary mode:
 assemble.ps1 <input.eas> <output-file> <include-dir>
 assemble.sh  <input.eas> <output-file> <include-dir>
 ```
+
+Both run NASM as `nasm -f bin -w+all "-dnear=strict near" -I <include-dir>`. The
+`near` definition keeps EAS's meaning of `near` (always a rel32 jump, `docs/spec/eas.md`):
+NASM 3.01 treats `near` as a hint and shortens jumps that fit in rel8, which changed the
+bytes of Stage 0 and broke the fixed-size jump table of its runtime block. With `strict`,
+every NASM version emits rel32, and versions that already honoured `near` produce the
+same bytes as before.
 
 `bootstrap.ps1` / `bootstrap.sh` call these and nothing else knows NASM exists. A Phase B
 seed adapter will offer the same interface, and CI will compare the two outputs byte for byte.
