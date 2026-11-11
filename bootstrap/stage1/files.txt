@@ -22,4 +22,6 @@ eir/ir.envo
 eir/read.envo
 eir/print.envo
 eir/verify.envo
+x64/asm.envo
+x64/image.envo
 driver.envo

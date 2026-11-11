@@ -48,6 +48,10 @@ if (StrEq(command, "help") || StrEq(command, "--help")) {
     Usage(1);
     Exit(EXIT_OK);
 }
+if (StrEq(command, "selftest-image") && argc() == argi + 2) {
+    SelfTestImage(arg(argi), arg(argi + 1));
+    Exit(EXIT_OK);
+}
 if (StrEq(command, "selftest")) {
     SelfTest();
     Exit(EXIT_OK);

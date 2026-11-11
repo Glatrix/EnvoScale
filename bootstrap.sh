@@ -240,6 +240,19 @@ do_test() {
     run "$ROOT" frobnicate
     if [ "$rc" -eq 2 ] && grep -q "^envoc1: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc1 unknown command' "exit $rc"; fi
 
+    # The x86-64 encoder and image writer: a minimal native program must exit with 42.
+    case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
+    run "$TMP" selftest-image "$TMP/t42" "$host_os"
+    if [ "$rc" -eq 0 ]; then
+        set +e
+        "$TMP/t42"
+        rc=$?
+        set -e
+        if [ "$rc" -eq 42 ]; then pass; else bad 'envoc1 selftest-image' "exit $rc, expected 42"; fi
+    else
+        bad 'envoc1 selftest-image' "exit $rc: $(cat "$TMP/err")"
+    fi
+
     # Differential tests (PLAN D14). Golden suites: envoc1 must print exactly envoc0's
     # expected files, in --core mode and in Envo-S1 mode (Core programs mean the same in
     # S1). Spec suites: the same error code at the same position; lexical tests run in

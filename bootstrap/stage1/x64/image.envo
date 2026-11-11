@@ -1,0 +1,167 @@
+// Executable images: one read-write-execute section at IMAGE_BASE, as in Stage 0
+// (docs/architecture/bootstrap.md, "Executable layout"). Windows images import from
+// KERNEL32.dll; the runtime reaches import k through `wincall`.
+
+const u64 IMAGE_BASE = 0x400000;
+const u64 ELF_HEADERS = 176;        // ELF header (64) + 2 program headers (56 each)
+const u64 PE_SECTION_RVA = 0x1000;
+
+const u32 TARGET_LINUX = 1;
+const u32 TARGET_WINDOWS = 2;
+
+const u32 WIN_IMPORTS = 12;
+
+// The KERNEL32.dll functions the Windows runtime calls, by wincall index.
+str WinImport(u32 k) {
+    match k {
+        0 => { return "GetStdHandle"; }
+        1 => { return "GetCommandLineW"; }
+        2 => { return "CreateFileW"; }
+        3 => { return "ReadFile"; }
+        4 => { return "WriteFile"; }
+        5 => { return "CloseHandle"; }
+        6 => { return "VirtualAlloc"; }
+        7 => { return "VirtualFree"; }
+        8 => { return "GetLastError"; }
+        9 => { return "ExitProcess"; }
+        10 => { return "MultiByteToWideChar"; }
+        _ => { return "WideCharToMultiByte"; }
+    }
+}
+
+struct WinImports {
+    u32 Dir;        // the import directory (two descriptors, 40 bytes)
+    u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
+}
+
+// The import directory, lookup and address tables, hint/name entries and DLL name, in
+// the data. Returns the labels the PE header and wincall need.
+WinImports EmitImports(*Asm a) {
+    WinImports w;
+    u32[12] names;
+    u32 ilt = NewLabel(a);
+    u32 dll = NewLabel(a);
+    w.Dir = NewLabel(a);
+    w.Iat = NewLabel(a);
+    for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = NewLabel(a);
+    unsafe {
+        DataAlign(a, 8);
+        BindData(a, w.Dir);
+        DataRva(a, ilt, 4);         // OriginalFirstThunk
+        DataU32(a, 0);              // TimeDateStamp
+        DataU32(a, 0);              // ForwarderChain
+        DataRva(a, dll, 4);         // Name
+        DataRva(a, w.Iat, 4);       // FirstThunk
+        BufRepeat(&a.Data, 0, 20);  // the null descriptor
+        DataAlign(a, 8);
+        BindData(a, ilt);
+        for (u32 k = 0; k < WIN_IMPORTS; k++) DataRva(a, names[k], 8);
+        BufRepeat(&a.Data, 0, 8);
+        BindData(a, w.Iat);
+        for (u32 k = 0; k < WIN_IMPORTS; k++) DataRva(a, names[k], 8);
+        BufRepeat(&a.Data, 0, 8);
+        for (u32 k = 0; k < WIN_IMPORTS; k++) {
+            DataAlign(a, 2);
+            BindData(a, names[k]);
+            BufRepeat(&a.Data, 0, 2);       // hint
+            BufStr(&a.Data, WinImport(k));
+            BufByte(&a.Data, 0);
+        }
+        BindData(a, dll);
+        BufStr(&a.Data, "KERNEL32.dll");
+        BufByte(&a.Data, 0);
+    }
+    return w;
+}
+
+void PutU16(*u8 p, usize at, u64 v) {
+    unsafe {
+        p[at] = (v & 0xFF) as u8;
+        p[at + 1] = (v >> 8 & 0xFF) as u8;
+    }
+}
+
+void PutU32(*u8 p, usize at, u64 v) {
+    unsafe { MemStoreU32(&p[at], (v & 0xFFFFFFFF) as u32); }
+}
+
+void PutU64(*u8 p, usize at, u64 v) {
+    unsafe { MemStoreU64(&p[at], v); }
+}
+
+// Links the code and data and writes a complete executable. The section starts with the
+// entry point.
+str WriteImage(*Asm a, u32 target, WinImports imports) {
+    u64 dataStart;
+    if (target == TARGET_WINDOWS) {
+        str section;
+        unsafe { section = AsmLink(a, IMAGE_BASE, PE_SECTION_RVA, &dataStart); }
+        u64 size = (section.Len as u64 + 0xFFF) & ~0xFFF;
+        u64 fileSize = 0x1000 + size;
+        *u8 f = alloc(fileSize as usize);
+        unsafe {
+            MemCopy(&f[0x1000], section.Ptr, section.Len);
+        }
+        PutU16(f, 0, 0x5A4D);                   // MZ
+        PutU32(f, 0x3C, 0x40);                  // e_lfanew
+        PutU32(f, 0x40, 0x4550);                // PE
+        PutU16(f, 0x44, 0x8664);                // AMD64
+        PutU16(f, 0x46, 1);                     // one section
+        PutU16(f, 0x54, 240);                   // SizeOfOptionalHeader
+        PutU16(f, 0x56, 0x0023);                // RELOCS_STRIPPED | EXECUTABLE | LARGE_ADDRESS_AWARE
+        PutU16(f, 0x58, 0x020B);                // PE32+
+        PutU32(f, 0x5C, size);                  // SizeOfCode
+        PutU32(f, 0x68, PE_SECTION_RVA);        // entry point: the start of the section
+        PutU32(f, 0x6C, PE_SECTION_RVA);        // BaseOfCode
+        PutU64(f, 0x70, IMAGE_BASE);
+        PutU32(f, 0x78, 0x1000);                // SectionAlignment
+        PutU32(f, 0x7C, 0x1000);                // FileAlignment
+        PutU16(f, 0x80, 6);                     // OS version 6.0
+        PutU16(f, 0x88, 6);                     // subsystem version 6.0
+        PutU32(f, 0x90, size + 0x1000);         // SizeOfImage
+        PutU32(f, 0x94, 0x1000);                // SizeOfHeaders
+        PutU16(f, 0x9C, 3);                     // console
+        PutU16(f, 0x9E, 0x8100);                // NX_COMPAT | TERMINAL_SERVER_AWARE
+        PutU64(f, 0xA0, 0x800000);              // stack reserve (8 MiB)
+        PutU64(f, 0xA8, 0x1000);                // stack commit
+        PutU64(f, 0xB0, 0x100000);              // heap reserve
+        PutU64(f, 0xB8, 0x1000);                // heap commit
+        PutU32(f, 0xC4, 16);                    // NumberOfRvaAndSizes
+        PutU32(f, 0xD0, PE_SECTION_RVA + LabelOffset(a, imports.Dir, dataStart));
+        PutU32(f, 0xD4, 40);
+        PutU32(f, 0x148, 0x7865742E);           // ".tex"
+        PutU16(f, 0x14C, 0x74);                 // "t"
+        PutU32(f, 0x150, size);                 // VirtualSize
+        PutU32(f, 0x154, PE_SECTION_RVA);       // VirtualAddress
+        PutU32(f, 0x158, size);                 // SizeOfRawData
+        PutU32(f, 0x15C, 0x1000);               // PointerToRawData
+        PutU32(f, 0x16C, 0xE0000020);           // CODE | EXECUTE | READ | WRITE
+        unsafe { return str_from(f, fileSize as usize); }
+    }
+    str section;
+    unsafe { section = AsmLink(a, IMAGE_BASE, ELF_HEADERS, &dataStart); }
+    u64 fileSize = ELF_HEADERS + section.Len as u64;
+    *u8 f = alloc(fileSize as usize);
+    unsafe { MemCopy(&f[ELF_HEADERS as usize], section.Ptr, section.Len); }
+    PutU32(f, 0, 0x464C457F);                   // 0x7F 'E' 'L' 'F'
+    PutU32(f, 4, 0x00010102);                   // 64-bit, little-endian, version 1
+    PutU16(f, 16, 2);                           // ET_EXEC
+    PutU16(f, 18, 0x3E);                        // x86-64
+    PutU32(f, 20, 1);
+    PutU64(f, 24, IMAGE_BASE + ELF_HEADERS);    // entry point: the start of the section
+    PutU64(f, 32, 64);                          // program headers follow
+    PutU16(f, 52, 64);
+    PutU16(f, 54, 56);
+    PutU16(f, 56, 2);
+    PutU32(f, 64, 1);                           // PT_LOAD, R | W | X, the whole file
+    PutU32(f, 68, 7);
+    PutU64(f, 80, IMAGE_BASE);
+    PutU64(f, 88, IMAGE_BASE);
+    PutU64(f, 96, fileSize);
+    PutU64(f, 104, fileSize);
+    PutU64(f, 112, 0x1000);
+    PutU32(f, 120, 0x6474E551);                 // PT_GNU_STACK, R | W
+    PutU32(f, 124, 6);
+    PutU64(f, 168, 16);
+    unsafe { return str_from(f, fileSize as usize); }
+}

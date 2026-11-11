@@ -45,6 +45,8 @@ Stage 0.
 | `eir/read.envo` | the EIR text reader |
 | `eir/print.envo` | the canonical EIR printer |
 | `eir/verify.envo` | the EIR verifier, with dominators |
+| `x64/asm.envo` | the x86-64 encoder: fixed-size encodings, labels, fixups, linking |
+| `x64/image.envo` | PE32+ (with the `KERNEL32.dll` import table) and ELF64 writers |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
 | `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |

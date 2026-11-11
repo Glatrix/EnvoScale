@@ -91,3 +91,32 @@ void SelfTest() {
     SelfTestDiag();
     OutLine("selftest: ok");
 }
+
+// `envoc1 selftest-image <out> <linux|windows>`: writes a minimal executable that exits
+// with code 42, to check the encoder and the image writers end to end.
+void SelfTestImage(str path, str os) {
+    Asm a;
+    unsafe {
+        AsmInit(&a);
+        WinImports imports;
+        u32 target = TARGET_LINUX;
+        if (StrEq(os, "windows")) {
+            target = TARGET_WINDOWS;
+            imports = EmitImports(&a);
+            AluImm(&a, 5, RSP, 40);             // sub rsp, 40: shadow space, 16-byte alignment
+            MovRI(&a, RCX, 42);
+            // call [rip + IAT entry 9] (ExitProcess)
+            u32 exitLabel = NewLabel(&a);
+            u64 iat = VecGetU64(&a.Labels, imports.Iat as usize);
+            VecSetU64(&a.Labels, exitLabel as usize, iat + 9 * 8);
+            CallIndirectLabel(&a, exitLabel);
+        } else {
+            MovRI(&a, RAX, 60);                 // exit
+            MovRI(&a, RDI, 42);
+            Syscall(&a);
+        }
+        Ud2(&a);
+        str image = WriteImage(&a, target, imports);
+        if (!FileWrite(path, image, true)) ToolFail("cannot write the test image", EXIT_INTERNAL);
+    }
+}

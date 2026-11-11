@@ -247,6 +247,14 @@ function Invoke-Test {
     $r = Invoke-Tool $envoc1 @('frobnicate') $Root
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc1: error: unknown command 'frobnicate'")) { Pass 'envoc1 unknown command' } else { Bad 'envoc1 unknown command' "exit $($r.Code), stderr: $($r.Err)" }
 
+    # The x86-64 encoder and image writer: a minimal native program must exit with 42.
+    $t42 = Join-Path $tmp 't42.exe'
+    $r = Invoke-Tool $envoc1 @('selftest-image', $t42, 'windows') $Root
+    if ($r.Code -eq 0) {
+        $r = Invoke-Tool $t42 @() $Root
+        if ($r.Code -eq 42) { Pass 'envoc1 selftest-image' } else { Bad 'envoc1 selftest-image' "exit $($r.Code), expected 42" }
+    } else { Bad 'envoc1 selftest-image' "exit $($r.Code), stderr: $($r.Err)" }
+
     # Differential tests (PLAN D14). Golden suites: envoc1 must print exactly envoc0's
     # expected files, in --core mode and in Envo-S1 mode (Core programs mean the same in
     # S1). Spec suites: the same error code at the same position; lexical tests run in
