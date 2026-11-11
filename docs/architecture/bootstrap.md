@@ -1,7 +1,7 @@
 # Architecture: Stage 0 (`envoc0`)
 
-> **Status:** M1 in progress. Platform shims, runtime helpers, lexer and parser work;
-> the type checker and code generator are next.
+> **Status:** M1 in progress. Platform shims, runtime helpers, lexer, parser and type
+> checker work; the code generator is next.
 
 This note explains how Stage 0 is put together and why. The user-facing overview of the
 whole ladder is [`bootstrap/README.md`](../../bootstrap/README.md).
@@ -152,11 +152,34 @@ Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
 - **Depth limit.** Every recursive construct counts toward a 256-level limit (E0104),
   so hostile input cannot overflow the 1 MiB stack, here or in later passes.
 
+## The checker
+
+- **Three passes.** Collect every item's name (so items can be used before they are
+  declared); then declarations in program order; then bodies, with the top-level
+  statements checked as the body of `main`.
+- **Lazy declarations with cycle detection.** A struct is laid out when something needs
+  its size, a `const` is evaluated when first used, and both carry an in-progress state:
+  meeting an in-progress struct is E0303 and an in-progress constant is E0309. This
+  gives a single pass over declarations without a separate dependency sort.
+- **Interned types.** A 32-byte entry per type; pointer, slice and array types are found
+  by linear search before being created, so type equality is an index comparison.
+- **Side tables** parallel to the node array hold each node's type, constant value or
+  field offset, and resolved symbol, so the tree itself stays immutable after parsing.
+- **Untyped literals** are recognised syntactically ([core.expr.2]) and typed from
+  context, then evaluated at once, so overflow in `200 + 100` assigned to `u8` is a
+  compile-time error.
+- **Constants** are 64-bit values sign- or zero-extended by type; arithmetic checks the
+  CPU's overflow or carry flag, then whether the result fits the narrower type.
+- **Independent reference model.** As with the lexer and parser, every expected output
+  and error position in the tests comes from a separate model of
+  [`envo-core.md`](../spec/envo-core.md) §5.2–5.3, not from `envoc0`.
+
 ## Testing
 
 - `tests/golden/lexer/*.envo` → `*.tokens`: exact token dumps.
 - `tests/golden/parser/*.envo` → `*.ast`: exact syntax tree dumps.
-- `tests/spec/01-lexical/*.envo` and `tests/spec/core-syntax/*.envo`: one error each,
+- `tests/golden/check/*.envo` → `*.check`: typed trees with layouts and constant values.
+- `tests/spec/01-lexical/`, `core-syntax/` and `core-types/`: one error each,
   with `// expect-error: EXXXX @ line:col`.
 
 The runners are in `bootstrap.ps1` and `bootstrap.sh` (OS tools only). Both binaries are

@@ -1,0 +1,2 @@
+// expect-error: E0301 @ 2:5
+if (1) {}

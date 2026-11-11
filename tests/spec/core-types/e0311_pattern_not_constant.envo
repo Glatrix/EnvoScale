@@ -1,0 +1,4 @@
+// expect-error: E0311 @ 4:11
+i32 x;
+i32 y;
+match x { y => {}, _ => {} }

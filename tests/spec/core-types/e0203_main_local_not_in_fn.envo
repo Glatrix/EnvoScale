@@ -1,0 +1,3 @@
+// expect-error: E0203 @ 3:12
+var x = 1;
+i32 F() => x;

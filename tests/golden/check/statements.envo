@@ -1,0 +1,30 @@
+// Statements ([core.stmt.1]-[core.stmt.7]).
+enum Op { Add, Sub, Halt }
+i32 Run(Op op, i32 acc) {
+    match op {
+        Add => acc += 1,
+        Sub => { acc -= 1; }
+        Halt => { return acc; }
+    }
+    for (var i = 0; i < 3; i++) {
+        if (i == 1) continue;
+        if (i == 2) break;
+        acc++;
+    }
+    i32 n;
+    n = acc;
+    while (n > 0) {
+        n--;
+        unsafe { *i32 p = &n; *p = *p - 1; }
+    }
+    match acc {
+        0 => { return 0; }
+        1 | 2 | 3 => {}
+        -1 => { return -1; }
+        _ => print("big"),
+    }
+    return acc;
+}
+var total = Run(Op.Add, 1) + Run(Op.Halt, 2);
+if (total > 2) { return 1; }
+return;

@@ -1,0 +1,3 @@
+// expect-error: E0306 @ 3:9
+i32 x;
+var p = &x;

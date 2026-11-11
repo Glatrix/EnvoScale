@@ -52,6 +52,48 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0103 | invalid target for assignment | the assignment operator | [core.syntax.3] |
 | E0104 | nested too deeply (Stage 0 limit: 256 levels) | the token where the limit is exceeded | [core.syntax.4] |
 
+## Names (E0200–E0299)
+
+| Code | Message | Rule |
+|---|---|---|
+| E0201 | `x` is already defined | [core.name.1], [core.name.4] |
+| E0202 | unknown type `x` | [core.name.3] |
+| E0203 | unknown name `x` | [core.name.3] |
+| E0204 | `x` is already declared in this function | [core.name.2] |
+| E0205 | `break`/`continue` outside a loop | [core.stmt.5] |
+| E0206 | `T` has no member `x` | [core.expr.7] |
+| E0207 | field `x` is set twice | [core.expr.10] |
+| E0208 | `x` is not a type | [core.name.3] |
+| E0209 | `x` is a type, not a value | [core.name.3] |
+
+## Types (E0300–E0399)
+
+| Code | Message | Rule |
+|---|---|---|
+| E0301 | mismatched types: expected `T`, found `U` | [core.expr.2] |
+| E0302 | operator cannot be applied to `T` | [core.expr.3], [core.expr.4] |
+| E0303 | struct `S` contains itself | [core.type.2] |
+| E0304 | value does not fit in `T` | [core.expr.1], [core.type.4] |
+| E0305 | cannot convert `T` to `U` | [core.expr.9] |
+| E0306 | this needs an `unsafe` block | [core.expr.5]–[core.expr.9] |
+| E0307 | wrong number of arguments: expected N, found M | [core.expr.8] |
+| E0308 | `match` is not exhaustive | [core.stmt.7] |
+| E0309 | constant `x` depends on itself | [core.const.2] |
+| E0310 | constant evaluation failed (overflow, division by zero, or shift too large) | [core.const.2] |
+| E0311 | expected a constant expression | [core.const.1], [core.type.1] |
+| E0312 | type is too large | [core.type.2] |
+| E0314 | this cannot be called | [core.expr.8] |
+| E0315 | cannot assign to this | [core.stmt.3] |
+| E0316 | cannot take the address of this | [core.expr.5] |
+| E0317 | `return` does not match the function's return type | [core.stmt.6] |
+| E0319 | this value is already matched | [core.stmt.7] |
+| E0320 | not all code paths return a value | [core.stmt.6] |
+| E0321 | only calls can be used as statements | [core.stmt.2] |
+| E0322 | a `void` value cannot be used here | [core.expr.11] |
+| E0323 | duplicate enum value | [core.type.4] |
+| E0324 | enum representation must be an integer type | [core.type.4] |
+| E0327 | `void` is only allowed as a return type | [core.type.1] |
+
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
 
 | Code | Message |

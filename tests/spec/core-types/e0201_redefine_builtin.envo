@@ -1,0 +1,2 @@
+// expect-error: E0201 @ 2:6
+void print(str s) {}

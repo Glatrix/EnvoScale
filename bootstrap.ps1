@@ -116,7 +116,8 @@ function Invoke-Test {
     # Keep this list in step with bootstrap.sh.
     $goldenSuites = @(
         @{ Dir = 'lexer';  Command = 'lex';   Ext = '.tokens' },
-        @{ Dir = 'parser'; Command = 'parse'; Ext = '.ast' }
+        @{ Dir = 'parser'; Command = 'parse'; Ext = '.ast' },
+        @{ Dir = 'check';  Command = 'check'; Ext = '.check' }
     )
     foreach ($suite in $goldenSuites) {
       Say "golden tests: tests/golden/$($suite.Dir)"
@@ -133,10 +134,11 @@ function Invoke-Test {
       }
     }
 
-    # Spec error tests run through `envoc0 parse`, which lexes first, so lexical
-    # errors are still reported by the lexer. Keep this list in step with bootstrap.sh.
+    # Spec error tests run through `envoc0 check`, which lexes and parses first, so
+    # lexical and syntax errors are still reported by their own stage.
+    # Keep this list in step with bootstrap.sh.
     $latin1 = [Text.Encoding]::GetEncoding(28591)    # byte-transparent, for files that are not UTF-8
-    foreach ($specDir in @('01-lexical', 'core-syntax')) {
+    foreach ($specDir in @('01-lexical', 'core-syntax', 'core-types')) {
       Say "spec tests: tests/spec/$specDir"
       $dir = Join-Path $Root "tests\spec\$specDir"
       foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
@@ -147,7 +149,7 @@ function Invoke-Test {
         $code = $m.Groups[1].Value
         $want = "error[$code]"
         if ($m.Groups[2].Success) { $want = "$($f.Name):$($m.Groups[2].Value):$($m.Groups[3].Value): error[$code]" }
-        $r = Invoke-Tool $exe @('parse', $f.Name) $dir
+        $r = Invoke-Tool $exe @('check', $f.Name) $dir
         if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
         else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
       }

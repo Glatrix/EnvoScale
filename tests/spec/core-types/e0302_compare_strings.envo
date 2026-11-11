@@ -1,0 +1,2 @@
+// expect-error: E0302 @ 2:13
+var x = "a" == "b";

@@ -1,0 +1,2 @@
+// expect-error: E0302 @ 2:7
+match true { _ => {} }

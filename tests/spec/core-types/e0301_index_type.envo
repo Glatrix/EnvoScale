@@ -1,0 +1,3 @@
+// expect-error: E0301 @ 3:11
+u8[4] a;
+var x = a[true];

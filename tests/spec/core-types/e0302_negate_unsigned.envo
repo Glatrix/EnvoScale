@@ -1,0 +1,3 @@
+// expect-error: E0302 @ 3:9
+u8 x;
+var y = -x;

@@ -1,0 +1,143 @@
+program @2:1
+  const BUF_SIZE @2:13 = 4096
+    type usize @2:7
+    int 4096 @2:24 : usize
+  struct Counter @4:8 size 16 align 8
+    field Lines @5:11 offset 0 : usize
+      type usize @5:5
+    field Bytes @6:11 offset 8 : usize
+      type usize @6:5
+  fn Feed @9:6
+    type void @9:1
+    param c @9:20 : *Counter
+      ptr @9:11
+        type Counter @9:12
+    param data @9:27 : *u8
+      ptr @9:23
+        type u8 @9:24
+    param n @9:39 : usize
+      type usize @9:33
+    block @9:42
+      unsafe @10:5
+        block @10:12
+          for @11:9
+            var i @11:20 : usize
+              type usize @11:14
+              int 0 @11:24 : usize
+            binary < @11:29 : bool
+              name i @11:27 : usize
+              name n @11:31 : usize
+            inc @11:35
+              name i @11:34 : usize
+            block @11:39
+              inc @12:20
+                member Bytes @12:15 : usize
+                  name c @12:13 : *Counter
+              if @13:13
+                binary == @13:25 : bool
+                  index @13:21 : u8
+                    name data @13:17 : *u8
+                    name i @13:22 : usize
+                  char '\n' @13:28 : u8
+                inc @13:41
+                  member Lines @13:36 : usize
+                    name c @13:34 : *Counter
+                -
+  fn CountFile @18:5
+    type i32 @18:1
+    param path @18:19 : str
+      type str @18:15
+    block @18:25
+      var fd @19:9 : i32
+        type i32 @19:5
+        call @19:18 : i32
+          name open @19:14
+          name path @19:19 : str
+          int 0 @19:25 : i32
+      if @20:5
+        binary < @20:12 : bool
+          name fd @20:9 : i32
+          int 0 @20:14 : i32
+        return @20:17
+          unary - @20:24 : i32
+            int 1 @20:25 : i32
+        -
+      var c @21:13 : Counter
+        type Counter @21:5
+        new @21:17 : Counter
+          type Counter @21:21
+          -
+      var buf @22:9 : *u8
+        ptr @22:5
+          type u8 @22:6
+        call @22:20 : *u8
+          name alloc @22:15
+          name BUF_SIZE @22:21 : usize
+      while @23:5
+        bool true @23:12 : bool
+        block @23:18
+          var got @24:15 : isize
+            type isize @24:9
+            call @24:25 : isize
+              name read @24:21
+              name fd @24:26 : i32
+              name buf @24:30 : *u8
+              name BUF_SIZE @24:35 : usize
+          if @25:9
+            binary <= @25:17 : bool
+              name got @25:13 : isize
+              int 0 @25:20 : isize
+            break @25:23
+            -
+          unsafe @26:9
+            block @26:16
+              expr @26:18
+                call @26:22 : void
+                  name Feed @26:18
+                  unary & @26:23 : *Counter
+                    name c @26:24 : Counter
+                  name buf @26:27 : *u8
+                  as @26:36 : usize
+                    name got @26:32 : isize
+                    type usize @26:39
+      expr @28:5
+        call @28:10 : void
+          name close @28:5
+          name fd @28:11 : i32
+      return @29:5
+        as @29:20 : i32
+          member Lines @29:14 : usize
+            name c @29:12 : Counter
+          type i32 @29:23
+  if @32:1
+    binary < @32:12 : bool
+      call @32:9 : usize
+        name argc @32:5
+        -
+      int 2 @32:14 : usize
+    block @32:17
+      expr @33:5
+        call @33:10 : void
+          name print @33:5
+          string "usage: count <file>" @33:11 : str
+      return @34:5
+        int 2 @34:12 : i32
+    -
+  var lines @36:5 : i32
+    type i32 @36:1
+    call @36:22 : i32
+      name CountFile @36:13
+      call @36:26 : str
+        name arg @36:23
+        int 1 @36:27 : usize
+  if @37:1
+    binary < @37:11 : bool
+      name lines @37:5 : i32
+      int 0 @37:13 : i32
+    expr @37:16
+      call @37:21 : void
+        name panic @37:16
+        string "cannot read the file" @37:22 : str
+    -
+  return @38:1
+    int 0 @38:8 : i32

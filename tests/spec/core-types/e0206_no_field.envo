@@ -1,0 +1,4 @@
+// expect-error: E0206 @ 4:11
+struct S { i32 A; }
+S s;
+var b = s.B;

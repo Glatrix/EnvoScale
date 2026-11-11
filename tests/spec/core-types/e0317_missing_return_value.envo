@@ -1,0 +1,2 @@
+// expect-error: E0317 @ 2:11
+i32 F() { return; }

@@ -1,0 +1,2 @@
+// expect-error: E0320 @ 2:5
+i32 F(bool b) { if (b) return 1; }

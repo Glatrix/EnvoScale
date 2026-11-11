@@ -1,0 +1,2 @@
+// expect-error: E0203 @ 2:1
+Frobnicate();

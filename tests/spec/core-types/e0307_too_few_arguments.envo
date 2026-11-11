@@ -1,0 +1,3 @@
+// expect-error: E0307 @ 3:2
+void F(i32 a, i32 b) {}
+F(1);

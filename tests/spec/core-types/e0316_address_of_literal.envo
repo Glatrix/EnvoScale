@@ -1,0 +1,2 @@
+// expect-error: E0316 @ 2:18
+unsafe { var p = &1; }

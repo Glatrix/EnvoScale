@@ -19,6 +19,7 @@
 %include "src/utf8.eas"
 %include "src/lexer.eas"
 %include "src/parser.eas"
+%include "src/check.eas"
 %include "src/main.eas"
 
 image_end:

@@ -1,0 +1,2 @@
+// expect-error: E0324 @ 2:10
+enum E : bool { A }

@@ -1,0 +1,2 @@
+// expect-error: E0307 @ 2:6
+print();

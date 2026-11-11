@@ -1,0 +1,3 @@
+// expect-error: E0206 @ 3:11
+enum E { A }
+var e = E.B;

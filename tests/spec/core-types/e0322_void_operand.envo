@@ -1,0 +1,3 @@
+// expect-error: E0322 @ 3:10
+void F() {}
+var x = F() + 1;

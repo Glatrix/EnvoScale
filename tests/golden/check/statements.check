@@ -1,0 +1,136 @@
+program @2:1
+  enum Op @2:6
+    -
+    variant Add @2:11 = 0
+      -
+    variant Sub @2:16 = 1
+      -
+    variant Halt @2:21 = 2
+      -
+  fn Run @3:5
+    type i32 @3:1
+    param op @3:12 : Op
+      type Op @3:9
+    param acc @3:20 : i32
+      type i32 @3:16
+    block @3:25
+      match @4:5
+        name op @4:11 : Op
+        arm @5:13
+          name Add @5:9 : Op
+          assign += @5:20
+            name acc @5:16 : i32
+            int 1 @5:23 : i32
+        arm @6:13
+          name Sub @6:9 : Op
+          block @6:16
+            assign -= @6:22
+              name acc @6:18 : i32
+              int 1 @6:25 : i32
+        arm @7:14
+          name Halt @7:9 : Op
+          block @7:17
+            return @7:19
+              name acc @7:26 : i32
+      for @9:5
+        var i @9:14 : i32
+          -
+          int 0 @9:18 : i32
+        binary < @9:23 : bool
+          name i @9:21 : i32
+          int 3 @9:25 : i32
+        inc @9:29
+          name i @9:28 : i32
+        block @9:33
+          if @10:9
+            binary == @10:15 : bool
+              name i @10:13 : i32
+              int 1 @10:18 : i32
+            continue @10:21
+            -
+          if @11:9
+            binary == @11:15 : bool
+              name i @11:13 : i32
+              int 2 @11:18 : i32
+            break @11:21
+            -
+          inc @12:12
+            name acc @12:9 : i32
+      var n @14:9 : i32
+        type i32 @14:5
+        -
+      assign = @15:7
+        name n @15:5 : i32
+        name acc @15:9 : i32
+      while @16:5
+        binary > @16:14 : bool
+          name n @16:12 : i32
+          int 0 @16:16 : i32
+        block @16:19
+          dec @17:10
+            name n @17:9 : i32
+          unsafe @18:9
+            block @18:16
+              var p @18:23 : *i32
+                ptr @18:18
+                  type i32 @18:19
+                unary & @18:27 : *i32
+                  name n @18:28 : i32
+              assign = @18:34
+                unary * @18:31 : i32
+                  name p @18:32 : *i32
+                binary - @18:39 : i32
+                  unary * @18:36 : i32
+                    name p @18:37 : *i32
+                  int 1 @18:41 : i32
+      match @20:5
+        name acc @20:11 : i32
+        arm @21:11
+          int 0 @21:9 : i32
+          block @21:14
+            return @21:16
+              int 0 @21:23 : i32
+        arm @22:19
+          int 1 @22:9 : i32
+          int 2 @22:13 : i32
+          int 3 @22:17 : i32
+          block @22:22
+            -
+        arm @23:12
+          unary - @23:9 : i32
+            int 1 @23:10 : i32
+          block @23:15
+            return @23:17
+              unary - @23:24 : i32
+                int 1 @23:25 : i32
+        arm @24:11
+          wild @24:9
+          expr @24:14
+            call @24:19 : void
+              name print @24:14
+              string "big" @24:20 : str
+      return @26:5
+        name acc @26:12 : i32
+  var total @28:5 : i32
+    -
+    binary + @28:28 : i32
+      call @28:16 : i32
+        name Run @28:13
+        member Add @28:20 : Op
+          name Op @28:17
+        int 1 @28:25 : i32
+      call @28:33 : i32
+        name Run @28:30
+        member Halt @28:37 : Op
+          name Op @28:34
+        int 2 @28:43 : i32
+  if @29:1
+    binary > @29:11 : bool
+      name total @29:5 : i32
+      int 2 @29:13 : i32
+    block @29:16
+      return @29:18
+        int 1 @29:25 : i32
+    -
+  return @30:1
+    -

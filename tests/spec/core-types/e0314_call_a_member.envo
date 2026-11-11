@@ -1,0 +1,4 @@
+// expect-error: E0314 @ 4:4
+struct S { i32 A; }
+S s;
+s.A();

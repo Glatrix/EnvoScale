@@ -1,0 +1,2 @@
+// expect-error: E0202 @ 2:1
+Strng s;

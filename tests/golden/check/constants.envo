@@ -1,0 +1,21 @@
+// Constants ([core.const.1]-[core.const.3]), used before they are declared.
+const usize LEN = WIDTH * HEIGHT;
+const usize WIDTH = 8;
+const usize HEIGHT = 4;
+const i32 MASK = (1 << 8) - 1;
+const u8 LETTER = 'z' - 'a';
+const bool FLAG = !false;
+const i64 WRAPPED = 9223372036854775807 +% 1;
+const u32 QUOTIENT = 17 / 5 + 17 % 5;
+const i32 NEG_DIV = -7 / 2;
+const i32 NEG_REM = -7 % 2;
+const u8 CAST = 300 as u8;
+const i8 SIGNED_CAST = 200u8 as i8;
+const str NAME = "envo";
+const usize SIZE = sizeof(Grid);
+const bool CMP = LEN > 30;
+enum Level : u16 { Low = LEN as u16, Mid, High = (Level.Mid as u16) * 2 }
+struct Grid { u8[LEN] Cells; Level L; }
+static Grid grid;
+static usize counter = LEN + 1;
+static Level level = Level.High;

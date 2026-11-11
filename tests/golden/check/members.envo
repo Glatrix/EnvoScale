@@ -1,0 +1,23 @@
+// Fields, views, indexing, variants and `new` ([core.expr.6], [core.expr.7], [core.expr.10]).
+struct Inner { i32 V; u8[4] Bytes; }
+struct Outer { Inner In; *Inner Ref; str Label; }
+enum Kind : u8 { First = 1, Second }
+Outer o = new Outer { In = new Inner { V = 5 }, Label = "x" };
+o.In.V = o.In.V + 1;
+o.In.Bytes[2] = 9;
+usize n = o.Label.Len;
+u8 first = o.Label[0];
+unsafe {
+    *u8 raw = o.Label.Ptr;
+    o.Ref = &o.In;
+    o.Ref.V = 7;
+    i32 v = o.Ref.V;
+    *Inner many = alloc(sizeof(Inner) * 4) as *Inner;
+    many[1].V = 2;
+}
+u8[] view;
+usize m = view.Len;
+Kind k = Kind.Second;
+u8 code = k as u8;
+bool second = k == Kind.Second;
+Outer empty = new Outer {};

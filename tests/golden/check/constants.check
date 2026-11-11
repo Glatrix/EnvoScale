@@ -1,0 +1,110 @@
+program @2:1
+  const LEN @2:13 = 32
+    type usize @2:7
+    binary * @2:25 : usize
+      name WIDTH @2:19 : usize
+      name HEIGHT @2:27 : usize
+  const WIDTH @3:13 = 8
+    type usize @3:7
+    int 8 @3:21 : usize
+  const HEIGHT @4:13 = 4
+    type usize @4:7
+    int 4 @4:22 : usize
+  const MASK @5:11 = 255
+    type i32 @5:7
+    binary - @5:27 : i32
+      binary << @5:21 : i32
+        int 1 @5:19 : i32
+        int 8 @5:24 : i32
+      int 1 @5:29 : i32
+  const LETTER @6:10 = 25
+    type u8 @6:7
+    binary - @6:23 : u8
+      char 'z' @6:19 : u8
+      char 'a' @6:25 : u8
+  const FLAG @7:12 = 1
+    type bool @7:7
+    unary ! @7:19 : bool
+      bool false @7:20 : bool
+  const WRAPPED @8:11 = -9223372036854775808
+    type i64 @8:7
+    binary +% @8:41 : i64
+      int 9223372036854775807 @8:21 : i64
+      int 1 @8:44 : i64
+  const QUOTIENT @9:11 = 5
+    type u32 @9:7
+    binary + @9:29 : u32
+      binary / @9:25 : u32
+        int 17 @9:22 : u32
+        int 5 @9:27 : u32
+      binary % @9:34 : u32
+        int 17 @9:31 : u32
+        int 5 @9:36 : u32
+  const NEG_DIV @10:11 = -3
+    type i32 @10:7
+    binary / @10:24 : i32
+      unary - @10:21 : i32
+        int 7 @10:22 : i32
+      int 2 @10:26 : i32
+  const NEG_REM @11:11 = -1
+    type i32 @11:7
+    binary % @11:24 : i32
+      unary - @11:21 : i32
+        int 7 @11:22 : i32
+      int 2 @11:26 : i32
+  const CAST @12:10 = 44
+    type u8 @12:7
+    as @12:21 : u8
+      int 300 @12:17 : i32
+      type u8 @12:24
+  const SIGNED_CAST @13:10 = -56
+    type i8 @13:7
+    as @13:30 : i8
+      int 200u8 @13:24 : u8
+      type i8 @13:33
+  const NAME @14:11
+    type str @14:7
+    string "envo" @14:18 : str
+  const SIZE @15:13 = 34
+    type usize @15:7
+    sizeof @15:20 : usize
+      type Grid @15:27
+  const CMP @16:12 = 1
+    type bool @16:7
+    binary > @16:22 : bool
+      name LEN @16:18 : usize
+      int 30 @16:24 : usize
+  enum Level @17:6
+    type u16 @17:14
+    variant Low @17:20 = 32
+      as @17:30 : u16
+        name LEN @17:26 : usize
+        type u16 @17:33
+    variant Mid @17:38 = 33
+      -
+    variant High @17:43 = 66
+      binary * @17:69 : u16
+        as @17:61 : u16
+          member Mid @17:57 : Level
+            name Level @17:51
+          type u16 @17:64
+        int 2 @17:71 : u16
+  struct Grid @18:8 size 34 align 2
+    field Cells @18:23 offset 0 : u8[32]
+      array @18:17
+        type u8 @18:15
+        name LEN @18:18 : usize
+    field L @18:36 offset 32 : Level
+      type Level @18:30
+  static grid @19:13
+    type Grid @19:8
+    -
+  static counter @20:14 = 33
+    type usize @20:8
+    binary + @20:28 : usize
+      name LEN @20:24 : usize
+      int 1 @20:30 : usize
+  static level @21:14 = 66
+    type Level @21:8
+    member High @21:28 : Level
+      name Level @21:22

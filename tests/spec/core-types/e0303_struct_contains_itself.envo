@@ -1,0 +1,2 @@
+// expect-error: E0303 @ 2:21
+struct S { i32 A; S B; }

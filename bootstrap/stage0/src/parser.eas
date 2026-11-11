@@ -1897,6 +1897,11 @@ ast_dump:
         lea     rdi, [w_out]
         mov     rsi, rax
         call    w_u64
+        cmp     byte [c_dump], 0        ; `envoc0 check` adds types and layouts
+        je      .line_end
+        mov     edi, ebx
+        call    c_dump_extra
+.line_end:
         lea     rdi, [w_out]
         mov     esi, 10
         call    w_byte

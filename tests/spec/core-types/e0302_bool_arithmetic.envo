@@ -1,0 +1,2 @@
+// expect-error: E0302 @ 2:14
+var x = true + false;

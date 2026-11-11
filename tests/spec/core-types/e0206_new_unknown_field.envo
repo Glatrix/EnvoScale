@@ -1,0 +1,3 @@
+// expect-error: E0206 @ 3:17
+struct S { i32 A; }
+var s = new S { B = 1 };

@@ -1,0 +1,3 @@
+// expect-error: E0311 @ 3:4
+const i32 N = -1;
+u8[N] a;

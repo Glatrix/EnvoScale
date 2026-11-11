@@ -1,0 +1,2 @@
+// expect-error: E0204 @ 2:21
+void F(i32 a) { var a = 1; }

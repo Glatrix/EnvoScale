@@ -1,0 +1,21 @@
+// Literal typing ([core.expr.1], [core.expr.2]).
+u8 a = 255;
+i8 b = -128;
+i8 c = 127;
+u16 d = 0xFFFF;
+u32 e = 0b1010_1010;
+u64 f = 0xFFFF_FFFF_FFFF_FFFF;
+i64 g = -9223372036854775808;
+var h = 42;
+var i = 42u8;
+var j = 7_i64;
+usize k = 1 << 40;
+u8 l = 'a';
+u8 m = '\n';
+u8 n = '\x7F';
+u8 o = '\u{41}';
+i32 q = -(3 + 4) * 2;
+u32 r = ~0;
+i16 s = 0o777;
+str t = "hello";
+bool u = true;

@@ -1,0 +1,2 @@
+// expect-error: E0209 @ 2:9
+var x = i32;

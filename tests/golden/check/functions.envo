@@ -1,0 +1,25 @@
+// Calls, built-ins and termination ([core.expr.8], [core.stmt.6]).
+i32 Fib(i32 n) {
+    if (n < 2) return n; else return Fib(n - 1) + Fib(n - 2);
+}
+i32 Forever() { while (true) { } }
+i32 Spin() { for (;;) { } }
+i32 Fail() { panic("no"); }
+i32 Leave() { exit(3); }
+i32 Pick(bool b) { if (b) { return 1; } else { return 2; } }
+i32 Later() => Helper(2);
+i32 Helper(i32 x) => x * 3;
+void Log(str s) => print(s);
+void Nothing() {}
+void All() {
+    print("a");
+    write(1, "b");
+    i32 fd = open("f.txt", 0);
+    unsafe { isize got = read(fd, alloc(16), 16); }
+    close(fd);
+    usize n = argc();
+    str first = arg(0);
+    Log(first);
+    Nothing();
+    exit(0);
+}

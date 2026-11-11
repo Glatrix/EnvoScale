@@ -83,7 +83,7 @@ do_test() {
 
     # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by
     # `envoc0 <command>`. Keep this list in step with bootstrap.ps1.
-    for suite in lexer:lex:.tokens parser:parse:.ast; do
+    for suite in lexer:lex:.tokens parser:parse:.ast check:check:.check; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; ext=${rest#*:}
       say "golden tests: tests/golden/$sdir"
       dir="$ROOT/tests/golden/$sdir"
@@ -101,9 +101,10 @@ do_test() {
       done
     done
 
-    # Spec error tests run through `envoc0 parse`, which lexes first, so lexical
-    # errors are still reported by the lexer. Keep this list in step with bootstrap.ps1.
-    for sdir in 01-lexical core-syntax; do
+    # Spec error tests run through `envoc0 check`, which lexes and parses first, so
+    # lexical and syntax errors are still reported by their own stage.
+    # Keep this list in step with bootstrap.ps1.
+    for sdir in 01-lexical core-syntax core-types; do
       say "spec tests: tests/spec/$sdir"
       dir="$ROOT/tests/spec/$sdir"
       for f in "$dir"/*.envo; do
@@ -116,7 +117,7 @@ do_test() {
         case "$line" in
             *' @ '*) pos=${line##* @ }; pos=${pos%% *}; want="$base:$pos: error[$code]" ;;
         esac
-        run "$dir" parse "$base"
+        run "$dir" check "$base"
         if [ "$rc" -eq 1 ] && LC_ALL=C grep -a -q -F "$want" "$TMP/err"; then pass
         else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
       done

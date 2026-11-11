@@ -1,0 +1,4 @@
+// expect-error: E0308 @ 4:1
+enum E { A, B, C }
+E e;
+match e { A => {}, B => {} }

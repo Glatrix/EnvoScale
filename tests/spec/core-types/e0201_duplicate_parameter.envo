@@ -1,0 +1,2 @@
+// expect-error: E0201 @ 2:19
+void F(i32 a, i32 a) {}

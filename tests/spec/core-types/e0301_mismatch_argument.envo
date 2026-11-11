@@ -1,0 +1,3 @@
+// expect-error: E0301 @ 3:3
+void F(str s) {}
+F(1);

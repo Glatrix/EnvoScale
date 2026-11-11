@@ -1,0 +1,2 @@
+// expect-error: E0309 @ 2:15
+const i32 A = A;

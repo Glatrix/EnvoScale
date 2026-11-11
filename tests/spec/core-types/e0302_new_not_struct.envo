@@ -1,0 +1,2 @@
+// expect-error: E0302 @ 2:9
+var x = new i32 {};

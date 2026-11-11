@@ -7,6 +7,7 @@ output is byte-identical to the expected file (after normalizing CRLF to LF).
 |---|---|---|
 | `lexer/` | `envoc0 lex` | `name.envo` → `name.tokens` |
 | `parser/` | `envoc0 parse` | `name.envo` → `name.ast` |
+| `check/` | `envoc0 check` | `name.envo` → `name.check` |
 
 Planned: EIR (M2), assembly and diagnostics (M3).
 
@@ -25,6 +26,18 @@ Planned: EIR (M2), assembly and diagnostics (M3).
   and a slot holding a list prints every element. For example `fn` prints
   return type, parameters, body; `for` prints init, condition, step, body.
 - Parentheses do not appear in the tree.
+
+## Typed tree format (`envoc0 check`)
+
+The same tree, with what the checker worked out appended to each line:
+
+- expressions, `var`, `param` and `field` nodes: ` : <type>` (types are written `i32`,
+  `*T`, `T[]`, `T[N]`, or a struct/enum name; aliases print as their canonical type);
+- `struct`: ` size <bytes> align <bytes>`; `field`: ` offset <bytes>` before its type;
+- enum `variant`, and `const`/`static` of an integer, `bool` or enum type: ` = <value>`.
+
+Nodes the checker never types (a callee's name, the `E` in `E.V`, type nodes) carry no
+annotation.
 
 ## Token dump format
 

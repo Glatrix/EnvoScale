@@ -1,0 +1,4 @@
+// expect-error: E0301 @ 4:13
+i32 a;
+i64 b;
+var c = a + b;

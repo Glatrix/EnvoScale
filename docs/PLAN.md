@@ -102,8 +102,8 @@ The milestone is large, so it is cut into increments that each end tested.
 | 1.3 | Runtime helpers: arena, buffered I/O, diagnostics, UTF-8 check | via 1.4 tests | done |
 | 1.4 | Lexer + `envoc0 lex` token dump | `tests/golden/lexer/`, `tests/spec/01-lexical/` | done |
 | 1.5 | Parser → AST for Envo-Core | `tests/golden/parser/`, `tests/spec/core-syntax/` | done (109/109 on Windows and Linux) |
-| 1.6 | Type checker for Envo-Core | `expect-error` spec tests | next |
-| 1.7 | x86-64 code generation + PE/ELF writers for *output* programs | `// expect:` spec tests, hello world | |
+| 1.6 | Type checker for Envo-Core | `tests/golden/check/`, `tests/spec/core-types/` | done (208/208 on Windows) |
+| 1.7 | x86-64 code generation + PE/ELF writers for *output* programs | `// expect:` spec tests, hello world | next |
 | 1.8 | Builtins (`print`, file I/O, `alloc`, args) for output programs | spec tests | |
 | 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | |
 
@@ -112,8 +112,11 @@ done only once the `stage0-linux` CI job passes.
 
 ## 6. Risks
 
-- **Assembly volume.** Stage 0 targets < 15k lines. Keeping the lexer table-driven and
-  the code generator a simple stack machine is how that budget is met.
+- **Assembly volume.** Stage 0 targets < 15k lines. After the checker (M1.6) it is
+  10.8k lines, about 600 of them generated tables, leaving roughly 4k for code
+  generation, the PE/ELF writers and built-ins. Keeping the code generator a simple
+  stack machine that reuses the checker's types and layouts is how that budget is met;
+  if it is exceeded, the overrun gets an RFC rather than silent growth.
 - **Untestable Linux path locally.** Development happens on Windows; the Linux ELF is
   cross-assembled here and only *run* in CI. The two platform files share no code
   paths besides the shim interface, so a Linux-only bug stays in `platform/linux.eas`.

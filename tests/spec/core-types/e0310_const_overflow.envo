@@ -1,0 +1,2 @@
+// expect-error: E0310 @ 2:26
+const i32 X = 2147483647 + 1;

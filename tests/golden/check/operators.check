@@ -1,0 +1,149 @@
+program @2:1
+  var x @2:5 : i32
+    type i32 @2:1
+    int 10 @2:9 : i32
+  var y @3:5 : i64
+    type i64 @3:1
+    int 20 @3:9 : i64
+  var z @4:4 : u8
+    type u8 @4:1
+    int 3 @4:8 : u8
+  var t @5:6 : bool
+    type bool @5:1
+    binary || @5:30 : bool
+      binary && @5:16 : bool
+        binary < @5:12 : bool
+          name x @5:10 : i32
+          int 5 @5:14 : i32
+        unary ! @5:19 : bool
+          binary == @5:23 : bool
+            name y @5:21 : i64
+            int 20 @5:26 : i64
+      binary != @5:35 : bool
+        name x @5:33 : i32
+        int 0 @5:38 : i32
+  var a @6:5 : i32
+    type i32 @6:1
+    binary - @6:15 : i32
+      binary + @6:11 : i32
+        name x @6:9 : i32
+        int 1 @6:13 : i32
+      binary % @6:27 : i32
+        binary / @6:23 : i32
+          binary * @6:19 : i32
+            name x @6:17 : i32
+            int 2 @6:21 : i32
+          int 3 @6:25 : i32
+        int 4 @6:29 : i32
+  var b @7:5 : i32
+    type i32 @7:1
+    binary -% @7:16 : i32
+      binary +% @7:11 : i32
+        name x @7:9 : i32
+        int 1 @7:14 : i32
+      binary *% @7:21 : i32
+        int 2 @7:19 : i32
+        int 3 @7:24 : i32
+  var c @8:5 : i32
+    type i32 @8:1
+    binary | @8:17 : i32
+      binary & @8:11 : i32
+        name x @8:9 : i32
+        int 0xF @8:13 : i32
+      binary ^ @8:21 : i32
+        name x @8:19 : i32
+        int 3 @8:23 : i32
+  var d @9:5 : i32
+    type i32 @9:1
+    binary >> @9:16 : i32
+      binary << @9:11 : i32
+        name x @9:9 : i32
+        name z @9:14 : u8
+      int 1 @9:19 : i32
+  var e @10:5 : u64
+    type u64 @10:1
+    binary << @10:14 : u64
+      int 1u64 @10:9 : u64
+      int 63 @10:17 : i32
+  var f @11:5 : i32
+    type i32 @11:1
+    unary - @11:9 : i32
+      name x @11:10 : i32
+  var g @12:5 : i32
+    type i32 @12:1
+    unary ~ @12:9 : i32
+      name x @12:10 : i32
+  var h @13:5 : i64
+    type i64 @13:1
+    binary + @13:18 : i64
+      as @13:11 : i64
+        name x @13:9 : i32
+        type i64 @13:14
+      name y @13:20 : i64
+  var i @14:4 : u8
+    type u8 @14:1
+    as @14:10 : u8
+      name y @14:8 : i64
+      type u8 @14:13
+  var j @15:5 : i32
+    type i32 @15:1
+    as @15:11 : i32
+      name t @15:9 : bool
+      type i32 @15:14
+  var k @16:7 : usize
+    type usize @16:1
+    binary * @16:23 : usize
+      sizeof @16:11 : usize
+        type i64 @16:18
+      alignof @16:25 : usize
+        type u16 @16:33
+  var l @17:6 : bool
+    type bool @17:1
+    binary && @17:27 : bool
+      binary && @17:17 : bool
+        binary >= @17:12 : bool
+          name z @17:10 : u8
+          int 2 @17:15 : u8
+        binary <= @17:22 : bool
+          name z @17:20 : u8
+          int 4 @17:25 : u8
+      binary > @17:32 : bool
+        name z @17:30 : u8
+        int 0 @17:34 : u8
+  unsafe @18:1
+    block @18:8
+      var p @19:10 : *i32
+        ptr @19:5
+          type i32 @19:6
+        unary & @19:14 : *i32
+          name x @19:15 : i32
+      var addr @20:11 : usize
+        type usize @20:5
+        as @20:20 : usize
+          name p @20:18 : *i32
+          type usize @20:23
+      var bytes @21:9 : *u8
+        ptr @21:5
+          type u8 @21:6
+        as @21:19 : *u8
+          name p @21:17 : *i32
+          ptr @21:22
+            type u8 @21:23
+      var back @22:10 : *i32
+        ptr @22:5
+          type i32 @22:6
+        as @22:22 : *i32
+          name addr @22:17 : usize
+          ptr @22:25
+            type i32 @22:26
+      var v @23:9 : i32
+        type i32 @23:5
+        binary + @23:16 : i32
+          unary * @23:13 : i32
+            name p @23:14 : *i32
+          int 1 @23:18 : i32
+      var same @24:10 : bool
+        type bool @24:5
+        binary == @24:19 : bool
+          name p @24:17 : *i32
+          name back @24:22 : *i32

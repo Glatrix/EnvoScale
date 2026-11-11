@@ -1,0 +1,2 @@
+// expect-error: E0305 @ 2:11
+var b = 1 as bool;

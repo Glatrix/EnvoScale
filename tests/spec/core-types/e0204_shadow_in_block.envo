@@ -1,0 +1,2 @@
+// expect-error: E0204 @ 2:29
+void F() { var x = 1; { var x = 2; } }

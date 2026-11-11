@@ -1,0 +1,2 @@
+// expect-error: E0323 @ 2:24
+enum E { A = 1, B = 0, C }

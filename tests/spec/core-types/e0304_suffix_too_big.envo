@@ -1,0 +1,2 @@
+// expect-error: E0304 @ 2:9
+var x = 128i8;

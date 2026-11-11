@@ -1,0 +1,2 @@
+// expect-error: E0327 @ 2:8
+void F(void v) {}

@@ -1,0 +1,26 @@
+// Types and layout ([core.type.1]-[core.type.4]).
+struct Empty {}
+struct Pad { u8 A; i64 B; u16 C; }
+struct Tight { u8 A; u8 B; u16 C; u32 D; }
+struct Nested { Pad P; u8 Flag; Tight[3] Ts; }
+struct Views { str Name; u8[] Bytes; *Views Next; bool Ok; }
+struct Node { i32 Value; *Node Left; *Node Right; }
+enum Small : u8 { A, B }
+enum Wide : i64 { Low = -5, High = 5000000000 }
+enum Default { X, Y }
+struct Holder { Small S; Wide W; Default D; }
+byte b;
+int i;
+uint u;
+long l;
+ulong ul;
+isize is;
+usize us;
+*u8 p;
+**i32 pp;
+u8[16] buf;
+u8[] view;
+str text;
+Pad[2] pads;
+usize sizes = sizeof(Pad) + sizeof(Nested) + sizeof(Views) + sizeof(Holder) + sizeof(Empty);
+usize aligns = alignof(Pad) + alignof(Tight) + alignof(Empty) + alignof(u8[7]);

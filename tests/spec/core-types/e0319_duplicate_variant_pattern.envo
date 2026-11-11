@@ -1,0 +1,4 @@
+// expect-error: E0319 @ 4:24
+enum E { A, B }
+E e;
+match e { A => {}, B | A => {} }
