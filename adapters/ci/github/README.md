@@ -21,8 +21,11 @@ Calling the bootstrap scripts instead of `envo` is a temporary sequencing necess
 
 The one provider-specific step is installing NASM for the Phase A bootstrap
 (see [`adapters/bootstrap/nasm`](../../bootstrap/nasm/README.md)). It disappears when
-the hex seed can build Stage 0 (Phase B).
+the hex seed can build Stage 0 (Phase B). On Linux it goes through
+`install-nasm.sh`, which falls back from the runner's default apt mirror (whose
+hostname has repeatedly failed to resolve) to `archive.ubuntu.com`.
 
 ## Files
 
 - [`/.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)
+- [`install-nasm.sh`](install-nasm.sh): NASM for the Linux job
