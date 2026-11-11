@@ -16,7 +16,8 @@ marked retired, never reused.
 | E0300–E0499 | Types and interfaces |
 | E0500–E0599 | Ownership and borrowing |
 | E0600–E0899 | Reserved |
-| E0900–E0999 | "Not part of Envo-Core" (Stage 0 only) |
+| E0900–E0949 | "Not part of Envo-Core" (Stage 0, and `envoc1 --core`) |
+| E0950–E0999 | "Not part of Envo-S1" (Stage 1) |
 
 ## Format
 
@@ -100,6 +101,7 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0331 | this lambda changes (or moves) `x`, but the target is a `fn` (or `mut fn`) | [fn.type.4] (Envo-S1, RFC 0003) |
 | E0332 | calling a `mut fn` needs `ref` or owned access, not a shared borrow | [fn.type.3] (Envo-S1, RFC 0003) |
 | E0333 | `mut` only applies to `fn` types and slices | [view.2] (Envo-S1, RFC 0004) |
+| E0350 | generic instantiation too deep | [s1.type.2] (Envo-S1) |
 
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
 
@@ -115,7 +117,7 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0508 | `from` can only name a borrowed parameter or `this` ([life.from.2], RFC 0004) |
 | E0510 | allocation in a `[NoAlloc]` function |
 
-## Not part of Envo-Core (E0900–E0999)
+## Not part of Envo-Core (E0900–E0949)
 
 | Code | Message |
 |---|---|
@@ -124,3 +126,9 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0903 | directives are not part of Envo-Core |
 | E0904 | non-ASCII characters outside literals and comments are not supported in Envo-Core |
 | E0905 | not part of Envo-Core: X (the message names the construct; [core.syntax.5]) |
+
+## Not part of Envo-S1 (E0950–E0999)
+
+| Code | Message |
+|---|---|
+| E0950 | not part of Envo-S1: X (the message names the construct; [s1.subset.4]) |

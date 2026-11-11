@@ -15,7 +15,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 |---|---|---|
 | M0 | Charter & skeleton | **Done** (see DoD record below) |
 | M1 | Stage 0 | **Done** (see DoD record below) |
-| M2 | Stage 1 | **Next**: RFCs (EIR v1, function types, lifetimes), then `envoc1` in Envo-Core |
+| M2 | Stage 1 | **In progress**: Envo-S1 and EIR v1 specified (RFCs 0002–0005); next the `envoc1` skeleton in Envo-Core |
 | M3–M13 | | Not started |
 
 ### M0 Definition of Done — record
@@ -43,7 +43,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 
 | Subsystem | Tier | What works | What's missing | Next step |
 |---|---|---|---|---|
-| **Docs: language spec** (`docs/spec`) | Experimental | Ch. 1 normative with rule IDs linked to tests; ch. 2–5 drafts; Envo-Core, EAS, EON drafts; error registry | Ch. 6+ (generics, modules in depth, async, comptime); EIR (M2) | Envo-Core grammar (`envo-core.md` §5.1) is now normative and tested |
+| **Docs: language spec** (`docs/spec`) | Experimental | Ch. 1 normative with rule IDs linked to tests; ch. 2–5 drafts; Envo-Core, EAS, EON drafts; error registry | Ch. 6+ (generics, modules in depth, async, comptime). Envo-S1 and EIR v1 are specified (M2.1) | Envo-Core grammar (`envo-core.md` §5.1) is now normative and tested |
 | **RFCs** (`docs/rfcs`) | — | Template; RFC 0001 (normative example audit) accepted | — | Further RFCs as listed on the roadmap (EIR v1, function types, lifetimes) |
 | **Bootstrap: seed** (`bootstrap/seed`) | — | — | Everything (Phase B, required before 1.0) | After Stage 0 is complete, so the `.eas` subset is final |
 | **Bootstrap: Stage 0** (`bootstrap/stage0`) | Experimental | 15.0k lines of `.eas`. `envoc0 lex`, `parse`, `check` and `build` (`check` and `build` take several files as one program): lexer, parser, type checker, x86-64 code generator with run-time checks (overflow, bounds, division, shifts), and PE/ELF writers. Compiled programs reuse envoc0's own runtime block (OS shim, argv, built-ins), so envoc0 cross-compiles; hello world is 8 KB. Builds are byte-identical across hosts and NASM 2.16/3.02. **249/249 tests pass on Windows and Linux** | Fixes only: the 15k-line budget is used up | Stage 1 (M2) |

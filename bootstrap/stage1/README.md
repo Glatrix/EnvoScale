@@ -1,7 +1,8 @@
 # Stage 1 — `envoc1`
 
-> **Status:** Being designed (M2.1). The plan, increments and decisions D11–D15 are in
-> [`docs/PLAN.md`](../../docs/PLAN.md); the language it will accept is Envo-S1.
+> **Status:** Specified (M2.1); implementation starts with M2.2. The plan, increments and
+> decisions D11–D15 are in [`docs/PLAN.md`](../../docs/PLAN.md). It accepts
+> [Envo-S1](../../docs/spec/envo-s1.md) and compiles through [EIR v1](../../docs/spec/eir.md).
 
 A fuller compiler written in Envo-Core and built by `envoc0`. It adds generics, interfaces, closures, a basic borrow checker and EIR, which is enough to compile the real compiler in `compiler/`. It stays buildable forever as part of the diverse double-compiling trust check.
 
