@@ -24,6 +24,12 @@ jobs:
       # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
       - run: sh adapters/ci/github/install-nasm.sh
       - run: ./bootstrap.sh test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stage0-built-on-linux
+          path: |
+            build/stage0/envoc0
+            build/stage0/envoc0.exe
 
   stage0-windows:
     runs-on: windows-latest
@@ -35,3 +41,25 @@ jobs:
         shell: powershell
       - run: .\bootstrap.ps1 test
         shell: powershell
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stage0-built-on-windows
+          path: |
+            build/stage0/envoc0
+            build/stage0/envoc0.exe
+
+  # Brief 4.1 and 18: the same sources must give byte-identical binaries on every host.
+  reproducible:
+    needs: [stage0-linux, stage0-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage0-built-on-linux
+          path: build/from-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage0-built-on-windows
+          path: build/from-windows
+      - run: ./bootstrap.sh compare build/from-linux build/from-windows

@@ -171,8 +171,26 @@ do_check() {
     say "check: ok ($dirs layout folders, $entries gallery programs, no lib->adapters imports)"
 }
 
+# ------------------------------------------------------------------- compare
+# compare <dir-a> <dir-b>: both Stage 0 builds must be byte-identical (brief 4.1).
+do_compare() {
+    [ "$#" -eq 2 ] || fail "usage: ./bootstrap.sh compare <dir-a> <dir-b>"
+    differ=0
+    for f in envoc0 envoc0.exe; do
+        [ -f "$1/$f" ] || fail "missing $1/$f"
+        [ -f "$2/$f" ] || fail "missing $2/$f"
+        say "$f"
+        say "  $1: $(wc -c < "$1/$f" | tr -d ' ') bytes  sha256 $(sha256 "$1/$f")"
+        say "  $2: $(wc -c < "$2/$f" | tr -d ' ') bytes  sha256 $(sha256 "$2/$f")"
+        if cmp -s "$1/$f" "$2/$f"; then say "  identical"
+        else say "  DIFFERENT: $(cmp "$1/$f" "$2/$f" | head -n 1)"; differ=1; fi
+    done
+    [ "$differ" -eq 0 ] || fail "the builds are not byte-identical"
+}
+
 case "${1:-help}" in
     build) do_build ;;
+    compare) shift; do_compare "$@" ;;
     test)  do_test ;;
     check) do_check ;;
     clean) rm -rf "$ROOT/build"; say 'removed build/' ;;
@@ -181,6 +199,7 @@ case "${1:-help}" in
         say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md)'
         say '  test    build, then run the Stage 0 test suites'
         say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
+        say '  compare <dir-a> <dir-b>   require two Stage 0 builds to be byte-identical'
         say '  clean   delete build/'
         [ "${1:-help}" = help ] || exit 2 ;;
 esac
