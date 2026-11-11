@@ -105,33 +105,45 @@ function Invoke-Test {
     $r = Invoke-Tool $exe @('lex', 'no such file.envo') $Root
     if ($r.Code -eq 1 -and $r.Err.StartsWith("envoc0: error: cannot open 'no such file.envo'")) { Pass 'missing file' } else { Bad 'missing file' "exit $($r.Code), stderr: $($r.Err)" }
 
-    Say 'golden tests: tests/golden/lexer'
-    $dir = Join-Path $Root 'tests\golden\lexer'
-    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
-        $name = "golden/lexer/$($f.Name)"
-        $tokens = [IO.Path]::ChangeExtension($f.FullName, '.tokens')
-        if (-not (Test-Path -LiteralPath $tokens)) { Bad $name 'missing .tokens file'; continue }
-        $expected = Normalize ([IO.File]::ReadAllText($tokens, $Utf8))
-        $r = Invoke-Tool $exe @('lex', $f.Name) $dir
+    # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by `envoc0 <command>`.
+    # Keep this list in step with bootstrap.sh.
+    $goldenSuites = @(
+        @{ Dir = 'lexer';  Command = 'lex';   Ext = '.tokens' },
+        @{ Dir = 'parser'; Command = 'parse'; Ext = '.ast' }
+    )
+    foreach ($suite in $goldenSuites) {
+      Say "golden tests: tests/golden/$($suite.Dir)"
+      $dir = Join-Path $Root "tests\golden\$($suite.Dir)"
+      foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+        $name = "golden/$($suite.Dir)/$($f.Name)"
+        $expectedFile = [IO.Path]::ChangeExtension($f.FullName, $suite.Ext)
+        if (-not (Test-Path -LiteralPath $expectedFile)) { Bad $name "missing $($suite.Ext) file"; continue }
+        $expected = Normalize ([IO.File]::ReadAllText($expectedFile, $Utf8))
+        $r = Invoke-Tool $exe @($suite.Command, $f.Name) $dir
         $actual = Normalize $r.Out
         if ($r.Code -ne 0) { Bad $name "exit $($r.Code), stderr: $($r.Err.Trim())"; continue }
-        if ([string]::Equals($expected, $actual)) { Pass $name } else { Bad $name 'token dump differs'; Show-Diff $expected $actual }
+        if ([string]::Equals($expected, $actual)) { Pass $name } else { Bad $name 'output differs'; Show-Diff $expected $actual }
+      }
     }
 
-    Say 'spec tests: tests/spec/01-lexical'
-    $dir = Join-Path $Root 'tests\spec\01-lexical'
+    # Spec error tests run through `envoc0 parse`, which lexes first, so lexical
+    # errors are still reported by the lexer. Keep this list in step with bootstrap.sh.
     $latin1 = [Text.Encoding]::GetEncoding(28591)    # byte-transparent, for files that are not UTF-8
-    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
-        $name = "spec/01-lexical/$($f.Name)"
+    foreach ($specDir in @('01-lexical', 'core-syntax')) {
+      Say "spec tests: tests/spec/$specDir"
+      $dir = Join-Path $Root "tests\spec\$specDir"
+      foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+        $name = "spec/$specDir/$($f.Name)"
         $text = [IO.File]::ReadAllText($f.FullName, $latin1)
         $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4})(?: @ (\d+):(\d+))?')
         if (-not $m.Success) { Bad $name 'no // expect-error: annotation'; continue }
         $code = $m.Groups[1].Value
         $want = "error[$code]"
         if ($m.Groups[2].Success) { $want = "$($f.Name):$($m.Groups[2].Value):$($m.Groups[3].Value): error[$code]" }
-        $r = Invoke-Tool $exe @('lex', $f.Name) $dir
+        $r = Invoke-Tool $exe @('parse', $f.Name) $dir
         if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
         else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+      }
     }
 
     Say ''

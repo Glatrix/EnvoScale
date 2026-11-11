@@ -1,0 +1,24 @@
+// A small Envo-Core program: what Stage 0 will compile next.
+const usize MAX = 1 << 10;
+
+enum Color : u8 { Red, Green = 5, Blue }
+
+struct Point {
+    i64 X;
+    i64 Y;
+}
+
+i64 Dot(Point a, Point b) {
+    return a.X * b.X + a.Y * b.Y;
+}
+
+var p = new Point { X = 3, Y = -4 };
+match Color.Red {
+    Red | Blue => print("cool"),
+    _ => {}
+}
+for (var i = 0; i < 10; i++) {
+    if (i % 2 == 0) continue;
+    unsafe { *buf = 'a' as u8; }
+}
+print("done")

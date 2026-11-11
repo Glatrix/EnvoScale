@@ -43,6 +43,15 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0010 | invalid Unicode escape | the `\` | [lex.esc.2] |
 | E0011 | control character in literal; use an escape sequence | the character | [lex.esc.3] |
 
+## Syntax (E0100–E0199)
+
+| Code | Message | Reported at | Rule |
+|---|---|---|---|
+| E0101 | expected X, found Y | the unexpected token | [core.syntax.1] |
+| E0102 | comparison operators cannot be chained; use `&&` or parentheses | the second operator | [core.syntax.2] |
+| E0103 | invalid target for assignment | the assignment operator | [core.syntax.3] |
+| E0104 | nested too deeply (Stage 0 limit: 256 levels) | the token where the limit is exceeded | [core.syntax.4] |
+
 ## Ownership (E0500–E0599) — reserved by the chapter 5 draft
 
 | Code | Message |
@@ -63,4 +72,4 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0902 | raw string literals are not part of Envo-Core |
 | E0903 | directives are not part of Envo-Core |
 | E0904 | non-ASCII characters outside literals and comments are not supported in Envo-Core |
-| E0905 | this construct is not part of Envo-Core (parser; message names the construct) |
+| E0905 | not part of Envo-Core: X (the message names the construct; [core.syntax.5]) |

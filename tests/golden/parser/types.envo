@@ -1,0 +1,10 @@
+// Types: pointers, arrays (literal or constant size), slices, combinations.
+u8[16] buf;
+*u8 p;
+**i32 pp = 0 as **i32;
+u8[] bytes;
+*u8[4][] mixed;
+Token[MAX] table;
+str name = "x";
+*Point[2] corners;
+usize n = sizeof(*u8[8]) + alignof(Token);

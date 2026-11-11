@@ -1,0 +1,142 @@
+program @2:1
+  var a @2:5
+    -
+    binary - @2:19
+      binary + @2:11
+        int 1 @2:9
+        binary * @2:15
+          int 2 @2:13
+          int 3 @2:17
+      binary % @2:27
+        binary / @2:23
+          int 4 @2:21
+          int 5 @2:25
+        int 6 @2:29
+  var b @3:5
+    -
+    binary | @3:29
+      binary ^ @3:25
+        binary & @3:21
+          binary >> @3:16
+            binary << @3:11
+              name x @3:9
+              int 1 @3:14
+            int 2 @3:19
+          int 3 @3:23
+        int 4 @3:27
+      int 5 @3:31
+  var c @4:5
+    -
+    binary || @4:26
+      binary && @4:16
+        binary == @4:11
+          name a @4:9
+          name b @4:14
+        binary != @4:21
+          name c @4:19
+          name d @4:24
+      binary && @4:35
+        binary < @4:31
+          name e @4:29
+          name f @4:33
+        binary >= @4:40
+          name g @4:38
+          name h @4:43
+  var d @5:5
+    -
+    binary == @5:15
+      binary & @5:11
+        name x @5:9
+        int 1 @5:13
+      int 0 @5:18
+  var e @6:5
+    -
+    binary == @6:17
+      binary < @6:12
+        name a @6:10
+        name b @6:14
+      binary > @6:23
+        name c @6:21
+        name d @6:25
+  var f @7:5
+    -
+    unary - @7:9
+      unary ! @7:10
+        unary ~ @7:11
+          unary * @7:12
+            unary & @7:13
+              name x @7:14
+  var g @8:5
+    -
+    as @8:17
+      as @8:11
+        name x @8:9
+        type u8 @8:14
+      type i64 @8:20
+  var h @9:5
+    -
+    binary * @9:19
+      as @9:12
+        unary - @9:9
+          name x @9:10
+        type i64 @9:15
+      int 2 @9:21
+  var i @10:5
+    -
+    call @10:29
+      index @10:26
+        member f @10:25
+          member e @10:23
+            index @10:19
+              call @10:16
+                call @10:10
+                  name f @10:9
+                  name a @10:11
+                  name b @10:14
+                name c @10:17
+              name d @10:20
+        name g @10:27
+      name h @10:30
+  var j @11:5
+    -
+    binary -% @11:16
+      binary +% @11:11
+        name a @11:9
+        name b @11:14
+      binary *% @11:21
+        name c @11:19
+        name d @11:24
+  var k @12:5
+    -
+    new @12:9
+      type Point @12:13
+      init X @12:21
+        int 1 @12:25
+      init Y @12:28
+        new @12:32
+          type Inner @12:36
+          init V @12:44
+            char 'z' @12:48
+  var l @13:5
+    -
+    new @13:9
+      type Empty @13:13
+      -
+  var m @14:5
+    -
+    binary || @14:14
+      bool true @14:9
+      bool false @14:17
+  var n @15:5
+    -
+    name x @15:12
+  var o @16:5
+    -
+    binary + @16:20
+      index @16:12
+        name arr @16:9
+        binary + @16:15
+          name i @16:13
+          int 1 @16:17
+      member Len @16:24
+        name s @16:22

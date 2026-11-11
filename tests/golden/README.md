@@ -6,8 +6,25 @@ output is byte-identical to the expected file (after normalizing CRLF to LF).
 | Folder | Tool | Input → expected |
 |---|---|---|
 | `lexer/` | `envoc0 lex` | `name.envo` → `name.tokens` |
+| `parser/` | `envoc0 parse` | `name.envo` → `name.ast` |
 
-Planned: parser AST dumps (M1), EIR (M2), assembly and diagnostics (M3).
+Planned: EIR (M2), assembly and diagnostics (M3).
+
+## Syntax tree format
+
+```
+<2 spaces per level><node>[ <text>] @<line>:<col>
+```
+
+- One node per line, children indented below it. `node` is the node kind (`fn`,
+  `binary`, `member`, …; the full list is `bootstrap/stage0/src/nodes.eas`).
+- `text` is the source text of the node's token, for kinds that have one: names,
+  literals and operators (`binary +`, `assign +=`, `name print`).
+- `@line:col` is the position of the node's token (for `binary`, the operator).
+- Each kind prints a fixed number of child slots, in order. An empty slot prints `-`,
+  and a slot holding a list prints every element. For example `fn` prints
+  return type, parameters, body; `for` prints init, condition, step, body.
+- Parentheses do not appear in the tree.
 
 ## Token dump format
 

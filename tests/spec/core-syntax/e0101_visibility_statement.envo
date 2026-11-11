@@ -1,0 +1,2 @@
+// expect-error: E0101 @ 2:8
+public print("x");

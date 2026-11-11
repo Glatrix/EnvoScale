@@ -2,7 +2,8 @@
 ; src/main.eas - envoc0 command dispatch
 ;
 ;   envoc0 lex <file.envo>     print the token stream
-;   envoc0 version             print the version (also --version)
+;   envoc0 parse <file.envo>   print the syntax tree
+;   envoc0 version            print the version (also --version)
 ;   envoc0 help                print usage (also --help)
 ;
 ; Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
@@ -24,6 +25,11 @@ main:
         call    arg1_is
         test    eax, eax
         jnz     .lex
+        lea     rsi, [s_cmd_parse]
+        mov     edx, s_cmd_parse_len
+        call    arg1_is
+        test    eax, eax
+        jnz     .parse
         lea     rsi, [s_cmd_version]
         mov     edx, s_cmd_version_len
         call    arg1_is
@@ -69,6 +75,13 @@ main:
         mov     rdi, [rdx + 16]
         call    cmd_lex                 ; does not return
 
+.parse:
+        cmp     qword [g_argc], 3
+        jne     .usage_error
+        mov     rdx, [g_argv]
+        mov     rdi, [rdx + 16]
+        call    cmd_parse               ; does not return
+
 .version:
         lea     rdi, [w_out]
         lea     rsi, [s_version]
@@ -111,9 +124,36 @@ arg1_is:
         mov     rdi, [rdi + 8]
         jmp     cstr_eq
 
-; cmd_lex - read, validate and tokenize one file, and print its tokens.
+; cmd_lex - print the tokens of one file.
 ;   in:  rdi = NUL-terminated path. Does not return.
 cmd_lex:
+        sub     rsp, 8
+        call    load_tokens
+        mov     rdi, rax
+        mov     rsi, rdx
+        call    lex_dump
+        xor     edi, edi
+        call    exit_process
+
+; cmd_parse - print the syntax tree of one file.
+;   in:  rdi = NUL-terminated path. Does not return.
+cmd_parse:
+        sub     rsp, 8
+        call    load_tokens
+        mov     rdi, rax
+        mov     rsi, rdx
+        call    parse
+        mov     edi, eax
+        xor     esi, esi
+        call    ast_dump
+        xor     edi, edi
+        call    exit_process
+
+; load_tokens - read, validate and tokenize one file. Sets diag_path/src/len.
+; Reports read failures and lexical errors itself (and exits).
+;   in:  rdi = NUL-terminated path
+;   out: rax = token array, rdx = token count
+load_tokens:
         push    rbx
         push    r12
         push    r13
@@ -148,11 +188,10 @@ cmd_lex:
         mov     rdi, r12
         mov     rsi, r13
         call    lex
-        mov     rdi, rax
-        mov     rsi, rdx
-        call    lex_dump
-        xor     edi, edi
-        call    exit_process
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
 
 .read_failed:
         mov     r12, rdx                ; reason: 1 open, 2 read, 3 too large
@@ -194,6 +233,8 @@ cmd_lex:
 
 s_cmd_lex:              db 'lex'
 s_cmd_lex_len           equ $ - s_cmd_lex
+s_cmd_parse:            db 'parse'
+s_cmd_parse_len         equ $ - s_cmd_parse
 s_cmd_version:          db 'version'
 s_cmd_version_len       equ $ - s_cmd_version
 s_cmd_dash_version:     db '--version'
@@ -210,9 +251,10 @@ s_usage:
         db      'usage: envoc0 <command> [arguments]', 10
         db      10
         db      'commands:', 10
-        db      '  lex <file.envo>   print the token stream of an Envo-Core source file', 10
-        db      '  version           print the version', 10
-        db      '  help              print this message', 10
+        db      '  lex <file.envo>     print the token stream of an Envo-Core source file', 10
+        db      '  parse <file.envo>   print the syntax tree of an Envo-Core source file', 10
+        db      '  version             print the version', 10
+        db      '  help                print this message', 10
 s_usage_len             equ $ - s_usage
 
 s_unknown_command:      db "envoc0: error: unknown command '"

@@ -1,0 +1,2 @@
+// expect-error: E0101 @ 2:11
+var x = a.0;

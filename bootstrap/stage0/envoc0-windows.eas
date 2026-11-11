@@ -12,11 +12,13 @@
 ; Shared sources, in dependency order: constants are defined before code that
 ; uses them (docs/spec/eas.md section 4), and data tables come first.
 %include "src/tokens.eas"
+%include "src/nodes.eas"
 %include "src/diag.eas"
 %include "src/mem.eas"
 %include "src/io.eas"
 %include "src/utf8.eas"
 %include "src/lexer.eas"
+%include "src/parser.eas"
 %include "src/main.eas"
 
 image_end:

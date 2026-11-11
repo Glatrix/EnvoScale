@@ -1,0 +1,2 @@
+// expect-error: E0905 @ 2:8
+void F(in i32 x) {}

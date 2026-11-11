@@ -1,0 +1,22 @@
+// Items (envo-core.md 5.1): functions, structs, enums, constants, statics.
+const usize MAX_TOKENS = 1 << 20;
+static usize count = 0;
+static *u8 buffer;
+public const i32 ANSWER = 42;
+
+struct Token {
+    u16 Kind;
+    public u32 Start;
+    private u32 Len
+}
+
+enum Color : u8 { Red, Green = 5, Blue, }
+enum Empty {}
+enum Bare { A }
+
+i64 Add(i64 a, i64 b) {
+    return a + b;
+}
+i64 Twice(i64 x) => x * 2;
+public void Nothing() {}
+private bool Flag(bool a,) => a;

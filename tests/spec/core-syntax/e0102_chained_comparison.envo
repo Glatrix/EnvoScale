@@ -1,0 +1,2 @@
+// expect-error: E0102 @ 2:15
+var b = 1 < 2 < 3;

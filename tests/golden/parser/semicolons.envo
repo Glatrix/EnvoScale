@@ -1,0 +1,10 @@
+// Semicolons may be omitted before '}' and at end of file ([stmt.term.4]);
+// declaration vs expression ([core.decl.1]).
+void F() { print("a") }
+void G() { var x = 1; x = 2 }
+buf[i] = 1;
+a[i + 1] = 2;
+x * y;
+*p = 3;
+u8[16] local;
+Point q

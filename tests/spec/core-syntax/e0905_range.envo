@@ -1,0 +1,2 @@
+// expect-error: E0905 @ 2:10
+var r = 0..10;

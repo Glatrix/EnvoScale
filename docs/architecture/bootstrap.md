@@ -1,7 +1,7 @@
 # Architecture: Stage 0 (`envoc0`)
 
-> **Status:** M1 in progress. Platform shims, runtime helpers and the lexer are written;
-> parser, checker and code generator are next.
+> **Status:** M1 in progress. Platform shims, runtime helpers, lexer and parser work;
+> the type checker and code generator are next.
 
 This note explains how Stage 0 is put together and why. The user-facing overview of the
 whole ladder is [`bootstrap/README.md`](../../bootstrap/README.md).
@@ -131,11 +131,32 @@ Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
 - Literal *values* are not computed by the lexer: it validates them and records their
   spans. The parser converts the ones it needs.
 
+## The parser
+
+- **Recursive descent**, one routine per rule of the Envo-Core grammar
+  ([`envo-core.md`](../spec/envo-core.md) §5.1). Binary operators use precedence
+  climbing driven by `tok_class`, a byte per token kind (operator level, assignment,
+  not-in-Core, Core keyword), so precedence lives in data, not in code.
+- **Nodes** are 32-byte records in one array, addressed by 32-bit index: kind, operator,
+  token, four child slots, a `next` link for lists, and flags. Index 0 means "none".
+  The array is allocated once for the worst case, so nodes never move and children
+  are plain integers. Lists are built by linking `next`.
+- **Ambiguity** between declarations and expressions (`u8[16] buf;` vs `buf[i] = 1;`)
+  is resolved by speculation: `try_type` parses a type without reporting errors, and
+  the caller rewinds the token position and the node count if no declaration follows.
+  Types are kept simple enough (array sizes are literals or names) that speculation
+  never needs an expression parser.
+- **Errors** never return, like the lexer's. `diag_header` + `diag_finish` let the
+  parser build messages such as ``expected `;`, found `var` ``.
+- **Depth limit.** Every recursive construct counts toward a 256-level limit (E0104),
+  so hostile input cannot overflow the 1 MiB stack, here or in later passes.
+
 ## Testing
 
 - `tests/golden/lexer/*.envo` → `*.tokens`: exact token dumps.
-- `tests/spec/01-lexical/*.envo`: one lexical error each, with
-  `// expect-error: EXXXX @ line:col`.
+- `tests/golden/parser/*.envo` → `*.ast`: exact syntax tree dumps.
+- `tests/spec/01-lexical/*.envo` and `tests/spec/core-syntax/*.envo`: one error each,
+  with `// expect-error: EXXXX @ line:col`.
 
 The runners are in `bootstrap.ps1` and `bootstrap.sh` (OS tools only). Both binaries are
 assembled on every host; each host runs its native one.

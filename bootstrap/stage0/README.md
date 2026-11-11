@@ -1,7 +1,8 @@
 # Stage 0 — `envoc0`
 
-> **Status:** In progress (M1). Platform shims, runtime helpers and the lexer
-> (`envoc0 lex`) are written. Parser, checker and x86-64 code generation are next.
+> **Status:** In progress (M1). Platform shims, runtime helpers, the lexer
+> (`envoc0 lex`) and the parser (`envoc0 parse`) work and are tested. Type checking
+> and x86-64 code generation are next.
 > See [`STATUS.md`](../../STATUS.md) for what is tested.
 
 `envoc0` compiles **Envo-Core** ([`docs/spec/envo-core.md`](../../docs/spec/envo-core.md))
@@ -40,7 +41,9 @@ From the repository root:
 | `src/diag.eas` | Diagnostics with line and column |
 | `src/utf8.eas` | UTF-8 validation |
 | `src/tokens.eas` | Token kinds and the kind table |
+| `src/nodes.eas` | Syntax tree node kinds and parser lookup tables |
 | `src/lexer.eas` | The lexer |
+| `src/parser.eas` | The parser and the syntax tree printer |
 
 How it fits together, and why it is built this way:
 [`docs/architecture/bootstrap.md`](../../docs/architecture/bootstrap.md).
@@ -49,6 +52,7 @@ How it fits together, and why it is built this way:
 
 ```
 envoc0 lex <file.envo>     print the token stream
+envoc0 parse <file.envo>   print the syntax tree
 envoc0 version             print the version
 envoc0 help                print usage
 ```

@@ -1,0 +1,47 @@
+program @3:1
+  fn F @3:6
+    type void @3:1
+    -
+    block @3:10
+      expr @3:12
+        call @3:17
+          name print @3:12
+          string "a" @3:18
+  fn G @4:6
+    type void @4:1
+    -
+    block @4:10
+      var x @4:16
+        -
+        int 1 @4:20
+      assign = @4:25
+        name x @4:23
+        int 2 @4:27
+  assign = @5:8
+    index @5:4
+      name buf @5:1
+      name i @5:5
+    int 1 @5:10
+  assign = @6:10
+    index @6:2
+      name a @6:1
+      binary + @6:5
+        name i @6:3
+        int 1 @6:7
+    int 2 @6:12
+  expr @7:1
+    binary * @7:3
+      name x @7:1
+      name y @7:5
+  assign = @8:4
+    unary * @8:1
+      name p @8:2
+    int 3 @8:6
+  var local @9:8
+    array @9:3
+      type u8 @9:1
+      int 16 @9:4
+    -
+  var q @10:7
+    type Point @10:1
+    -

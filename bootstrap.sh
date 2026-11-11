@@ -76,26 +76,34 @@ do_test() {
     run "$ROOT" lex 'no such file.envo'
     if [ "$rc" -eq 1 ] && grep -q "^envoc0: error: cannot open 'no such file.envo'" "$TMP/err"; then pass; else bad 'missing file' "exit $rc"; fi
 
-    say 'golden tests: tests/golden/lexer'
-    dir="$ROOT/tests/golden/lexer"
-    for f in "$dir"/*.envo; do
+    # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by
+    # `envoc0 <command>`. Keep this list in step with bootstrap.ps1.
+    for suite in lexer:lex:.tokens parser:parse:.ast; do
+      sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; ext=${rest#*:}
+      say "golden tests: tests/golden/$sdir"
+      dir="$ROOT/tests/golden/$sdir"
+      for f in "$dir"/*.envo; do
         base=$(basename "$f")
-        name="golden/lexer/$base"
-        tokens="${f%.envo}.tokens"
-        [ -f "$tokens" ] || { bad "$name" 'missing .tokens file'; continue; }
-        run "$dir" lex "$base"
+        name="golden/$sdir/$base"
+        expected="${f%.envo}$ext"
+        [ -f "$expected" ] || { bad "$name" "missing $ext file"; continue; }
+        run "$dir" "$cmd" "$base"
         if [ "$rc" -ne 0 ]; then bad "$name" "exit $rc: $(tr -d '\r' < "$TMP/err")"; continue; fi
-        tr -d '\r' < "$tokens" > "$TMP/expected"
+        tr -d '\r' < "$expected" > "$TMP/expected"
         tr -d '\r' < "$TMP/out" > "$TMP/actual"
         if cmp -s "$TMP/expected" "$TMP/actual"; then pass
-        else bad "$name" 'token dump differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+        else bad "$name" 'output differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+      done
     done
 
-    say 'spec tests: tests/spec/01-lexical'
-    dir="$ROOT/tests/spec/01-lexical"
-    for f in "$dir"/*.envo; do
+    # Spec error tests run through `envoc0 parse`, which lexes first, so lexical
+    # errors are still reported by the lexer. Keep this list in step with bootstrap.ps1.
+    for sdir in 01-lexical core-syntax; do
+      say "spec tests: tests/spec/$sdir"
+      dir="$ROOT/tests/spec/$sdir"
+      for f in "$dir"/*.envo; do
         base=$(basename "$f")
-        name="spec/01-lexical/$base"
+        name="spec/$sdir/$base"
         line=$(LC_ALL=C grep -a -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
         [ -n "$line" ] || { bad "$name" 'no // expect-error: annotation'; continue; }
         code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9][0-9][0-9][0-9]\).*|\1|')
@@ -103,9 +111,10 @@ do_test() {
         case "$line" in
             *' @ '*) pos=${line##* @ }; pos=${pos%% *}; want="$base:$pos: error[$code]" ;;
         esac
-        run "$dir" lex "$base"
+        run "$dir" parse "$base"
         if [ "$rc" -eq 1 ] && LC_ALL=C grep -a -q -F "$want" "$TMP/err"; then pass
         else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+      done
     done
 
     say ''

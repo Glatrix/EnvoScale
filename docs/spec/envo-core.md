@@ -122,6 +122,93 @@ Semicolons: required after each statement except directly before `}` or at end o
 Integer overflow, division by zero and out-of-range indexing panic (exit code 101), as
 in full Envo.
 
+### 5.1 Grammar (normative; implemented by `bootstrap/stage0/src/parser.eas`)
+
+Notation as in [the spec README](README.md#conventions). Terminals in capitals are token
+classes from chapter 1 (`IDENT`, `INT`, `CHAR`, `STRING`, `EOF`).
+
+```
+Program     = ( Item | Statement )* EOF
+Item        = Visibility? ( Function | Struct | Enum | Const | Static )
+Visibility  = 'public' | 'private'
+Function    = Type IDENT '(' Params? ')' ( Block | '=>' Expr End )
+Params      = Param ( ',' Param )* ','?
+Param       = Type IDENT
+Struct      = 'struct' IDENT '{' Field* '}'
+Field       = Visibility? Type IDENT End
+Enum        = 'enum' IDENT ( ':' Type )? '{' ( Variant ( ',' Variant )* ','? )? '}'
+Variant     = IDENT ( '=' Expr )?
+Const       = 'const' Type IDENT '=' Expr End
+Static      = 'static' Type IDENT ( '=' Expr )? End
+
+Type        = '*' Type | IDENT TypeSuffix*
+TypeSuffix  = '[' ']' | '[' ( INT | IDENT ) ']'
+
+Statement   = Block | 'unsafe' Block
+            | 'if' '(' Expr ')' Statement ( 'else' Statement )?
+            | 'while' '(' Expr ')' Statement
+            | 'for' '(' Simple? ';' Expr? ';' Simple? ')' Statement
+            | 'match' Expr '{' Arm* '}'
+            | 'break' End | 'continue' End | 'return' Expr? End
+            | Simple End
+Simple      = 'var' IDENT '=' Expr
+            | Type IDENT ( '=' Expr )?                 (declaration; see [core.decl.1])
+            | Expr ( AssignOp Expr | '++' | '--' )?
+AssignOp    = '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^='
+            | '<<=' | '>>=' | '+%=' | '-%=' | '*%='
+Arm         = Pattern ( '|' Pattern )* '=>' ( Block ','? | Simple ( ',' | before '}' ) )
+Pattern     = '_' | Prefix
+Block       = '{' Statement* '}'
+End         = ';' | before '}' | before EOF
+
+Expr        = Binary(1)
+Binary(p)   = Cast ( BinOp(q) Binary(q + 1) )*        for each operator with level q >= p
+Cast        = Prefix ( 'as' Type )*
+Prefix      = ( '-' | '!' | '~' | '*' | '&' ) Prefix | Postfix
+Postfix     = Primary ( '(' Args? ')' | '[' Expr ']' | '.' IDENT )*
+Args        = Expr ( ',' Expr )* ','?
+Primary     = INT | CHAR | STRING | 'true' | 'false' | IDENT | '(' Expr ')'
+            | 'sizeof' '(' Type ')' | 'alignof' '(' Type ')'
+            | 'new' Type '{' ( Init ( ',' Init )* ','? )? '}'
+Init        = IDENT '=' Expr
+```
+
+Binary operator levels, lowest first: 1 `||`; 2 `&&`; 3 `== != < > <= >=`;
+4 `|`; 5 `^`; 6 `&`; 7 `<< >>`; 8 `+ - +% -%`; 9 `* / % *%`. All are left-associative
+except level 3, which does not associate.
+
+**[core.decl.1]** A statement starting with something that parses as a `Type` followed
+by an `IDENT` and then `=`, `;`, `}` or end of file is a declaration; otherwise it is an
+expression statement. So `u8[16] buf;` declares and `buf[i] = 1;` assigns. At top level,
+`Type IDENT (` begins a function.
+
+**[core.syntax.1]** Syntax errors are **E0101**, worded `expected X, found Y`.
+
+**[core.syntax.2]** A comparison whose left operand is an unparenthesized comparison
+(`a < b < c`) is **E0102**.
+
+**[core.syntax.3]** The target of an assignment, `++` or `--` must be a name, a field
+access, an index or a dereference (`*p`); anything else is **E0103**.
+
+**[core.syntax.4]** Statements and expressions may nest at most 256 levels deep; deeper
+nesting is **E0104**. A statement, an expression, a prefix operator, and each operator,
+cast, call, index or member access in a chain (`a + b + c`, `x.y.z`) counts as a level,
+because those chains form left-deep trees that later passes walk recursively. In
+practice a single expression can hold roughly 250 chained binary operators. (A Stage 0
+limit, so no input can overflow its stack.)
+
+**[core.syntax.5]** Full-Envo syntax that Core leaves out is **E0905**, naming the
+construct, wherever the parser can recognise it: any reserved keyword outside the Core
+set (`class`, `foreach`, `null`, `this`, `in`, `ref`, …; the Core set is
+`_ alignof as break const continue else enum false for if match new private public
+return sizeof static struct true unsafe var while`), float literals, `?`, `??`, `=>`
+outside functions and arms, `..`, `::`, `->`, `??=`, named arguments (`f(x: 1)`),
+tuples and array literals, generic parameters on functions, default parameter values,
+struct base lists, enum payloads, and local `const`, `static`, `struct` and `enum`.
+
+The AST is printed by `envoc0 parse <file>`; its format is described in
+[`tests/golden/README.md`](../../tests/golden/README.md).
+
 ## 6. Built-in functions
 
 Core programs have no standard library. These built-ins are always in scope:
@@ -146,6 +233,7 @@ porting Stage 0 is a matter of one platform file.
 
 ```
 envoc0 lex <file.envo>                              print the token stream (implemented)
+envoc0 parse <file.envo>                            print the syntax tree (implemented)
 envoc0 build <entry.envo> [more.envo…] -o <out>     compile (M1, not yet implemented)
         [--target x86_64-windows | x86_64-linux]
 envoc0 version | help

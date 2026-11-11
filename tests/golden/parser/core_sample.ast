@@ -1,0 +1,91 @@
+program @2:1
+  const MAX @2:13
+    type usize @2:7
+    binary << @2:21
+      int 1 @2:19
+      int 10 @2:24
+  enum Color @4:6
+    type u8 @4:14
+    variant Red @4:19
+      -
+    variant Green @4:24
+      int 5 @4:32
+    variant Blue @4:35
+      -
+  struct Point @6:8
+    field X @7:9
+      type i64 @7:5
+    field Y @8:9
+      type i64 @8:5
+  fn Dot @11:5
+    type i64 @11:1
+    param a @11:15
+      type Point @11:9
+    param b @11:24
+      type Point @11:18
+    block @11:27
+      return @12:5
+        binary + @12:22
+          binary * @12:16
+            member X @12:14
+              name a @12:12
+            member X @12:20
+              name b @12:18
+          binary * @12:28
+            member Y @12:26
+              name a @12:24
+            member Y @12:32
+              name b @12:30
+  var p @15:5
+    -
+    new @15:9
+      type Point @15:13
+      init X @15:21
+        int 3 @15:25
+      init Y @15:28
+        unary - @15:32
+          int 4 @15:33
+  match @16:1
+    member Red @16:13
+      name Color @16:7
+    arm @17:16
+      name Red @17:5
+      name Blue @17:11
+      expr @17:19
+        call @17:24
+          name print @17:19
+          string "cool" @17:25
+    arm @18:7
+      wild @18:5
+      block @18:10
+        -
+  for @20:1
+    var i @20:10
+      -
+      int 0 @20:14
+    binary < @20:19
+      name i @20:17
+      int 10 @20:21
+    inc @20:26
+      name i @20:25
+    block @20:30
+      if @21:5
+        binary == @21:15
+          binary % @21:11
+            name i @21:9
+            int 2 @21:13
+          int 0 @21:18
+        continue @21:21
+        -
+      unsafe @22:5
+        block @22:12
+          assign = @22:19
+            unary * @22:14
+              name buf @22:15
+            as @22:25
+              char 'a' @22:21
+              type u8 @22:28
+  expr @24:1
+    call @24:6
+      name print @24:1
+      string "done" @24:7

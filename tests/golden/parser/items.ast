@@ -1,0 +1,66 @@
+program @2:1
+  const MAX_TOKENS @2:13
+    type usize @2:7
+    binary << @2:28
+      int 1 @2:26
+      int 20 @2:31
+  static count @3:14
+    type usize @3:8
+    int 0 @3:22
+  static buffer @4:12
+    ptr @4:8
+      type u8 @4:9
+    -
+  const ANSWER @5:18
+    type i32 @5:14
+    int 42 @5:27
+  struct Token @7:8
+    field Kind @8:9
+      type u16 @8:5
+    field Start @9:16
+      type u32 @9:12
+    field Len @10:17
+      type u32 @10:13
+  enum Color @13:6
+    type u8 @13:14
+    variant Red @13:19
+      -
+    variant Green @13:24
+      int 5 @13:32
+    variant Blue @13:35
+      -
+  enum Empty @14:6
+    -
+    -
+  enum Bare @15:6
+    -
+    variant A @15:13
+      -
+  fn Add @17:5
+    type i64 @17:1
+    param a @17:13
+      type i64 @17:9
+    param b @17:20
+      type i64 @17:16
+    block @17:23
+      return @18:5
+        binary + @18:14
+          name a @18:12
+          name b @18:16
+  fn Twice @20:5
+    type i64 @20:1
+    param x @20:15
+      type i64 @20:11
+    binary * @20:23
+      name x @20:21
+      int 2 @20:25
+  fn Nothing @21:13
+    type void @21:8
+    -
+    block @21:23
+      -
+  fn Flag @22:14
+    type bool @22:9
+    param a @22:24
+      type bool @22:19
+    name a @22:31

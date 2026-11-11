@@ -1,0 +1,158 @@
+program @2:1
+  fn Main @2:6
+    type void @2:1
+    -
+    block @2:13
+      var x @3:9
+        -
+        int 1 @3:13
+      var y @4:9
+        type i64 @4:5
+        -
+      var z @5:9
+        type i64 @5:5
+        int 2 @5:13
+      assign = @6:7
+        name x @6:5
+        int 3 @6:9
+      assign += @7:7
+        name x @7:5
+        int 1 @7:10
+      assign -= @7:15
+        name x @7:13
+        int 1 @7:18
+      assign *= @7:23
+        name x @7:21
+        int 2 @7:26
+      assign /= @7:31
+        name x @7:29
+        int 2 @7:34
+      assign %= @7:39
+        name x @7:37
+        int 3 @7:42
+      assign &= @8:7
+        name x @8:5
+        int 1 @8:10
+      assign |= @8:15
+        name x @8:13
+        int 2 @8:18
+      assign ^= @8:23
+        name x @8:21
+        int 3 @8:26
+      assign <<= @8:31
+        name x @8:29
+        int 1 @8:35
+      assign >>= @8:40
+        name x @8:38
+        int 1 @8:44
+      assign +%= @9:7
+        name x @9:5
+        int 1 @9:11
+      assign -%= @9:16
+        name x @9:14
+        int 1 @9:20
+      assign *%= @9:25
+        name x @9:23
+        int 1 @9:29
+      inc @10:6
+        name x @10:5
+      dec @11:6
+        name x @11:5
+      if @12:5
+        binary == @12:11
+          name x @12:9
+          int 1 @12:14
+        assign = @12:19
+          name y @12:17
+          int 1 @12:21
+        if @12:29
+          binary == @12:35
+            name x @12:33
+            int 2 @12:38
+          block @12:41
+            assign = @12:45
+              name y @12:43
+              int 2 @12:47
+          assign = @12:59
+            name y @12:57
+            int 3 @12:61
+      while @13:5
+        binary < @13:14
+          name x @13:12
+          int 10 @13:16
+        inc @13:21
+          name x @13:20
+      for @14:5
+        -
+        -
+        -
+        break @14:14
+      for @15:5
+        var i @15:14
+          -
+          int 0 @15:18
+        binary < @15:23
+          name i @15:21
+          int 10 @15:25
+        inc @15:30
+          name i @15:29
+        continue @15:34
+      for @16:5
+        assign = @16:12
+          name x @16:10
+          int 0 @16:14
+        -
+        -
+        block @16:21
+          break @16:23
+      unsafe @17:5
+        block @17:12
+          assign = @17:17
+            unary * @17:14
+              name p @17:15
+            int 1 @17:19
+      block @18:5
+        -
+      return @19:5
+        -
+  fn Pick @21:5
+    type i32 @21:1
+    param k @21:14
+      type i32 @21:10
+    block @21:17
+      match @22:5
+        name k @22:11
+        arm @23:11
+          int 0 @23:9
+          expr @23:14
+            call @23:25
+              name return_zero @23:14
+              -
+        arm @24:15
+          int 1 @24:9
+          int 2 @24:13
+          block @24:18
+            return @24:20
+              int 1 @24:27
+        arm @25:12
+          unary - @25:9
+            int 1 @25:10
+          assign = @25:17
+            name x @25:15
+            int 0 @25:19
+        arm @26:19
+          member Red @26:15
+            name Color @26:9
+          block @26:22
+            -
+        arm @27:11
+          wild @27:9
+          expr @27:14
+            call @27:19
+              name print @27:14
+              string "other" @27:20
+      match @29:5
+        name k @29:11
+        -
+      return @30:5
+        name k @30:12

@@ -1,0 +1,2 @@
+// expect-error: E0102 @ 2:16
+var b = a == b != c;

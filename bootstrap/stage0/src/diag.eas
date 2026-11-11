@@ -22,10 +22,15 @@ E_BAD_SUFFIX            equ 8
 E_CHAR_LENGTH           equ 9
 E_BAD_UNICODE_ESCAPE    equ 10
 E_CONTROL_CHAR          equ 11
+E_EXPECTED              equ 101
+E_CHAINED_COMPARISON    equ 102
+E_BAD_ASSIGN_TARGET     equ 103
+E_TOO_DEEP              equ 104
 E_CORE_INTERPOLATION    equ 901
 E_CORE_RAW_STRING       equ 902
 E_CORE_DIRECTIVE        equ 903
 E_CORE_NON_ASCII        equ 904
+E_CORE_CONSTRUCT        equ 905
 
 ; src_line - 1-based line number of a byte offset.
 ;   in:  rdi = offset
@@ -79,6 +84,33 @@ src_col:
 ;   in:  edi = error code, rsi = byte offset
 diag_error:
         and     rsp, -16                ; never returns: realign unconditionally
+        mov     ebx, edi
+        call    diag_header
+        mov     edi, ebx
+        call    diag_message            ; rax = NUL-terminated message
+        lea     rdi, [w_err]
+        mov     rsi, rax
+        call    w_cstr
+        jmp     diag_finish
+
+; diag_finish - end the diagnostic line and exit with code 1. Jump here (or
+; call it) from a routine that has written the rest of the message to w_err.
+diag_finish:
+        and     rsp, -16
+        lea     rdi, [w_err]
+        mov     esi, 10
+        call    w_byte
+        mov     edi, 1
+        call    exit_process
+
+; diag_header - write "<path>:<line>:<col>: error[E<code>]: " to w_err.
+; For routines that build their own message, then jump to diag_finish.
+;   in:  edi = error code, rsi = byte offset
+;   clobbers: caller-saved registers (rbx and r12 are preserved)
+diag_header:
+        push    rbx
+        push    r12
+        sub     rsp, 24                 ; 8 + 16 + 24 = 48: aligned, plus scratch
         mov     ebx, edi                ; rbx = code
         mov     r12, rsi                ; r12 = offset
         lea     rdi, [w_err]
@@ -104,8 +136,7 @@ diag_error:
         lea     rsi, [msg_error_open]
         mov     edx, msg_error_open_len
         call    w_bytes
-        ; four-digit code, zero-padded
-        sub     rsp, 16
+        ; four-digit code, zero-padded, built in the scratch space at [rsp]
         mov     eax, ebx
         mov     ecx, 10
         xor     edx, edx
@@ -128,21 +159,14 @@ diag_error:
         mov     rsi, rsp
         mov     edx, 4
         call    w_bytes
-        add     rsp, 16
         lea     rdi, [w_err]
         lea     rsi, [msg_error_close]
         mov     edx, msg_error_close_len
         call    w_bytes
-        mov     edi, ebx
-        call    diag_message            ; rax = NUL-terminated message
-        lea     rdi, [w_err]
-        mov     rsi, rax
-        call    w_cstr
-        lea     rdi, [w_err]
-        mov     esi, 10
-        call    w_byte
-        mov     edi, 1
-        call    exit_process
+        add     rsp, 24
+        pop     r12
+        pop     rbx
+        ret
 
 ; diag_message - look up the message for an error code.
 ;   in:  edi = code
@@ -198,6 +222,12 @@ diag_messages:
         db      'invalid Unicode escape', 0
         dw      E_CONTROL_CHAR
         db      'control character in literal; use an escape sequence', 0
+        dw      E_CHAINED_COMPARISON
+        db      'comparison operators cannot be chained; use `&&` or parentheses', 0
+        dw      E_BAD_ASSIGN_TARGET
+        db      'invalid target for assignment', 0
+        dw      E_TOO_DEEP
+        db      'nested too deeply (Stage 0 limit: 256 levels)', 0
         dw      E_CORE_INTERPOLATION
         db      'interpolated strings are not part of Envo-Core', 0
         dw      E_CORE_RAW_STRING

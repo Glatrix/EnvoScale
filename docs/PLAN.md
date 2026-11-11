@@ -98,8 +98,8 @@ The milestone is large, so it is cut into increments that each end tested.
 | 1.2 | Platform shims: PE/ELF headers, 8 shim functions, argv | builds; smoke tests | done on Windows; Linux awaits CI |
 | 1.3 | Runtime helpers: arena, buffered I/O, diagnostics, UTF-8 check | via 1.4 tests | done |
 | 1.4 | Lexer + `envoc0 lex` token dump | `tests/golden/lexer/`, `tests/spec/01-lexical/` | done (58/58 on Windows) |
-| 1.5 | Parser → AST for Envo-Core | golden AST dumps | next |
-| 1.6 | Type checker for Envo-Core | `expect-error` spec tests | |
+| 1.5 | Parser → AST for Envo-Core | `tests/golden/parser/`, `tests/spec/core-syntax/` | done (109/109 on Windows) |
+| 1.6 | Type checker for Envo-Core | `expect-error` spec tests | next |
 | 1.7 | x86-64 code generation + PE/ELF writers for *output* programs | `// expect:` spec tests, hello world | |
 | 1.8 | Builtins (`print`, file I/O, `alloc`, args) for output programs | spec tests | |
 | 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | |

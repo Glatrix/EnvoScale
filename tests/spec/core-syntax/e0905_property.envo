@@ -1,0 +1,2 @@
+// expect-error: E0905 @ 2:20
+struct S { i32 Len { get; } }

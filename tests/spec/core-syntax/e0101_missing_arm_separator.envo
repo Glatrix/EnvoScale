@@ -1,0 +1,2 @@
+// expect-error: E0101 @ 2:25
+match x { 1 => print(a) 2 => b() }

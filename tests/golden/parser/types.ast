@@ -1,0 +1,54 @@
+program @2:1
+  var buf @2:8
+    array @2:3
+      type u8 @2:1
+      int 16 @2:4
+    -
+  var p @3:5
+    ptr @3:1
+      type u8 @3:2
+    -
+  var pp @4:7
+    ptr @4:1
+      ptr @4:2
+        type i32 @4:3
+    as @4:14
+      int 0 @4:12
+      ptr @4:17
+        ptr @4:18
+          type i32 @4:19
+  var bytes @5:6
+    slice @5:3
+      type u8 @5:1
+    -
+  var mixed @6:10
+    ptr @6:1
+      slice @6:7
+        array @6:4
+          type u8 @6:2
+          int 4 @6:5
+    -
+  var table @7:12
+    array @7:6
+      type Token @7:1
+      name MAX @7:7
+    -
+  var name @8:5
+    type str @8:1
+    string "x" @8:12
+  var corners @9:11
+    ptr @9:1
+      array @9:7
+        type Point @9:2
+        int 2 @9:8
+    -
+  var n @10:7
+    type usize @10:1
+    binary + @10:26
+      sizeof @10:11
+        ptr @10:18
+          array @10:21
+            type u8 @10:19
+            int 8 @10:22
+      alignof @10:28
+        type Token @10:36
