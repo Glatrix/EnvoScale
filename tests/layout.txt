@@ -139,3 +139,4 @@ tools/lint
 tools/lsp
 tools/pkg
 tools/prof
+website
