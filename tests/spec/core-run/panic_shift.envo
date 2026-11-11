@@ -1,0 +1,4 @@
+// Shifting by the bit width or more panics ([type.int.4]).
+// expect-panic: shift amount out of range
+u32 n = 32;
+var x = 1u32 << n;

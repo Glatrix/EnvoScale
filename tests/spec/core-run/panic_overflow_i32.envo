@@ -1,0 +1,7 @@
+// Signed overflow panics in every build ([type.int.1]).
+// expect: start
+// expect-panic: integer overflow
+i32 x = 2147483647;
+print("start");
+x = x + 1;
+print("unreachable");

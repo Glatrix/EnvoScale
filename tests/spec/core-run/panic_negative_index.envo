@@ -1,0 +1,5 @@
+// A negative index is out of bounds, not a wrap-around.
+// expect-panic: index out of bounds
+u8[4] a;
+i32 i = -1;
+var x = a[i];

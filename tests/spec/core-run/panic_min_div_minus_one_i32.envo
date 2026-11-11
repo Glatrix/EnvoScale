@@ -1,0 +1,5 @@
+// The same for a narrower type: the quotient does not fit.
+// expect-panic: integer overflow
+i32 x = -2147483647 - 1;
+i32 m = -1;
+var y = x / m;

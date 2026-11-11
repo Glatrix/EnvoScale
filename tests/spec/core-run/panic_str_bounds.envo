@@ -1,0 +1,5 @@
+// Indexing a str is bounds-checked too.
+// expect-panic: index out of bounds
+str s = "abc";
+usize i = 3;
+var c = s[i];

@@ -228,6 +228,38 @@ diag_messages:
         db      'invalid target for assignment', 0
         dw      E_TOO_DEEP
         db      'nested too deeply (Stage 0 limit: 256 levels)', 0
+        dw      205
+        db      '`break` or `continue` outside a loop', 0
+        dw      306
+        db      'this needs an `unsafe` block', 0
+        dw      308
+        db      '`match` is not exhaustive; add `_` or the missing values', 0
+        dw      310
+        db      'constant evaluation failed (overflow, division by zero, or shift too large)', 0
+        dw      311
+        db      'expected a constant expression', 0
+        dw      312
+        db      'type is too large (Stage 0 limit: 2^31 - 1 bytes)', 0
+        dw      314
+        db      'this cannot be called', 0
+        dw      315
+        db      'cannot assign to this', 0
+        dw      316
+        db      'cannot take the address of this', 0
+        dw      319
+        db      'this value is already matched', 0
+        dw      320
+        db      'not all code paths return a value', 0
+        dw      321
+        db      'only calls can be used as statements', 0
+        dw      322
+        db      'a `void` value cannot be used here', 0
+        dw      323
+        db      'duplicate enum value', 0
+        dw      324
+        db      'enum representation must be an integer type', 0
+        dw      327
+        db      '`void` is only allowed as a return type', 0
         dw      E_CORE_INTERPOLATION
         db      'interpolated strings are not part of Envo-Core', 0
         dw      E_CORE_RAW_STRING

@@ -1,0 +1,5 @@
+// panic() prints its message and exits with 101 (envo-core.md section 6).
+// expect: before
+// expect-panic: something went wrong
+print("before");
+panic("something went wrong");

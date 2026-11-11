@@ -1,0 +1,4 @@
+// Division by zero panics ([type.int.3]).
+// expect-panic: division by zero
+i32 zero = 0;
+var x = 10 / zero;

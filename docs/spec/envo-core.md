@@ -119,8 +119,8 @@ Expressions:
 Semicolons: required after each statement except directly before `}` or at end of file
 (§3.1).
 
-Integer overflow, division by zero and out-of-range indexing panic (exit code 101), as
-in full Envo.
+Integer overflow, division by zero, shifts by at least the bit width and out-of-range
+indexing panic (`panic: <reason>` on stderr, exit code 101), as in full Envo.
 
 ### 5.1 Grammar (normative; implemented by `bootstrap/stage0/src/parser.eas`)
 
@@ -337,6 +337,7 @@ Core programs have no standard library. These built-ins are always in scope:
 | `usize argc()` | number of command-line arguments |
 | `str arg(usize i)` | argument `i` (0 is the program) |
 | `void panic(str msg)` | print `panic: msg` to stderr and exit with code 101 |
+| `str str_from(*u8 ptr, usize len)` | the `len` bytes at `ptr` as a `str`; only in `unsafe` (E0306), because the caller vouches that the bytes are valid UTF-8 and stay alive |
 
 These map one-to-one onto the Stage 0 platform shim (`sys_*` routines), which is why
 porting Stage 0 is a matter of one platform file.
@@ -347,8 +348,8 @@ porting Stage 0 is a matter of one platform file.
 envoc0 lex <file.envo>                              print the token stream (implemented)
 envoc0 parse <file.envo>                            print the syntax tree (implemented)
 envoc0 check <file.envo>                            check names and types; print the typed tree (implemented)
-envoc0 build <entry.envo> [more.envo…] -o <out>     compile (M1, not yet implemented)
-        [--target x86_64-windows | x86_64-linux]
+envoc0 build <file.envo> -o <out>                   compile to an executable (implemented; one file)
+        [--target x86_64-windows | x86_64-linux]    default: the OS envoc0 runs on
 envoc0 version | help
 ```
 

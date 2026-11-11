@@ -87,6 +87,7 @@ SK_LOCAL        equ 8
 
 B_EXIT          equ 7                   ; builtin ids that never return ([core.stmt.6])
 B_PANIC         equ 10
+B_STR_FROM      equ 11                  ; needs `unsafe`
 
 MAX_TYPE_SIZE   equ 0x7FFFFFFF
 NF_MATCHED      equ 2                   ; a match pattern whose value was recorded
@@ -3257,6 +3258,10 @@ check_expr_inner:
         je      short .callable
         cmp     ecx, SK_BUILTIN
         jne     near .not_callable
+        cmp     dword [rax + S_AUX2], B_STR_FROM ; str_from vouches for raw memory
+        jne     short .callable
+        cmp     qword [c_unsafe], 0
+        je      near .needs_unsafe
 .callable:
         ; [core.expr.8] count the arguments first
         mov     edi, ebx
@@ -5153,6 +5158,8 @@ builtin_table:
         dd      3, T_STR, 1, T_USIZE, 0, 0
         dq      pn_panic - prim_names                   ; id 10 = B_PANIC
         dd      5, T_VOID, 1, T_STR, 0, 0
+        dq      pn_str_from - prim_names                ; id 11 = B_STR_FROM (unsafe)
+        dd      8, T_STR, 2, T_PTR_U8, T_USIZE, 0
         dq      0
         dd      0, 0, 0, 0, 0, 0
 
@@ -5199,6 +5206,7 @@ pn_exit:        db 'exit'
 pn_argc:        db 'argc'
 pn_arg:         db 'arg'
 pn_panic:       db 'panic'
+pn_str_from:    db 'str_from'
 
 ; Message formats for c_fail.
 f_duplicate:        db '`%n` is already defined', 0

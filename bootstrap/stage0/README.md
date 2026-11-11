@@ -1,8 +1,8 @@
 # Stage 0 — `envoc0`
 
-> **Status:** In progress (M1). Platform shims, runtime helpers, the lexer
-> (`envoc0 lex`), the parser (`envoc0 parse`) and the type checker (`envoc0 check`)
-> work and are tested. x86-64 code generation is next.
+> **Status:** In progress (M1). `envoc0 build` compiles Envo-Core programs to working
+> x86-64 executables for Windows and Linux; lexer, parser, checker, code generator and
+> writers are all tested. What remains of M1 is a broader Envo-Core test suite.
 > See [`STATUS.md`](../../STATUS.md) for what is tested.
 
 `envoc0` compiles **Envo-Core** ([`docs/spec/envo-core.md`](../../docs/spec/envo-core.md))
@@ -33,8 +33,8 @@ From the repository root:
 |---|---|
 | `envoc0-windows.eas` | Top-level unit for Windows; includes everything below |
 | `envoc0-linux.eas` | Top-level unit for Linux |
-| `platform/windows.eas` | PE header, kernel32 imports, shim routines, argv parsing, entry |
-| `platform/linux.eas` | ELF header, syscall shim routines, entry |
+| `platform/windows.eas` | Windows runtime block: kernel32 imports, shim, argv parsing, built-ins |
+| `platform/linux.eas` | Linux runtime block: syscall shim, built-ins |
 | `src/main.eas` | Command dispatch |
 | `src/mem.eas` | Arena allocator and memory helpers |
 | `src/io.eas` | Buffered stdout/stderr, decimal output, file reading, exit |
@@ -45,6 +45,10 @@ From the repository root:
 | `src/lexer.eas` | The lexer |
 | `src/parser.eas` | The parser and the syntax tree printer |
 | `src/check.eas` | Names, types, layouts and constants (the checker) |
+| `src/codegen.eas` | x86-64 code generation |
+| `src/writer.eas` | PE/ELF output and `envoc0 build` |
+| `platform/pe.eas`, `platform/elf.eas` | envoc0's own executable headers |
+| `platform/runtime-abi.eas` | The interface between compiled code and the runtime blocks |
 
 How it fits together, and why it is built this way:
 [`docs/architecture/bootstrap.md`](../../docs/architecture/bootstrap.md).
@@ -55,6 +59,7 @@ How it fits together, and why it is built this way:
 envoc0 lex <file.envo>     print the token stream
 envoc0 parse <file.envo>   print the syntax tree
 envoc0 check <file.envo>   check names and types; print the typed tree
+envoc0 build <file.envo> -o <exe> [--target x86_64-windows|x86_64-linux]
 envoc0 version             print the version
 envoc0 help                print usage
 ```

@@ -1,0 +1,4 @@
+// 64-bit unsigned multiplication overflow (the carry flag).
+// expect-panic: integer overflow
+u64 x = 4294967296;
+var y = x * x;

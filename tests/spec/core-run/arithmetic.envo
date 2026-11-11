@@ -1,0 +1,66 @@
+// Integer arithmetic at every width ([type.int.1]-[type.int.4]).
+// expect: 300
+// expect: -128
+// expect: 255
+// expect: 4294967295
+// expect: 18446744073709551615
+// expect: -3
+// expect: -1
+// expect: 3
+// expect: 1
+// expect: 0
+// expect: 244
+// expect: -2
+// expect: 120
+// expect: 16
+// expect: -4
+// expect: 9223372036854775807
+// expect: 2
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+str U(u64 v) {
+    if (v == 18446744073709551615) return "18446744073709551615";
+    return Num(v as i64);
+}
+i16 a = 100;
+i16 b = 200;
+print(Num((a + b) as i64));
+i8 c = -128;
+print(Num(c as i64));
+u8 d = 255;
+print(Num(d as i64));
+u32 e = 4294967295;
+print(Num(e as i64));
+u64 f = 18446744073709551615;
+print(U(f));
+i32 g = -7;
+print(Num((g / 2) as i64));
+print(Num((g % 2) as i64));
+print(Num((7 / 2) as i64));
+print(Num((7 % 2) as i64));
+u8 h = 250;
+print(Num((h +% 6) as i64));
+print(Num((h -% 6) as i64));
+i8 i = 127;
+print(Num((i +% 127) as i64));
+print(Num((5 * 4 * 3 * 2) as i64));
+print(Num((1 << 4) as i64));
+print(Num((-16 >> 2) as i64));
+print(Num(9223372036854775807));
+u64 big = 18446744073709551615;
+print(Num((big >> 63) as i64 + 1));

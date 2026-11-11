@@ -1,0 +1,4 @@
+// Going below zero in an unsigned type is overflow too.
+// expect-panic: integer overflow
+u8 x = 0;
+x--;

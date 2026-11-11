@@ -1,0 +1,9 @@
+// Indexing is bounds-checked ([type.array.1]).
+// expect: ok
+// expect-panic: index out of bounds
+u8[4] a;
+usize i = 3;
+a[i] = 1;
+print("ok");
+i = 4;
+a[i] = 1;

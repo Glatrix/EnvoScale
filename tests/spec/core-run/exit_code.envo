@@ -1,0 +1,6 @@
+// A top-level `return` sets the exit code ([item.mod.3]).
+// expect: before
+// expect-exit: 42
+print("before");
+return 42;
+print("never");

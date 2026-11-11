@@ -4,6 +4,7 @@
 ;   envoc0 lex <file.envo>     print the token stream
 ;   envoc0 parse <file.envo>   print the syntax tree
 ;   envoc0 check <file.envo>   check names and types; print the typed tree
+;   envoc0 build <file.envo> -o <output> [--target T]   compile to an executable
 ;   envoc0 version            print the version (also --version)
 ;   envoc0 help                print usage (also --help)
 ;
@@ -36,6 +37,11 @@ main:
         call    arg1_is
         test    eax, eax
         jnz     near .check
+        lea     rsi, [s_cmd_build]
+        mov     edx, s_cmd_build_len
+        call    arg1_is
+        test    eax, eax
+        jnz     near .build
         lea     rsi, [s_cmd_version]
         mov     edx, s_cmd_version_len
         call    arg1_is
@@ -94,6 +100,11 @@ main:
         mov     rdx, [g_argv]
         mov     rdi, [rdx + 16]
         call    cmd_check               ; does not return
+
+.build:
+        mov     rdi, [g_argv]
+        mov     rsi, [g_argc]
+        call    cmd_build               ; does not return
 
 .version:
         lea     rdi, [w_out]
@@ -266,6 +277,8 @@ s_cmd_lex:              db 'lex'
 s_cmd_lex_len           equ $ - s_cmd_lex
 s_cmd_parse:            db 'parse'
 s_cmd_parse_len         equ $ - s_cmd_parse
+s_cmd_build:            db 'build'
+s_cmd_build_len         equ $ - s_cmd_build
 s_cmd_check:            db 'check'
 s_cmd_check_len         equ $ - s_cmd_check
 s_cmd_version:          db 'version'
@@ -287,6 +300,8 @@ s_usage:
         db      '  lex <file.envo>     print the token stream of an Envo-Core source file', 10
         db      '  parse <file.envo>   print the syntax tree of an Envo-Core source file', 10
         db      '  check <file.envo>   check names and types; print the typed syntax tree', 10
+        db      '  build <file.envo> -o <output> [--target x86_64-windows|x86_64-linux]', 10
+        db      '                      compile to an executable (default: this OS)', 10
         db      '  version             print the version', 10
         db      '  help                print this message', 10
 s_usage_len             equ $ - s_usage

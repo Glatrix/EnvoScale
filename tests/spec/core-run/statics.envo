@@ -1,0 +1,38 @@
+// Statics hold state between calls; consts are compile-time values ([core.const.3]).
+// expect: 1 2 3
+// expect: base
+// expect: 8
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+const usize N = 2 * WIDTH;
+const usize WIDTH = 4;
+static i32 counter;
+static str label = "base";
+static u8[N] cells;
+i32 Next() {
+    counter++;
+    return counter;
+}
+write(1, Num(Next() as i64));
+write(1, " ");
+write(1, Num(Next() as i64));
+write(1, " ");
+print(Num(Next() as i64));
+print(label);
+cells[7] = 8;
+print(Num(cells[N - 1] as i64));

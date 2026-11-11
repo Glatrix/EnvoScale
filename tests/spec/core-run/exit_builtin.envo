@@ -1,0 +1,7 @@
+// exit() ends the program at once (envo-core.md section 6).
+// expect: one
+// expect-exit: 7
+void Stop() { exit(7); }
+print("one");
+Stop();
+print("two");

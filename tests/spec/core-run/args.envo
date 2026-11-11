@@ -1,0 +1,3 @@
+// argc() and arg(): argument 0 is the program.
+// expect: has program name
+if (argc() >= 1 && arg(0).Len > 0) print("has program name");

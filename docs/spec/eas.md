@@ -65,7 +65,8 @@ comment   = ';' any-text-to-end-of-line
   defined first (this is why `bootstrap/stage0` includes `src/tokens.eas` before the code
   that uses token kinds).
 - **Every jump states its size**: `jmp short .x` / `jz short .x` (rel8, 2 bytes) or
-  `jmp near .x` / `jz near .x` (rel32, 5 or 6 bytes). The assembler never chooses, and a
+  `jmp near .x` / `jz near .x` (rel32, 5 or 6 bytes). (An indirect `jmp rax` has no
+  size to state.) The assembler never chooses, and a
   `short` jump whose target is out of range is an error, not a silent widening.
   `bootstrap.* check` rejects a jump without a size.
 
@@ -98,7 +99,8 @@ mov movzx movsx movsxd lea  xchg
 add sub adc sbb imul mul idiv div neg inc dec
 and or xor not test cmp
 shl shr sar rol ror
-push pop call ret jmp
+push pop call ret jmp      (jmp also through a 64-bit register)
+setcc lodsb
 jcc   (jo jno jb jae je jne jbe ja js jns jp jnp jl jge jle jg, and aliases jc jnc jz jnz)
 setcc cmovcc   (same condition codes)
 cqo cdq

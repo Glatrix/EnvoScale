@@ -1,7 +1,7 @@
 # Architecture: Stage 0 (`envoc0`)
 
-> **Status:** M1 in progress. Platform shims, runtime helpers, lexer, parser and type
-> checker work; the code generator is next.
+> **Status:** M1 in progress. The whole pipeline works: lexer, parser, checker, x86-64
+> code generation and PE/ELF output. What remains of M1 is a broader test suite.
 
 This note explains how Stage 0 is put together and why. The user-facing overview of the
 whole ladder is [`bootstrap/README.md`](../../bootstrap/README.md).
@@ -174,11 +174,41 @@ Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
   and error position in the tests comes from a separate model of
   [`envo-core.md`](../spec/envo-core.md) §5.2–5.3, not from `envoc0`.
 
+## Code generation
+
+- **Programs reuse envoc0's runtime.** Each platform file is a position-independent
+  *runtime block*: entry point, the eight OS routines, argument parsing, the Windows
+  import table, and the built-ins. envoc0 runs its native block itself, and `envoc0
+  build` copies a block's bytes into every program (both blocks are in every envoc0,
+  so it cross-compiles). The writer zeroes the copy's mutable data, points its call to
+  `main` at the program's `__main`, and on Windows moves the import RVAs. A block starts
+  with a table of 5-byte jumps, so built-in *k* is at offset 5*k* on both OSes
+  (`platform/runtime-abi.eas`).
+- **A stack machine.** An expression leaves a scalar in `rax`, a `str` or slice in
+  `rax`/`rdx`, or the address of a struct or array in `rax`. Temporaries are pushed;
+  every local, parameter and aggregate temporary has a fixed `rbp` slot assigned before
+  the body is generated. Machine code comes from small byte templates.
+- **Calling convention.** Arguments are pushed left to right (8 bytes per scalar, 16
+  per `str`, the size rounded up to 8 per aggregate), then the address of the result
+  slot when a struct or array is returned. The caller pops everything; results come back
+  in `rax`(/`rdx`). Built-ins use the same convention.
+- **Run-time checks.** Values are kept canonical (sign- or zero-extended to 64 bits),
+  so overflow is the CPU's overflow/carry flag for 64-bit types and "does it survive
+  re-normalization" for narrower ones. Bounds, division and shift checks are compares.
+  Every failing check jumps to a shared stub that calls the runtime's trap entry, which
+  prints `panic: <reason>` and exits with 101.
+- **Image layout.** One section: [runtime block][trap stubs][functions][data], with
+  data reached RIP-relative (fixups resolved once the code size is known) and absolute
+  addresses (a `static str`'s pointer) filled in once the image address is known.
+  Hello world is 8 KB on Windows.
+
 ## Testing
 
 - `tests/golden/lexer/*.envo` → `*.tokens`: exact token dumps.
 - `tests/golden/parser/*.envo` → `*.ast`: exact syntax tree dumps.
 - `tests/golden/check/*.envo` → `*.check`: typed trees with layouts and constant values.
+- `tests/spec/core-run/`: programs compiled with `envoc0 build` and run; stdout, exit
+  code and panic message must match.
 - `tests/spec/01-lexical/`, `core-syntax/` and `core-types/`: one error each,
   with `// expect-error: EXXXX @ line:col`.
 

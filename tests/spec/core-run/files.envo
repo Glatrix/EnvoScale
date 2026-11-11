@@ -1,0 +1,34 @@
+// open/write/read/close round trip in the working directory.
+// expect: wrote 12
+// expect: read: hello, file
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+i32 output = open("core-run-files.tmp", 1);
+if (output < 0) panic("cannot create the file");
+write(output, "hello, file\n");
+close(output);
+print("wrote 12");
+i32 input = open("core-run-files.tmp", 0);
+if (input < 0) panic("cannot open the file");
+*u8 buf = alloc(64);
+isize got = read(input, buf, 64);
+close(input);
+unsafe {
+    write(1, "read: ");
+    write(1, str_from(buf, got as usize));
+}

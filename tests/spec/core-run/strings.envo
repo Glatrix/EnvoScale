@@ -1,0 +1,41 @@
+// str values: literals, escapes, Len/Ptr, indexing, str_from ([core.expr.6], [core.expr.7]).
+// expect: tab:	end
+// expect: quote:"' backslash:\
+// expect: héllo 6
+// expect: 😀 4
+// expect: AB
+// expect: 3
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+print("tab:\tend");
+print("quote:\"\' backslash:\\");
+str h = "h\u{e9}llo";
+write(1, h);
+write(1, " ");
+print(Num(h.Len as i64));
+str e = "\u{1F600}";
+write(1, e);
+write(1, " ");
+print(Num(e.Len as i64));
+str x = "\x41B";
+unsafe {
+    *u8 p = x.Ptr;
+    print(str_from(p, 2));
+}
+const str THREE = "abc";
+print(Num(THREE.Len as i64));

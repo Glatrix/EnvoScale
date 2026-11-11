@@ -1,0 +1,53 @@
+// Structs and arrays are values: copied on assignment, passed and returned by value.
+// expect: 11 22
+// expect: copy kept 1
+// expect: 3 18 9
+// expect: 0 0
+// expect: 42
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+struct Point { i64 X; i64 Y; }
+struct Line { Point A; Point B; u8[3] Tag; }
+Point Add(Point a, Point b) => new Point { X = a.X + b.X, Y = a.Y + b.Y };
+Line Scale(Line l, i64 k) {
+    l.A.X = l.A.X * k;
+    l.B.Y = l.B.Y * k;
+    return l;
+}
+void Show(Point p) {
+    write(1, Num(p.X));
+    write(1, " ");
+    print(Num(p.Y));
+}
+Show(Add(new Point { X = 1, Y = 2 }, new Point { X = 10, Y = 20 }));
+Point p = new Point { X = 1 };
+Point q = p;
+q.X = 99;
+write(1, "copy kept ");
+print(Num(p.X));
+Line l = new Line { A = new Point { X = 1, Y = 1 }, B = new Point { X = 2, Y = 3 } };
+Line m = Scale(l, 3);
+write(1, Num(m.A.X));
+write(1, " ");
+write(1, Num(m.B.Y * 2));
+write(1, " ");
+print(Num(m.A.X * 3));
+Show(new Point {});
+u8[3] t = l.Tag;
+t[1] = 42;
+if (l.Tag[1] == 0) print(Num(t[1] as i64));

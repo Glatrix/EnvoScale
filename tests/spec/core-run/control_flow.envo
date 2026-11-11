@@ -1,0 +1,65 @@
+// if/else, while, for, break, continue, match ([core.stmt.*]).
+// expect: 0 2 4 6 8 done
+// expect: zero
+// expect: few
+// expect: many
+// expect: green
+// expect: nested 6
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+enum Color { Red, Green, Blue }
+void Size(i32 n) {
+    match n {
+        0 => print("zero"),
+        1 | 2 | 3 => print("few"),
+        _ => print("many"),
+    }
+}
+str Name(Color c) {
+    match c {
+        Red => { return "red"; }
+        Green => { return "green"; }
+        Blue => { return "blue"; }
+    }
+}
+str line = "";
+i32 total = 0;
+for (var i = 0; i < 100; i++) {
+    if (i % 2 == 1) continue;
+    if (i == 10) break;
+    write(1, Num(i as i64));
+    write(1, " ");
+}
+print("done");
+Size(0);
+Size(2);
+Size(40);
+print(Name(Color.Green));
+var count = 0;
+var outer = 0;
+while (outer < 3) {
+    var inner = 0;
+    while (true) {
+        inner++;
+        count++;
+        if (inner == 2) break;
+    }
+    outer++;
+}
+write(1, "nested ");
+print(Num(count as i64));

@@ -1,21 +1,16 @@
 ; =============================================================================
-; platform/linux.eas - x86-64 Linux platform layer for envoc0 (Stage 0)
+; platform/linux.eas - the Linux runtime block
 ;
-; Contents, in file order:
-;   1. the ELF64 header and program headers (this file must be included first)
-;   2. the process entry point
-;   3. the eight shim routines (sys_open ... sys_args), using raw syscalls
+; Position-independent code and data between rtl_begin and rtl_end: the process
+; entry, the eight shim routines (rtl_sys_open ... rtl_sys_args) over raw
+; syscalls, and the built-ins of envo-core.md section 6. envoc0 runs this block
+; itself on Linux, and `envoc0 build --target x86_64-linux` copies its bytes into
+; every program it produces (src/writer.eas patches the call to main). The block
+; starts with a table of 5-byte jumps (see RT_ENTRY_*).
 ;
-; Layout (see docs/architecture/bootstrap.md): one PT_LOAD segment mapping the
-; whole file read+write+execute at 0x400000, so every label's file offset equals
-; label - $$. No sections, no relocations, no dynamic linker.
-;
-; Calling convention: Stage 0 uses the System V order everywhere, which is also
-; the kernel's, so most shim routines are a register shuffle and a syscall.
-; The kernel clobbers rcx and r11 on syscall; both are caller-saved for us.
+; Calling convention: the System V order, which is also the kernel's; the kernel
+; clobbers rcx and r11 on syscall, both caller-saved for us.
 ; =============================================================================
-
-IMAGE_BASE      equ 0x400000
 
 SYS_READ        equ 0
 SYS_WRITE       equ 1
@@ -33,69 +28,41 @@ O_CLOEXEC       equ 0x80000
 
 EINTR           equ 4
 
-        org     IMAGE_BASE
-
-; ---------------------------------------------------------------- ELF header
-elf_header:
-        db      0x7F, 'ELF'             ; e_ident magic
-        db      2                       ; EI_CLASS: ELFCLASS64
-        db      1                       ; EI_DATA: little-endian
-        db      1                       ; EI_VERSION: current
-        db      0                       ; EI_OSABI: System V
-        times 8 db 0                    ; EI_ABIVERSION + padding
-        dw      2                       ; e_type: ET_EXEC
-        dw      0x3E                    ; e_machine: EM_X86_64
-        dd      1                       ; e_version
-        dq      IMAGE_BASE + (_start - $$) ; e_entry (absolute address)
-        dq      elf_phdrs - $$          ; e_phoff
-        dq      0                       ; e_shoff: no section headers
-        dd      0                       ; e_flags
-        dw      64                      ; e_ehsize
-        dw      56                      ; e_phentsize
-        dw      2                       ; e_phnum
-        dw      0                       ; e_shentsize
-        dw      0                       ; e_shnum
-        dw      0                       ; e_shstrndx
-
-elf_phdrs:
-        ; PT_LOAD: map the whole file at IMAGE_BASE.
-        dd      1                       ; p_type: PT_LOAD
-        dd      7                       ; p_flags: R | W | X
-        dq      0                       ; p_offset
-        dq      IMAGE_BASE              ; p_vaddr
-        dq      IMAGE_BASE              ; p_paddr
-        dq      image_end - $$          ; p_filesz
-        dq      image_end - $$          ; p_memsz
-        dq      0x1000                  ; p_align
-        ; PT_GNU_STACK: ask for a non-executable stack.
-        dd      0x6474E551              ; p_type: PT_GNU_STACK
-        dd      6                       ; p_flags: R | W
-        dq      0, 0, 0, 0, 0
-        dq      16                      ; p_align
-
-plat_name:      db 'x86_64-linux'
-plat_name_len   equ $ - plat_name
-
+rtl_begin:
+        jmp     near rtl_start          ; 0  RT_ENTRY_START (the process entry point)
+        jmp     near rtl_bi_print       ; 1  print
+        jmp     near rtl_bi_write       ; 2  write
+        jmp     near rtl_bi_read        ; 3  read
+        jmp     near rtl_bi_open        ; 4  open
+        jmp     near rtl_bi_close       ; 5  close
+        jmp     near rtl_bi_alloc       ; 6  alloc
+        jmp     near rtl_bi_exit        ; 7  exit
+        jmp     near rtl_bi_argc        ; 8  argc
+        jmp     near rtl_bi_arg         ; 9  arg
+        jmp     near rtl_bi_panic       ; 10 panic
+        jmp     near rtl_bi_str_from    ; 11 str_from
+        jmp     near rtl_trap           ; 12 RT_ENTRY_TRAP
 ; ---------------------------------------------------------------- entry
 ; The kernel starts us with rsp 16-byte aligned and
 ;   [rsp] = argc, [rsp + 8] = argv[0], ..., NULL, envp...
 ; main is called with rsp aligned, as the convention requires, and normally
 ; exits through exit_process itself. If it ever returns, its eax is the exit code.
-_start:
+rtl_start:
         mov     rax, [rsp]
-        mov     [plat_argc], rax
+        mov     [rtl_argc_value], rax
         lea     rax, [rsp + 8]
-        mov     [plat_argv], rax
-        call    main
+        mov     [rtl_argv_value], rax
+        call    main                    ; patched by src/writer.eas in output programs
+.after_main_call:                       ; src/writer.eas: the rel32 ends here
         mov     edi, eax
-        call    sys_exit
+        call    rtl_sys_exit
 
 ; ---------------------------------------------------------------- shim
-; sys_open - open a file.
+; rtl_sys_open - open a file.
 ;   in:  rdi = NUL-terminated path, rsi = mode
 ;        (0 = read, 1 = write/create/truncate 0644, 2 = same but 0755 executable)
 ;   out: rax = fd >= 0, or -errno
-sys_open:
+rtl_sys_open:
         mov     eax, O_RDONLY | O_CLOEXEC
         xor     edx, edx
         test    rsi, rsi
@@ -111,30 +78,30 @@ sys_open:
         syscall
         ret
 
-; sys_read - read up to rdx bytes.
+; rtl_sys_read - read up to rdx bytes.
 ;   in:  rdi = fd, rsi = buffer, rdx = length
 ;   out: rax = bytes read (0 at end of file), or -errno. Retries on EINTR.
-sys_read:
+rtl_sys_read:
         mov     eax, SYS_READ
         syscall
         cmp     rax, -EINTR
-        je      short sys_read
+        je      short rtl_sys_read
         ret
 
-; sys_write - write up to rdx bytes (may write fewer; callers loop).
+; rtl_sys_write - write up to rdx bytes (may write fewer; callers loop).
 ;   in:  rdi = fd, rsi = buffer, rdx = length
 ;   out: rax = bytes written, or -errno. Retries on EINTR.
-sys_write:
+rtl_sys_write:
         mov     eax, SYS_WRITE
         syscall
         cmp     rax, -EINTR
-        je      short sys_write
+        je      short rtl_sys_write
         ret
 
-; sys_close - close a file descriptor. fds 0-2 are left open, as on Windows.
+; rtl_sys_close - close a file descriptor. fds 0-2 are left open, as on Windows.
 ;   in:  rdi = fd
 ;   out: rax = 0 or -errno
-sys_close:
+rtl_sys_close:
         xor     eax, eax
         cmp     rdi, 3
         jb      short .done
@@ -143,10 +110,10 @@ sys_close:
 .done:
         ret
 
-; sys_alloc - get zeroed, page-aligned memory from the kernel.
+; rtl_sys_alloc - get zeroed, page-aligned memory from the kernel.
 ;   in:  rdi = size in bytes
 ;   out: rax = pointer, or 0 on failure
-sys_alloc:
+rtl_sys_alloc:
         mov     rsi, rdi                ; length
         xor     edi, edi                ; addr = NULL: kernel chooses
         mov     edx, 3                  ; PROT_READ | PROT_WRITE
@@ -161,27 +128,256 @@ sys_alloc:
 .ok:
         ret
 
-; sys_free - return memory obtained from sys_alloc.
-;   in:  rdi = pointer, rsi = size passed to sys_alloc
-sys_free:
+; rtl_sys_free - return memory obtained from rtl_sys_alloc.
+;   in:  rdi = pointer, rsi = size passed to rtl_sys_alloc
+rtl_sys_free:
         mov     eax, SYS_MUNMAP
         syscall
         ret
 
-; sys_exit - terminate the process. Does not return.
+; rtl_sys_exit - terminate the process. Does not return.
 ;   in:  rdi = exit code
-sys_exit:
+rtl_sys_exit:
         mov     eax, SYS_EXIT_GROUP
         syscall
         ud2
 
-; sys_args - command-line arguments.
+; rtl_sys_args - command-line arguments.
 ;   out: rax = argc, rdx = argv (array of NUL-terminated strings, NULL-terminated)
-sys_args:
-        mov     rax, [plat_argc]
-        mov     rdx, [plat_argv]
+rtl_sys_args:
+        mov     rax, [rtl_argc_value]
+        mov     rdx, [rtl_argv_value]
         ret
 
         align   8, db 0
-plat_argc:      dq 0
-plat_argv:      dq 0
+; Mutable state of the block, kept together so src/writer.eas can zero it when
+; it copies the block into an output program (the copy must start fresh).
+rtl_data_begin:
+rtl_argc_value:      dq 0
+rtl_argv_value:      dq 0
+rtl_heap_cur:       dq 0                ; built-in heap (alloc, open)
+rtl_heap_end:       dq 0
+rtl_data_end:
+; ---------------------------------------------------------------- built-ins
+; The built-ins of envo-core.md section 6, in the stack ABI described in
+; platform/runtime-abi.eas. Generated from one template for both runtime blocks;
+; keep platform/windows.eas and platform/linux.eas in step.
+
+; print(str s): write s and a newline to stdout.
+rtl_bi_print:
+        mov     rsi, [rsp + 8]
+        mov     rdx, [rsp + 16]
+        mov     edi, 1
+        call    rtl_write_all
+        mov     edi, 1
+        lea     rsi, [rtl_newline]
+        mov     edx, 1
+        jmp     near rtl_write_all
+
+; write(i32 fd, str s)
+rtl_bi_write:
+        mov     rsi, [rsp + 8]
+        mov     rdx, [rsp + 16]
+        movsxd  rdi, dword [rsp + 24]
+        jmp     near rtl_write_all
+
+; read(i32 fd, *u8 buf, usize n) -> isize
+rtl_bi_read:
+        mov     rdx, [rsp + 8]
+        mov     rsi, [rsp + 16]
+        movsxd  rdi, dword [rsp + 24]
+        jmp     near rtl_sys_read
+
+; open(str path, i32 mode) -> i32: the path is copied so it can be NUL-terminated.
+rtl_bi_open:
+        push    rbx
+        push    r12
+        push    r13
+        mov     r12, [rsp + 40]                 ; path pointer
+        mov     r13, [rsp + 48]                 ; path length
+        lea     rdi, [r13 + 1]
+        call    rtl_heap_alloc                  ; zeroed, so the copy ends in NUL
+        mov     rbx, rax
+        mov     rdi, rax
+        mov     rsi, r12
+        mov     rcx, r13
+        rep movsb
+        mov     rdi, rbx
+        movsxd  rsi, dword [rsp + 32]           ; mode
+        call    rtl_sys_open
+        movsxd  rax, eax                        ; an i32 result, normalized
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
+
+; close(i32 fd)
+rtl_bi_close:
+        movsxd  rdi, dword [rsp + 8]
+        jmp     near rtl_sys_close
+
+; alloc(usize n) -> *u8
+rtl_bi_alloc:
+        mov     rdi, [rsp + 8]
+        jmp     near rtl_heap_alloc
+
+; exit(i32 code)
+rtl_bi_exit:
+        movsxd  rdi, dword [rsp + 8]
+        jmp     near rtl_sys_exit
+
+; argc() -> usize
+rtl_bi_argc:
+        mov     rax, [rtl_argc_value]
+        ret
+
+; arg(usize i) -> str: argument i, or an index-out-of-bounds panic.
+rtl_bi_arg:
+        mov     rcx, [rsp + 8]
+        cmp     rcx, [rtl_argc_value]
+        jae     short .out_of_bounds
+        mov     rax, [rtl_argv_value]
+        mov     rax, [rax + rcx*8]
+        xor     edx, edx
+.length:
+        cmp     byte [rax + rdx], 0
+        je      short .done
+        inc     rdx
+        jmp     short .length
+.done:
+        ret
+.out_of_bounds:
+        mov     edi, TRAP_BOUNDS
+        jmp     near rtl_trap
+
+; panic(str msg): "panic: <msg>" on stderr, exit code 101.
+rtl_bi_panic:
+        mov     edi, 2
+        lea     rsi, [rtl_panic_prefix]
+        mov     edx, 7
+        call    rtl_write_all
+        mov     rsi, [rsp + 8]
+        mov     rdx, [rsp + 16]
+        jmp     short rtl_panic_finish
+
+; str_from(*u8 ptr, usize len) -> str: the caller (in `unsafe`) vouches for the bytes.
+rtl_bi_str_from:
+        mov     rdx, [rsp + 8]
+        mov     rax, [rsp + 16]
+        ret
+
+; rtl_trap - a run-time check failed ([type.int.1], [type.array.1]).
+;   in: edi = TRAP_* reason. Prints "panic: <reason>", exits with code 101.
+rtl_trap:
+        mov     ebx, edi
+        mov     edi, 2
+        lea     rsi, [rtl_panic_prefix]
+        mov     edx, 7
+        call    rtl_write_all
+        lea     rsi, [rtl_trap_messages]        ; skip to message number ebx
+.skip:
+        dec     ebx
+        jz      short .found
+.skip_byte:
+        lodsb
+        test    al, al
+        jnz     short .skip_byte
+        jmp     short .skip
+.found:
+        xor     edx, edx                        ; length of the NUL-terminated message
+.measure:
+        cmp     byte [rsi + rdx], 0
+        je      short rtl_panic_finish
+        inc     rdx
+        jmp     short .measure
+
+; rtl_panic_finish - write rsi/rdx and a newline to stderr, exit with code 101.
+rtl_panic_finish:
+        mov     edi, 2
+        call    rtl_write_all
+        mov     edi, 2
+        lea     rsi, [rtl_newline]
+        mov     edx, 1
+        call    rtl_write_all
+        mov     edi, PANIC_EXIT_CODE
+        jmp     near rtl_sys_exit
+
+; rtl_write_all - write all of a buffer, retrying partial writes.
+;   in: rdi = fd, rsi = buffer, rdx = length. Errors end the write silently.
+rtl_write_all:
+        push    rbx
+        push    r12
+        push    r13
+        mov     rbx, rdi
+        mov     r12, rsi
+        mov     r13, rdx
+.loop:
+        test    r13, r13
+        jz      short .done
+        mov     rdi, rbx
+        mov     rsi, r12
+        mov     rdx, r13
+        call    rtl_sys_write
+        test    rax, rax
+        jle     short .done
+        add     r12, rax
+        sub     r13, rax
+        jmp     short .loop
+.done:
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
+
+; rtl_heap_alloc - zeroed, 16-byte-aligned memory for compiled programs. A bump
+; pointer over RT_HEAP_CHUNK mappings; never freed (envo-core.md section 6).
+;   in: rdi = size.  out: rax.  Out of memory is a TRAP_MEMORY panic.
+rtl_heap_alloc:
+        add     rdi, 15
+        and     rdi, -16
+        mov     rax, [rtl_heap_cur]
+        mov     rdx, [rtl_heap_end]
+        sub     rdx, rax
+        cmp     rdi, rdx
+        ja      short .grow
+        add     rdi, rax
+        mov     [rtl_heap_cur], rdi
+        ret
+.grow:
+        push    rbx
+        push    r12
+        sub     rsp, 8
+        mov     rbx, rdi
+        mov     r12, RT_HEAP_CHUNK
+        cmp     rbx, r12
+        jbe     short .map
+        lea     r12, [rbx + 0xFFF]
+        and     r12, -0x1000
+.map:
+        mov     rdi, r12
+        call    rtl_sys_alloc
+        test    rax, rax
+        jz      short .out_of_memory
+        lea     rdx, [rax + rbx]
+        mov     [rtl_heap_cur], rdx
+        lea     rdx, [rax + r12]
+        mov     [rtl_heap_end], rdx
+        add     rsp, 8
+        pop     r12
+        pop     rbx
+        ret
+.out_of_memory:
+        mov     edi, TRAP_MEMORY
+        jmp     near rtl_trap
+
+rtl_newline:        db 10
+rtl_panic_prefix:   db 'panic: '
+rtl_trap_messages:
+        db      'integer overflow', 0
+        db      'index out of bounds', 0
+        db      'division by zero', 0
+        db      'out of memory', 0
+        db      'shift amount out of range', 0
+        db      'unreachable code reached', 0
+
+rtl_end:

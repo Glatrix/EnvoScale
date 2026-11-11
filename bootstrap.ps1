@@ -111,6 +111,12 @@ function Invoke-Test {
     [IO.File]::WriteAllText((Join-Path $tmp $uname), "print(`"hi`")`n", $Utf8)
     $r = Invoke-Tool $exe @('lex', $uname) $tmp
     if ($r.Code -eq 0 -and $r.Out.StartsWith('1:1 n ident print')) { Pass 'unicode path' } else { Bad 'unicode path' "exit $($r.Code), stderr: $($r.Err)" }
+    # Cross-compilation: this host builds the other OS's executable (it can only check the header).
+    [IO.File]::WriteAllText((Join-Path $tmp 'cross.envo'), "print(`"hi`")`n", $Utf8)
+    $r = Invoke-Tool $exe @('build', 'cross.envo', '-o', 'cross-linux', '--target', 'x86_64-linux') $tmp
+    $ok = $false
+    if ($r.Code -eq 0) { $head = [IO.File]::ReadAllBytes((Join-Path $tmp 'cross-linux')); $ok = ($head[0] -eq 0x7F -and $head[1] -eq 0x45 -and $head[2] -eq 0x4C -and $head[3] -eq 0x46) }
+    if ($ok) { Pass 'cross build (linux)' } else { Bad 'cross build (linux)' "exit $($r.Code), stderr: $($r.Err)" }
 
     # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by `envoc0 <command>`.
     # Keep this list in step with bootstrap.sh.
@@ -150,9 +156,37 @@ function Invoke-Test {
         $want = "error[$code]"
         if ($m.Groups[2].Success) { $want = "$($f.Name):$($m.Groups[2].Value):$($m.Groups[3].Value): error[$code]" }
         $r = Invoke-Tool $exe @('check', $f.Name) $dir
-        if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
+        if ($r.Err.Contains('(no message for this error code)')) { Bad $name "missing message: $($r.Err.Trim())" }
+        elseif ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
         else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
       }
+    }
+
+    # Programs compiled and run: `// expect:` stdout lines, `// expect-exit: N`,
+    # `// expect-panic: <reason>` (exit 101 and "panic: <reason>" on stderr).
+    Say 'run tests: tests/spec/core-run'
+    $runDir = Join-Path $Build 'run'
+    New-Item -ItemType Directory -Force $runDir | Out-Null
+    foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envo' | Sort-Object Name) {
+        $name = "spec/core-run/$($f.Name)"
+        $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
+        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+        $wantOut = ''
+        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+        $wantCode = 0
+        $m = [regex]::Match($text, '(?m)^// expect-exit: (\d+)')
+        if ($m.Success) { $wantCode = [int]$m.Groups[1].Value }
+        $panic = [regex]::Match($text, '(?m)^// expect-panic: (.*)$')
+        if ($panic.Success) { $wantCode = 101 }
+        $program = Join-Path $runDir ($f.BaseName + '.exe')
+        $r = Invoke-Tool $exe @('build', $f.FullName, '-o', $program) $runDir
+        if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+        $r = Invoke-Tool $program @() $runDir
+        $out = Normalize $r.Out
+        if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
+        if ($r.Code -ne $wantCode) { Bad $name "exit code $($r.Code), expected $wantCode; stderr: $($r.Err.Trim())"; continue }
+        if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value)")) { Bad $name "stderr: $($r.Err.Trim())"; continue }
+        Pass $name
     }
 
     Say ''
@@ -190,7 +224,7 @@ function Invoke-Check {
     # docs/spec/eas.md: every jump states its size, so the bytes depend on the source alone.
     foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'bootstrap') -Recurse -Filter '*.eas') {
         $hits = Select-String -LiteralPath $f.FullName -CaseSensitive -Pattern '^\s*j[a-z]+\s+[.A-Za-z_]' |
-            Where-Object { $_.Line -notmatch '^\s*j[a-z]+\s+(short|near)\s' }
+            Where-Object { $_.Line -notmatch '^\s*j[a-z]+\s+((short|near)\s|r[a-z0-9]+\s*(;|$))' }
         foreach ($h in $hits) { $problems.Add("jump without short/near: $($f.FullName.Substring($Root.Length + 1)):$($h.LineNumber)") }
     }
 

@@ -80,6 +80,16 @@ do_test() {
     printf 'print("hi")\n' > "$TMP/$uname"
     run "$TMP" lex "$uname"
     if [ "$rc" -eq 0 ] && head -n 1 "$TMP/out" | grep -q '^1:1 n ident print'; then pass; else bad 'unicode path' "exit $rc: $(cat "$TMP/err")"; fi
+    # Cross-compilation: this host builds the other OS's executable (it can only check the header).
+    printf 'print("hi")
+' > "$TMP/cross.envo"
+    case "$EXE" in
+        *.exe) other=x86_64-linux; magic='7f454c46' ;;
+        *) other=x86_64-windows; magic='4d5a' ;;
+    esac
+    run "$TMP" build cross.envo -o cross-out --target "$other"
+    got=$(od -A n -t x1 -N 4 "$TMP/cross-out" 2>/dev/null | tr -d ' \n')
+    case "$got" in "$magic"*) pass ;; *) bad "cross build ($other)" "exit $rc, header $got" ;; esac
 
     # Golden suites: tests/golden/<dir>/<name>.envo -> <name><ext>, produced by
     # `envoc0 <command>`. Keep this list in step with bootstrap.ps1.
@@ -118,9 +128,38 @@ do_test() {
             *' @ '*) pos=${line##* @ }; pos=${pos%% *}; want="$base:$pos: error[$code]" ;;
         esac
         run "$dir" check "$base"
-        if [ "$rc" -eq 1 ] && LC_ALL=C grep -a -q -F "$want" "$TMP/err"; then pass
+        if grep -q -F '(no message for this error code)' "$TMP/err"; then bad "$name" "missing message: $(cat "$TMP/err")"
+        elif [ "$rc" -eq 1 ] && LC_ALL=C grep -a -q -F "$want" "$TMP/err"; then pass
         else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
       done
+    done
+
+    # Programs compiled and run: `// expect:` stdout lines, `// expect-exit: N`,
+    # `// expect-panic: <reason>` (exit 101 and "panic: <reason>" on stderr).
+    say 'run tests: tests/spec/core-run'
+    rundir="$BUILD/run"
+    mkdir -p "$rundir"
+    for f in "$ROOT"/tests/spec/core-run/*.envo; do
+        base=$(basename "$f" .envo)
+        name="spec/core-run/$base.envo"
+        sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
+        want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
+        panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+        [ -n "$want_code" ] || want_code=0
+        [ -z "$panic" ] || want_code=101
+        program="$rundir/$base"
+        case "$EXE" in *.exe) program="$program.exe" ;; esac
+        run "$rundir" build "$f" -o "$program"
+        if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+        set +e
+        (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
+        if [ "$rc" -ne "$want_code" ]; then bad "$name" "exit code $rc, expected $want_code: $(cat "$TMP/err")"; continue; fi
+        if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "stderr: $(cat "$TMP/err")"; continue; fi
+        pass
     done
 
     say ''
@@ -154,7 +193,7 @@ do_check() {
 
     # docs/spec/eas.md: every jump states its size, so the bytes depend on the source alone.
     unsized=$(find "$ROOT/bootstrap" -name '*.eas' -exec grep -n -E '^[[:space:]]*j[a-z]+[[:space:]]+[.A-Za-z_]' /dev/null {} + \
-        | grep -v -E ':[[:space:]]*j[a-z]+[[:space:]]+(short|near)[[:space:]]' || true)
+        | grep -v -E ':[[:space:]]*j[a-z]+[[:space:]]+((short|near)[[:space:]]|r[a-z0-9]+[[:space:]]*(;|$))' || true)
     [ -z "$unsized" ] || problem "jumps without short/near: $unsized"
 
     # Brief 17: no Hello World Gallery program may grow past its line count.

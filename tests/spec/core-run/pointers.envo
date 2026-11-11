@@ -1,0 +1,46 @@
+// Raw pointers in unsafe: alloc, dereference, index, field access, casts ([core.expr.5]).
+// expect: 42 7 5
+// expect: linked 3
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+struct Node { i64 Value; *Node Next; }
+unsafe {
+    *u8 mem = alloc(64);
+    mem[10] = 42;
+    *i64 cell = alloc(8) as *i64;
+    *cell = 7;
+    *Node n = alloc(sizeof(Node)) as *Node;
+    n.Value = 5;
+    write(1, Num(mem[10] as i64));
+    write(1, " ");
+    write(1, Num(*cell));
+    write(1, " ");
+    print(Num((*n).Value));
+    *Node a = alloc(sizeof(Node)) as *Node;
+    *Node b = alloc(sizeof(Node)) as *Node;
+    a.Next = b;
+    b.Next = n;
+    i64 len = 0;
+    *Node at = a;
+    while (at as usize != 0) {
+        len++;
+        at = at.Next;
+    }
+    write(1, "linked ");
+    print(Num(len));
+}

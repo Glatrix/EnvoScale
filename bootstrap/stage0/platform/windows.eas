@@ -1,27 +1,20 @@
 ; =============================================================================
-; platform/windows.eas - x86-64 Windows platform layer for envoc0 (Stage 0)
+; platform/windows.eas - the Windows runtime block
 ;
-; Contents, in file order:
-;   1. the PE32+ headers (this file must be included first)
-;   2. the process entry point
-;   3. the eight shim routines (sys_open ... sys_args), via kernel32.dll
-;   4. command-line splitting (Microsoft C runtime rules)
-;   5. the import table for KERNEL32.dll
+; Position-independent code and data between rtw_begin and rtw_end: the process
+; entry, the eight shim routines (rtw_sys_open ... rtw_sys_args) over kernel32,
+; command-line splitting, the KERNEL32 import table, and the built-ins of
+; envo-core.md section 6. envoc0 runs this block itself on Windows, and
+; `envoc0 build --target x86_64-windows` copies its bytes into every program it
+; produces (src/writer.eas patches the import RVAs and the call to main).
+; Every reference inside the block is RIP-relative to the block, so it works at
+; any address. The block starts with a table of 5-byte jumps (see RT_ENTRY_*).
 ;
-; Layout (see docs/architecture/bootstrap.md): headers in the first 0x1000 bytes,
-; then one RWX section ".text" at RVA 0x1000. FileAlignment == SectionAlignment
-; == 0x1000, so a label's file offset equals its RVA, which is label - $$.
-; Fixed base 0x400000, relocations stripped, TimeDateStamp 0 (reproducible).
-;
-; Calling convention: Stage 0 routines use the System V register order. Each
-; shim routine converts to Win64 at the kernel32 call: realign the stack,
-; reserve 32 bytes of shadow space, arguments in rcx, rdx, r8, r9, then stack.
-; Win64 callees preserve rbx, rbp, rdi, rsi, r12-r15, a superset of what our
-; convention requires, so nothing else needs saving around the calls.
+; Calling convention: shim routines use the System V register order and convert
+; to Win64 at each kernel32 call (realign the stack, 32 bytes of shadow space,
+; arguments in rcx, rdx, r8, r9, then the stack). Win64 callees preserve rbx,
+; rbp, rdi, rsi, r12-r15, a superset of what our convention requires.
 ; =============================================================================
-
-IMAGE_BASE      equ 0x400000
-PE_ALIGN        equ 0x1000              ; both FileAlignment and SectionAlignment
 
 STD_INPUT_HANDLE  equ -10
 STD_OUTPUT_HANDLE equ -11
@@ -31,79 +24,24 @@ CP_UTF8           equ 65001
 MB_ERR_INVALID_CHARS equ 8
 WPATH_CHARS       equ 32768             ; longest path, in UTF-16 units (the NTFS limit)
 
-        org     IMAGE_BASE
-
-; ---------------------------------------------------------------- DOS header
-pe_dos_header:
-        dw      'MZ'                    ; e_magic
-        times 0x3C - ($ - $$) db 0      ; the rest of the DOS header is unused
-        dd      pe_nt_headers - $$      ; e_lfanew
-
-; ---------------------------------------------------------------- NT headers
-pe_nt_headers:
-        dd      'PE'                    ; Signature "PE\0\0"
-        ; IMAGE_FILE_HEADER
-        dw      0x8664                  ; Machine: AMD64
-        dw      1                       ; NumberOfSections
-        dd      0                       ; TimeDateStamp: 0 for reproducible output
-        dd      0                       ; PointerToSymbolTable
-        dd      0                       ; NumberOfSymbols
-        dw      pe_opt_end - pe_opt_header ; SizeOfOptionalHeader
-        dw      0x0023                  ; RELOCS_STRIPPED | EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
-pe_opt_header:
-        ; IMAGE_OPTIONAL_HEADER64
-        dw      0x020B                  ; Magic: PE32+
-        db      0, 0                    ; Major/MinorLinkerVersion
-        dd      pe_file_end - pe_section_start ; SizeOfCode
-        dd      0                       ; SizeOfInitializedData
-        dd      0                       ; SizeOfUninitializedData
-        dd      _start - $$             ; AddressOfEntryPoint (RVA)
-        dd      pe_section_start - $$   ; BaseOfCode
-        dq      IMAGE_BASE              ; ImageBase
-        dd      PE_ALIGN                ; SectionAlignment
-        dd      PE_ALIGN                ; FileAlignment
-        dw      6, 0                    ; Major/MinorOperatingSystemVersion (Vista+)
-        dw      0, 0                    ; Major/MinorImageVersion
-        dw      6, 0                    ; Major/MinorSubsystemVersion
-        dd      0                       ; Win32VersionValue
-        dd      pe_file_end - $$        ; SizeOfImage: the file is padded to PE_ALIGN,
-                                        ; which is also the section alignment
-        dd      pe_section_start - $$   ; SizeOfHeaders
-        dd      0                       ; CheckSum (not required for EXEs)
-        dw      3                       ; Subsystem: WINDOWS_CUI (console)
-        dw      0x8100                  ; DllCharacteristics: NX_COMPAT | TERMINAL_SERVER_AWARE
-        dq      0x100000                ; SizeOfStackReserve (1 MiB)
-        dq      0x1000                  ; SizeOfStackCommit
-        dq      0x100000                ; SizeOfHeapReserve
-        dq      0x1000                  ; SizeOfHeapCommit
-        dd      0                       ; LoaderFlags
-        dd      16                      ; NumberOfRvaAndSizes
-        ; Data directories
-        dd      0, 0                    ; [0] Export
-        dd      win_import_dir - $$, win_import_dir_end - win_import_dir ; [1] Import
-        times 14 dd 0, 0                ; [2..15] unused (the loader finds the IAT via [1])
-pe_opt_end:
-
-; ---------------------------------------------------------------- section table
-        db      '.text', 0, 0, 0        ; Name
-        dd      image_end - pe_section_start   ; VirtualSize
-        dd      pe_section_start - $$          ; VirtualAddress
-        dd      pe_file_end - pe_section_start ; SizeOfRawData (multiple of PE_ALIGN)
-        dd      pe_section_start - $$          ; PointerToRawData
-        dd      0, 0                    ; PointerToRelocations, PointerToLinenumbers
-        dw      0, 0                    ; NumberOfRelocations, NumberOfLinenumbers
-        dd      0xE0000020              ; CODE | MEM_EXECUTE | MEM_READ | MEM_WRITE
-
-        times PE_ALIGN - ($ - $$) db 0
-pe_section_start:
-
-plat_name:      db 'x86_64-windows'
-plat_name_len   equ $ - plat_name
-
+rtw_begin:
+        jmp     near rtw_start          ; 0  RT_ENTRY_START (the process entry point)
+        jmp     near rtw_bi_print       ; 1  print
+        jmp     near rtw_bi_write       ; 2  write
+        jmp     near rtw_bi_read        ; 3  read
+        jmp     near rtw_bi_open        ; 4  open
+        jmp     near rtw_bi_close       ; 5  close
+        jmp     near rtw_bi_alloc       ; 6  alloc
+        jmp     near rtw_bi_exit        ; 7  exit
+        jmp     near rtw_bi_argc        ; 8  argc
+        jmp     near rtw_bi_arg         ; 9  arg
+        jmp     near rtw_bi_panic       ; 10 panic
+        jmp     near rtw_bi_str_from    ; 11 str_from
+        jmp     near rtw_trap           ; 12 RT_ENTRY_TRAP
 ; ---------------------------------------------------------------- entry
 ; Windows enters with rsp = 8 (mod 16), as if called. Reserve shadow space and
 ; realign in one step; from here on rsp is aligned at every call.
-_start:
+rtw_start:
         sub     rsp, 40
         mov     ecx, STD_INPUT_HANDLE
         call    [__imp_GetStdHandle]
@@ -114,20 +52,21 @@ _start:
         mov     ecx, STD_ERROR_HANDLE
         call    [__imp_GetStdHandle]
         mov     [win_std + 16], rax
-        ; Scratch buffer for UTF-16 paths in sys_open. Allocated once, so sys_open
+        ; Scratch buffer for UTF-16 paths in rtw_sys_open. Allocated once, so rtw_sys_open
         ; needs no large stack frame (which would need stack probing on Windows).
         mov     edi, WPATH_CHARS * 2
-        call    sys_alloc
+        call    rtw_sys_alloc
         test    rax, rax
         jz      short .oom
         mov     [win_wpath], rax
         call    win_build_argv
-        call    main
+        call    main                    ; patched by src/writer.eas in output programs
+.after_main_call:                       ; src/writer.eas: the rel32 ends here
         mov     edi, eax
-        call    sys_exit
+        call    rtw_sys_exit
 .oom:
         mov     edi, 70
-        call    sys_exit
+        call    rtw_sys_exit
 
 ; win_handle - map an fd to a HANDLE.
 ;   in:  rdi = fd (0, 1, 2 = standard handles; anything else is a HANDLE value)
@@ -142,13 +81,13 @@ win_handle:
         ret
 
 ; ---------------------------------------------------------------- shim
-; sys_open - open a file.
+; rtw_sys_open - open a file.
 ;   in:  rdi = NUL-terminated UTF-8 path, rsi = mode
 ;        (0 = read, 1 = write/create/truncate, 2 = same as 1 on Windows)
 ;   out: rax = fd (a HANDLE), or -1 on failure (including a path that is not
 ;        valid UTF-8 or is longer than WPATH_CHARS UTF-16 units)
 ; Paths are UTF-8 on every OS; here they become UTF-16 for CreateFileW.
-sys_open:
+rtw_sys_open:
         push    rbp
         mov     rbp, rsp
         push    rbx
@@ -190,10 +129,10 @@ sys_open:
         pop     rbp
         ret
 
-; sys_read - read up to rdx bytes.
+; rtw_sys_read - read up to rdx bytes.
 ;   in:  rdi = fd, rsi = buffer, rdx = length
 ;   out: rax = bytes read (0 at end of file or broken pipe), or -1 on error
-sys_read:
+rtw_sys_read:
         push    rbp
         mov     rbp, rsp
         and     rsp, -16
@@ -223,10 +162,10 @@ sys_read:
         pop     rbp
         ret
 
-; sys_write - write up to rdx bytes (may write fewer; callers loop).
+; rtw_sys_write - write up to rdx bytes (may write fewer; callers loop).
 ;   in:  rdi = fd, rsi = buffer, rdx = length
 ;   out: rax = bytes written, or -1 on error
-sys_write:
+rtw_sys_write:
         push    rbp
         mov     rbp, rsp
         and     rsp, -16
@@ -252,10 +191,10 @@ sys_write:
         pop     rbp
         ret
 
-; sys_close - close a file. fds 0-2 (standard handles) are left open.
+; rtw_sys_close - close a file. fds 0-2 (standard handles) are left open.
 ;   in:  rdi = fd
 ;   out: rax = 0, or -1 on failure
-sys_close:
+rtw_sys_close:
         xor     eax, eax
         cmp     rdi, 3
         jb      short .done
@@ -274,10 +213,10 @@ sys_close:
 .done:
         ret
 
-; sys_alloc - get zeroed, page-aligned memory.
+; rtw_sys_alloc - get zeroed, page-aligned memory.
 ;   in:  rdi = size in bytes
 ;   out: rax = pointer, or 0 on failure
-sys_alloc:
+rtw_sys_alloc:
         push    rbp
         mov     rbp, rsp
         and     rsp, -16
@@ -291,9 +230,9 @@ sys_alloc:
         pop     rbp
         ret
 
-; sys_free - release memory from sys_alloc.
+; rtw_sys_free - release memory from rtw_sys_alloc.
 ;   in:  rdi = pointer, rsi = size (unused: MEM_RELEASE frees the whole block)
-sys_free:
+rtw_sys_free:
         push    rbp
         mov     rbp, rsp
         and     rsp, -16
@@ -306,18 +245,18 @@ sys_free:
         pop     rbp
         ret
 
-; sys_exit - terminate the process. Does not return.
+; rtw_sys_exit - terminate the process. Does not return.
 ;   in:  rdi = exit code
-sys_exit:
+rtw_sys_exit:
         and     rsp, -16
         sub     rsp, 32
         mov     ecx, edi
         call    [__imp_ExitProcess]
         ud2
 
-; sys_args - command-line arguments.
+; rtw_sys_args - command-line arguments.
 ;   out: rax = argc, rdx = argv (array of NUL-terminated strings, NULL-terminated)
-sys_args:
+rtw_sys_args:
         mov     rax, [win_argc]
         mov     rdx, [win_argv]
         ret
@@ -369,7 +308,7 @@ win_build_argv:
         jz      near .oom
         mov     r13d, eax               ; size in bytes, including the NUL
         mov     edi, eax
-        call    sys_alloc
+        call    rtw_sys_alloc
         test    rax, rax
         jz      near .oom
         mov     rbx, rax                ; UTF-8 command line
@@ -394,7 +333,7 @@ win_build_argv:
         mov     r12, rcx
         imul    rdi, r12, 10
         add     rdi, 32
-        call    sys_alloc
+        call    rtw_sys_alloc
         test    rax, rax
         jz      near .oom
         mov     r13, rax
@@ -542,13 +481,241 @@ win_build_argv:
         ret
 .oom:
         mov     edi, 70
-        call    sys_exit
+        call    rtw_sys_exit
 
         align   8, db 0
+; Mutable state of the block, kept together so src/writer.eas can zero it when
+; it copies the block into an output program (the copy must start fresh).
+rtw_data_begin:
 win_std:        dq 0, 0, 0              ; stdin, stdout, stderr handles
 win_argc:       dq 0
 win_argv:       dq 0
-win_wpath:      dq 0                    ; WPATH_CHARS UTF-16 units of scratch for sys_open
+win_wpath:      dq 0                    ; WPATH_CHARS UTF-16 units of scratch for rtw_sys_open
+rtw_heap_cur:       dq 0                ; built-in heap (alloc, open)
+rtw_heap_end:       dq 0
+rtw_data_end:
+
+; ---------------------------------------------------------------- built-ins
+; The built-ins of envo-core.md section 6, in the stack ABI described in
+; platform/runtime-abi.eas. Generated from one template for both runtime blocks;
+; keep platform/windows.eas and platform/linux.eas in step.
+
+; print(str s): write s and a newline to stdout.
+rtw_bi_print:
+        mov     rsi, [rsp + 8]
+        mov     rdx, [rsp + 16]
+        mov     edi, 1
+        call    rtw_write_all
+        mov     edi, 1
+        lea     rsi, [rtw_newline]
+        mov     edx, 1
+        jmp     near rtw_write_all
+
+; write(i32 fd, str s)
+rtw_bi_write:
+        mov     rsi, [rsp + 8]
+        mov     rdx, [rsp + 16]
+        movsxd  rdi, dword [rsp + 24]
+        jmp     near rtw_write_all
+
+; read(i32 fd, *u8 buf, usize n) -> isize
+rtw_bi_read:
+        mov     rdx, [rsp + 8]
+        mov     rsi, [rsp + 16]
+        movsxd  rdi, dword [rsp + 24]
+        jmp     near rtw_sys_read
+
+; open(str path, i32 mode) -> i32: the path is copied so it can be NUL-terminated.
+rtw_bi_open:
+        push    rbx
+        push    r12
+        push    r13
+        mov     r12, [rsp + 40]                 ; path pointer
+        mov     r13, [rsp + 48]                 ; path length
+        lea     rdi, [r13 + 1]
+        call    rtw_heap_alloc                  ; zeroed, so the copy ends in NUL
+        mov     rbx, rax
+        mov     rdi, rax
+        mov     rsi, r12
+        mov     rcx, r13
+        rep movsb
+        mov     rdi, rbx
+        movsxd  rsi, dword [rsp + 32]           ; mode
+        call    rtw_sys_open
+        movsxd  rax, eax                        ; an i32 result, normalized
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
+
+; close(i32 fd)
+rtw_bi_close:
+        movsxd  rdi, dword [rsp + 8]
+        jmp     near rtw_sys_close
+
+; alloc(usize n) -> *u8
+rtw_bi_alloc:
+        mov     rdi, [rsp + 8]
+        jmp     near rtw_heap_alloc
+
+; exit(i32 code)
+rtw_bi_exit:
+        movsxd  rdi, dword [rsp + 8]
+        jmp     near rtw_sys_exit
+
+; argc() -> usize
+rtw_bi_argc:
+        mov     rax, [win_argc]
+        ret
+
+; arg(usize i) -> str: argument i, or an index-out-of-bounds panic.
+rtw_bi_arg:
+        mov     rcx, [rsp + 8]
+        cmp     rcx, [win_argc]
+        jae     short .out_of_bounds
+        mov     rax, [win_argv]
+        mov     rax, [rax + rcx*8]
+        xor     edx, edx
+.length:
+        cmp     byte [rax + rdx], 0
+        je      short .done
+        inc     rdx
+        jmp     short .length
+.done:
+        ret
+.out_of_bounds:
+        mov     edi, TRAP_BOUNDS
+        jmp     near rtw_trap
+
+; panic(str msg): "panic: <msg>" on stderr, exit code 101.
+rtw_bi_panic:
+        mov     edi, 2
+        lea     rsi, [rtw_panic_prefix]
+        mov     edx, 7
+        call    rtw_write_all
+        mov     rsi, [rsp + 8]
+        mov     rdx, [rsp + 16]
+        jmp     short rtw_panic_finish
+
+; str_from(*u8 ptr, usize len) -> str: the caller (in `unsafe`) vouches for the bytes.
+rtw_bi_str_from:
+        mov     rdx, [rsp + 8]
+        mov     rax, [rsp + 16]
+        ret
+
+; rtw_trap - a run-time check failed ([type.int.1], [type.array.1]).
+;   in: edi = TRAP_* reason. Prints "panic: <reason>", exits with code 101.
+rtw_trap:
+        mov     ebx, edi
+        mov     edi, 2
+        lea     rsi, [rtw_panic_prefix]
+        mov     edx, 7
+        call    rtw_write_all
+        lea     rsi, [rtw_trap_messages]        ; skip to message number ebx
+.skip:
+        dec     ebx
+        jz      short .found
+.skip_byte:
+        lodsb
+        test    al, al
+        jnz     short .skip_byte
+        jmp     short .skip
+.found:
+        xor     edx, edx                        ; length of the NUL-terminated message
+.measure:
+        cmp     byte [rsi + rdx], 0
+        je      short rtw_panic_finish
+        inc     rdx
+        jmp     short .measure
+
+; rtw_panic_finish - write rsi/rdx and a newline to stderr, exit with code 101.
+rtw_panic_finish:
+        mov     edi, 2
+        call    rtw_write_all
+        mov     edi, 2
+        lea     rsi, [rtw_newline]
+        mov     edx, 1
+        call    rtw_write_all
+        mov     edi, PANIC_EXIT_CODE
+        jmp     near rtw_sys_exit
+
+; rtw_write_all - write all of a buffer, retrying partial writes.
+;   in: rdi = fd, rsi = buffer, rdx = length. Errors end the write silently.
+rtw_write_all:
+        push    rbx
+        push    r12
+        push    r13
+        mov     rbx, rdi
+        mov     r12, rsi
+        mov     r13, rdx
+.loop:
+        test    r13, r13
+        jz      short .done
+        mov     rdi, rbx
+        mov     rsi, r12
+        mov     rdx, r13
+        call    rtw_sys_write
+        test    rax, rax
+        jle     short .done
+        add     r12, rax
+        sub     r13, rax
+        jmp     short .loop
+.done:
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
+
+; rtw_heap_alloc - zeroed, 16-byte-aligned memory for compiled programs. A bump
+; pointer over RT_HEAP_CHUNK mappings; never freed (envo-core.md section 6).
+;   in: rdi = size.  out: rax.  Out of memory is a TRAP_MEMORY panic.
+rtw_heap_alloc:
+        add     rdi, 15
+        and     rdi, -16
+        mov     rax, [rtw_heap_cur]
+        mov     rdx, [rtw_heap_end]
+        sub     rdx, rax
+        cmp     rdi, rdx
+        ja      short .grow
+        add     rdi, rax
+        mov     [rtw_heap_cur], rdi
+        ret
+.grow:
+        push    rbx
+        push    r12
+        sub     rsp, 8
+        mov     rbx, rdi
+        mov     r12, RT_HEAP_CHUNK
+        cmp     rbx, r12
+        jbe     short .map
+        lea     r12, [rbx + 0xFFF]
+        and     r12, -0x1000
+.map:
+        mov     rdi, r12
+        call    rtw_sys_alloc
+        test    rax, rax
+        jz      short .out_of_memory
+        lea     rdx, [rax + rbx]
+        mov     [rtw_heap_cur], rdx
+        lea     rdx, [rax + r12]
+        mov     [rtw_heap_end], rdx
+        add     rsp, 8
+        pop     r12
+        pop     rbx
+        ret
+.out_of_memory:
+        mov     edi, TRAP_MEMORY
+        jmp     near rtw_trap
+
+rtw_newline:        db 10
+rtw_panic_prefix:   db 'panic: '
+rtw_trap_messages:
+        db      'integer overflow', 0
+        db      'index out of bounds', 0
+        db      'division by zero', 0
+        db      'out of memory', 0
+        db      'shift amount out of range', 0
+        db      'unreachable code reached', 0
 
 ; ---------------------------------------------------------------- imports
 ; One IMAGE_IMPORT_DESCRIPTOR for KERNEL32.dll, then a null descriptor. The
@@ -634,3 +801,4 @@ win_hn_WideCharToMultiByte: dw 0
         align   2, db 0
 win_dll_name:
         db      'KERNEL32.dll', 0
+rtw_end:

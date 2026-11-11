@@ -1,0 +1,4 @@
+// Negating the minimum value overflows.
+// expect-panic: integer overflow
+i64 x = -9223372036854775807 - 1;
+var y = -x;
