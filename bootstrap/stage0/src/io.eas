@@ -42,7 +42,7 @@ w_flush:
 .loop:
         mov     r13, [rbx + W_LEN]
         cmp     r12, r13
-        jae     .done
+        jae     short .done
         mov     rdi, [rbx + W_FD]
         mov     rsi, [rbx + W_BUF]
         add     rsi, r12
@@ -50,9 +50,9 @@ w_flush:
         sub     rdx, r12
         call    sys_write
         test    rax, rax
-        jle     .done
+        jle     short .done
         add     r12, rax
-        jmp     .loop
+        jmp     short .loop
 .done:
         mov     qword [rbx + W_LEN], 0
         pop     r13
@@ -72,13 +72,13 @@ w_bytes:
         mov     r13, rdx                ; bytes remaining
 .loop:
         test    r13, r13
-        jz      .done
+        jz      short .done
         mov     rax, [rbx + W_CAP]
         sub     rax, [rbx + W_LEN]      ; free space
-        jnz     .copy
+        jnz     short .copy
         mov     rdi, rbx
         call    w_flush
-        jmp     .loop
+        jmp     short .loop
 .copy:
         cmp     rax, r13
         cmova   rax, r13                ; copy min(free, remaining)
@@ -90,7 +90,7 @@ w_bytes:
         add     [rbx + W_LEN], rax
         add     r12, rax
         sub     r13, rax
-        jmp     .loop
+        jmp     short .loop
 .done:
         pop     r13
         pop     r12
@@ -103,7 +103,7 @@ w_bytes:
 w_byte:
         mov     rax, [rdi + W_LEN]
         cmp     rax, [rdi + W_CAP]
-        jb      .put
+        jb      short .put
         push    rdi
         push    rsi
         sub     rsp, 8
@@ -132,7 +132,7 @@ w_cstr:
         add     rsp, 8
         pop     rsi
         pop     rdi
-        jmp     w_bytes
+        jmp     near w_bytes
 
 ; w_u64 - append an unsigned integer in decimal.
 ;   in:  rdi = writer, rsi = value
@@ -150,7 +150,7 @@ w_u64:
         dec     r8
         mov     [r8], dl
         test    rax, rax
-        jnz     .digit
+        jnz     short .digit
         mov     rsi, r8
         mov     rdx, r9
         sub     rdx, r8
@@ -170,7 +170,7 @@ read_file:
         xor     esi, esi                ; mode 0: read
         call    sys_open
         test    rax, rax
-        js      .open_fail
+        js      short .open_fail
         mov     rbx, rax                ; fd
         mov     rdi, MAX_SOURCE + 1     ; one extra byte detects "too large"
         call    arena_alloc
@@ -179,24 +179,24 @@ read_file:
 .read:
         mov     rdx, MAX_SOURCE + 1
         sub     rdx, r13
-        jz      .too_large
+        jz      short .too_large
         mov     rdi, rbx
         lea     rsi, [r12 + r13]
         call    sys_read
         test    rax, rax
-        js      .read_fail
-        jz      .eof
+        js      short .read_fail
+        jz      short .eof
         add     r13, rax
-        jmp     .read
+        jmp     short .read
 .eof:
         mov     rdi, rbx
         call    sys_close
         mov     rax, r12
         mov     rdx, r13
-        jmp     .out
+        jmp     short .out
 .too_large:
         mov     edx, 3
-        jmp     .fail_close
+        jmp     short .fail_close
 .read_fail:
         mov     edx, 2
 .fail_close:
@@ -205,7 +205,7 @@ read_file:
         call    sys_close
         mov     rdx, r13
         xor     eax, eax
-        jmp     .out
+        jmp     short .out
 .open_fail:
         xor     eax, eax
         mov     edx, 1
@@ -236,12 +236,12 @@ fatal:
         mov     rbx, rdi
         mov     r12, rsi
         cmp     qword [w_out + W_BUF], 0
-        je      .no_out
+        je      short .no_out
         lea     rdi, [w_out]
         call    w_flush
 .no_out:
         cmp     qword [w_err + W_BUF], 0
-        je      .no_err
+        je      short .no_err
         lea     rdi, [w_err]
         call    w_flush
 .no_err:

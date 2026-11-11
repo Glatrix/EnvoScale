@@ -187,6 +187,13 @@ function Invoke-Check {
         foreach ($h in $hits) { $problems.Add("lib imports an adapter: $($f.FullName.Substring($Root.Length + 1)):$($h.LineNumber)") }
     }
 
+    # docs/spec/eas.md: every jump states its size, so the bytes depend on the source alone.
+    foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'bootstrap') -Recurse -Filter '*.eas') {
+        $hits = Select-String -LiteralPath $f.FullName -CaseSensitive -Pattern '^\s*j[a-z]+\s+[.A-Za-z_]' |
+            Where-Object { $_.Line -notmatch '^\s*j[a-z]+\s+(short|near)\s' }
+        foreach ($h in $hits) { $problems.Add("jump without short/near: $($f.FullName.Substring($Root.Length + 1)):$($h.LineNumber)") }
+    }
+
     # Brief 17: no Hello World Gallery program may grow past its line count.
     $gallery = Join-Path $Root 'tests\spec\hello'
     $entries = 0

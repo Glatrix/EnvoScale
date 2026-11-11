@@ -99,11 +99,11 @@ sys_open:
         mov     eax, O_RDONLY | O_CLOEXEC
         xor     edx, edx
         test    rsi, rsi
-        jz      .go
+        jz      short .go
         mov     eax, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC
         mov     edx, 0x1A4              ; 0644
         cmp     rsi, 2
-        jne     .go
+        jne     short .go
         mov     edx, 0x1ED              ; 0755
 .go:
         mov     esi, eax
@@ -118,7 +118,7 @@ sys_read:
         mov     eax, SYS_READ
         syscall
         cmp     rax, -EINTR
-        je      sys_read
+        je      short sys_read
         ret
 
 ; sys_write - write up to rdx bytes (may write fewer; callers loop).
@@ -128,7 +128,7 @@ sys_write:
         mov     eax, SYS_WRITE
         syscall
         cmp     rax, -EINTR
-        je      sys_write
+        je      short sys_write
         ret
 
 ; sys_close - close a file descriptor. fds 0-2 are left open, as on Windows.
@@ -137,7 +137,7 @@ sys_write:
 sys_close:
         xor     eax, eax
         cmp     rdi, 3
-        jb      .done
+        jb      short .done
         mov     eax, SYS_CLOSE
         syscall
 .done:
@@ -156,7 +156,7 @@ sys_alloc:
         mov     eax, SYS_MMAP
         syscall
         cmp     rax, -4095              ; -4095..-1 are errors (unsigned compare)
-        jb      .ok
+        jb      short .ok
         xor     eax, eax
 .ok:
         ret

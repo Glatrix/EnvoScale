@@ -41,13 +41,13 @@ src_line:
         xor     ecx, ecx
 .loop:
         cmp     rcx, rdi
-        jae     .done
+        jae     short .done
         cmp     byte [rdx + rcx], 10
-        jne     .next
+        jne     short .next
         inc     rax
 .next:
         inc     rcx
-        jmp     .loop
+        jmp     short .loop
 .done:
         ret
 
@@ -59,24 +59,24 @@ src_col:
         mov     rcx, rdi                ; walk back to the start of the line
 .back:
         test    rcx, rcx
-        jz      .count
+        jz      short .count
         cmp     byte [rdx + rcx - 1], 10
-        je      .count
+        je      short .count
         dec     rcx
-        jmp     .back
+        jmp     short .back
 .count:
         mov     eax, 1
 .loop:
         cmp     rcx, rdi
-        jae     .done
+        jae     short .done
         movzx   r8d, byte [rdx + rcx]
         and     r8d, 0xC0
         cmp     r8d, 0x80               ; continuation bytes don't start a character
-        je      .next
+        je      short .next
         inc     rax
 .next:
         inc     rcx
-        jmp     .loop
+        jmp     short .loop
 .done:
         ret
 
@@ -91,7 +91,7 @@ diag_error:
         lea     rdi, [w_err]
         mov     rsi, rax
         call    w_cstr
-        jmp     diag_finish
+        jmp     short diag_finish
 
 ; diag_finish - end the diagnostic line and exit with code 1. Jump here (or
 ; call it) from a routine that has written the rest of the message to w_err.
@@ -178,15 +178,15 @@ diag_message:
 .entry:
         movzx   ecx, word [rax]
         test    ecx, ecx
-        jz      .unknown
+        jz      short .unknown
         add     rax, 2
         cmp     ecx, edi
-        je      .found
+        je      short .found
 .skip:
         cmp     byte [rax], 0
         lea     rax, [rax + 1]          ; lea leaves the flags alone
-        jne     .skip
-        jmp     .entry
+        jne     short .skip
+        jmp     short .entry
 .found:
         ret
 .unknown:

@@ -19,7 +19,7 @@ arena_alloc:
         mov     rdx, [arena_end]
         sub     rdx, rax                ; bytes left in the current chunk
         cmp     rdi, rdx
-        ja      .grow
+        ja      short .grow
         add     rdi, rax
         mov     [arena_cur], rdi
         ret
@@ -30,14 +30,14 @@ arena_alloc:
         mov     rbx, rdi                ; rbx = request size
         mov     r12, ARENA_CHUNK        ; r12 = size of the new mapping
         cmp     rbx, r12
-        jbe     .map
+        jbe     short .map
         lea     r12, [rbx + 0xFFF]      ; oversized request: round up to pages
         and     r12, -0x1000
 .map:
         mov     rdi, r12
         call    sys_alloc
         test    rax, rax
-        jz      .oom
+        jz      short .oom
         ; The rest of the old chunk is abandoned; simpler than tracking two chunks.
         lea     rdx, [rax + rbx]
         mov     [arena_cur], rdx
@@ -50,7 +50,7 @@ arena_alloc:
 .oom:
         lea     rdi, [msg_oom]
         mov     esi, msg_oom_len
-        jmp     fatal
+        jmp     near fatal
 
 ; mem_eq - compare two byte ranges of the same length.
 ;   in:  rdi = a, rsi = b, rdx = length
@@ -59,12 +59,12 @@ mem_eq:
         xor     ecx, ecx
 .loop:
         cmp     rcx, rdx
-        jae     .equal
+        jae     short .equal
         movzx   eax, byte [rdi + rcx]
         cmp     al, [rsi + rcx]
-        jne     .differ
+        jne     short .differ
         inc     rcx
-        jmp     .loop
+        jmp     short .loop
 .equal:
         mov     eax, 1
         ret
@@ -79,9 +79,9 @@ cstr_len:
         xor     eax, eax
 .loop:
         cmp     byte [rdi + rax], 0
-        je      .done
+        je      short .done
         inc     rax
-        jmp     .loop
+        jmp     short .loop
 .done:
         ret
 
@@ -92,17 +92,17 @@ cstr_eq:
         xor     ecx, ecx
 .loop:
         cmp     rcx, rdx
-        jae     .end
+        jae     short .end
         movzx   eax, byte [rdi + rcx]
         test    al, al                  ; NUL before the end: shorter, so different
-        jz      .differ
+        jz      short .differ
         cmp     al, [rsi + rcx]
-        jne     .differ
+        jne     short .differ
         inc     rcx
-        jmp     .loop
+        jmp     short .loop
 .end:
         cmp     byte [rdi + rcx], 0     ; equal only if the C string ends here too
-        jne     .differ
+        jne     short .differ
         mov     eax, 1
         ret
 .differ:

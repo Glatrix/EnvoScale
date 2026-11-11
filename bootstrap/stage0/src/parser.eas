@@ -61,7 +61,7 @@ p_kind_at:
         mov     rdx, [p_ntoks]
         dec     rdx
         cmp     rax, rdx
-        jbe     .ok
+        jbe     short .ok
         mov     rax, rdx
 .ok:
         shl     rax, 4
@@ -78,7 +78,7 @@ p_advance:
         shl     rdx, 4
         add     rdx, [p_toks]
         cmp     word [rdx + TOK_KIND], TK_EOF
-        je      .done
+        je      short .done
         lea     rdx, [rax + 1]
         mov     [p_pos], rdx
 .done:
@@ -89,7 +89,7 @@ p_advance:
 p_accept:
         call    p_kind
         cmp     eax, edi
-        jne     .no
+        jne     short .no
         call    p_advance
         mov     eax, 1
         ret
@@ -102,26 +102,26 @@ p_accept:
 p_expect:
         call    p_kind
         cmp     eax, edi
-        jne     .error
-        jmp     p_advance
+        jne     short .error
+        jmp     short p_advance
 .error:
         cmp     edi, TK_IDENT
-        jne     p_error_expected_kind
+        jne     near p_error_expected_kind
         lea     rdi, [s_an_identifier]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 
 ; p_end - End = ';' | before '}' | before EOF  ([core.syntax.1] otherwise)
 p_end:
         sub     rsp, 8
         call    p_kind
         cmp     eax, TK_SEMI
-        je      .semi
+        je      short .semi
         cmp     eax, TK_RBRACE
-        je      .ok
+        je      short .ok
         cmp     eax, TK_EOF
-        je      .ok
+        je      short .ok
         mov     edi, TK_SEMI
-        jmp     p_error_expected_kind
+        jmp     near p_error_expected_kind
 .semi:
         call    p_advance
 .ok:
@@ -135,12 +135,12 @@ p_enter:
         inc     rax
         mov     [p_depth], rax
         cmp     rax, MAX_DEPTH
-        ja      .deep
+        ja      short .deep
         ret
 .deep:
         mov     edi, E_TOO_DEEP
         mov     rsi, [p_pos]
-        jmp     p_error_at
+        jmp     near p_error_at
 
 ; tok_addr - address of token edi.  out: rax
 tok_addr:
@@ -159,7 +159,7 @@ tok_addr:
 node_new:
         mov     rax, [n_count]
         cmp     rax, [n_cap]
-        jae     .full
+        jae     short .full
         lea     rcx, [rax + 1]
         mov     [n_count], rcx
         mov     rdx, rax
@@ -176,7 +176,7 @@ node_new:
 .full:
         lea     rdi, [msg_tree_full]
         mov     esi, msg_tree_full_len
-        jmp     fatal
+        jmp     near fatal
 
 ; node_ptr - address of node edi.  out: rax
 node_ptr:
@@ -190,9 +190,9 @@ node_ptr:
 list_add:
         mov     eax, [rdi + 4]
         test    eax, eax
-        jnz     .link
+        jnz     short .link
         mov     [rdi], esi
-        jmp     .tail
+        jmp     short .tail
 .link:
         shl     rax, 5
         add     rax, [n_base]
@@ -207,15 +207,15 @@ is_place:
         call    node_ptr
         movzx   ecx, word [rax + N_KIND]
         cmp     ecx, NK_NAME
-        je      .yes
+        je      short .yes
         cmp     ecx, NK_MEMBER
-        je      .yes
+        je      short .yes
         cmp     ecx, NK_INDEX
-        je      .yes
+        je      short .yes
         cmp     ecx, NK_UNARY
-        jne     .no
+        jne     short .no
         cmp     word [rax + N_OP], TK_STAR
-        je      .yes
+        je      short .yes
 .no:
         xor     eax, eax
         ret
@@ -239,12 +239,12 @@ parse_program:
 .loop:
         call    p_kind
         cmp     eax, TK_EOF
-        je      .done
+        je      short .done
         call    parse_toplevel
         mov     rdi, rsp
         mov     esi, eax
         call    list_add
-        jmp     .loop
+        jmp     short .loop
 .done:
         mov     edi, ebx
         call    node_ptr
@@ -260,53 +260,53 @@ parse_toplevel:
         sub     rsp, 8
         call    p_kind
         cmp     eax, TK_KW_PUBLIC
-        je      .visibility
+        je      short .visibility
         cmp     eax, TK_KW_PRIVATE
-        jne     .item
+        jne     short .item
 .visibility:
         call    p_advance               ; no effect in Core: one program, one scope
         call    p_kind
         cmp     eax, TK_KW_STRUCT
-        je      .struct
+        je      short .struct
         cmp     eax, TK_KW_ENUM
-        je      .enum
+        je      short .enum
         cmp     eax, TK_KW_CONST
-        je      .const
+        je      short .const
         cmp     eax, TK_KW_STATIC
-        je      .static
+        je      short .static
         call    is_fn_start
         test    eax, eax
-        jnz     .fn
+        jnz     short .fn
         lea     rdi, [s_an_item]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 .item:
         cmp     eax, TK_KW_STRUCT
-        je      .struct
+        je      short .struct
         cmp     eax, TK_KW_ENUM
-        je      .enum
+        je      short .enum
         cmp     eax, TK_KW_CONST
-        je      .const
+        je      short .const
         cmp     eax, TK_KW_STATIC
-        je      .static
+        je      short .static
         call    is_fn_start
         test    eax, eax
-        jnz     .fn
+        jnz     short .fn
         call    parse_statement
-        jmp     .out
+        jmp     short .out
 .struct:
         call    parse_struct
-        jmp     .out
+        jmp     short .out
 .enum:
         call    parse_enum
-        jmp     .out
+        jmp     short .out
 .const:
         mov     edi, NK_CONST
         call    parse_binding
-        jmp     .out
+        jmp     short .out
 .static:
         mov     edi, NK_STATIC
         call    parse_binding
-        jmp     .out
+        jmp     short .out
 .fn:
         call    parse_function
 .out:
@@ -323,23 +323,23 @@ is_fn_start:
         mov     r12, [n_count]
         call    try_type
         test    eax, eax
-        jz      .no
+        jz      short .no
         call    p_kind
         cmp     eax, TK_IDENT
-        jne     .no
+        jne     short .no
         mov     edi, 1
         call    p_kind_at
         cmp     eax, TK_LPAREN
-        je      .yes
+        je      short .yes
         cmp     eax, TK_LT
-        jne     .no
+        jne     short .no
         lea     rdi, [s_generic_functions]
         mov     rsi, [p_pos]
         inc     rsi                     ; the '<'
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 .yes:
         mov     eax, 1
-        jmp     .out
+        jmp     short .out
 .no:
         xor     eax, eax
 .out:
@@ -372,15 +372,15 @@ parse_function:
 .param:
         call    p_kind
         cmp     eax, TK_RPAREN
-        je      .params_done
+        je      short .params_done
         cmp     eax, TK_KW_IN           ; parameter modes and receivers are full Envo
-        je      .not_core_keyword
+        je      near .not_core_keyword
         cmp     eax, TK_KW_REF
-        je      .not_core_keyword
+        je      near .not_core_keyword
         cmp     eax, TK_KW_OUT
-        je      .not_core_keyword
+        je      near .not_core_keyword
         cmp     eax, TK_KW_THIS
-        je      .not_core_keyword
+        je      near .not_core_keyword
         call    parse_decl_type
         mov     r12d, eax
         mov     edi, TK_IDENT
@@ -392,25 +392,25 @@ parse_function:
         mov     r13d, eax
         call    p_kind
         cmp     eax, TK_EQ
-        je      .default_value
+        je      near .default_value
         mov     rdi, rsp
         mov     esi, r13d
         call    list_add
         mov     edi, TK_COMMA
         call    p_accept
         test    eax, eax
-        jnz     .param
+        jnz     short .param
 .params_done:
         mov     edi, TK_RPAREN
         call    p_expect
         call    p_kind
         cmp     eax, TK_LBRACE
-        jne     .arrow
+        jne     short .arrow
         call    parse_block
-        jmp     .body
+        jmp     short .body
 .arrow:
         cmp     eax, TK_FAT_ARROW
-        jne     .bad_body
+        jne     short .bad_body
         call    p_advance
         call    parse_expr
         mov     r13d, eax
@@ -431,15 +431,15 @@ parse_function:
         ret
 .bad_body:
         lea     rdi, [s_fn_body]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 .not_core_keyword:
         xor     edi, edi
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 .default_value:
         lea     rdi, [s_default_params]
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 
 ; Struct = 'struct' IDENT '{' Field* '}'    Field = Visibility? Type IDENT End
 ; ebx = struct node, r12d = field type, r13d = field node; [rsp] = field list pair
@@ -458,19 +458,19 @@ parse_struct:
         mov     ebx, eax
         call    p_kind
         cmp     eax, TK_COLON
-        je      .bases
+        je      near .bases
         cmp     eax, TK_LT
-        je      .generic
+        je      near .generic
         mov     edi, TK_LBRACE
         call    p_expect
 .field:
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .done
+        je      short .done
         cmp     eax, TK_KW_PUBLIC
-        je      .visibility
+        je      short .visibility
         cmp     eax, TK_KW_PRIVATE
-        jne     .type
+        jne     short .type
 .visibility:
         call    p_advance
 .type:
@@ -485,18 +485,18 @@ parse_struct:
         mov     r13d, eax
         call    p_kind
         cmp     eax, TK_LPAREN
-        je      .method
+        je      short .method
         cmp     eax, TK_LBRACE
-        je      .property
+        je      short .property
         cmp     eax, TK_FAT_ARROW
-        je      .property
+        je      short .property
         cmp     eax, TK_EQ
-        je      .field_init
+        je      short .field_init
         call    p_end
         mov     rdi, rsp
         mov     esi, r13d
         call    list_add
-        jmp     .field
+        jmp     short .field
 .done:
         call    p_advance
         mov     edi, ebx
@@ -511,21 +511,21 @@ parse_struct:
         ret
 .bases:
         lea     rdi, [s_struct_bases]
-        jmp     .not_core
+        jmp     short .not_core
 .generic:
         lea     rdi, [s_generic_types]
-        jmp     .not_core
+        jmp     short .not_core
 .method:
         lea     rdi, [s_methods]
-        jmp     .not_core
+        jmp     short .not_core
 .property:
         lea     rdi, [s_properties]
-        jmp     .not_core
+        jmp     short .not_core
 .field_init:
         lea     rdi, [s_field_inits]
 .not_core:
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 
 ; Enum = 'enum' IDENT ( ':' Type )? '{' ( Variant ( ',' Variant )* ','? )? '}'
 ; Variant = IDENT ( '=' Expr )?
@@ -546,7 +546,7 @@ parse_enum:
         mov     edi, TK_COLON
         call    p_accept
         test    eax, eax
-        jz      .body
+        jz      short .body
         call    parse_decl_type
         mov     r12d, eax
         mov     edi, ebx
@@ -558,7 +558,7 @@ parse_enum:
 .variant:
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .done
+        je      short .done
         mov     edi, TK_IDENT
         call    p_expect
         mov     edi, NK_VARIANT
@@ -567,11 +567,11 @@ parse_enum:
         mov     r13d, eax
         call    p_kind
         cmp     eax, TK_LPAREN
-        je      .payload
+        je      short .payload
         mov     edi, TK_EQ
         call    p_accept
         test    eax, eax
-        jz      .add
+        jz      short .add
         call    parse_expr
         mov     r12d, eax
         mov     edi, r13d
@@ -584,12 +584,12 @@ parse_enum:
         mov     edi, TK_COMMA
         call    p_accept
         test    eax, eax
-        jnz     .variant
+        jnz     short .variant
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .done
+        je      short .done
         lea     rdi, [s_comma_or_brace]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 .done:
         call    p_advance
         mov     edi, ebx
@@ -605,7 +605,7 @@ parse_enum:
 .payload:
         lea     rdi, [s_enum_payloads]
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 
 ; parse_binding - Const = 'const' Type IDENT '=' Expr End
 ;                 Static = 'static' Type IDENT ( '=' Expr )? End
@@ -627,10 +627,10 @@ parse_binding:
         mov     [rdx + N_A], r12d
         mov     ebx, eax
         cmp     r13d, NK_CONST
-        je      .value                  ; a const must have a value
+        je      short .value                  ; a const must have a value
         call    p_kind
         cmp     eax, TK_EQ
-        jne     .end
+        jne     short .end
 .value:
         mov     edi, TK_EQ
         call    p_expect
@@ -670,15 +670,15 @@ try_type:
 .stars:
         call    p_kind
         cmp     eax, TK_STAR
-        jne     .base
+        jne     short .base
         call    p_advance
         inc     r12d
         cmp     r12d, MAX_DEPTH
-        ja      .fail
-        jmp     .stars
+        ja      near .fail
+        jmp     short .stars
 .base:
         cmp     eax, TK_IDENT
-        jne     .fail
+        jne     near .fail
         call    p_advance
         mov     edi, NK_TNAME
         mov     esi, eax
@@ -688,26 +688,26 @@ try_type:
 .suffix:
         call    p_kind
         cmp     eax, TK_LBRACKET
-        jne     .wrap
+        jne     near .wrap
         mov     edi, 1
         call    p_kind_at
         cmp     eax, TK_RBRACKET
-        je      .slice
+        je      near .slice
         mov     edi, NK_INT
         cmp     eax, TK_INT
-        je      .array
+        je      short .array
         mov     edi, NK_NAME
         cmp     eax, TK_IDENT
-        jne     .wrap                   ; '[' starts something else, e.g. an index
+        jne     near .wrap                   ; '[' starts something else, e.g. an index
 .array:
         mov     [rsp], edi              ; kind of the size node
         mov     edi, 2
         call    p_kind_at
         cmp     eax, TK_RBRACKET
-        jne     .wrap
+        jne     near .wrap
         inc     r14d
         cmp     r14d, MAX_DEPTH
-        ja      .fail
+        ja      near .fail
         call    p_advance               ; '['
         mov     [rsp + 4], eax
         call    p_advance               ; the size
@@ -723,11 +723,11 @@ try_type:
         mov     ecx, [rsp]
         mov     [rdx + N_B], ecx
         mov     ebx, eax
-        jmp     .suffix
+        jmp     near .suffix
 .slice:
         inc     r14d
         cmp     r14d, MAX_DEPTH
-        ja      .fail
+        ja      short .fail
         call    p_advance               ; '['
         mov     [rsp + 4], eax
         call    p_advance               ; ']'
@@ -736,21 +736,21 @@ try_type:
         call    node_new
         mov     [rdx + N_A], ebx
         mov     ebx, eax
-        jmp     .suffix
+        jmp     near .suffix
 .wrap:
         ; Apply the leading '*'s: the last one written is the innermost.
         test    r12d, r12d
-        jz      .done
+        jz      short .done
         dec     r12d
         lea     rsi, [r13 + r12]
         mov     edi, NK_TPTR
         call    node_new
         mov     [rdx + N_A], ebx
         mov     ebx, eax
-        jmp     .wrap
+        jmp     short .wrap
 .done:
         mov     eax, ebx
-        jmp     .out
+        jmp     short .out
 .fail:
         xor     eax, eax
 .out:
@@ -766,12 +766,12 @@ parse_type:
         sub     rsp, 8
         call    try_type
         test    eax, eax
-        jz      .missing
+        jz      short .missing
         add     rsp, 8
         ret
 .missing:
         lea     rdi, [s_a_type]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 
 ; parse_decl_type - a Type in a declaration, where full Envo could continue
 ; with '?' (optional) or '<' (generic arguments): both are E0905 in Core.
@@ -781,20 +781,20 @@ parse_decl_type:
         mov     ebx, eax
         call    p_kind
         cmp     eax, TK_QUESTION
-        je      .optional
+        je      short .optional
         cmp     eax, TK_LT
-        je      .generic
+        je      short .generic
         mov     eax, ebx
         pop     rbx
         ret
 .optional:
         lea     rdi, [s_optional_types]
-        jmp     .not_core
+        jmp     short .not_core
 .generic:
         lea     rdi, [s_generic_types]
 .not_core:
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 
 ; =============================================================================
 ; Statements
@@ -813,40 +813,40 @@ parse_statement:
         call    p_enter
         call    p_kind
         cmp     eax, TK_LBRACE
-        je      .block
+        je      near .block
         cmp     eax, TK_KW_UNSAFE
-        je      .unsafe
+        je      near .unsafe
         cmp     eax, TK_KW_IF
-        je      .if
+        je      near .if
         cmp     eax, TK_KW_WHILE
-        je      .while
+        je      near .while
         cmp     eax, TK_KW_FOR
-        je      .for
+        je      near .for
         cmp     eax, TK_KW_MATCH
-        je      .match
+        je      near .match
         cmp     eax, TK_KW_BREAK
-        je      .break
+        je      near .break
         cmp     eax, TK_KW_CONTINUE
-        je      .continue
+        je      near .continue
         cmp     eax, TK_KW_RETURN
-        je      .return
+        je      near .return
         cmp     eax, TK_KW_STRUCT
-        je      .local_item
+        je      near .local_item
         cmp     eax, TK_KW_ENUM
-        je      .local_item
+        je      near .local_item
         cmp     eax, TK_KW_CONST
-        je      .local_item
+        je      near .local_item
         cmp     eax, TK_KW_STATIC
-        je      .local_item
+        je      near .local_item
         call    parse_simple
         mov     ebx, eax
         call    p_end
         mov     eax, ebx
-        jmp     .out
+        jmp     near .out
 
 .block:
         call    parse_block
-        jmp     .out
+        jmp     near .out
 
 .unsafe:
         call    p_advance
@@ -857,7 +857,7 @@ parse_statement:
         mov     esi, ebx
         call    node_new
         mov     [rdx + N_A], r12d
-        jmp     .out
+        jmp     near .out
 
 .if:
         call    p_advance
@@ -870,7 +870,7 @@ parse_statement:
         mov     edi, TK_KW_ELSE
         call    p_accept
         test    eax, eax
-        jz      .if_node
+        jz      short .if_node
         call    parse_statement
         mov     r14d, eax
 .if_node:
@@ -880,7 +880,7 @@ parse_statement:
         mov     [rdx + N_A], r12d
         mov     [rdx + N_B], r13d
         mov     [rdx + N_C], r14d
-        jmp     .out
+        jmp     near .out
 
 .while:
         call    p_advance
@@ -894,7 +894,7 @@ parse_statement:
         call    node_new
         mov     [rdx + N_A], r12d
         mov     [rdx + N_B], r13d
-        jmp     .out
+        jmp     near .out
 
 .for:                                   ; 'for' '(' Simple? ';' Expr? ';' Simple? ')' Statement
         call    p_advance
@@ -906,7 +906,7 @@ parse_statement:
         xor     r14d, r14d
         call    p_kind
         cmp     eax, TK_SEMI
-        je      .for_condition
+        je      short .for_condition
         call    parse_simple
         mov     r12d, eax
 .for_condition:
@@ -914,7 +914,7 @@ parse_statement:
         call    p_expect
         call    p_kind
         cmp     eax, TK_SEMI
-        je      .for_step
+        je      short .for_step
         call    parse_expr
         mov     r13d, eax
 .for_step:
@@ -922,7 +922,7 @@ parse_statement:
         call    p_expect
         call    p_kind
         cmp     eax, TK_RPAREN
-        je      .for_body
+        je      short .for_body
         call    parse_simple
         mov     r14d, eax
 .for_body:
@@ -938,15 +938,15 @@ parse_statement:
         mov     [rdx + N_C], r14d
         mov     ecx, [rsp]
         mov     [rdx + N_D], ecx
-        jmp     .out
+        jmp     near .out
 
 .match:
         call    parse_match
-        jmp     .out
+        jmp     short .out
 
 .break:
         mov     r12d, NK_BREAK
-        jmp     .jump
+        jmp     short .jump
 .continue:
         mov     r12d, NK_CONTINUE
 .jump:
@@ -957,7 +957,7 @@ parse_statement:
         mov     ebx, eax
         call    p_end
         mov     eax, ebx
-        jmp     .out
+        jmp     short .out
 
 .return:
         call    p_advance
@@ -965,11 +965,11 @@ parse_statement:
         xor     r12d, r12d
         call    p_kind
         cmp     eax, TK_SEMI
-        je      .return_node
+        je      short .return_node
         cmp     eax, TK_RBRACE
-        je      .return_node
+        je      short .return_node
         cmp     eax, TK_EOF
-        je      .return_node
+        je      short .return_node
         call    parse_expr
         mov     r12d, eax
 .return_node:
@@ -980,12 +980,12 @@ parse_statement:
         mov     ebx, eax
         call    p_end
         mov     eax, ebx
-        jmp     .out
+        jmp     short .out
 
 .local_item:
         lea     rdi, [s_local_items]
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 
 .out:
         mov     [p_depth], r15
@@ -1024,14 +1024,14 @@ parse_block:
 .loop:
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .done
+        je      short .done
         cmp     eax, TK_EOF
-        je      .eof
+        je      short .eof
         call    parse_statement
         mov     rdi, rsp
         mov     esi, eax
         call    list_add
-        jmp     .loop
+        jmp     short .loop
 .done:
         call    p_advance
         mov     edi, ebx
@@ -1044,7 +1044,7 @@ parse_block:
         ret
 .eof:
         mov     edi, TK_RBRACE
-        jmp     p_error_expected_kind
+        jmp     near p_error_expected_kind
 
 ; Simple = 'var' IDENT '=' Expr
 ;        | Type IDENT ( '=' Expr )?             ([core.decl.1])
@@ -1059,26 +1059,26 @@ parse_simple:
         sub     rsp, 8
         call    p_kind
         cmp     eax, TK_KW_VAR
-        je      .var
+        je      near .var
         mov     r13, [p_pos]
         mov     r14, [n_count]
         call    try_type
         test    eax, eax
-        jz      .expression
+        jz      short .expression
         mov     r12d, eax
         call    p_kind
         cmp     eax, TK_IDENT
-        jne     .expression
+        jne     short .expression
         mov     edi, 1
         call    p_kind_at
         cmp     eax, TK_EQ
-        je      .declaration
+        je      near .declaration
         cmp     eax, TK_SEMI
-        je      .declaration
+        je      near .declaration
         cmp     eax, TK_RBRACE
-        je      .declaration
+        je      near .declaration
         cmp     eax, TK_EOF
-        je      .declaration
+        je      near .declaration
 .expression:
         mov     [p_pos], r13            ; backtrack
         mov     [n_count], r14
@@ -1087,23 +1087,23 @@ parse_simple:
         call    p_kind
         lea     rdx, [tok_class]
         test    byte [rdx + rax], TC_ASSIGN
-        jnz     .assign
+        jnz     short .assign
         cmp     eax, TK_PLUS_PLUS
-        je      .increment
+        je      short .increment
         cmp     eax, TK_MINUS_MINUS
-        je      .decrement
+        je      short .decrement
         mov     edi, NK_EXPR
         mov     esi, r13d               ; positioned at the statement's first token
         call    node_new
         mov     [rdx + N_A], ebx
-        jmp     .out
+        jmp     near .out
 .assign:
         call    p_advance
         mov     r12d, eax
         mov     edi, ebx
         call    is_place
         test    eax, eax
-        jz      .bad_target
+        jz      short .bad_target
         call    parse_expr
         mov     r13d, eax
         mov     edi, NK_ASSIGN
@@ -1111,10 +1111,10 @@ parse_simple:
         call    node_new
         mov     [rdx + N_A], ebx
         mov     [rdx + N_B], r13d
-        jmp     .out
+        jmp     near .out
 .increment:
         mov     r13d, NK_INC
-        jmp     .step
+        jmp     short .step
 .decrement:
         mov     r13d, NK_DEC
 .step:
@@ -1123,16 +1123,16 @@ parse_simple:
         mov     edi, ebx
         call    is_place
         test    eax, eax
-        jz      .bad_target
+        jz      short .bad_target
         mov     edi, r13d
         mov     esi, r12d
         call    node_new
         mov     [rdx + N_A], ebx
-        jmp     .out
+        jmp     short .out
 .bad_target:
         mov     edi, E_BAD_ASSIGN_TARGET
         mov     esi, r12d
-        jmp     p_error_at
+        jmp     near p_error_at
 .var:
         call    p_advance
         mov     edi, TK_IDENT
@@ -1146,7 +1146,7 @@ parse_simple:
         mov     esi, r12d
         call    node_new
         mov     [rdx + N_B], ebx
-        jmp     .out
+        jmp     short .out
 .declaration:
         call    p_advance               ; the name
         mov     r13d, eax
@@ -1154,7 +1154,7 @@ parse_simple:
         mov     edi, TK_EQ
         call    p_accept
         test    eax, eax
-        jz      .declaration_node
+        jz      short .declaration_node
         call    parse_expr
         mov     ebx, eax
 .declaration_node:
@@ -1195,19 +1195,19 @@ parse_match:
 .arm:
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .done
+        je      near .done
         cmp     eax, TK_EOF
-        je      .eof
+        je      near .eof
         mov     qword [rsp + 8], 0
 .pattern:
         call    p_kind
         cmp     eax, TK_KW_UNDERSCORE
-        jne     .pattern_expression
+        jne     short .pattern_expression
         call    p_advance
         mov     edi, NK_WILD
         mov     esi, eax
         call    node_new
-        jmp     .pattern_add
+        jmp     short .pattern_add
 .pattern_expression:
         call    parse_prefix            ; not parse_expr: '|' separates patterns
 .pattern_add:
@@ -1217,30 +1217,30 @@ parse_match:
         mov     edi, TK_PIPE
         call    p_accept
         test    eax, eax
-        jnz     .pattern
+        jnz     short .pattern
         mov     edi, TK_FAT_ARROW
         call    p_expect
         mov     r12d, eax
         call    p_kind
         cmp     eax, TK_LBRACE
-        jne     .simple_body
+        jne     short .simple_body
         call    parse_block
         mov     r13d, eax
         mov     edi, TK_COMMA
         call    p_accept
-        jmp     .arm_node
+        jmp     short .arm_node
 .simple_body:
         call    parse_simple
         mov     r13d, eax
         mov     edi, TK_COMMA
         call    p_accept
         test    eax, eax
-        jnz     .arm_node
+        jnz     short .arm_node
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .arm_node
+        je      short .arm_node
         lea     rdi, [s_comma_or_brace]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 .arm_node:
         mov     edi, NK_ARM
         mov     esi, r12d
@@ -1251,7 +1251,7 @@ parse_match:
         mov     rdi, rsp
         mov     esi, eax
         call    list_add
-        jmp     .arm
+        jmp     near .arm
 .done:
         call    p_advance
         mov     edi, ebx
@@ -1266,7 +1266,7 @@ parse_match:
         ret
 .eof:
         mov     edi, TK_RBRACE
-        jmp     p_error_expected_kind
+        jmp     near p_error_expected_kind
 
 ; =============================================================================
 ; Expressions
@@ -1308,31 +1308,31 @@ parse_binary:
         lea     rdx, [tok_class]
         movzx   ecx, byte [rdx + rax]
         test    ecx, TC_NOT_CORE
-        jnz     .not_core
+        jnz     near .not_core
         and     ecx, TC_PREC
-        jz      .done
+        jz      near .done
         cmp     ecx, r12d
-        jb      .done
+        jb      near .done
         mov     r13d, ecx
         cmp     ecx, PREC_COMPARE
-        jne     .take
+        jne     short .take
         ; [core.syntax.2] a comparison may not take an unparenthesized comparison
         ; as its left operand
         mov     edi, ebx
         call    node_ptr
         cmp     word [rax + N_KIND], NK_BINARY
-        jne     .take
+        jne     short .take
         test    dword [rax + N_FLAGS], NF_PAREN
-        jnz     .take
+        jnz     short .take
         movzx   edx, word [rax + N_OP]
         lea     rax, [tok_class]
         movzx   edx, byte [rax + rdx]
         and     edx, TC_PREC
         cmp     edx, PREC_COMPARE
-        jne     .take
+        jne     short .take
         mov     edi, E_CHAINED_COMPARISON
         mov     rsi, [p_pos]
-        jmp     p_error_at
+        jmp     near p_error_at
 .take:
         call    p_enter
         call    p_advance
@@ -1347,11 +1347,11 @@ parse_binary:
         mov     [rdx + N_A], ebx
         mov     [rdx + N_B], r13d
         mov     ebx, eax
-        jmp     .loop
+        jmp     near .loop
 .not_core:
         xor     edi, edi
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 .done:
         mov     [p_depth], r15
         mov     eax, ebx
@@ -1375,7 +1375,7 @@ parse_cast:
 .loop:
         call    p_kind
         cmp     eax, TK_KW_AS
-        jne     .done
+        jne     short .done
         call    p_enter
         call    p_advance
         mov     r12d, eax
@@ -1387,7 +1387,7 @@ parse_cast:
         mov     [rdx + N_A], ebx
         mov     [rdx + N_B], r12d
         mov     ebx, eax
-        jmp     .loop
+        jmp     short .loop
 .done:
         mov     [p_depth], r13
         mov     eax, ebx
@@ -1409,17 +1409,17 @@ parse_prefix:
         call    p_kind
         mov     r12d, eax
         cmp     eax, TK_MINUS
-        je      .unary
+        je      short .unary
         cmp     eax, TK_BANG
-        je      .unary
+        je      short .unary
         cmp     eax, TK_TILDE
-        je      .unary
+        je      short .unary
         cmp     eax, TK_STAR
-        je      .unary
+        je      short .unary
         cmp     eax, TK_AMP
-        je      .unary
+        je      short .unary
         call    parse_postfix
-        jmp     .out
+        jmp     short .out
 .unary:
         call    p_advance
         mov     ebx, eax
@@ -1454,12 +1454,12 @@ parse_postfix:
 .loop:
         call    p_kind
         cmp     eax, TK_LPAREN
-        je      .call
+        je      short .call
         cmp     eax, TK_LBRACKET
-        je      .index
+        je      near .index
         cmp     eax, TK_DOT
-        je      .member
-        jmp     .done
+        je      near .member
+        jmp     near .done
 .call:
         call    p_enter
         call    p_advance
@@ -1468,19 +1468,19 @@ parse_postfix:
 .argument:
         call    p_kind
         cmp     eax, TK_RPAREN
-        je      .arguments_done
+        je      short .arguments_done
         call    parse_expr
         mov     r14d, eax
         call    p_kind
         cmp     eax, TK_COLON
-        je      .named_argument
+        je      short .named_argument
         mov     rdi, rsp
         mov     esi, r14d
         call    list_add
         mov     edi, TK_COMMA
         call    p_accept
         test    eax, eax
-        jnz     .argument
+        jnz     short .argument
 .arguments_done:
         mov     edi, TK_RPAREN
         call    p_expect
@@ -1491,11 +1491,11 @@ parse_postfix:
         mov     ecx, [rsp]
         mov     [rdx + N_B], ecx
         mov     ebx, eax
-        jmp     .loop
+        jmp     near .loop
 .named_argument:
         lea     rdi, [s_named_args]
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 .index:
         call    p_enter
         call    p_advance
@@ -1510,7 +1510,7 @@ parse_postfix:
         mov     [rdx + N_A], ebx
         mov     [rdx + N_B], r14d
         mov     ebx, eax
-        jmp     .loop
+        jmp     near .loop
 .member:
         call    p_enter
         call    p_advance
@@ -1521,7 +1521,7 @@ parse_postfix:
         call    node_new
         mov     [rdx + N_A], ebx
         mov     ebx, eax
-        jmp     .loop
+        jmp     near .loop
 .done:
         mov     [p_depth], r13
         mov     eax, ebx
@@ -1545,56 +1545,56 @@ parse_primary:
         call    p_kind
         mov     r12d, NK_INT
         cmp     eax, TK_INT
-        je      .leaf
+        je      near .leaf
         mov     r12d, NK_CHAR
         cmp     eax, TK_CHAR
-        je      .leaf
+        je      near .leaf
         mov     r12d, NK_STRING
         cmp     eax, TK_STRING
-        je      .leaf
+        je      near .leaf
         mov     r12d, NK_NAME
         cmp     eax, TK_IDENT
-        je      .leaf
+        je      near .leaf
         mov     r12d, NK_BOOL
         cmp     eax, TK_KW_TRUE
-        je      .leaf
+        je      short .leaf
         cmp     eax, TK_KW_FALSE
-        je      .leaf
+        je      short .leaf
         cmp     eax, TK_LPAREN
-        je      .paren
+        je      near .paren
         mov     r12d, NK_SIZEOF
         cmp     eax, TK_KW_SIZEOF
-        je      .type_query
+        je      near .type_query
         mov     r12d, NK_ALIGNOF
         cmp     eax, TK_KW_ALIGNOF
-        je      .type_query
+        je      near .type_query
         cmp     eax, TK_KW_NEW
-        je      .new
+        je      near .new
         cmp     eax, TK_FLOAT
-        je      .float
+        je      near .float
         cmp     eax, TK_LBRACKET
-        je      .array_literal
+        je      near .array_literal
         ; [core.syntax.5] a keyword only full Envo has
         cmp     eax, TK_KW_FIRST
-        jb      .expected
+        jb      short .expected
         cmp     eax, TK_KW_LAST
-        ja      .expected
+        ja      short .expected
         lea     rdx, [tok_class]
         test    byte [rdx + rax], TC_CORE_KW
-        jnz     .expected
+        jnz     short .expected
         xor     edi, edi
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 .expected:
         lea     rdi, [s_an_expression]
-        jmp     p_error_expected
+        jmp     near p_error_expected
 
 .leaf:
         call    p_advance
         mov     edi, r12d
         mov     esi, eax
         call    node_new
-        jmp     .out
+        jmp     near .out
 
 .paren:
         call    p_advance
@@ -1602,14 +1602,14 @@ parse_primary:
         mov     ebx, eax
         call    p_kind
         cmp     eax, TK_COMMA
-        je      .tuple
+        je      near .tuple
         mov     edi, TK_RPAREN
         call    p_expect
         mov     edi, ebx
         call    node_ptr
         or      dword [rax + N_FLAGS], NF_PAREN
         mov     eax, ebx
-        jmp     .out
+        jmp     near .out
 
 .type_query:                            ; sizeof(T), alignof(T)
         call    p_advance
@@ -1624,7 +1624,7 @@ parse_primary:
         mov     esi, ebx
         call    node_new
         mov     [rdx + N_A], r13d
-        jmp     .out
+        jmp     near .out
 
 .new:
         call    p_advance
@@ -1633,14 +1633,14 @@ parse_primary:
         mov     r12d, eax
         call    p_kind
         cmp     eax, TK_LPAREN
-        je      .constructor
+        je      near .constructor
         mov     edi, TK_LBRACE
         call    p_expect
         mov     qword [rsp], 0
 .init:
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .inits_done
+        je      short .inits_done
         mov     edi, TK_IDENT
         call    p_expect
         mov     r13d, eax
@@ -1659,12 +1659,12 @@ parse_primary:
         mov     edi, TK_COMMA
         call    p_accept
         test    eax, eax
-        jnz     .init
+        jnz     short .init
         call    p_kind
         cmp     eax, TK_RBRACE
-        je      .inits_done
+        je      short .inits_done
         lea     rdi, [s_comma_or_brace]
-        jmp     p_error_expected
+        jmp     short p_error_expected
 .inits_done:
         call    p_advance
         mov     edi, NK_NEW
@@ -1673,22 +1673,22 @@ parse_primary:
         mov     [rdx + N_A], r12d
         mov     ecx, [rsp]
         mov     [rdx + N_B], ecx
-        jmp     .out
+        jmp     short .out
 
 .tuple:
         lea     rdi, [s_tuples]
-        jmp     .not_core
+        jmp     short .not_core
 .constructor:
         lea     rdi, [s_constructors]
-        jmp     .not_core
+        jmp     short .not_core
 .float:
         lea     rdi, [s_floats]
-        jmp     .not_core
+        jmp     short .not_core
 .array_literal:
         lea     rdi, [s_array_literals]
 .not_core:
         mov     rsi, [p_pos]
-        jmp     p_error_not_core
+        jmp     near p_error_not_core
 
 .out:
         add     rsp, 16
@@ -1707,7 +1707,7 @@ p_error_expected:
         and     rsp, -16
         mov     rbx, rdi
         mov     r12d, -1
-        jmp     p_error_expected_common
+        jmp     short p_error_expected_common
 
 ; p_error_expected_kind - E0101: "expected `<spelling of kind edi>`, found <token>".
 p_error_expected_kind:
@@ -1725,11 +1725,11 @@ p_error_expected_common:
         mov     edx, s_expected_len
         call    w_bytes
         test    rbx, rbx
-        jz      .kind
+        jz      short .kind
         lea     rdi, [w_err]
         mov     rsi, rbx
         call    w_cstr
-        jmp     .found
+        jmp     short .found
 .kind:
         mov     edi, r12d
         call    w_err_spelling
@@ -1740,7 +1740,7 @@ p_error_expected_common:
         call    w_bytes
         mov     rdi, [p_pos]
         call    w_err_token
-        jmp     diag_finish
+        jmp     near diag_finish
 
 ; p_error_not_core - E0905: "not part of Envo-Core: <rdi>", or the token's text
 ; when rdi is 0.
@@ -1759,15 +1759,15 @@ p_error_not_core:
         mov     edx, s_not_core_len
         call    w_bytes
         test    rbx, rbx
-        jz      .token
+        jz      short .token
         lea     rdi, [w_err]
         mov     rsi, rbx
         call    w_cstr
-        jmp     diag_finish
+        jmp     near diag_finish
 .token:
         mov     edi, r12d
         call    w_err_token
-        jmp     diag_finish
+        jmp     near diag_finish
 
 ; p_error_at - report a fixed-message error at a token.
 ;   in: edi = error code, esi = token index
@@ -1778,7 +1778,7 @@ p_error_at:
         call    tok_addr
         mov     esi, [rax + TOK_START]
         mov     edi, ebx
-        jmp     diag_error
+        jmp     near diag_error
 
 ; w_err_spelling - write "`<spelling>`" for token kind edi to stderr.
 w_err_spelling:
@@ -1807,7 +1807,7 @@ w_err_token:
         mov     ebx, edi
         call    tok_addr
         cmp     word [rax + TOK_KIND], TK_EOF
-        je      .eof
+        je      short .eof
         lea     rdi, [w_err]
         mov     esi, '`'
         call    w_byte
@@ -1835,7 +1835,7 @@ w_token_text:
         mov     esi, [rax + TOK_START]
         add     rsi, [diag_src]
         mov     edx, [rax + TOK_LEN]
-        jmp     w_bytes
+        jmp     near w_bytes
 
 ; =============================================================================
 ; ast_dump - print a list of nodes with their subtrees, one node per line:
@@ -1856,7 +1856,7 @@ ast_dump:
         mov     r12d, esi
 .node:
         test    ebx, ebx
-        jz      .done
+        jz      near .done
         mov     edi, r12d
         call    dump_indent
         mov     edi, ebx
@@ -1871,7 +1871,7 @@ ast_dump:
         movzx   edx, byte [r14]
         call    w_bytes
         cmp     byte [r14 + NT_TEXT], 0
-        je      .position
+        je      short .position
         lea     rdi, [w_out]
         mov     esi, ' '
         call    w_byte
@@ -1898,7 +1898,7 @@ ast_dump:
         mov     rsi, rax
         call    w_u64
         cmp     byte [c_dump], 0        ; `envoc0 check` adds types and layouts
-        je      .line_end
+        je      short .line_end
         mov     edi, ebx
         call    c_dump_extra
 .line_end:
@@ -1909,13 +1909,13 @@ ast_dump:
 .child:
         movzx   eax, byte [r14 + NT_SLOTS]
         cmp     r15d, eax
-        jae     .next
+        jae     short .next
         mov     edi, [r13 + r15*4 + N_A]
         lea     esi, [r12 + 1]
         test    edi, edi
-        jz      .empty
+        jz      short .empty
         call    ast_dump
-        jmp     .child_next
+        jmp     short .child_next
 .empty:
         mov     edi, esi
         call    dump_indent
@@ -1927,10 +1927,10 @@ ast_dump:
         call    w_byte
 .child_next:
         inc     r15d
-        jmp     .child
+        jmp     short .child
 .next:
         mov     ebx, [r13 + N_NEXT]
-        jmp     .node
+        jmp     near .node
 .done:
         pop     r15
         pop     r14
@@ -1945,12 +1945,12 @@ dump_indent:
         lea     ebx, [rdi + rdi]
 .loop:
         test    ebx, ebx
-        jz      .done
+        jz      short .done
         lea     rdi, [w_out]
         mov     esi, ' '
         call    w_byte
         dec     ebx
-        jmp     .loop
+        jmp     short .loop
 .done:
         pop     rbx
         ret

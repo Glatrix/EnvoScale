@@ -64,9 +64,21 @@ comment   = ';' any-text-to-end-of-line
   (`mov r32, imm32`, data directives), and constants used as `imm8`-eligible operands are
   defined first (this is why `bootstrap/stage0` includes `src/tokens.eas` before the code
   that uses token kinds).
-- **Jumps** take the shortest encoding that reaches (`rel8` when it fits, else `rel32`),
-  as NASM does by default. An assembler must iterate until instruction sizes stop
-  changing; the seed does the same to stay byte-identical.
+- **Every jump states its size**: `jmp short .x` / `jz short .x` (rel8, 2 bytes) or
+  `jmp near .x` / `jz near .x` (rel32, 5 or 6 bytes). The assembler never chooses, and a
+  `short` jump whose target is out of range is an error, not a silent widening.
+  `bootstrap.* check` rejects a jump without a size.
+
+  *Rationale:* letting the assembler pick ("jump relaxation") made the output depend on
+  the assembler: NASM 2.16 and 3.02 settled on different sizes for the same source
+  (issue #20). With explicit sizes, the bytes are a function of the source text alone,
+  and the seed needs no relaxation pass. When editing, write `short`; if the assembler
+  reports the target out of range, change that jump to `near`.
+- **Immediates and displacements** whose value is known use the shortest encoding: a
+  sign-extended 8-bit immediate or displacement when the value fits, otherwise 32 bits
+  (NASM's default `-Ox`). Because constants are defined before the code that uses them
+  (above), this choice never depends on later code. RIP-relative operands are always
+  32-bit displacements.
 
 ## 5. Instructions (Stage 0 subset)
 

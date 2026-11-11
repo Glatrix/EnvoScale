@@ -152,6 +152,11 @@ do_check() {
     hits=$(find "$ROOT/lib" -name '*.envo' -exec grep -n -E '^[[:space:]]*(use|using)[[:space:]]+adapters([^A-Za-z0-9_]|$)' /dev/null {} + 2>/dev/null || true)
     [ -z "$hits" ] || problem "lib imports an adapter: $hits"
 
+    # docs/spec/eas.md: every jump states its size, so the bytes depend on the source alone.
+    unsized=$(find "$ROOT/bootstrap" -name '*.eas' -exec grep -n -E '^[[:space:]]*j[a-z]+[[:space:]]+[.A-Za-z_]' /dev/null {} + \
+        | grep -v -E ':[[:space:]]*j[a-z]+[[:space:]]+(short|near)[[:space:]]' || true)
+    [ -z "$unsized" ] || problem "jumps without short/near: $unsized"
+
     # Brief 17: no Hello World Gallery program may grow past its line count.
     gallery="$ROOT/tests/spec/hello"
     entries=0

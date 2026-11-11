@@ -119,7 +119,7 @@ _start:
         mov     edi, WPATH_CHARS * 2
         call    sys_alloc
         test    rax, rax
-        jz      .oom
+        jz      short .oom
         mov     [win_wpath], rax
         call    win_build_argv
         call    main
@@ -135,7 +135,7 @@ _start:
 win_handle:
         mov     rcx, rdi
         cmp     rdi, 3
-        jae     .done
+        jae     short .done
         lea     rax, [win_std]
         mov     rcx, [rax + rdi*8]
 .done:
@@ -164,13 +164,13 @@ sys_open:
         mov     qword [rsp + 40], WPATH_CHARS ; cchWideChar
         call    [__imp_MultiByteToWideChar]
         test    eax, eax
-        jz      .fail
+        jz      short .fail
         mov     rcx, [win_wpath]        ; lpFileName
         mov     edx, 0x80000000         ; dwDesiredAccess: GENERIC_READ
         mov     r8d, 1                  ; dwShareMode: FILE_SHARE_READ
         mov     eax, 3                  ; dwCreationDisposition: OPEN_EXISTING
         test    rbx, rbx
-        jz      .go
+        jz      short .go
         mov     edx, 0x40000000         ; GENERIC_WRITE
         xor     r8d, r8d                ; no sharing while we write
         mov     eax, 2                  ; CREATE_ALWAYS
@@ -181,7 +181,7 @@ sys_open:
         mov     qword [rsp + 48], 0     ; hTemplateFile = NULL
         call    [__imp_CreateFileW]
         ; INVALID_HANDLE_VALUE is -1, which is already our error value.
-        jmp     .out
+        jmp     short .out
 .fail:
         mov     rax, -1
 .out:
@@ -209,14 +209,14 @@ sys_read:
         mov     qword [rsp + 32], 0     ; lpOverlapped = NULL
         call    [__imp_ReadFile]
         test    eax, eax
-        jz      .fail
+        jz      short .fail
         mov     eax, [rsp + 48]         ; DWORD count, zero-extended
-        jmp     .out
+        jmp     short .out
 .fail:
         call    [__imp_GetLastError]
         cmp     eax, ERROR_BROKEN_PIPE  ; writer closed the pipe: that is end of file
         mov     eax, 0
-        je      .out
+        je      short .out
         mov     rax, -1
 .out:
         mov     rsp, rbp
@@ -242,9 +242,9 @@ sys_write:
         mov     qword [rsp + 32], 0     ; lpOverlapped = NULL
         call    [__imp_WriteFile]
         test    eax, eax
-        jz      .fail
+        jz      short .fail
         mov     eax, [rsp + 48]
-        jmp     .out
+        jmp     short .out
 .fail:
         mov     rax, -1
 .out:
@@ -258,7 +258,7 @@ sys_write:
 sys_close:
         xor     eax, eax
         cmp     rdi, 3
-        jb      .done
+        jb      short .done
         push    rbp
         mov     rbp, rsp
         and     rsp, -16
@@ -269,7 +269,7 @@ sys_close:
         pop     rbp
         test    eax, eax                ; BOOL: nonzero on success
         mov     eax, 0
-        jnz     .done
+        jnz     short .done
         mov     rax, -1
 .done:
         ret
@@ -366,12 +366,12 @@ win_build_argv:
         mov     qword [rsp + 56], 0
         call    [__imp_WideCharToMultiByte]
         test    eax, eax
-        jz      .oom
+        jz      near .oom
         mov     r13d, eax               ; size in bytes, including the NUL
         mov     edi, eax
         call    sys_alloc
         test    rax, rax
-        jz      .oom
+        jz      near .oom
         mov     rbx, rax                ; UTF-8 command line
         mov     ecx, CP_UTF8
         xor     edx, edx
@@ -383,20 +383,20 @@ win_build_argv:
         mov     qword [rsp + 56], 0
         call    [__imp_WideCharToMultiByte]
         test    eax, eax
-        jz      .oom
+        jz      near .oom
         xor     ecx, ecx
 .len:
         cmp     byte [rbx + rcx], 0
-        je      .len_done
+        je      short .len_done
         inc     rcx
-        jmp     .len
+        jmp     short .len
 .len_done:
         mov     r12, rcx
         imul    rdi, r12, 10
         add     rdi, 32
         call    sys_alloc
         test    rax, rax
-        jz      .oom
+        jz      near .oom
         mov     r13, rax
         lea     r14, [r12 + 2]
         lea     r14, [rax + r14*8]      ; text area follows the pointer array
@@ -406,30 +406,30 @@ win_build_argv:
         mov     [r13], r14
         inc     r15
         cmp     byte [rbx], '"'
-        jne     .a0_plain
+        jne     short .a0_plain
         inc     rbx
 .a0_quoted:
         movzx   eax, byte [rbx]
         test    al, al
-        jz      .a0_end
+        jz      short .a0_end
         inc     rbx
         cmp     al, '"'
-        je      .a0_end
+        je      short .a0_end
         mov     [r14], al
         inc     r14
-        jmp     .a0_quoted
+        jmp     short .a0_quoted
 .a0_plain:
         movzx   eax, byte [rbx]
         test    al, al
-        jz      .a0_end
+        jz      short .a0_end
         cmp     al, ' '
-        je      .a0_end
+        je      short .a0_end
         cmp     al, 9
-        je      .a0_end
+        je      short .a0_end
         mov     [r14], al
         inc     r14
         inc     rbx
-        jmp     .a0_plain
+        jmp     short .a0_plain
 .a0_end:
         mov     byte [r14], 0
         inc     r14
@@ -438,15 +438,15 @@ win_build_argv:
 .skip_ws:
         movzx   eax, byte [rbx]
         cmp     al, ' '
-        je      .ws
+        je      short .ws
         cmp     al, 9
-        je      .ws
+        je      short .ws
         test    al, al
-        jz      .done
-        jmp     .arg_start
+        jz      near .done
+        jmp     short .arg_start
 .ws:
         inc     rbx
-        jmp     .skip_ws
+        jmp     short .skip_ws
 
 .arg_start:
         mov     [r13 + r15*8], r14
@@ -455,79 +455,79 @@ win_build_argv:
 .arg_loop:
         movzx   eax, byte [rbx]
         test    al, al
-        jz      .arg_end
+        jz      near .arg_end
         cmp     al, 0x5C                ; backslash
-        je      .backslashes
+        je      short .backslashes
         cmp     al, '"'
-        je      .quote
+        je      short .quote
         test    r8d, r8d
-        jnz     .literal                ; inside quotes, whitespace is literal
+        jnz     short .literal                ; inside quotes, whitespace is literal
         cmp     al, ' '
-        je      .arg_end
+        je      near .arg_end
         cmp     al, 9
-        je      .arg_end
+        je      near .arg_end
 .literal:
         mov     [r14], al
         inc     r14
         inc     rbx
-        jmp     .arg_loop
+        jmp     short .arg_loop
 
 .backslashes:
         xor     ecx, ecx                ; count the run of backslashes
 .bs_count:
         cmp     byte [rbx + rcx], 0x5C
-        jne     .bs_counted
+        jne     short .bs_counted
         inc     rcx
-        jmp     .bs_count
+        jmp     short .bs_count
 .bs_counted:
         cmp     byte [rbx + rcx], '"'
-        je      .bs_quote
+        je      short .bs_quote
         add     rbx, rcx                ; not before a quote: all literal
 .bs_literal:
         mov     byte [r14], 0x5C
         inc     r14
         dec     rcx
-        jnz     .bs_literal
-        jmp     .arg_loop
+        jnz     short .bs_literal
+        jmp     short .arg_loop
 .bs_quote:
         add     rbx, rcx                ; rbx now points at the quote
         mov     rdx, rcx
         shr     rdx, 1                  ; emit n = count / 2 backslashes
-        jz      .bs_half_done
+        jz      short .bs_half_done
 .bs_half:
         mov     byte [r14], 0x5C
         inc     r14
         dec     rdx
-        jnz     .bs_half
+        jnz     short .bs_half
 .bs_half_done:
         test    ecx, 1
-        jz      .quote                  ; even count: the quote is a delimiter
+        jz      short .quote                  ; even count: the quote is a delimiter
         mov     byte [r14], '"'         ; odd count: the quote is literal
         inc     r14
         inc     rbx
-        jmp     .arg_loop
+        jmp     near .arg_loop
 
 .quote:
         inc     rbx
         test    r8d, r8d
-        jz      .open_quote
+        jz      short .open_quote
         cmp     byte [rbx], '"'         ; "" inside quotes: literal quote
-        jne     .close_quote
+        jne     short .close_quote
         mov     byte [r14], '"'
         inc     r14
         inc     rbx
-        jmp     .arg_loop
+        jmp     near .arg_loop
 .close_quote:
         xor     r8d, r8d
-        jmp     .arg_loop
+        jmp     near .arg_loop
 .open_quote:
         mov     r8d, 1
-        jmp     .arg_loop
+        jmp     near .arg_loop
 
 .arg_end:
         mov     byte [r14], 0
         inc     r14
-        jmp     .skip_ws                ; sees the NUL and finishes if the line ended
+        jmp     near .skip_ws                ; sees the NUL and finishes if the line ended
 
 .done:
         mov     qword [r13 + r15*8], 0

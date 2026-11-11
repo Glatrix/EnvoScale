@@ -19,43 +19,43 @@ main:
         mov     [g_argc], rax
         mov     [g_argv], rdx
         cmp     rax, 2
-        jb      .usage_error
+        jb      near .usage_error
 
         lea     rsi, [s_cmd_lex]
         mov     edx, s_cmd_lex_len
         call    arg1_is
         test    eax, eax
-        jnz     .lex
+        jnz     near .lex
         lea     rsi, [s_cmd_parse]
         mov     edx, s_cmd_parse_len
         call    arg1_is
         test    eax, eax
-        jnz     .parse
+        jnz     near .parse
         lea     rsi, [s_cmd_check]
         mov     edx, s_cmd_check_len
         call    arg1_is
         test    eax, eax
-        jnz     .check
+        jnz     near .check
         lea     rsi, [s_cmd_version]
         mov     edx, s_cmd_version_len
         call    arg1_is
         test    eax, eax
-        jnz     .version
+        jnz     near .version
         lea     rsi, [s_cmd_dash_version]
         mov     edx, s_cmd_dash_version_len
         call    arg1_is
         test    eax, eax
-        jnz     .version
+        jnz     near .version
         lea     rsi, [s_cmd_help]
         mov     edx, s_cmd_help_len
         call    arg1_is
         test    eax, eax
-        jnz     .help
+        jnz     near .help
         lea     rsi, [s_cmd_dash_help]
         mov     edx, s_cmd_dash_help_len
         call    arg1_is
         test    eax, eax
-        jnz     .help
+        jnz     near .help
 
         ; unknown command
         lea     rdi, [w_err]
@@ -72,25 +72,25 @@ main:
         lea     rdi, [w_err]
         mov     esi, 10
         call    w_byte
-        jmp     .usage_error
+        jmp     near .usage_error
 
 .lex:
         cmp     qword [g_argc], 3
-        jne     .usage_error
+        jne     near .usage_error
         mov     rdx, [g_argv]
         mov     rdi, [rdx + 16]
         call    cmd_lex                 ; does not return
 
 .parse:
         cmp     qword [g_argc], 3
-        jne     .usage_error
+        jne     near .usage_error
         mov     rdx, [g_argv]
         mov     rdi, [rdx + 16]
         call    cmd_parse               ; does not return
 
 .check:
         cmp     qword [g_argc], 3
-        jne     .usage_error
+        jne     near .usage_error
         mov     rdx, [g_argv]
         mov     rdi, [rdx + 16]
         call    cmd_check               ; does not return
@@ -135,7 +135,7 @@ main:
 arg1_is:
         mov     rdi, [g_argv]
         mov     rdi, [rdi + 8]
-        jmp     cstr_eq
+        jmp     near cstr_eq
 
 ; cmd_lex - print the tokens of one file.
 ;   in:  rdi = NUL-terminated path. Does not return.
@@ -192,14 +192,14 @@ load_tokens:
         mov     [diag_path], rdi
         call    read_file
         test    rax, rax
-        jz      .read_failed
+        jz      short .read_failed
         ; [lex.src.2] ignore a UTF-8 byte order mark
         cmp     rdx, 3
-        jb      .no_bom
+        jb      short .no_bom
         cmp     word [rax], 0xBBEF
-        jne     .no_bom
+        jne     short .no_bom
         cmp     byte [rax + 2], 0xBF
-        jne     .no_bom
+        jne     short .no_bom
         add     rax, 3
         sub     rdx, 3
 .no_bom:
@@ -211,7 +211,7 @@ load_tokens:
         mov     rsi, rdx
         call    utf8_validate           ; [lex.src.1]
         cmp     rax, -1
-        je      .valid
+        je      short .valid
         mov     edi, E_INVALID_UTF8
         mov     rsi, rax
         call    diag_error
@@ -233,11 +233,11 @@ load_tokens:
         lea     rsi, [s_cannot_open]
         mov     edx, s_cannot_open_len
         cmp     r12, 1
-        je      .reason
+        je      short .reason
         lea     rsi, [s_cannot_read]
         mov     edx, s_cannot_read_len
         cmp     r12, 2
-        je      .reason
+        je      short .reason
         lea     rsi, [s_too_large]
         mov     edx, s_too_large_len
 .reason:
@@ -250,7 +250,7 @@ load_tokens:
         mov     esi, 0x27
         call    w_byte
         cmp     r12, 3
-        jne     .newline
+        jne     short .newline
         lea     rdi, [w_err]
         lea     rsi, [s_size_limit]
         mov     edx, s_size_limit_len

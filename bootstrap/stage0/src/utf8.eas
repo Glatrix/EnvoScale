@@ -25,89 +25,89 @@ utf8_validate:
         xor     ecx, ecx                ; rcx = offset
 .loop:
         cmp     rcx, rsi
-        jae     .valid
+        jae     near .valid
         movzx   eax, byte [rdi + rcx]
         cmp     al, 0x80
-        jb      .ascii
+        jb      short .ascii
         cmp     al, 0xC2
-        jb      .bad
+        jb      near .bad
         cmp     al, 0xE0
-        jb      .two
+        jb      short .two
         cmp     al, 0xF0
-        jb      .three
+        jb      short .three
         cmp     al, 0xF5
-        jb      .four
-        jmp     .bad
+        jb      near .four
+        jmp     near .bad
 .ascii:
         inc     rcx
-        jmp     .loop
+        jmp     short .loop
 
 .two:
         lea     rdx, [rcx + 1]
         cmp     rdx, rsi
-        jae     .bad                    ; truncated at end of file
+        jae     near .bad                    ; truncated at end of file
         movzx   edx, byte [rdi + rcx + 1]
         and     dl, 0xC0
         cmp     dl, 0x80
-        jne     .bad
+        jne     near .bad
         add     rcx, 2
-        jmp     .loop
+        jmp     short .loop
 
 .three:
         lea     rdx, [rcx + 2]
         cmp     rdx, rsi
-        jae     .bad
+        jae     near .bad
         movzx   edx, byte [rdi + rcx + 1]
         mov     r8d, 0x80               ; allowed range of the second byte
         mov     r9d, 0xBF
         cmp     al, 0xE0
-        jne     .three_not_e0
+        jne     short .three_not_e0
         mov     r8d, 0xA0
 .three_not_e0:
         cmp     al, 0xED
-        jne     .three_range
+        jne     short .three_range
         mov     r9d, 0x9F
 .three_range:
         cmp     edx, r8d
-        jb      .bad
+        jb      near .bad
         cmp     edx, r9d
-        ja      .bad
+        ja      short .bad
         movzx   edx, byte [rdi + rcx + 2]
         and     dl, 0xC0
         cmp     dl, 0x80
-        jne     .bad
+        jne     short .bad
         add     rcx, 3
-        jmp     .loop
+        jmp     near .loop
 
 .four:
         lea     rdx, [rcx + 3]
         cmp     rdx, rsi
-        jae     .bad
+        jae     short .bad
         movzx   edx, byte [rdi + rcx + 1]
         mov     r8d, 0x80
         mov     r9d, 0xBF
         cmp     al, 0xF0
-        jne     .four_not_f0
+        jne     short .four_not_f0
         mov     r8d, 0x90
 .four_not_f0:
         cmp     al, 0xF4
-        jne     .four_range
+        jne     short .four_range
         mov     r9d, 0x8F
 .four_range:
         cmp     edx, r8d
-        jb      .bad
+        jb      short .bad
         cmp     edx, r9d
-        ja      .bad
+        ja      short .bad
         movzx   edx, byte [rdi + rcx + 2]
         and     dl, 0xC0
         cmp     dl, 0x80
-        jne     .bad
+        jne     short .bad
         movzx   edx, byte [rdi + rcx + 3]
         and     dl, 0xC0
         cmp     dl, 0x80
-        jne     .bad
+        jne     short .bad
         add     rcx, 4
-        jmp     .loop
+        jmp     near .loop
 
 .valid:
         mov     rax, -1
