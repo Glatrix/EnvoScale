@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M0 and M1 done; M2 (Stage 1) next. This file is rewritten when M2 starts.
+- **Current milestone:** M2 (Stage 1). M0 and M1 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -46,6 +46,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D8 | Until the `envo` CLI exists (M5), the CI adapter calls `bootstrap.ps1` / `bootstrap.sh`. These are the only build entry points that exist, and they use OS tools only. When `envo` exists, CI switches to `envo` commands. | `adapters/ci/github/README.md` |
 | D9 | Diagnostics use stable codes from day one. Ranges: `E0001–E0099` lexical, `E01xx` syntax, `E02xx` names, `E03xx` types, `E05xx` ownership, `E09xx` "not part of Envo-Core". | `docs/spec/errors.md` |
 | D10 | Folder READMEs for subsystems that don't exist yet say so plainly ("Not started — M7") instead of holding stub code. | every `README.md` |
+| D11 | Stage 1 is a multi-file Envo-Core program in `bootstrap/stage1/`, built by `envoc0 build` with the file order fixed in `bootstrap/stage1/files.txt` (`main.envo` first). Stage 0's line budget is spent, so Stage 0 gets bug fixes only; anything Stage 1's source would like from the language is done in Core as written. | `bootstrap/stage1/README.md` |
+| D12 | The language `envoc1` accepts is **Envo-S1**: Envo-Core plus what the Stage 2 compiler needs to be written comfortably (generics, interfaces, closures, methods, owned strings, `T?`, `Result` and `?`, namespaces, slicing) and nothing more. It is a strict subset of full Envo, defined in `docs/spec/envo-s1.md`, so every S1 program is an Envo program. | `docs/spec/envo-s1.md` |
+| D13 | Stage 1 compiles generics by monomorphization and interfaces by static dispatch through generic bounds, plus `dyn` objects with vtables only if the Stage 2 design needs them. Simplest correct choice; Stage 2 may add other strategies. | `docs/spec/envo-s1.md` |
+| D14 | Stage 1 is tested **differentially**: every Envo-Core test runs under both `envoc0` and `envoc1` and must give the same result, and `envoc1 lex` must print the same token dumps as `envoc0 lex`. Two independent implementations of Core catch each other's bugs. | `bootstrap.*`, `tests/` |
+| D15 | Stage 1's backend is deliberately simple: EIR → x86-64 with every SSA value in a stack slot, no optimizer, the same one-section executable layout as Stage 0. Speed comes in Stage 2. | `docs/architecture/bootstrap.md` |
 
 ## 3. Open questions
 
@@ -63,63 +68,71 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    choice. The owner should confirm or replace it before the first public release.
 3. **Explicit lifetime syntax.** The brief says explicit lifetimes "exist but are
    rarely needed" without giving a spelling. Rust's `'a` collides with char literals
-   in a C#-style lexer. Deferred to an RFC; the draft spec reports elision failures
-   as an error with no explicit escape hatch yet.
+   in a C#-style lexer. Deferred to an RFC ([#31](https://github.com/envoscale/EnvoScale/issues/31));
+   the draft spec reports elision failures as an error with no explicit escape hatch yet.
 4. **Function types.** No syntax is given for function pointer / closure types.
-   Deferred to an RFC alongside generics (needed by M2).
+   Deferred to an RFC alongside generics (needed by M2; [#30](https://github.com/envoscale/EnvoScale/issues/30)).
 5. ~~**Unicode paths on Windows.**~~ **Decided 2026-11-11: UTF-8 everywhere.** Stage 0 now uses the `…W` APIs and converts with kernel32's UTF-8 routines. Original question: Stage 0 uses the `…A` kernel32 entry points, so paths
    must be in the active code page. Fixing it means UTF-16 conversion in assembly;
    deferred unless it blocks someone (tracked in `STATUS.md`).
 6. **Edition name.** The brief uses `edition = "2027"` while the current year is 2026.
    Kept as written; the first stable edition will be named when it ships.
+7. **Slices in Envo-Core.** Core has `T[]` but no way to make a non-empty one
+   ([#45](https://github.com/envoscale/EnvoScale/issues/45)). Stage 1's source uses a
+   pointer and a length until this is decided.
+8. **How Stage 1 programs get their runtime.** Stage 0 copies its own assembled runtime
+   block into each output program. `envoc1` cannot do that (it is a Core program), so
+   it must emit the OS shim with its own x86-64 encoder. Decided in increment 2.7.
 
-## 4. M0 — Charter and skeleton (done this session)
+## 4. Done milestones
 
-| Task | Output |
-|---|---|
-| Repository layout from §6, with a README in every folder | all folders |
-| Charter, status, contributing, security, code of conduct, license | root files |
-| RFC template + RFC 0001 | `docs/rfcs/` |
-| Envo-Core, EAS and EON specs | `docs/spec/envo-core.md`, `eas.md`, `eon.md` |
-| Language spec chapters 1–5 (draft) | `docs/spec/01-…05-*.md` |
-| Error code registry | `docs/spec/errors.md` |
-| `examples/00-hello` | `examples/00-hello/` |
-| Hello World Gallery files + line-count check | `tests/spec/hello/`, `bootstrap.* check` |
-| CI adapter running the check | `.github/workflows/ci.yml`, `adapters/ci/github/` |
-| Porting checklist outline | `docs/porting/CHECKLIST.md` |
+- **M0 — Charter and skeleton.** Repository layout, charter, status, specs (drafts), RFC
+  template, error registry, Hello World Gallery, CI. DoD record in `STATUS.md`.
+- **M1 — Stage 0.** `envoc0`, 15.0k lines of `.eas`, compiles Envo-Core programs of one
+  or more files to Windows and Linux executables, byte-identical across hosts and NASM
+  versions. 249/249 tests on both OSes. Increments 1.1–1.9 were: spec, platform shims,
+  runtime helpers, lexer, parser, checker, code generation and writers, built-ins, and
+  the full spec suite with multi-file programs. DoD record in `STATUS.md`.
 
-**DoD:** every item above exists, `bootstrap.ps1 check` and `bootstrap.sh check` pass,
-and `STATUS.md` records M0 as done.
+## 5. M2 — Stage 1
 
-## 5. M1 — Stage 0 (done)
+**DoD (brief §15):** `envoc1`, written in Envo-Core, builds with `envoc0` and compiles a
+larger subset (generics, interfaces, closures, basic borrow checker, EIR). Its spec tests
+pass. Read here as: Envo-S1 (D12) is specified, `envoc1` compiles every Envo-Core and
+Envo-S1 spec test correctly on Windows and Linux in CI, and its build is reproducible.
 
-The milestone is large, so it is cut into increments that each end tested.
+The milestone is cut into increments that each end tested. Each one is an issue under
+the M2 epic on the roadmap project.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| 1.1 | Envo-Core spec (lexical, types, statements, builtins) | review | done (draft) |
-| 1.2 | Platform shims: PE/ELF headers, 8 shim functions, argv | builds; smoke tests | done (Windows and Linux) |
-| 1.3 | Runtime helpers: arena, buffered I/O, diagnostics, UTF-8 check | via 1.4 tests | done |
-| 1.4 | Lexer + `envoc0 lex` token dump | `tests/golden/lexer/`, `tests/spec/01-lexical/` | done |
-| 1.5 | Parser → AST for Envo-Core | `tests/golden/parser/`, `tests/spec/core-syntax/` | done (109/109 on Windows and Linux) |
-| 1.6 | Type checker for Envo-Core | `tests/golden/check/`, `tests/spec/core-types/` | done (208/208 on Windows) |
-| 1.7 | x86-64 code generation + PE/ELF writers for *output* programs | `tests/spec/core-run/` | done |
-| 1.8 | Builtins (`print`, file I/O, `alloc`, args, `str_from`) for output programs | `tests/spec/core-run/` | done |
-| 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | done (249/249 on Windows and Linux) |
-
-Nothing is marked done until its tests pass. The Linux half of each increment counts as
-done only once the `stage0-linux` CI job passes.
+| [2.1](https://github.com/envoscale/EnvoScale/issues/46) | Specs and RFCs: `envo-s1.md`; RFCs for slices (#45), function types (#30), lifetimes (#31), EIR v1 (#29) | review | in progress |
+| [2.2](https://github.com/envoscale/EnvoScale/issues/47) | Stage 1 skeleton: build with `envoc0`, support library (arena, buffers, strings, hash map, files, diagnostics), `envoc1 version`; scripts and CI build it | smoke tests | |
+| [2.3](https://github.com/envoscale/EnvoScale/issues/48) | Lexer for the full lexical grammar | lexer goldens and `01-lexical` must match `envoc0` (D14) | |
+| [2.4](https://github.com/envoscale/EnvoScale/issues/49) | Parser for Envo-S1 | `core-syntax` (same codes and positions as `envoc0`), new S1 syntax tests | |
+| [2.5](https://github.com/envoscale/EnvoScale/issues/50) | Names and types for Envo-Core | `core-types` (same codes and positions) | |
+| [2.6](https://github.com/envoscale/EnvoScale/issues/51) | EIR v1: data structures, text form (print and parse, round-trip), verifier | `tests/golden/eir/` | |
+| [2.7](https://github.com/envoscale/EnvoScale/issues/52) | Lowering Core to EIR; x86-64 backend; PE/ELF writer; runtime | `core-run`, `core-multi` under `envoc1` | |
+| [2.8](https://github.com/envoscale/EnvoScale/issues/53) | Generics and interfaces | S1 type and run tests | |
+| [2.9](https://github.com/envoscale/EnvoScale/issues/54) | Closures and function types | S1 type and run tests | |
+| [2.10](https://github.com/envoscale/EnvoScale/issues/55) | Ownership: moves, borrows, lifetime elision, basic borrow checker (E05xx) | S1 ownership tests | |
+| [2.11](https://github.com/envoscale/EnvoScale/issues/56) | Envo-S1 spec suite green on Windows and Linux in CI; reproducible `envoc1` | CI | |
 
 ## 6. Risks
 
-- **Assembly volume.** Stage 0 targets < 15k lines. With the code generator, writers
-  and built-ins (M1.7-M1.8) and multi-file programs (M1.9) it is 14,974 lines, about 600
-  of them generated tables, so the pipeline fits with no room to spare: further Stage 0
-  work is fixes only, and new features wait for Stage 1. Keeping the code generator a simple
-  stack machine that reuses the checker's types and layouts is how that budget is met;
-  if it is exceeded, the overrun gets an RFC rather than silent growth.
-- **Untestable Linux path locally.** Development happens on Windows; the Linux ELF is
-  cross-assembled here and only *run* in CI. The two platform files share no code
-  paths besides the shim interface, so a Linux-only bug stays in `platform/linux.eas`.
-- **Spec drift.** Chapters 1–5 are drafts. The lexical chapter is normative now
-  because Stage 0 implements it; the others become normative as stages implement them.
+- **Stage 1 volume.** A compiler in Envo-Core, which has no generics or methods, is
+  verbose. Expect 30–50k lines. Mitigation: a small support library written once, one
+  file per pass, and tests per increment so size never hides bugs.
+- **Stage 0 bugs found by a large program.** `envoc0` has only compiled tests so far.
+  A miscompilation in Stage 1 looks like a Stage 1 bug. Mitigation: differential tests
+  (D14) and a minimal reproduction added to `core-run` for every Stage 0 bug found.
+  Fixes must fit Stage 0's budget; a fix that cannot gets an RFC.
+- **Debugging without locations.** Programs built by `envoc0` panic with a reason but
+  no source location. Mitigation: small functions, unit-style tests per module, and
+  `envoc1` itself reporting its phase on internal errors.
+- **Speed.** `envoc0` output has no optimizer and a bump allocator that never frees.
+  Fine at Stage 1's scale; measured from 2.4 on and recorded in `STATUS.md`.
+- **Untestable Linux path locally.** Development happens on Windows; Linux binaries
+  only run in CI. Unchanged from M1.
+- **Spec drift.** Chapters 1–5 are drafts; Envo-S1 makes parts of chapters 2–5
+  normative as `envoc1` implements them.
