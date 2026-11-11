@@ -1,0 +1,6 @@
+// expect-error: E0301 @ 5:9
+// [fn.type.2] a `mut fn` value is not a `fn`
+void Run(fn() f) { f(); }
+void Go(mut fn() g) {
+    Run(g);
+}

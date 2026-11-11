@@ -1,0 +1,4 @@
+// expect-error: E0301 @ 4:16
+// [fn.type.4] a written parameter type matches the target's
+i64 Apply(fn(i64) -> i64 f) => f(1);
+i64 r = Apply((bool b) => 1);

@@ -32,8 +32,10 @@ u32 LowerExpr(*Lower l, u32 n) {
         return LConst(l, ET_U64, size);
     }
     if (k == NK_THIS) return LoadPlace(l, t, LowerPlace(l, n));
+    if (k == NK_LAMBDA) return LowerLambda(l, n);
     if (k == NK_NAME) {
         Sym sym = SymGet(c, NSym(c, n));
+        if (sym.Kind == SK_FN) return FnItemValue(l, NSym(c, n));
         if (sym.Kind == SK_CONST) {
             if (TyKind(c, sym.Type) == TYK_STR) return StrTemp(l, StringValue(l, CNode(c, sym.Node).B));
             return LConst(l, LType(l, sym.Type), WrapValue(c, sym.Value, IntReprType(c, sym.Type)));
@@ -310,6 +312,7 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     *Module m = LM(l);
     u32 cs = NSym(c, n);
     if (cs != 0 && NeedsInst(c, cs)) return LowerInstCall(l, n, node, t);
+    if (cs == 0 && TyKind(c, LNType(l, node.A)) == TYK_FN) return LowerIndirectCall(l, n, node, t);
     u32 s = NSym(c, node.A);
     if (s == 0) s = Lookup(c, NTok(c, node.A));
     Sym sym = SymGet(c, s);

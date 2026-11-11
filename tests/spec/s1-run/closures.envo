@@ -1,0 +1,117 @@
+// Function types, lambdas and function values (RFC 0003): lambdas passed to function-typed
+// parameters borrow what they capture, so a `mut fn` changes the caller's variable
+// ([fn.pos.1], [fn.cap.1]); stored and returned closures keep copies ([fn.pos.3]); named
+// functions as values; function values in fields and arrays; generic higher-order
+// functions with inferred lambda types ([fn.lam.1], [fn.lam.2]); nested lambdas.
+// expect: 10 6
+// expect: 2 4 6
+// expect: 15 15
+// expect: 1 2 3
+// expect: 11 21 101
+// expect: 9 hi!
+// expect: 5 5 6
+// expect: 4 3
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+void Each(i64 n, mut fn(i64) action) {
+    for (i64 i = 1; i <= n; i++) action(i);
+}
+
+i64 Apply(fn(i64) -> i64 f, i64 x) => f(x);
+
+// a returned closure keeps its own copy of what it captured
+fn(i64) -> i64 Adder(i64 k) => x => x + k;
+
+i64 Double(i64 x) => x * 2;
+
+struct Step { fn(i64) -> i64 F; }
+
+struct Button {
+    str Label;
+    mut fn() OnClick;
+}
+
+U Map<T, U>(T x, fn(T) -> U f) => f(x);
+
+// a lambda in a generic body, instantiated with the body
+T Twice<T>(T x, fn(T) -> T f) {
+    fn(T) -> T g = y => f(f(y));
+    return g(x);
+}
+
+// a `mut fn` counter that changes the caller's local
+i64 total = 0;
+i64 calls = 0;
+Each(4, n => { total += n; calls++; });
+W(total);
+print(Num(Apply(x => x + calls + 1, 1)));
+
+// named functions and stored values
+fn(i64) -> i64 d = Double;
+W(d(1));
+W(Apply(Double, 2));
+print(Num(Apply(d, 3)));
+
+// copies: changing the variable after the closure is made does not change the closure
+i64 start = 15;
+fn() -> i64 get = move () => start;
+start = 99;
+var add15 = Adder(15);
+W(get());
+print(Num(add15(0)));
+
+// function values in a struct and in an array
+i64 clicks = 0;
+var b = new Button { Label = "go", OnClick = move () => { clicks++; } };
+Step[3] steps;
+steps[0].F = x => x + 1;
+steps[1].F = x => x + 2;
+steps[2].F = x => x + 3;
+for (usize i = 0; i < 3; i++) {
+    if (i < 2) W(steps[i].F(0));
+    else print(Num(steps[i].F(0)));
+}
+
+// closures returned from a function, each with its own copy
+var add10 = Adder(10);
+var add20 = Adder(20);
+var add100 = Adder(100);
+W(add10(1));
+W(add20(1));
+print(Num(add100(1)));
+
+// generic higher-order functions: the lambda's types come from the call
+i64 nine = Map(3 as i64, x => x * x);
+str hi = Map(2 as i64, (i64 n) => "hi!");
+W(nine);
+print(hi);
+
+// nested lambdas and a lambda inside a generic function
+i64 outer = 2;
+fn(i64) -> i64 mk = x => Apply(y => y + outer, x);
+W(mk(3));
+W(Twice(1 as i64, x => x + 2));
+print(Num(Twice(4 as i64, x => x + 1)));
+
+// a button clicked through its stored value
+b.OnClick();
+b.OnClick();
+W(Map(b.Label, s => s.Len as i64) * 2);
+print(Num(Apply(x => x - 1, 4)));

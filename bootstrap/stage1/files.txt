@@ -18,6 +18,7 @@ check/decl.envo
 check/stmt.envo
 check/expr.envo
 check/generic.envo
+check/closure.envo
 check/dump.envo
 eir/ir.envo
 eir/read.envo
@@ -30,4 +31,5 @@ runtime/embedded.envo
 lower/lower.envo
 lower/stmt.envo
 lower/expr.envo
+lower/closure.envo
 driver.envo

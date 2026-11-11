@@ -1,0 +1,5 @@
+// expect-error: E0332 @ 4:5
+// [fn.type.3] calling a `mut fn` needs owned or `ref` access
+void Call(in mut fn() f) {
+    f();
+}

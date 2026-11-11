@@ -38,6 +38,10 @@ struct Checker {
     u32 CurFn;          // the function whose body is being checked (0: top level)
     u32 CurBounds;      // its bounds
     u32 NCurBounds;
+    // lambdas (check/closure.envo)
+    Vec LamStack;       // u32 triples for the lambdas being checked: node, locals start, first change
+    Vec CapTmp;         // u32 pairs (lambda, local) found so far
+    Vec Captures;       // u32 locals, each lambda's contiguous (its NValue: first | count << 32)
 }
 
 // ------------------------------------------------------------------ side tables
@@ -201,6 +205,8 @@ void BufType(*Buf b, *Checker c, u32 t) {
         BufByte(b, ']');
     } else if (t == 0) {
         BufByte(b, '?');
+    } else if (ty.Kind == TYK_FN) {
+        BufFnType(b, c, ty);
     } else {
         BufStr(b, ty.Name);
         if (ty.NArgs > 0) {
@@ -281,6 +287,7 @@ u32 LocalPushNamed(*Checker c, str name, u32 t) {
 void LocalPushSym(*Checker c, u32 s, u32 t) {
     unsafe {
         SymPtr(c, s).Type = t;
+        SymPtr(c, s).Value = c.LSP as u64;     // its stack index, for lambda captures
         if (c.LSP == VecLen(&c.Locals)) VecPush(&c.Locals);
         MemStoreU32(VecAt(&c.Locals, c.LSP), s);
         c.LSP++;

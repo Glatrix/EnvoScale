@@ -4,7 +4,7 @@
 // Checks node n against type t exactly (E0301).
 void ExpectType(*Checker c, u32 n, u32 t) {
     u32 got = CheckValue(c, n, t);
-    if (got != t) Mismatch(c, t, NTok(c, n), got);
+    if (!Assignable(c, got, t)) Mismatch(c, t, NTok(c, n), got);
 }
 
 // CheckExpr, but a void value is E0322 ([core.expr.11]).
@@ -109,11 +109,14 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
         if (s == 0) CFailName(c, node.Tok, E_UNKNOWN_NAME, "unknown name `", node.Tok, "`");
         SetNSym(c, n, s);
         u8 sk = SymGet(c, s).Kind;
+        if (sk == SK_LOCAL) NoteLocalUse(c, s);
         if (sk == SK_LOCAL || sk == SK_STATIC) return SymGet(c, s).Type;
         if (sk == SK_CONST) {
             ConstResolve(c, s, node.Tok);
             return SymGet(c, s).Type;
         }
+        if (sk == SK_FN && !CCore(c)) return FnItemType(c, s, node.Tok);
+        if (sk == SK_BUILTIN && !CCore(c)) CNotYet(c, "built-in functions as values", node.Tok);
         if (sk == SK_FN || sk == SK_BUILTIN) CNotCore(c, "function values", node.Tok);
         CFailName(c, node.Tok, E_NOT_A_VALUE, "`", node.Tok, "` is a type, not a value");
     }
@@ -122,8 +125,10 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
         u32 s = LocalFind(c, node.Tok);
         if (s == 0) CFailName(c, node.Tok, E_UNKNOWN_NAME, "unknown name `", node.Tok, "`");
         SetNSym(c, n, s);
+        NoteLocalUse(c, s);
         return SymGet(c, s).Type;
     }
+    if (k == NK_LAMBDA) return CheckLambda(c, n, expected, false);
     if (k == NK_INDEX) {
         u32 objType = CheckValue(c, node.A, 0);
         Type obj = TypeGet(c, objType);
@@ -232,11 +237,14 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
 u32 CheckCall(*Checker c, u32 n) {
     Node node = CNode(c, n);
     if (NKind(c, node.A) == NK_MEMBER && !CCore(c)) return CheckMethodCall(c, n);
+    if (NKind(c, node.A) != NK_NAME && !CCore(c)) return CheckIndirectCall(c, n, node.A);
     if (NKind(c, node.A) != NK_NAME) CError(c, E_NOT_CALLABLE, node.Tok);
     u32 calleeTok = NTok(c, node.A);
     u32 s = Lookup(c, calleeTok);
     if (s == 0) CFailName(c, calleeTok, E_UNKNOWN_NAME, "unknown name `", calleeTok, "`");
     Sym sym = SymGet(c, s);
+    // a function value in a local or static ([fn.pos.3])
+    if ((sym.Kind == SK_LOCAL || sym.Kind == SK_STATIC) && TyKind(c, sym.Type) == TYK_FN) return CheckIndirectCall(c, n, node.A);
     if (sym.Kind != SK_FN && sym.Kind != SK_BUILTIN) CError(c, E_NOT_CALLABLE, node.Tok);
     u32 typeArgs = CNode(c, node.A).E;
     if (sym.Kind == SK_FN && !CCore(c)) return CheckCallTo(c, n, s, 0, typeArgs, calleeTok);
@@ -302,12 +310,13 @@ u32 CheckCallTo(*Checker c, u32 n, u32 fs, u32 ownerEnv, u32 typeArgs, u32 tok) 
             CFail(c, node.Tok, E_ARG_COUNT, BufView(&b));
         }
     }
-    // inference: arguments with a type of their own first, then untyped literals
+    // inference: arguments with a type of their own first, then lambdas and untyped
+    // literals, which take their type from the parameter
     u32 a = node.B;
     u32 i = 0;
     while (a != 0) {
         u32 pt = ParamType(c, fs, i);
-        if (Unbound(c, pt, env, ne) && !IsUntyped(c, a)) Unify(c, pt, CheckValue(c, a, 0), env, ne);
+        if (Unbound(c, pt, env, ne) && !IsUntyped(c, a) && NKind(c, a) != NK_LAMBDA) Unify(c, pt, CheckValue(c, a, 0), env, ne);
         i++;
         a = CNode(c, a).Next;
     }
@@ -316,21 +325,32 @@ u32 CheckCallTo(*Checker c, u32 n, u32 fs, u32 ownerEnv, u32 typeArgs, u32 tok) 
     u32 p = FirstParam(c, fs);
     while (a != 0) {
         u32 pt = ParamType(c, fs, i);
-        if (NType(c, a) == 0 && Unbound(c, pt, env, ne)) Unify(c, pt, CheckValue(c, a, 0), env, ne);
+        MarkParamLambda(c, a, pt);
+        if (NType(c, a) == 0 && Unbound(c, pt, env, ne)) {
+            u32 at = 0;
+            if (NKind(c, a) == NK_LAMBDA && TyKind(c, pt) == TYK_FN) {
+                // the parameter types must be known; the result may come from the body
+                u32 target = Subst(c, pt, env, ne);
+                Type tt = TypeGet(c, pt);
+                bool known = true;
+                for (u32 k = 0; k < tt.NArgs; k++) {
+                    if (Unbound(c, EnvGet(c, tt.Args, k), env, ne)) known = false;
+                }
+                if (!known) target = 0;
+                at = CheckLambda(c, a, target, Unbound(c, tt.Elem, env, ne));
+                SetNType(c, a, at);
+            } else {
+                at = CheckValue(c, a, 0);
+            }
+            Unify(c, pt, at, env, ne);
+        }
         u32 want = Subst(c, pt, env, ne);
         if (NType(c, a) != 0) {
-            if (NType(c, a) != want) Mismatch(c, want, NTok(c, a), NType(c, a));
+            if (!Assignable(c, NType(c, a), want)) Mismatch(c, want, NTok(c, a), NType(c, a));
         } else {
             ExpectType(c, a, want);
         }
-        // [own.mode.1] `ref` is written at the call; `in` borrows implicitly
-        bool refArg = CNode(c, a).Flags & NF_REF != 0;
-        if (CNode(c, p).Flags & NF_REF != 0) {
-            if (!refArg) CFail(c, NTok(c, a), E_ARG_MODE, "this parameter is `ref`; write `ref` before the argument");
-            if (!IsMutable(c, a)) CError(c, E_NOT_ASSIGNABLE, NTok(c, a));
-        } else if (refArg) {
-            CFail(c, NTok(c, a), E_ARG_MODE, "only `ref` parameters take `ref` arguments");
-        }
+        CheckArgMode(c, a, CNode(c, p).Flags & NF_REF != 0);
         i++;
         a = CNode(c, a).Next;
         p = CNode(c, p).Next;
@@ -390,14 +410,21 @@ u32 CheckMethodCall(*Checker c, u32 n) {
         for (u32 i = 0; i < bt.NArgs; i++) EnvSet(c, owner, i + 1, EnvGet(c, bt.Args, i));
     } else {
         u64 v = MethodFind(c, rt, name);
-        if (v == 0) NoMember(c, name, ot);
+        if (v == 0) {
+            // a field holding a function value: x.F(…) calls it ([fn.pos.3])
+            if (TyKind(c, rt) == TYK_STRUCT && StructFieldNamed(c, rt, m) != 0) return CheckIndirectCall(c, n, m);
+            NoMember(c, name, ot);
+        }
         fs = (v & 0xFFFFFFFF) as u32;
         owner = OwnerEnv(c, rt, v);
     }
     u32 flags = SymGet(c, fs).Flags;
     if (flags & SF_STATIC != 0) CFailName(c, name, E_STATIC_CALL, "`", name, "` is static; call it on its type");
     // `ref this` needs a place it may change ([s1.expr.6])
-    if (flags & SF_RECV_REF != 0 && TyKind(c, ot) != TYK_PTR && !IsMutable(c, obj)) CError(c, E_NOT_ASSIGNABLE, NTok(c, obj));
+    if (flags & SF_RECV_REF != 0 && TyKind(c, ot) != TYK_PTR) {
+        if (!IsMutable(c, obj)) CError(c, E_NOT_ASSIGNABLE, NTok(c, obj));
+        MarkMutation(c, obj);
+    }
     return CheckCallTo(c, n, fs, owner, mem.E, name);
 }
 

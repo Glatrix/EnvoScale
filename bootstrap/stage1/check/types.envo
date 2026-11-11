@@ -26,6 +26,7 @@ const u8 TYK_STRUCT = 8;
 const u8 TYK_ENUM = 9;
 const u8 TYK_PARAM = 10;    // a generic type parameter (Envo-S1)
 const u8 TYK_IFACE = 11;    // an interface, only as a bound or in `impl` (Envo-S1)
+const u8 TYK_FN = 12;       // a function type (Envo-S1, RFC 0003; check/closure.envo)
 
 // Fixed type indices, in Stage 0's order. 0 means "no type".
 const u32 T_VOID = 1;
@@ -131,6 +132,9 @@ const u32 E_VOID_VALUE = 322;
 const u32 E_DUPLICATE_VALUE = 323;
 const u32 E_BAD_REPR = 324;
 const u32 E_VOID_TYPE = 327;
+const u32 E_LAMBDA_INFER = 330;
+const u32 E_LAMBDA_KIND = 331;
+const u32 E_MUT_FN_SHARED = 332;
 const u32 E_NOT_IMPLEMENTED = 334;
 const u32 E_CANNOT_INFER = 335;
 const u32 E_NOT_AN_IFACE = 336;

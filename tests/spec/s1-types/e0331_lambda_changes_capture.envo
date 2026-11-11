@@ -1,0 +1,5 @@
+// expect-error: E0331 @ 5:13
+// [fn.type.4] a lambda that changes a capture is not a `fn`
+void Run(fn() f) { f(); }
+i64 n = 0;
+Run(() => { n++; });

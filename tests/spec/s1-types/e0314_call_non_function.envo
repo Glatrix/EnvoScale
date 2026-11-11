@@ -1,0 +1,4 @@
+// expect-error: E0314 @ 4:10
+// [fn.pos.3] only function values are called
+i64 x = 1;
+i64 y = x(2);

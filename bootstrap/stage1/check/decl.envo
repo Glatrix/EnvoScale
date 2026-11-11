@@ -123,7 +123,7 @@ u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
     Node node = CNode(c, n);
     u32 t = 0;
     if (node.Kind == NK_TOPT) CNotYet(c, "optional types `T?`", node.Tok);
-    if (node.Kind == NK_TFN) CNotYet(c, "function types", node.Tok);
+    if (node.Kind == NK_TFN) return ResolveFnType(c, n);
     if (node.Kind == NK_TSLICE && node.Flags & NF_MUT != 0) CNotYet(c, "`mut` views", node.Tok);
     if (node.Kind == NK_TPTR) {
         t = TypePtrTo(c, ResolveType(c, node.A, false));

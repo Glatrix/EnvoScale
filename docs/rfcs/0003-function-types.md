@@ -6,7 +6,10 @@
   (brief §3.3), and Rust's memory model with fewer things to write.
 - **Author(s):** founding engineer
 - **Affects:** language (chapters 1, 2, 3 and 5, Envo-S1); not Envo-Core
-- **Tracking:** [#30](https://github.com/envoscale/EnvoScale/issues/30), milestone M2
+- **Tracking:** [#30](https://github.com/envoscale/EnvoScale/issues/30), milestone M2.
+  Implemented by Stage 1 in M2.9 (function values for every position; see
+  [`architecture/stage1.md`](../architecture/stage1.md), "Closures"); `extern "C" fn` is
+  not part of Envo-S1 and comes with Stage 2.
 
 ## Summary
 

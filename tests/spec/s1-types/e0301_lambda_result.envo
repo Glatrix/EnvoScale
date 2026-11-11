@@ -1,0 +1,4 @@
+// expect-error: E0301 @ 4:20
+// [fn.lam.2] the body has the target's result type
+i64 Apply(fn(i64) -> i64 f) => f(1);
+i64 r = Apply(x => true);

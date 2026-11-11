@@ -89,6 +89,7 @@ bool HasParams(*Checker c, u32 t) {
     Type ty = TypeGet(c, t);
     if (ty.Kind == TYK_PARAM) return true;
     if (ty.Kind == TYK_PTR || ty.Kind == TYK_SLICE || ty.Kind == TYK_ARRAY) return HasParams(c, ty.Elem);
+    if (ty.Kind == TYK_FN && HasParams(c, ty.Elem)) return true;
     for (u32 i = 0; i < ty.NArgs; i++) {
         if (HasParams(c, EnvGet(c, ty.Args, i))) return true;
     }
@@ -110,6 +111,7 @@ u32 Subst(*Checker c, u32 t, u32 env, u32 n) {
     if (ty.Kind == TYK_PTR || ty.Kind == TYK_SLICE || ty.Kind == TYK_ARRAY) {
         return TypeDerived(c, ty.Kind, Subst(c, ty.Elem, env, n), ty.Count);
     }
+    if (ty.Kind == TYK_FN) return FnTypeSubst(c, t, env, n);
     u32 args = EnvNew(c, ty.NArgs);
     for (u32 i = 0; i < ty.NArgs; i++) EnvSet(c, args, i, Subst(c, EnvGet(c, ty.Args, i), env, n));
     return TypeInstance(c, ty.Kind, ty.Sym, args, ty.NArgs);
@@ -131,7 +133,10 @@ void Unify(*Checker c, u32 pt, u32 at, u32 env, u32 n) {
         Unify(c, p.Elem, a.Elem, env, n);
         return;
     }
-    if (p.Sym != a.Sym || p.NArgs != a.NArgs) return;
+    if (p.Kind == TYK_FN) {
+        if (p.NArgs != a.NArgs) return;
+        Unify(c, p.Elem, a.Elem, env, n);
+    } else if (p.Sym != a.Sym || p.NArgs != a.NArgs) return;
     for (u32 i = 0; i < p.NArgs; i++) Unify(c, EnvGet(c, p.Args, i), EnvGet(c, a.Args, i), env, n);
 }
 
@@ -144,6 +149,7 @@ bool Unbound(*Checker c, u32 pt, u32 env, u32 n) {
         return i < n && EnvGet(c, env, i) == 0;
     }
     if (p.Kind == TYK_PTR || p.Kind == TYK_SLICE || p.Kind == TYK_ARRAY) return Unbound(c, p.Elem, env, n);
+    if (p.Kind == TYK_FN && Unbound(c, p.Elem, env, n)) return true;
     for (u32 i = 0; i < p.NArgs; i++) {
         if (Unbound(c, EnvGet(c, p.Args, i), env, n)) return true;
     }
@@ -793,6 +799,22 @@ void BufMangle(*Buf b, *Checker c, u32 t) {
     if (ty.Kind == TYK_ARRAY) {
         BufStr(b, "2.");
         BufU64(b, ty.Count as u64);
+        BufByte(b, '.');
+        BufMangle(b, c, ty.Elem);
+        return;
+    }
+    if (ty.Kind == TYK_FN) {
+        // 3.kind.count, then each parameter's mode and type, then the result
+        BufStr(b, "3.");
+        BufU64(b, ty.Count as u64);
+        BufByte(b, '.');
+        BufU64(b, ty.NArgs as u64);
+        for (u32 i = 0; i < ty.NArgs; i++) {
+            BufByte(b, '.');
+            BufU64(b, EnvGet(c, ty.Sym, i) as u64);
+            BufByte(b, '.');
+            BufMangle(b, c, EnvGet(c, ty.Args, i));
+        }
         BufByte(b, '.');
         BufMangle(b, c, ty.Elem);
         return;

@@ -125,10 +125,46 @@ generic instance's argument count before its arguments: `Box.1.i64`), so differe
 instances never share a name.
 
 **Not yet (E0951).** Envo-S1 constructs `envoc1` does not compile yet are reported as
-E0951 rather than mis-compiled: generic enums and enums with payloads, `T?`, function
-types, `mut` views, namespaces and `use`, generic interface methods, and an `impl` whose
-type parameters are not exactly its type's (`impl<T> I for Box<Box<T>>`). Each goes away
-with the increment that implements it; M2.13 removes the code.
+E0951 rather than mis-compiled: generic enums and enums with payloads, `T?`, `mut` views,
+namespaces and `use`, generic interface methods, generic functions, methods and built-ins
+used as values, and an `impl` whose type parameters are not exactly its type's
+(`impl<T> I for Box<Box<T>>`). Each goes away with the increment that implements it;
+M2.13 removes the code.
+
+## Closures (M2.9)
+
+`check/closure.envo` and `lower/closure.envo` implement RFC 0003 with one representation
+for every function-typed value: the function value `$fnv = { code: ptr, env: ptr }`
+([fn.abi.2]). Code takes the hidden result pointer (for an aggregate result), then
+`env`, then the parameters, and is called with `call.ind`. Stage 2 adds the per-closure
+types and monomorphized calls of [fn.pos.1]; the behaviour programs see is the same.
+
+- **Function types** are interned like generic instances: kind, parameter types and
+  modes, result. A `fn` value may be used where a `mut fn` or `once fn` is expected,
+  not the other way round ([fn.type.2], [fn.type.4]).
+- **Lambdas** are checked as functions of their own inside the enclosing scope. Their
+  parameter types and modes come from the target type (a parameter, a typed local, a
+  field, a return type), or are written (E0330 otherwise); the result comes from the
+  target or from the body ([fn.lam.1], [fn.lam.2]). In a generic call, a lambda is
+  checked after the other arguments, so `Map(x, y => y * 2)` learns `y`'s type from `x`
+  and the result type from the body.
+- **Captures** are found as the body is checked: a local of an enclosing function used
+  inside the lambda is captured (each local records its position on the locals stack).
+  Changing a captured place, `ref`-passing it or calling a `mut fn` capture makes the
+  lambda a `mut fn` (E0331 if the target is a `fn`).
+- **Capture modes** ([fn.cap.1]): a lambda passed directly to a function-typed parameter
+  borrows: its environment holds pointers to the captured variables, in a stack slot of
+  the caller, so `Each(4, n => total += n)` changes `total`. Every other lambda, and any
+  lambda written `move`, copies its captures into a heap environment; a lambda that
+  captures nothing has a null environment and allocates nothing.
+- **Lambda bodies** become EIR functions named after the enclosing function
+  (`@__main.lambda0`); a lambda in a generic body is compiled once per instance of that
+  body. A named function used as a value goes through a thunk (`@Double.fv`) that drops
+  `env` and calls it.
+
+Until the borrow checker (M2.10), nothing stops a callee from storing a function-typed
+parameter that borrows its caller's variables; M2.10 reports that as E0504
+([fn.cap.2]).
 
 ## Executable images
 

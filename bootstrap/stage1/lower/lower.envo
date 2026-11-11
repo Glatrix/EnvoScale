@@ -25,6 +25,12 @@ struct Lower {
     u32 Target;
     u32 Env;            // the generic environment of the function being lowered
     u32 NEnv;
+    // function values (lower/closure.envo)
+    u32 FnvType;        // $fnv = { ptr, ptr }
+    u32 LamCount;
+    Vec PendingLams;    // u32 quintuples: lambda node, EIR function, env struct, Env, NEnv
+    Vec PendingThunks;  // u32 pairs: function symbol, thunk
+    Map Thunks;         // function symbol -> thunk
 }
 
 // The type of checked node n in the function being lowered (its type arguments
@@ -221,6 +227,9 @@ u32 LType(*Lower l, u32 t) {
     if (ty.Kind == TYK_VOID) r = ET_VOID;
     else if (ty.Kind == TYK_BOOL) r = ET_BOOL;
     else if (ty.Kind == TYK_PTR) r = ET_PTR;
+    else if (ty.Kind == TYK_FN) {
+        unsafe { r = l.FnvType; }
+    }
     else if (ty.Kind == TYK_STR || ty.Kind == TYK_SLICE) {
         unsafe { r = l.StrType; }
     } else if (ty.Kind == TYK_INT) {
@@ -278,7 +287,7 @@ u32 EIntType(u32 size, bool signed) {
 // Is checker type t passed and stored by address (str, slice, array, struct)?
 bool IsAggregate(*Lower l, u32 t) {
     u8 k = TyKind(LC(l), t);
-    return k == TYK_STR || k == TYK_SLICE || k == TYK_ARRAY || k == TYK_STRUCT;
+    return k == TYK_STR || k == TYK_SLICE || k == TYK_ARRAY || k == TYK_STRUCT || k == TYK_FN;
 }
 
 // ------------------------------------------------------------------ module
@@ -310,6 +319,14 @@ void LowerProgram(*Lower l, u32 program) {
         st.Fields = first;
         st.NFields = 2;
         st.Defined = true;
+        // $fnv = { ptr, ptr }
+        Vec fv = VecNew(4, 2);
+        MemStoreU32(VecPush(&fv), ET_PTR);
+        MemStoreU32(VecPush(&fv), ET_PTR);
+        l.FnvType = EStructOf(l, "fnv", &fv);
+        l.PendingLams = VecNew(4, 20);
+        l.PendingThunks = VecNew(4, 8);
+        l.Thunks = MapNew(16);
     }
     // declare every function and static first, so calls can refer forward; generic
     // functions and methods are declared once per instance
@@ -335,6 +352,7 @@ void LowerProgram(*Lower l, u32 program) {
         LowerFuncEnv(l, inst.Sym, inst.Func, inst.Env, inst.NEnv);
     }
     LowerMain(l, mainFn, CNode(c, program).A);
+    DrainThunks(l);
 }
 
 // The EIR function of instance i, named after its type arguments.
@@ -655,6 +673,7 @@ void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
         l.Env = 0;
         l.NEnv = 0;
     }
+    DrainLambdas(l);
 }
 
 // Parameter value v for local s of type pt: an aggregate or a borrowed (`in`, `ref`)
@@ -699,4 +718,5 @@ void LowerMain(*Lower l, u32 f, u32 items) {
         n = CNode(c, n).Next;
     }
     EndFunc(l, VecNew(4, 1));
+    DrainLambdas(l);
 }
