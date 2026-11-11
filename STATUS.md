@@ -67,7 +67,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 - **Stage 0 source files are limited to 16 MiB**, reported as an error.
 - **Envo-Core has no way to make a non-empty slice.** `T[]` exists, but there is no
   slicing syntax or built-in yet, so Core code uses a pointer and a length instead.
-  To be settled with the Stage 1 RFCs (M2).
+  To be settled with the Stage 1 RFCs (M2, [#45](https://github.com/envoscale/EnvoScale/issues/45)).
 - **The license and CLA have not had legal review.** `LICENSE` applies the PolyForm
   Noncommercial License 1.0.0 by reference to its official text and adds commercial
   terms; `CLA.md` is an original draft. Both should be reviewed by a lawyer before
