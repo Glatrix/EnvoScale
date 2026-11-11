@@ -1,0 +1,3 @@
+// The error is on line 3.
+
+void Helper() { var x = Missing; }

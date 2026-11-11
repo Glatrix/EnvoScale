@@ -84,9 +84,12 @@ i64 Add(i64 a, i64 b) {
 - `enum`, fieldless.
 - `const` and `static` items.
 - **Top-level statements** in the entry file (the first file on the command line) form
-  `main`. `return n;` at top level sets the exit code.
+  `main`. `return n;` at top level sets the exit code. A top-level statement in any
+  other file is **E0210** ([item.mod.3]).
 - No `namespace` or `use`: all files passed to `envoc0` form one program with a single
-  global scope. Duplicate names are an error.
+  global scope. Duplicate names are an error (E0201). Each file is lexed and parsed on
+  its own, so no token or statement spans two files, and diagnostics name the file
+  the error is in. Tests: `tests/spec/core-multi/`.
 
 ## 5. Statements and expressions
 
@@ -347,11 +350,13 @@ porting Stage 0 is a matter of one platform file.
 ```
 envoc0 lex <file.envo>                              print the token stream (implemented)
 envoc0 parse <file.envo>                            print the syntax tree (implemented)
-envoc0 check <file.envo>                            check names and types; print the typed tree (implemented)
-envoc0 build <file.envo> -o <out>                   compile to an executable (implemented; one file)
+envoc0 check <file.envo>...                         check names and types; print the typed tree (implemented)
+envoc0 build <file.envo>... -o <out>                compile to an executable (implemented)
         [--target x86_64-windows | x86_64-linux]    default: the OS envoc0 runs on
 envoc0 version | help
 ```
+
+With several files, the first is the entry file (§4).
 
 Exit codes: 0 success, 1 compile errors, 2 usage error, 70 internal error
 (e.g. out of memory).

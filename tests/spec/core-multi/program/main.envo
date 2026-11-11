@@ -1,0 +1,14 @@
+// A program in several files: the entry file (given first) runs; the others
+// declare items, which every file can use in any order ([item.mod.3]).
+// expect: hello from shapes
+// expect: area 12
+// expect: 3 calls
+// expect: Green
+print(Greeting());
+Rect r = new Rect { W = 3, H = SIDE };
+write(1, "area ");
+print(Num(Area(r)));
+Count(); Count(); Count();
+write(1, Num(calls as i64));
+print(" calls");
+print(Name(Color.Green));

@@ -131,6 +131,15 @@ Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
   the maximal munch. Linear scans are slow in theory and irrelevant at Stage 0's scale.
 - Literal *values* are not computed by the lexer: it validates them and records their
   spans. The parser converts the ones it needs.
+- **Several files** (`envoc0 check a.envo b.envo`) are one program. `load_files` copies
+  them into one source buffer, each followed by a newline so that a file's end offset is
+  never the next file's start, and records a file table (base, length, path). Each file
+  is validated and lexed on its own, with `diag_base` turning the lexer's file-relative
+  offsets into buffer offsets; the token arrays are then merged with global offsets, each
+  file keeping its own EOF token. The parser parses each file's token range separately
+  (no statement can span two files) and joins the item lists; a statement outside the
+  entry file is E0210. Every later stage sees one program, and diagnostics find the
+  file, line and column from the table.
 
 ## The parser
 
@@ -211,6 +220,8 @@ Exit codes: 0 success, 1 compile error, 2 usage error, 70 internal error.
   code and panic message must match.
 - `tests/spec/01-lexical/`, `core-syntax/` and `core-types/`: one error each,
   with `// expect-error: EXXXX @ line:col`.
+- `tests/spec/core-multi/`: one folder per multi-file program; `main.envo` is the entry
+  file and says either what the program prints or which error is reported in which file.
 
 The runners are in `bootstrap.ps1` and `bootstrap.sh` (OS tools only). Both binaries are
 assembled on every host; each host runs its native one.

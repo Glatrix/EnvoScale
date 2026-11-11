@@ -22,12 +22,26 @@ MAX_DEPTH       equ 256
 ;   in:  rdi = token array, rsi = token count (the last token is TK_EOF)
 ;   out: eax = program node
 parse:
+        lea     rdx, [p_single_start]
+        mov     ecx, 1
+        jmp     near parse_files
+
+; parse_files - parse each file's tokens on its own (so no statement runs across
+; a file boundary) and join their items into one program ([item.mod.3]:
+; top-level statements only in the entry file, E0210).
+;   in:  rdi = token array, rsi = total tokens, rdx = u32 first-token index of
+;        each file, ecx = number of files.  out: eax = program node
+; ebx = program, r12 = file starts, r13d = file count, r14 = total, r15d = file
+parse_files:
         push    rbx
-        sub     rsp, 16
+        push    r12
+        push    r13
+        push    r14
+        push    r15
         mov     [p_toks], rdi
-        mov     [p_ntoks], rsi
-        mov     qword [p_pos], 0
-        mov     qword [p_depth], 0
+        mov     r12, rdx
+        mov     r13d, ecx
+        mov     r14, rsi
         ; Every node consumes at least one token except a handful of wrappers,
         ; so 4 nodes per token is a generous bound; node_new checks it anyway.
         lea     rdi, [rsi*4 + 64]
@@ -36,10 +50,90 @@ parse:
         call    arena_alloc
         mov     [n_base], rax
         mov     qword [n_count], 1      ; node 0 means "none"
+        xor     r15d, r15d
+.file:
+        cmp     r15d, r13d
+        jae     short .done
+        mov     eax, [r12 + r15*4]
+        mov     [p_pos], rax
+        mov     rax, r14                ; this file ends where the next begins
+        lea     ecx, [r15 + 1]
+        cmp     ecx, r13d
+        jae     short .end_known
+        mov     eax, [r12 + rcx*4]
+.end_known:
+        mov     [p_ntoks], rax
+        mov     qword [p_depth], 0
         call    parse_program
-        add     rsp, 16
+        test    r15d, r15d
+        jnz     short .join
+        mov     ebx, eax
+        jmp     short .next
+.join:
+        mov     edi, ebx
+        mov     esi, eax
+        call    join_programs
+.next:
+        inc     r15d
+        jmp     short .file
+.done:
+        mov     eax, ebx
+        pop     r15
+        pop     r14
+        pop     r13
+        pop     r12
         pop     rbx
         ret
+
+; join_programs - append program esi's items to program edi (E0210 for a
+; top-level statement outside the entry file).
+join_programs:
+        push    rbx
+        push    r12
+        push    r13
+        mov     ebx, edi
+        mov     edi, esi
+        call    node_ptr
+        mov     r12d, [rax + N_A]       ; the later file's items
+        mov     r13d, r12d
+.check:
+        test    r13d, r13d
+        jz      short .append
+        mov     edi, r13d
+        call    g_is_item
+        test    eax, eax
+        jz      short .statement
+        mov     edi, r13d
+        call    node_ptr
+        mov     r13d, [rax + N_NEXT]
+        jmp     short .check
+.append:
+        test    r12d, r12d
+        jz      short .out
+        mov     edi, ebx                ; find the entry list's tail
+        call    node_ptr
+        lea     rcx, [rax + N_A]
+.tail:
+        mov     edx, [rcx]
+        test    edx, edx
+        jz      short .link
+        mov     edi, edx
+        call    node_ptr
+        lea     rcx, [rax + N_NEXT]
+        jmp     short .tail
+.link:
+        mov     [rcx], r12d
+.out:
+        pop     r13
+        pop     r12
+        pop     rbx
+        ret
+.statement:
+        mov     edi, r13d
+        call    node_tok
+        mov     esi, eax
+        mov     edi, E_ENTRY_ONLY
+        jmp     near p_error_at
 
 ; =============================================================================
 ; Token access
@@ -1998,3 +2092,4 @@ p_depth:        dq 0                    ; nesting depth ([core.syntax.4])
 n_base:         dq 0                    ; node array
 n_count:        dq 0                    ; nodes in use, including node 0
 n_cap:          dq 0                    ; node array capacity
+p_single_start: dd 0                    ; parse: one file, starting at token 0

@@ -1,0 +1,3 @@
+// The bad argument is in this file.
+i32 Twice(i32 n) => n * 2;
+i32 Broken() => Twice("two");

@@ -1,0 +1,3 @@
+// Not the entry file, so it may only declare items.
+void Setup() {}
+Setup();

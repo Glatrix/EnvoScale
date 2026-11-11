@@ -14,6 +14,7 @@ Hello World Gallery. Each test is a `.envo` file whose comments say what must ha
 | `core-syntax/` | Envo-Core grammar (`envo-core.md` §5.1) | Yes: `expect-error` tests (E01xx, E0905) |
 | `core-types/` | Envo-Core names, types, constants (`envo-core.md` §5.2–5.3) | Yes: `expect-error` tests (E02xx, E03xx, E0905) |
 | `core-run/` | Envo-Core semantics, run-time checks, built-ins | Yes: compiled with `envoc0 build` and run; `// expect:` stdout lines, `// expect-exit: N`, `// expect-panic: <reason>` |
+| `core-multi/` | Programs of several files (`envo-core.md` §4, [item.mod.3]) | Yes: one folder per test; `main.envo` is the entry file and holds `// expect:` lines or `// expect-error: E#### @ <file>:L:C` |
 | `hello/` | Hello World Gallery (brief §17) | Line-count limits only (`limits.txt`, checked by `bootstrap.* check`); execution as each milestone lands |
 
 All `expect-error` tests run with `envoc0 check`, which lexes and parses first, so each

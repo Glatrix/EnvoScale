@@ -1,0 +1,3 @@
+// A lexical error in a later file, which starts with a byte order mark.
+// expect-error: E0004 @ text.envo:2:15
+print("main");

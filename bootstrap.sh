@@ -162,6 +162,43 @@ do_test() {
         pass
     done
 
+    # Multi-file programs: one folder per test. main.envo is the entry file and holds
+    # the annotations; the other .envo files follow in name order. Either
+    # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
+    say 'multi-file tests: tests/spec/core-multi'
+    for d in "$ROOT"/tests/spec/core-multi/*/; do
+        d=${d%/}
+        base=$(basename "$d")
+        name="spec/core-multi/$base"
+        set -- main.envo
+        for f in "$d"/*.envo; do
+            f=$(basename "$f")
+            [ "$f" = main.envo ] || set -- "$@" "$f"
+        done
+        line=$(grep -m1 '^// expect-error: ' "$d/main.envo" | tr -d '\r' || true)
+        if [ -n "$line" ]; then
+            code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
+            want="${line##* @ }: error[$code]"
+            run "$d" check "$@"
+            if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
+            else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+            continue
+        fi
+        sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
+        program="$rundir/multi-$base"
+        case "$EXE" in *.exe) program="$program.exe" ;; esac
+        run "$d" build "$@" -o "$program"
+        if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+        set +e
+        (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
+        if [ "$rc" -ne 0 ]; then bad "$name" "exit code $rc: $(cat "$TMP/err")"; continue; fi
+        pass
+    done
+
     say ''
     say "$passed passed, $failed failed"
     [ "$failed" -eq 0 ] || exit 1

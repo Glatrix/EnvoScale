@@ -189,6 +189,35 @@ function Invoke-Test {
         Pass $name
     }
 
+    # Multi-file programs: one folder per test. main.envo is the entry file and holds
+    # the annotations; the other .envo files follow in name order. Either
+    # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
+    Say 'multi-file tests: tests/spec/core-multi'
+    foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-multi') -Directory | Sort-Object Name) {
+        $name = "spec/core-multi/$($d.Name)"
+        $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
+        $text = Normalize ([IO.File]::ReadAllText((Join-Path $d.FullName 'main.envo'), $Utf8))
+        $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)$')
+        if ($m.Success) {
+            $want = "$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
+            $r = Invoke-Tool $exe (@('check') + $files) $d.FullName
+            if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
+            else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+            continue
+        }
+        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+        $wantOut = ''
+        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+        $program = Join-Path $runDir ("multi-" + $d.Name + '.exe')
+        $r = Invoke-Tool $exe (@('build') + $files + @('-o', $program)) $d.FullName
+        if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+        $r = Invoke-Tool $program @() $runDir
+        $out = Normalize $r.Out
+        if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
+        if ($r.Code -ne 0) { Bad $name "exit code $($r.Code); stderr: $($r.Err.Trim())"; continue }
+        Pass $name
+    }
+
     Say ''
     Say "$($script:passed) passed, $($script:failed) failed"
     if ($script:failed -gt 0) { exit 1 }

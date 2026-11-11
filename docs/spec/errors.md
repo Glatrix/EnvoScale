@@ -65,6 +65,7 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0207 | field `x` is set twice | [core.expr.10] |
 | E0208 | `x` is not a type | [core.name.3] |
 | E0209 | `x` is a type, not a value | [core.name.3] |
+| E0210 | top-level statements are only allowed in the entry file (the first file given) | [item.mod.3] |
 
 ## Types (E0300–E0399)
 

@@ -3,8 +3,9 @@
 ;
 ;   envoc0 lex <file.envo>     print the token stream
 ;   envoc0 parse <file.envo>   print the syntax tree
-;   envoc0 check <file.envo>   check names and types; print the typed tree
-;   envoc0 build <file.envo> -o <output> [--target T]   compile to an executable
+;   envoc0 check <file.envo>...   check names and types; print the typed tree
+;   envoc0 build <file.envo>... -o <output> [--target T]   compile to an executable
+;   (several files are one program; the first is the entry file)
 ;   envoc0 version            print the version (also --version)
 ;   envoc0 help                print usage (also --help)
 ;
@@ -95,10 +96,12 @@ main:
         call    cmd_parse               ; does not return
 
 .check:
-        cmp     qword [g_argc], 3
-        jne     near .usage_error
-        mov     rdx, [g_argv]
-        mov     rdi, [rdx + 16]
+        mov     rsi, [g_argc]
+        cmp     rsi, 3
+        jb      near .usage_error
+        sub     rsi, 2                  ; every argument after "check" is a file
+        mov     rdi, [g_argv]
+        add     rdi, 16
         call    cmd_check               ; does not return
 
 .build:
@@ -173,14 +176,12 @@ cmd_parse:
         xor     edi, edi
         call    exit_process
 
-; cmd_check - check one file and print its typed syntax tree.
-;   in:  rdi = NUL-terminated path. Does not return.
+; cmd_check - check a program and print its typed syntax tree.
+;   in:  rdi = array of NUL-terminated paths (the entry file first), rsi = count.
+;   Does not return.
 cmd_check:
         push    rbx
-        call    load_tokens
-        mov     rdi, rax
-        mov     rsi, rdx
-        call    parse
+        call    load_program
         mov     ebx, eax
         mov     edi, eax
         call    check_program
@@ -191,19 +192,72 @@ cmd_check:
         xor     edi, edi
         call    exit_process
 
-; load_tokens - read, validate and tokenize one file. Sets diag_path/src/len.
-; Reports read failures and lexical errors itself (and exits).
-;   in:  rdi = NUL-terminated path
-;   out: rax = token array, rdx = token count
-load_tokens:
+; load_program - load and parse the files of one program ([item.mod.3]).
+;   in:  rdi = array of NUL-terminated paths (the entry file first), rsi = count
+;   out: eax = program node
+load_program:
         push    rbx
+        mov     rbx, rsi
+        call    load_files
+        mov     rdi, rax
+        mov     rsi, rdx
+        mov     rdx, rcx
+        mov     ecx, ebx
+        pop     rbx
+        jmp     near parse_files
+
+; load_tokens - load_files for one file.
+;   in:  rdi = NUL-terminated path.  out: rax = token array, rdx = token count
+load_tokens:
+        push    rdi
+        mov     rdi, rsp
+        mov     esi, 1
+        call    load_files
+        pop     rcx
+        ret
+
+; load_files - read, validate and tokenize the files of a program. The files
+; share one source buffer (each followed by a newline, so that a file's end
+; offset is not also the next file's start) and one token array (each file
+; keeps its own EOF token), so source offsets and token indices are global.
+; Sets diag_path/src/len and the file table that maps offsets back to files.
+; Reports read failures and lexical errors itself (and exits).
+;   in:  rdi = array of NUL-terminated paths, rsi = count (>= 1)
+;   out: rax = token array, rdx = total tokens,
+;        rcx = u32 index of each file's first token
+; rbx = paths, r12 = count, r13 = file table, rbp = per-file tokens/count,
+; r14 = file, r15 = running total; [rsp], [rsp+8], [rsp+16] = scratch
+load_files:
+        push    rbx
+        push    rbp
         push    r12
         push    r13
+        push    r14
+        push    r15
+        sub     rsp, 24
         mov     rbx, rdi
-        mov     [diag_path], rdi
+        mov     r12, rsi
+        mov     rax, [rdi]
+        mov     [diag_path], rax
+        lea     rdi, [rsi + rsi*2]
+        shl     rdi, 3                  ; 24 bytes per file: base, length, path
+        call    arena_alloc
+        mov     r13, rax
+        mov     rdi, r12
+        shl     rdi, 4                  ; 16 bytes per file: tokens, count
+        call    arena_alloc
+        mov     rbp, rax
+
+        ; Read every file. Until the copy the table holds the data pointer.
+        xor     r14d, r14d
+        xor     r15d, r15d
+.read:
+        cmp     r14, r12
+        jae     short .combine
+        mov     rdi, [rbx + r14*8]
         call    read_file
         test    rax, rax
-        jz      short .read_failed
+        jz      near .read_failed
         ; [lex.src.2] ignore a UTF-8 byte order mark
         cmp     rdx, 3
         jb      short .no_bom
@@ -214,12 +268,58 @@ load_tokens:
         add     rax, 3
         sub     rdx, 3
 .no_bom:
+        lea     rcx, [r14 + r14*2]
+        lea     rcx, [r13 + rcx*8]
+        mov     [rcx], rax
+        mov     [rcx + 8], rdx
+        mov     rsi, [rbx + r14*8]
+        mov     [rcx + 16], rsi
+        lea     r15, [r15 + rdx + 1]
+        inc     r14
+        jmp     short .read
+
+.combine:
+        mov     rdi, r15
+        call    arena_alloc
         mov     [diag_src], rax
-        mov     [diag_len], rdx
-        mov     r12, rax
-        mov     r13, rdx
-        mov     rdi, rax
-        mov     rsi, rdx
+        mov     [diag_len], r15
+        mov     [d_files], r13
+        mov     [d_nfiles], r12
+        xor     r14d, r14d
+        xor     r15d, r15d              ; the next file's base
+.copy:
+        cmp     r14, r12
+        jae     short .lex
+        lea     rax, [r14 + r14*2]
+        lea     rdx, [r13 + rax*8]
+        mov     rsi, [rdx]
+        mov     rcx, [rdx + 8]
+        mov     [rdx], r15
+        mov     rdi, [diag_src]
+        add     rdi, r15
+        lea     r15, [r15 + rcx + 1]
+        rep movsb
+        mov     byte [rdi], 10
+        inc     r14
+        jmp     short .copy
+
+        ; Validate and lex each file on its own; diag_base makes the lexer's
+        ; file-relative offsets global for diagnostics.
+.lex:
+        xor     r14d, r14d
+        xor     r15d, r15d              ; total tokens
+.lex_file:
+        cmp     r14, r12
+        jae     short .merge
+        lea     rax, [r14 + r14*2]
+        lea     rax, [r13 + rax*8]
+        mov     rsi, [rax]
+        mov     [diag_base], rsi
+        mov     rdi, [diag_src]
+        add     rdi, rsi
+        mov     rsi, [rax + 8]
+        mov     [rsp], rdi
+        mov     [rsp + 8], rsi
         call    utf8_validate           ; [lex.src.1]
         cmp     rax, -1
         je      short .valid
@@ -227,15 +327,73 @@ load_tokens:
         mov     rsi, rax
         call    diag_error
 .valid:
-        mov     rdi, r12
-        mov     rsi, r13
+        mov     rdi, [rsp]
+        mov     rsi, [rsp + 8]
         call    lex
+        mov     rcx, r14
+        shl     rcx, 4
+        mov     [rbp + rcx], rax
+        mov     [rbp + rcx + 8], rdx
+        add     r15, rdx
+        inc     r14
+        jmp     short .lex_file
+
+        ; Merge the token arrays, making token offsets global.
+.merge:
+        mov     qword [diag_base], 0
+        mov     rdi, r12
+        shl     rdi, 2
+        call    arena_alloc
+        mov     [rsp + 16], rax
+        mov     rdi, r15
+        shl     rdi, 4                  ; * TOK_SIZE
+        call    arena_alloc
+        mov     [rsp], rax
+        mov     rdi, rax
+        xor     r14d, r14d
+        xor     r15d, r15d
+.merge_file:
+        cmp     r14, r12
+        jae     short .done
+        mov     rax, [rsp + 16]
+        mov     [rax + r14*4], r15d
+        lea     rax, [r14 + r14*2]
+        mov     r8, [r13 + rax*8]       ; the file's base
+        mov     rcx, r14
+        shl     rcx, 4
+        mov     rsi, [rbp + rcx]
+        mov     rcx, [rbp + rcx + 8]
+        add     r15, rcx
+.token:
+        test    rcx, rcx
+        jz      short .next_file
+        mov     rax, [rsi]
+        mov     [rdi], rax
+        mov     rax, [rsi + 8]
+        mov     [rdi + 8], rax
+        add     [rdi + TOK_START], r8d
+        add     rsi, TOK_SIZE
+        add     rdi, TOK_SIZE
+        dec     rcx
+        jmp     short .token
+.next_file:
+        inc     r14
+        jmp     short .merge_file
+.done:
+        mov     rax, [rsp]
+        mov     rdx, r15
+        mov     rcx, [rsp + 16]
+        add     rsp, 24
+        pop     r15
+        pop     r14
         pop     r13
         pop     r12
+        pop     rbp
         pop     rbx
         ret
 
 .read_failed:
+        mov     rbx, [rbx + r14*8]      ; the path
         mov     r12, rdx                ; reason: 1 open, 2 read, 3 too large
         lea     rdi, [w_err]
         lea     rsi, [s_err_prefix]
@@ -299,9 +457,11 @@ s_usage:
         db      'commands:', 10
         db      '  lex <file.envo>     print the token stream of an Envo-Core source file', 10
         db      '  parse <file.envo>   print the syntax tree of an Envo-Core source file', 10
-        db      '  check <file.envo>   check names and types; print the typed syntax tree', 10
-        db      '  build <file.envo> -o <output> [--target x86_64-windows|x86_64-linux]', 10
+        db      '  check <file.envo>...', 10
+        db      '                      check names and types; print the typed syntax tree', 10
+        db      '  build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]', 10
         db      '                      compile to an executable (default: this OS)', 10
+        db      '                      (several files are one program; the first is the entry file)', 10
         db      '  version             print the version', 10
         db      '  help                print this message', 10
 s_usage_len             equ $ - s_usage

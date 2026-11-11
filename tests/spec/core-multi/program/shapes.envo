@@ -1,0 +1,8 @@
+// Uses SIDE before its declaration and Color from another file.
+struct Rect { i64 W; i64 H; }
+i64 Area(Rect r) => r.W * r.H;
+str Greeting() => "hello from shapes";
+static i32 calls;
+void Count() { calls++; }
+Color Favorite() => Color.Blue;
+const i64 SIDE = 4;

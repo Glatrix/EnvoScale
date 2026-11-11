@@ -105,7 +105,7 @@ The milestone is large, so it is cut into increments that each end tested.
 | 1.6 | Type checker for Envo-Core | `tests/golden/check/`, `tests/spec/core-types/` | done (208/208 on Windows) |
 | 1.7 | x86-64 code generation + PE/ELF writers for *output* programs | `tests/spec/core-run/` | done |
 | 1.8 | Builtins (`print`, file I/O, `alloc`, args, `str_from`) for output programs | `tests/spec/core-run/` | done |
-| 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | next: a test per spec rule, multi-file builds |
+| 1.9 | Full Envo-Core spec test suite green on Windows and Linux in CI | CI | in progress: multi-file programs done (240/240); next: a run test per spec rule |
 
 Nothing is marked done until its tests pass. The Linux half of each increment counts as
 done only once the `stage0-linux` CI job passes.
@@ -113,8 +113,9 @@ done only once the `stage0-linux` CI job passes.
 ## 6. Risks
 
 - **Assembly volume.** Stage 0 targets < 15k lines. With the code generator, writers
-  and built-ins (M1.7-M1.8) it is 14.7k lines, about 600 of them generated tables, so
-  the pipeline fits; multi-file builds and fixes must stay small. Keeping the code generator a simple
+  and built-ins (M1.7-M1.8) and multi-file programs (M1.9) it is 14,974 lines, about 600
+  of them generated tables, so the pipeline fits with no room to spare: further Stage 0
+  work is fixes only, and new features wait for Stage 1. Keeping the code generator a simple
   stack machine that reuses the checker's types and layouts is how that budget is met;
   if it is exceeded, the overrun gets an RFC rather than silent growth.
 - **Untestable Linux path locally.** Development happens on Windows; the Linux ELF is

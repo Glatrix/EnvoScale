@@ -1,0 +1,9 @@
+﻿// Starts with a byte order mark ([lex.src.2]).
+enum Color { Red, Green, Blue }
+str Name(Color c) {
+    match c {
+        Red => { return "Red"; }
+        Green => { return "Green"; }
+        Blue => { return "Blue"; }
+    }
+}

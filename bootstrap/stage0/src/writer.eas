@@ -18,9 +18,9 @@ TARGET_WINDOWS  equ 0
 TARGET_LINUX    equ 1
 ELF_HEADERS     equ 176                 ; ELF header (64) + 2 program headers (56 each)
 
-; cmd_build - envoc0 build <file.envo> -o <output> [--target x86_64-windows|x86_64-linux]
-;   in: rdi = argv, rsi = argc. Does not return.
-; rbx = argv, r12 = argc, r13 = input, r14 = output, r15d = target
+; cmd_build - envoc0 build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]
+;   in: rdi = argv, rsi = argc. Does not return. The first file is the entry file.
+; rbx = argv, r12 = argc, r13 = input count, r14 = output, r15d = target
 cmd_build:
         push    rbx
         push    r12
@@ -56,9 +56,9 @@ cmd_build:
         pop     rcx
         test    eax, eax
         jnz     short .target
-        test    r13, r13                ; the input file
-        jnz     near .usage
-        mov     r13, [rbx + rcx*8]
+        mov     rax, [rbx + rcx*8]      ; an input file: inputs are packed
+        mov     [rbx + r13*8 + 16], rax ; in place at argv[2...]
+        inc     r13
         inc     rcx
         jmp     short .arg
 .output:
@@ -101,11 +101,9 @@ cmd_build:
         jz      near .usage
         test    r14, r14
         jz      near .usage
-        mov     rdi, r13
-        call    load_tokens
-        mov     rdi, rax
-        mov     rsi, rdx
-        call    parse
+        lea     rdi, [rbx + 16]
+        mov     rsi, r13
+        call    load_program
         mov     ebx, eax
         mov     edi, eax
         call    check_program
@@ -367,7 +365,7 @@ s_target_windows_len equ $ - s_target_windows
 s_target_linux:     db 'x86_64-linux'
 s_target_linux_len  equ $ - s_target_linux
 s_cannot_write:     db "envoc0: error: cannot write '", 0
-s_build_usage:      db 'usage: envoc0 build <file.envo> -o <output> [--target x86_64-windows|x86_64-linux]', 10, 0
+s_build_usage:      db 'usage: envoc0 build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]', 10, 0
 
         align   8, db 0
 b_file_size:    dq 0

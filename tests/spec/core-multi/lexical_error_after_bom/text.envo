@@ -1,0 +1,2 @@
+﻿// The string on line 2 is not closed.
+const str S = "never
