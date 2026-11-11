@@ -40,7 +40,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 | **Bootstrap: Stage 1** (`bootstrap/stage1`) | — | — | Everything | M2 |
 | **Bootstrap adapter: NASM** (`adapters/bootstrap/nasm`) | Experimental | `assemble.ps1` / `assemble.sh` | — | Used by CI and local builds |
 | **Build entry points** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check` (layout, lib→adapters imports, gallery line limits), `build` and `test` all work on Windows PowerShell and Git Bash. Verified that `check` catches a planted forbidden import and that `test` catches a wrong token and a wrong error column | — | — |
-| **CI adapter** (`adapters/ci/github`) | Experimental | Runs on [envoscale/EnvoScale](https://github.com/envoscale/EnvoScale/actions). All three jobs pass: `check`, `stage0-windows` and `stage0-linux` (109/109 each). Both hosts produce envoc0 binaries byte-identical to the local build, even with different NASM versions (2.16.01 in Linux CI, 3.02 locally). Linux installs NASM through `install-nasm.sh`, which falls back to `archive.ubuntu.com` when the runner's mirror fails | The mirror fallback has not been exercised yet (the default mirror worked on the passing run); the hash comparison is read by eye, not automated | Automate the cross-host hash comparison (issue: "CI: check envoc0 is byte-identical across Windows and Linux hosts") |
+| **CI adapter** (`adapters/ci/github`) | Experimental | Runs on [envoscale/EnvoScale](https://github.com/envoscale/EnvoScale/actions). All three jobs pass: `check`, `stage0-windows` and `stage0-linux` (208/208 each). The two CI hosts (NASM 2.16.x) produce byte-identical envoc0 binaries. Linux installs NASM through `install-nasm.sh`, which falls back to `archive.ubuntu.com` when the runner's mirror fails | **NASM 3.02 (local) and 2.16 (CI) now produce different bytes** for the M1.6 code (issue #20); the mirror fallback has not been exercised yet; the hash comparison is read by eye, not automated | Automate the cross-host hash comparison (issue: "CI: check envoc0 is byte-identical across Windows and Linux hosts") |
 | **Tests** (`tests/`) | — | 13 lexer, 8 parser and 8 checker golden tests; 41 lexical, 43 syntax and 90 type `expect-error` spec tests; 5 CLI smoke tests; Hello World Gallery files with line limits | `// expect:` tests that run compiled programs | Code generation tests (M1.7) |
 | **Compiler: Stage 2** (`compiler/`) | — | — | Everything | M3 |
 | **Runtime** (`runtime/`) | — | — | Everything | M3 (startup/panic/ARC), M6 (VM) |
@@ -50,6 +50,12 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 | **Templates** (`templates/`) | — | — | Everything | M5 / M9 |
 
 ## Known limitations
+
+- **Different NASM versions assemble Stage 0 differently since M1.6.** NASM 2.16 (CI)
+  and 3.02 (local) disagree on some instruction encoding added by the checker; each
+  version is self-consistent and every build passes all tests. Tracked in issue #20;
+  the fix is an encoding rule in `docs/spec/eas.md` that every assembler, including
+  the future seed, must follow.
 
 - **Linux is only exercised in CI.** The development machine runs Windows (WSL is broken
   there); the Linux binary is cross-assembled locally and run by the `stage0-linux` job.
