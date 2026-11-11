@@ -7,6 +7,9 @@ them in plain words. If this page and `LICENSE` ever disagree, `LICENSE` wins.
 > EnvoScale is *source-available*, not *open source* in the OSI sense: anyone can read,
 > build, change and learn from the code, but commercial use is licensed separately.
 
+In machine-readable form (SPDX), EnvoScale's license is
+`PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial`.
+
 ## Which license do I need?
 
 | You are… | You may use EnvoScale under | Cost |
@@ -16,6 +19,7 @@ them in plain words. If this page and `LICENSE` ever disagree, `LICENSE` wins.
 | A charity, public-health, public-safety or environmental organization, or a government institution | Community License | Free |
 | A company, of any size, using EnvoScale for its work, product or services | **Commercial License** | Paid |
 | An individual using EnvoScale to earn money (freelance work, a paid product, a commercial service) | **Commercial License** | Paid |
+| A company that wants to try EnvoScale before buying | **Evaluation license** (30 days, internal only) | Free, on request |
 
 When in doubt, you need a commercial license, or you can ask (see below).
 
@@ -30,6 +34,11 @@ When in doubt, you need a commercial license, or you can ask (see below).
   repository's issues.
 
 ### Commercial License
+
+A commercial license is a signed **Order Form** that incorporates the standard
+**EnvoScale Commercial License Agreement**. Both templates are public, so you can read the
+terms before asking: [agreement](docs/legal/commercial-license-agreement.md),
+[order form](docs/legal/order-form.md). It covers:
 
 - Use of EnvoScale by your organization for any purpose, including in products and
   services you sell, and internal tools.
@@ -50,6 +59,24 @@ same terms as the toolchain you built it with:
 - built under a Commercial License → usable and distributable commercially, as your
   agreement says.
 
+## Sharing programs under the Community License
+
+The Community License requires that anyone who gets a copy of any part of EnvoScale from
+you also gets the license terms (or their URL) and the `Required Notice:` line. Compiled
+programs contain the runtime, so when you share one, include this text with it, for
+example in its README or "about" screen:
+
+```
+Contains EnvoScale, licensed under PolyForm Noncommercial 1.0.0
+(https://polyformproject.org/licenses/noncommercial/1.0.0).
+Required Notice: Copyright (c) 2026 Glatrix (https://github.com/envoscale)
+```
+
+## Name and logo
+
+The licenses cover the software, not the EnvoScale name and logos. See
+[`TRADEMARKS.md`](TRADEMARKS.md).
+
 ## Enterprise
 
 EnvoScale is being built to be enterprise-ready by the end of its roadmap: reproducible
@@ -60,9 +87,27 @@ on the [roadmap project](https://github.com/orgs/envoscale/projects/3).
 
 ## Getting a commercial license
 
-Contact the copyright holder through the [envoscale organization on
-GitHub](https://github.com/envoscale). Commercial license agreements are written per
-customer until standard terms are published.
+Contact the licensor through the [envoscale organization on
+GitHub](https://github.com/envoscale). Standard editions and prices are being set
+([#36](https://github.com/envoscale/EnvoScale/issues/36)); until then, Order Forms are
+quoted per customer. No commercial agreement is signed before the templates' legal review
+([#35](https://github.com/envoscale/EnvoScale/issues/35)) is complete.
+
+## Why PolyForm Noncommercial
+
+The Community License is a standard license, not one written for EnvoScale: the
+[PolyForm Project](https://polyformproject.org) publishes it, lawyers drafted it, and it
+has an official SPDX identifier, so the license scanners companies use recognize it. Its
+full text is in [`LICENSES/`](LICENSES/PolyForm-Noncommercial-1.0.0.md). The other
+common source-available licenses were rejected because they do not keep companies out
+without a license:
+
+- **Business Source License 1.1** must turn into an open-source license within four years
+  of each release, after which companies could use that release for free.
+- **Functional Source License** does the same after two years.
+- **Elastic License 2.0** and the **Server Side Public License** allow most commercial use
+  and restrict only hosted services.
+- **PolyForm Small Business** lets companies under a size limit use it for free.
 
 ## Contributing
 

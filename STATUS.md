@@ -68,7 +68,10 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 - **Envo-Core has no way to make a non-empty slice.** `T[]` exists, but slicing
   ([RFC 0002](docs/rfcs/0002-slicing.md)) is in full Envo and Envo-S1 only, so Core code
   (including Stage 1's source) uses a pointer and a length instead.
-- **The license and CLA have not had legal review.** `LICENSE` applies the PolyForm
-  Noncommercial License 1.0.0 by reference to its official text and adds commercial
-  terms; `CLA.md` is an original draft. Both should be reviewed by a lawyer before
-  commercial licenses are sold.
+- **The legal documents have not had legal review.** `LICENSE` applies the PolyForm
+  Noncommercial License 1.0.0 (full text in `LICENSES/`) and reserves commercial use for
+  signed agreements. The commercial agreement and order form templates
+  (`docs/legal/`), `CLA.md` and `TRADEMARKS.md` are original drafts, and the licensor is
+  still named by GitHub handle rather than a legal person or company. A lawyer should
+  review them, and the licensor be named, before the first commercial license is sold
+  ([#35](https://github.com/envoscale/EnvoScale/issues/35)).

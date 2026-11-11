@@ -102,4 +102,5 @@ the [RFC process](docs/rfcs/README.md). Security issues: see [`SECURITY.md`](SEC
 EnvoScale is **free for individuals and noncommercial use** under the PolyForm
 Noncommercial License 1.0.0. **Companies need a commercial license.** See
 [`LICENSING.md`](LICENSING.md) for who needs which license, and [`LICENSE`](LICENSE) for
-the terms.
+the terms. Commercial terms are public as templates in [`docs/legal/`](docs/legal/), and
+the name and logos are covered by [`TRADEMARKS.md`](TRADEMARKS.md).
