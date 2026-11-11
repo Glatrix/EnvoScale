@@ -1,0 +1,26 @@
+# Temporary diagnostic: listings of Stage 0 from the runner's NASM, to find why NASM 3.01
+# (ubuntu 26.04) assembles different bytes than NASM 2.16 and 3.02. Remove once fixed.
+name: nasm-diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  listing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh adapters/ci/github/install-nasm.sh
+      - run: |
+          mkdir -p out
+          cd bootstrap/stage0
+          nasm -v > ../../out/version.txt
+          nasm -f bin -w+all -I ./ -l ../../out/linux.lst -o ../../out/envoc0 envoc0-linux.eas
+          nasm -f bin -w+all -I ./ -l ../../out/windows.lst -o ../../out/envoc0.exe envoc0-windows.eas
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nasm-diag
+          path: out/
