@@ -1198,6 +1198,37 @@ function Invoke-Dist {
     $tar = Join-Path $dist "envoscale-$v.tar"
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tar).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS'), "$hash  envoscale-$v.tar`n", (New-Object System.Text.UTF8Encoding($false)))
+    # an in-toto statement (SLSA provenance v1) of how the archive was built, as bootstrap.sh's
+    $commit = $env:GITHUB_SHA
+    if (-not $commit) { $commit = (& git -C $Root rev-parse HEAD 2>$null); if (-not $commit) { $commit = 'unknown' } }
+    $builder = 'local'
+    if ($env:GITHUB_RUN_ID) { $builder = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" }
+    $by = @()
+    foreach ($b in @(@('envoc0.exe', 'build\stage0\envoc0.exe'), @('envoc1.exe', 'build\stage1\envoc1.exe'), @('envoc.exe', 'build\stage2\envoc.exe'))) {
+        $bh = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Root $b[1])).Hash.ToLowerInvariant()
+        $by += "        {`"name`": `"$($b[0])`", `"digest`": {`"sha256`": `"$bh`"}}"
+    }
+    $prov = @(
+        '{',
+        '  "_type": "https://in-toto.io/Statement/v1",',
+        "  `"subject`": [{`"name`": `"envoscale-$v.tar`", `"digest`": {`"sha256`": `"$hash`"}}],",
+        '  "predicateType": "https://slsa.dev/provenance/v1",',
+        '  "predicate": {',
+        '    "buildDefinition": {',
+        '      "buildType": "https://github.com/envoscale/EnvoScale/blob/main/docs/guides/offline-install.md#provenance",',
+        '      "externalParameters": {"command": "bootstrap.ps1 dist", "SOURCE_DATE_EPOCH": "0"},',
+        "      `"resolvedDependencies`": [{`"uri`": `"git+https://github.com/envoscale/EnvoScale`", `"digest`": {`"gitCommit`": `"$commit`"}}]",
+        '    },',
+        '    "runDetails": {',
+        "      `"builder`": {`"id`": `"$builder`"},",
+        '      "byproducts": [',
+        ($by -join ",`n"),
+        '      ]',
+        '    }',
+        '  }',
+        '}'
+    ) -join "`n"
+    [IO.File]::WriteAllText((Join-Path $dist "envoscale-$v.provenance.json"), "$prov`n", (New-Object System.Text.UTF8Encoding($false)))
     Say "dist      build\dist\envoscale-$v.tar"
     Say "          sha256 $hash"
 }

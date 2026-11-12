@@ -1245,6 +1245,8 @@ do_compare() {
     files='stage0/envoc0 stage0/envoc0.exe stage1/envoc1 stage1/envoc1.exe stage2/envoc stage2/envoc.exe'
     # after `fixedpoint`, the fixed-point compilers too
     [ -d "$1/stage2c" ] && files="$files stage2c/envoc stage2c/envoc.exe"
+    # after `dist`, the release archive's digest (docs/guides/offline-install.md)
+    [ -f "$1/dist/SHA256SUMS" ] && files="$files dist/SHA256SUMS"
     for f in $files; do
         [ -f "$1/$f" ] || fail "missing $1/$f"
         [ -f "$2/$f" ] || fail "missing $2/$f"
@@ -1262,6 +1264,35 @@ do_compare() {
 # with bin/ (envo and envoc for both OSes), lib/, adapters/, docs/ and the licenses, packed
 # reproducibly by `envo archive`, and SHA256SUMS. Signing it is the release manager's step
 # (`envo sign`), with the project's key.
+# provenance <version> <sha256> <command>: an in-toto statement (SLSA provenance v1) of how
+# the archive was built: the source commit, the command, the build time, and the digests of
+# the compilers that built it. Unsigned; the release manager signs it with `envo sign`.
+provenance() {
+    commit=${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}
+    builder=local
+    [ -n "${GITHUB_RUN_ID:-}" ] && builder="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+    printf '{\n'
+    printf '  "_type": "https://in-toto.io/Statement/v1",\n'
+    printf '  "subject": [{"name": "envoscale-%s.tar", "digest": {"sha256": "%s"}}],\n' "$1" "$2"
+    printf '  "predicateType": "https://slsa.dev/provenance/v1",\n'
+    printf '  "predicate": {\n'
+    printf '    "buildDefinition": {\n'
+    printf '      "buildType": "https://github.com/envoscale/EnvoScale/blob/main/docs/guides/offline-install.md#provenance",\n'
+    printf '      "externalParameters": {"command": "%s", "SOURCE_DATE_EPOCH": "0"},\n' "$3"
+    printf '      "resolvedDependencies": [{"uri": "git+https://github.com/envoscale/EnvoScale", "digest": {"gitCommit": "%s"}}]\n' "$commit"
+    printf '    },\n'
+    printf '    "runDetails": {\n'
+    printf '      "builder": {"id": "%s"},\n' "$builder"
+    printf '      "byproducts": [\n'
+    printf '        {"name": "envoc0%s", "digest": {"sha256": "%s"}},\n' "$(host_suffix)" "$(sha256 "$BUILD/envoc0$(host_suffix)")"
+    printf '        {"name": "envoc1%s", "digest": {"sha256": "%s"}},\n' "$(host_suffix)" "$(sha256 "$BUILD1/envoc1$(host_suffix)")"
+    printf '        {"name": "envoc%s", "digest": {"sha256": "%s"}}\n' "$(host_suffix)" "$(sha256 "$BUILD2/envoc$(host_suffix)")"
+    printf '      ]\n'
+    printf '    }\n'
+    printf '  }\n'
+    printf '}\n'
+}
+
 do_dist() {
     do_build
     v=$(sed -n 's/^const str ENVO_VERSION = "\(.*\)";.*/\1/p' "$ROOT/tools/envo/main.envo" | tr -d '\r')
@@ -1273,6 +1304,7 @@ do_dist() {
     cp "$ROOT/LICENSE" "$ROOT/LICENSING.md" "$ROOT/README.md" "$ROOT/SECURITY.md" "$dist/envoscale-$v/"
     (cd "$dist" && SOURCE_DATE_EPOCH=0 "$ROOT/build/envo/envo$(host_suffix)" archive "envoscale-$v" "envoscale-$v.tar") || fail "envo archive failed"
     (cd "$dist" && printf '%s  %s\n' "$(sha256 "envoscale-$v.tar")" "envoscale-$v.tar" > SHA256SUMS)
+    provenance "$v" "$(sha256 "$dist/envoscale-$v.tar")" "bootstrap.sh dist" > "$dist/envoscale-$v.provenance.json"
     say "dist      build/dist/envoscale-$v.tar"
     say "          sha256 $(sha256 "$dist/envoscale-$v.tar")"
 }

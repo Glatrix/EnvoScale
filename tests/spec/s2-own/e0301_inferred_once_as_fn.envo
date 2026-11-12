@@ -1,0 +1,10 @@
+// expect-error: E0301 @ 10:5
+// [fn.type.4] an inferred `once fn` is not a `fn`, which may be called again and again
+void Hello() => print("hello");
+void Run(fn() f) { f(); }
+fn() h = Hello;
+var f = () => {
+    fn() g = h;
+    g();
+};
+Run(f);

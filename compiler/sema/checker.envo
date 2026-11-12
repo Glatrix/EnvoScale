@@ -78,6 +78,11 @@ public struct Checker {
     u32 MvStamp;            // statements so far, in the order the move check visits them
     List<u32> MvLast;       // per symbol: the stamp of its last use
     List<u32> MvDecl;       // per symbol: the stamp of its declaration
+    // `once fn` inference ([fn.type.2]): a quiet move check of a lambda's body, while it is
+    // checked, notes whether the body moves out a value the lambda captured
+    bool MvProbing;         // the probe runs
+    u32 MvProbeCaps;        // the probed lambda's first capture
+    bool MvCapMoved;        // the probed lambda's body moved one of its captures
 
     // A checker for a parsed program.
     public static Checker New(in Sources src, Tree tree, bool core, bool runtime) {
@@ -100,7 +105,7 @@ public struct Checker {
             FileNs = List<Text>.New(), NsSet = StrMap<u32>.New(), Uses = List<u32>.New(),
             TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New(),
             MvQuiet = false, MvRecord = false, MvEarly = false, MvStamp = 0, MvLast = List<u32>.New(),
-            MvDecl = List<u32>.New()
+            MvDecl = List<u32>.New(), MvProbing = false, MvProbeCaps = 0, MvCapMoved = false
         };
         c.TypeArgs.Push(0);     // index 0: "no environment"
         for (usize f = 0; f < src.Count(); f++) {

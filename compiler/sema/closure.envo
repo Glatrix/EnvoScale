@@ -266,6 +266,10 @@ impl Checker {
         if (has) {
             if (kind > tt.Count) this.FailName(mutTok, E_LAMBDA_KIND, "this lambda changes `", mutTok, "`, but the target is a `fn`");
             kind = tt.Count;
+        } else if (!this.Core && this.LambdaMovesCapture(n)) {
+            // [fn.type.2] with no target, the body decides: moving out a capture makes it
+            // a `once fn`
+            kind = FK_ONCE;
         }
         u32 lt = this.FnTypeOf(kind, pl, ml, count, ret);
         if (!this.Core) {

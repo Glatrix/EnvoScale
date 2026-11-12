@@ -92,10 +92,13 @@ jobs:
           persist-credentials: false
       - run: sh adapters/ci/github/install-nasm.sh
       - run: ./bootstrap.sh fixedpoint
+      # the release archive (docs/guides/offline-install.md): the same bytes on both hosts
+      - run: ./bootstrap.sh dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fixed-point-on-linux
           path: |
+            build/dist/SHA256SUMS
             build/stage0/envoc0
             build/stage0/envoc0.exe
             build/stage1/envoc1
@@ -114,10 +117,13 @@ jobs:
       - run: choco install nasm --no-progress -y
       - run: .\bootstrap.ps1 fixedpoint
         shell: powershell
+      - run: .\bootstrap.ps1 dist
+        shell: powershell
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fixed-point-on-windows
           path: |
+            build/dist/SHA256SUMS
             build/stage0/envoc0
             build/stage0/envoc0.exe
             build/stage1/envoc1
