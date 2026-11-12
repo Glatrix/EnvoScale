@@ -1,0 +1,7 @@
+// A top-level variable may share a built-in's name: other functions still call the
+// built-in. Lowering used to look the name up again after checking and find the
+// variable (found in M4, where a top-level `read` broke a library function's read).
+// expect: from Say
+void Say() => print("from Say");
+str print = "shadow";
+Say();

@@ -1,7 +1,7 @@
 # 00-hello
 
-> **Status:** Lexes with Stage 0 today. Compiles and runs once Stage 0's code generator
-> lands (M1). Runs as a script from M6.
+> **Status:** Compiles and runs with every stage: `envoc0` (M1), `envoc1` (M2) and
+> `envoc` (M3). Runs as a script from M6.
 
 The smallest complete Envo program:
 
@@ -17,14 +17,14 @@ Stage 0 will compile.
 ## Try it today
 
 ```sh
-build/stage0/envoc0 lex examples/00-hello/main.envo
+build/stage2/envoc build examples/00-hello/main.envo -o hello && ./hello
 ```
 
 ## When the toolchain exists
 
 ```sh
 envo run examples/00-hello/main.envo     # script mode (M6)
-envo build examples/00-hello             # native executable (M3/M5)
+envo build examples/00-hello             # native executable (M5)
 ```
 
 `envo.envon` is the package manifest (format: [`docs/spec/eon.md`](../../docs/spec/eon.md)).

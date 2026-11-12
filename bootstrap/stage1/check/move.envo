@@ -168,7 +168,8 @@ u32 ViewOfLocal(*Checker c, *MoveCx x, u32 e) {
         if (cs != 0 && SymGet(c, cs).Kind == SK_ENUM) sum = 0;
         if (cs == 0 && NKind(c, node.A) == NK_NAME) {
             // of the built-ins, only str_from and slice_from make views (of their pointer)
-            u32 b = Lookup(c, NTok(c, node.A));
+            u32 b = NSym(c, node.A);
+            if (b == 0) b = Lookup(c, NTok(c, node.A));
             sum = 0;
             if (b != 0 && SymGet(c, b).Kind == SK_BUILTIN) {
                 u32 id = SymGet(c, b).Aux2;

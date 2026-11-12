@@ -301,6 +301,9 @@ impl Checker {
         // a function value in a local or static ([fn.pos.3])
         if ((sym.Kind == SK_LOCAL || sym.Kind == SK_STATIC) && this.TyKind(sym.Type) == TYK_FN) return this.CheckIndirectCall(n, node.A);
         if (sym.Kind != SK_FN && sym.Kind != SK_BUILTIN) this.Error(E_NOT_CALLABLE, node.Tok);
+        // lowering finds the built-in here: looking the name up again later would see
+        // whatever the scope holds then (a top-level `str print` hid print; M4)
+        if (sym.Kind == SK_BUILTIN) this.SetNSym(node.A, s);
         u32 typeArgs = this.NodeAt(node.A).E;
         if (sym.Kind == SK_FN && !this.Core) return this.CheckCallTo(n, s, 0, typeArgs, calleeTok);
         if (typeArgs != 0 && !(sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT))) this.TypeArgCount(calleeTok, 0, this.ListCount(typeArgs));

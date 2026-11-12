@@ -618,6 +618,13 @@ do_test() {
             done
         done
     done
+    # Every example builds (examples/README.md: an example exists only once it works)
+    say 'stage 2 examples: examples/*/main.envo'
+    for f in "$ROOT"/examples/*/main.envo; do
+        ex=$(basename "$(dirname "$f")")
+        run "$libdir" build -O2 --lib "$ROOT" "$f" -o "$libdir/example-$ex$(host_suffix)"
+        if [ "$rc" -eq 0 ]; then pass; else bad "example $ex" "build failed: $(cat "$TMP/err")"; fi
+    done
     # Library resolution errors (M4.1): `// lib: root` checks against tests/spec/lib/root
     # instead of the repository
     say 'stage 2 spec tests: tests/spec/lib'

@@ -66,8 +66,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
 | **Runtime** (`runtime/`) | — | — | Everything | M3 (startup, panics, ARC), M6 (VM) |
-| **Standard platform** (`lib/`) | — | — | Everything | M4 |
-| **Adapters** (`adapters/os`, `window`, `gpu`, …) | — | — | Everything | M4 on |
+| **Standard platform** (`lib/`) | Experimental | `core` (text, fmt, math, hash), `alloc` (Map, Set, Box, text), `ports`, `std` (io, fs, path, time, env, random), in Envo-S1 through `envoc --lib` | Domain modules (`envo.*`), threads and async, floats | M5 on |
+| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment; every conformance suite passes on both hosts | Window, GPU, audio, network, threads | M6 on |
 | **Tools** (`tools/`) | — | — | Everything | M5 |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |
 

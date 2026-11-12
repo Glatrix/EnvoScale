@@ -293,6 +293,9 @@ u32 CheckCall(*Checker c, u32 n, u32 expected) {
     // a function value in a local or static ([fn.pos.3])
     if ((sym.Kind == SK_LOCAL || sym.Kind == SK_STATIC) && TyKind(c, sym.Type) == TYK_FN) return CheckIndirectCall(c, n, node.A);
     if (sym.Kind != SK_FN && sym.Kind != SK_BUILTIN) CError(c, E_NOT_CALLABLE, node.Tok);
+    // lowering finds the built-in here: looking the name up again later would see
+    // whatever the scope holds then (a top-level `str print` hid print; found in M4)
+    if (sym.Kind == SK_BUILTIN) SetNSym(c, node.A, s);
     u32 typeArgs = CNode(c, node.A).E;
     if (sym.Kind == SK_FN && !CCore(c)) return CheckCallTo(c, n, s, 0, typeArgs, calleeTok);
     if (typeArgs != 0 && !(sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT))) TypeArgCount(c, calleeTok, 0, ListCount(c, typeArgs));

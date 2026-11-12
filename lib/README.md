@@ -1,7 +1,9 @@
 # `lib/` — the standard platform
 
-> **Status:** Not started. `core`, `alloc`, `std` and `ports` arrive with **M4**; domain
-> modules follow the milestone table in [`docs/PLAN.md`](../docs/PLAN.md).
+> **Status:** `core`, `alloc`, `ports` and `std` are Experimental (M4), written in
+> Envo-S1 and compiled by `envoc --lib`; see
+> [`docs/architecture/library.md`](../docs/architecture/library.md). Domain modules
+> follow the milestone table in [`docs/PLAN.md`](../docs/PLAN.md).
 
 Pure, platform-free Envo code. Everything here reaches the outside world only through
 **ports**: interfaces defined in [`ports/`](ports/README.md) and implemented in
@@ -9,8 +11,9 @@ Pure, platform-free Envo code. Everything here reaches the outside world only th
 
 ## The one rule
 
-**`lib/**` may import only `lib/**`.** Importing anything from `adapters/**` is a build
-error, enforced by the compiler from M3 and by `bootstrap.* check` before then.
+**`lib/**` may import only `lib/**`.** Using an adapter namespace (`os.*`) from a file
+under `lib/` is a compile error (E0215); the one meeting point is the `platform`
+binding, which the build picks for the target.
 
 ## Layers
 

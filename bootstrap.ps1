@@ -641,6 +641,14 @@ function Invoke-Test {
             }
         }
     }
+    # Every example builds (examples\README.md: an example exists only once it works)
+    Say 'stage 2 examples: examples/*/main.envo'
+    foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'examples') -Directory | Sort-Object Name) {
+        $main = Join-Path $d.FullName 'main.envo'
+        if (-not (Test-Path -LiteralPath $main)) { continue }
+        $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, $main, '-o', (Join-Path $libDir "example-$($d.Name).exe")) $libDir
+        if ($r.Code -eq 0) { Pass "example $($d.Name)" } else { Bad "example $($d.Name)" "build failed: $($r.Err.Trim())" }
+    }
     # Library resolution errors (M4.1): `// lib: root` checks against tests\spec\lib\root
     # instead of the repository
     Say 'stage 2 spec tests: tests/spec/lib'

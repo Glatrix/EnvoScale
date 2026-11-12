@@ -1,0 +1,54 @@
+// Counts the words of a text file: std.fs reads it, alloc.map counts the words, and
+// std.io prints the result. Run it on itself, or name a file:
+//     envoc build --lib <repo> main.envo -o words && words notes.txt
+use std.fs;
+use std.io;
+use std.env;
+use alloc.map.{Map};
+use alloc.text;
+use core.text as ct;
+
+str path = "main.envo";
+if (env.ArgCount() > 1) path = env.Arg(1);
+Result<string, ports.IoError> read = fs.ReadText(path);
+if (read.IsErr()) {
+    io.Error("cannot read the file");
+    return 1;
+}
+string content = read.Unwrap();
+str all = content.AsStr();
+
+// words are runs of letters and digits
+Map<str, u64> counts = Map<str, u64>.New();
+u64 total = 0;
+usize i = 0;
+while (i < all.Len) {
+    while (i < all.Len && !ct.IsAlnum(all[i])) i++;
+    usize start = i;
+    while (i < all.Len && ct.IsAlnum(all[i])) i++;
+    if (i > start) {
+        str word = all[start..i];
+        counts.Set(word, counts.GetOr(word, 0) + 1);
+        total++;
+    }
+}
+
+str best = "";
+u64 most = 0;
+foreach (var w in counts.Keys().AsSlice()) {
+    u64 n = counts.GetOr(w, 0);
+    if (n > most) {
+        most = n;
+        best = w;
+    }
+}
+
+string line = text.Uint(total);
+line.Append(" words, ");
+line.Append(text.Uint(counts.Len() as u64));
+line.Append(" different; the most common is `");
+line.Append(best);
+line.Append("` (");
+line.Append(text.Uint(most));
+line.Append(" times)");
+io.Print(line);

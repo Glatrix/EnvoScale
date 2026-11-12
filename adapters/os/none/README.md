@@ -1,5 +1,12 @@
 # `adapters/os/none`
 
-> **Status:** Not started. Planned for **M4**.
+> **Status:** Experimental (M4). Tests: `adapters/os/none/tests/` and every conformance
+> suite.
 
-Reference adapters with no OS at all: in-memory file system, fixed clock, deterministic entropy for tests, single-threaded executor, captured console. Every port's conformance suite runs against these first; they are also the starting point for bare metal.
+The reference adapters, which need no OS: a captured `Console`, a pass-through
+`Terminal` (the process's own streams), an in-memory `FileSystem`, a manual `Clock`,
+seeded `Entropy` (deterministic, for tests only) and a fixed `Environment`. Every
+port's conformance suite runs against these first. `platform.envo` binds them for
+`envoc --os none`: a program then touches no files, sees a clock standing at
+2026-01-01 00:00 UTC and gets the same random bytes on every run. Its output still goes
+to the real console.

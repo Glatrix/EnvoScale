@@ -144,12 +144,12 @@ resolution and the platform binding follow D21–D25.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [4.1](https://github.com/envoscale/EnvoScale/issues/81) | Library resolution: `--lib`, `use` loads modules by path (D21), `platform` binding and `--os` (D23), the lib→adapters rule in the compiler | `tests/spec/lib/` | |
-| [4.2](https://github.com/envoscale/EnvoScale/issues/82) | `core`: integer formatting and parsing, `str` searching and splitting, math helpers, hashing | `lib/core/tests/` | |
-| [4.3](https://github.com/envoscale/EnvoScale/issues/83) | `alloc`: `Map<K, V>`, `Set<T>`, `Box<T>`, `StringBuilder` | `lib/alloc/tests/` | |
-| [4.4](https://github.com/envoscale/EnvoScale/issues/84) | `ports` and the reference adapters (`os.none`): in-memory file system, captured console, manual clock, seeded entropy, fixed environment | `tests/conformance/` against `os.none` | |
-| [4.5](https://github.com/envoscale/EnvoScale/issues/85) | Native adapters `os.windows` and `os.linux` (D25), Windows import table grown in both stages | `tests/conformance/` against each OS, in CI | |
-| [4.6](https://github.com/envoscale/EnvoScale/issues/86) | `std`: `io`, `fs`, `path`, `time`, `env`, `random`, each with a simple door through `platform` and a full-control door taking the port | `lib/std/tests/` | |
+| [4.1](https://github.com/envoscale/EnvoScale/issues/81) | Library resolution: `--lib`, `use` loads modules by path (D21), `platform` binding and `--os` (D23), the lib→adapters rule in the compiler | `tests/spec/lib/` | done: `--lib`, `--os`, `platform`, E0214, E0215; `use a.b;` names `b` in types too |
+| [4.2](https://github.com/envoscale/EnvoScale/issues/82) | `core`: integer formatting and parsing, `str` searching and splitting, math helpers, hashing | `lib/core/tests/` | done: `core.text`, `core.fmt`, `core.math`, `core.hash` (with `IKey`) |
+| [4.3](https://github.com/envoscale/EnvoScale/issues/83) | `alloc`: `Map<K, V>`, `Set<T>`, `Box<T>`, text helpers | `lib/alloc/tests/` | done: `string` stays the builder; `alloc.text` builds on it |
+| [4.4](https://github.com/envoscale/EnvoScale/issues/84) | `ports` and the reference adapters (`os.none`): in-memory file system, captured console, manual clock, seeded entropy, fixed environment | `tests/conformance/` against `os.none` | done: five ports, five suites |
+| [4.5](https://github.com/envoscale/EnvoScale/issues/85) | Native adapters `os.windows` and `os.linux` (D25), Windows import table grown in both stages | `tests/conformance/` against each OS, in CI | done: KERNEL32 slots 12-18 and ADVAPI32's random generator in both stages; every suite passes natively |
+| [4.6](https://github.com/envoscale/EnvoScale/issues/86) | `std`: `io`, `fs`, `path`, `time`, `env`, `random`, each with a simple door through `platform` and a full-control door taking the port | `lib/std/tests/` | done |
 | [4.7](https://github.com/envoscale/EnvoScale/issues/87) | M4 complete: docs, examples, `STATUS.md` | the whole suite | |
 
 ## 6. Risks

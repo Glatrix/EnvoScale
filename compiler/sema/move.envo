@@ -190,7 +190,8 @@ impl Checker {
             if (cs != 0 && this.SymKind(cs) == SK_ENUM) sum = 0;
             if (cs == 0 && this.NKind(node.A) == NK_NAME) {
                 // of the built-ins, only str_from and slice_from make views (of their pointer)
-                u32 b = this.Lookup(this.NTok(node.A));
+                u32 b = this.NSym(node.A);
+                if (b == 0) b = this.Lookup(this.NTok(node.A));
                 sum = 0;
                 if (b != 0 && this.SymKind(b) == SK_BUILTIN) {
                     u32 id = this.SymAt(b).Aux2;

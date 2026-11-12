@@ -98,12 +98,34 @@ string ModuleFile(str root, str ns, str os) {
     return p;
 }
 
-// Is path a file of the standard platform: under root's lib/ folder?
+// path with `\` as `/`, so paths compare the same on every host.
+string Slashes(str path) {
+    string r = string.New();
+    for (usize i = 0; i < path.Len; i++) {
+        if (path[i] == 0x5C) r.AppendByte('/');
+        else r.AppendByte(path[i]);
+    }
+    return r;
+}
+
+// Is path a module of the standard platform: under root's lib/ folder, and not in a
+// tests/ folder (a library's tests may use the reference adapters directly)?
 bool InLib(str root, str path) {
-    string prefix = string.From(root);
-    if (prefix.Len() > 0 && prefix.AsStr()[prefix.Len() - 1] != '/' && prefix.AsStr()[prefix.Len() - 1] != 0x5C) prefix.AppendByte('/');
+    string prefix = Slashes(root);
+    if (prefix.Len() > 0 && prefix.AsStr()[prefix.Len() - 1] != '/') prefix.AppendByte('/');
     prefix.Append("lib/");
-    return StartsWith(path, prefix.AsStr());
+    string p = Slashes(path);
+    if (!StartsWith(p.AsStr(), prefix.AsStr())) return false;
+    str rest = p.AsStr()[prefix.Len()..p.Len()];
+    str tests = "/tests/";
+    for (usize i = 0; i + tests.Len <= rest.Len; i++) {
+        bool hit = true;
+        for (usize k = 0; k < tests.Len && hit; k++) {
+            if (rest[i + k] != tests[k]) hit = false;
+        }
+        if (hit) return false;
+    }
+    return true;
 }
 
 // Loads the library modules the files in src use, transitively (D21, D23).

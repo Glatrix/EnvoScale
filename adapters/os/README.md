@@ -1,5 +1,9 @@
 # OS adapters
 
-> **Status:** Container folder; see each OS.
+> **Status:** `none`, `windows` and `linux` implement M4's ports: Console, FileSystem,
+> Clock, Entropy and Environment. See
+> [`docs/architecture/library.md`](../../docs/architecture/library.md).
 
-Implementations of the OS-level ports (`FileSystem`, `Console`, `Clock`, `Threads`, `Entropy`, `Executor`, `NetStack`) for one operating system each.
+One folder per operating system. Each holds the adapters (`<os>.envo`, namespace
+`os.<os>`) and the `platform` binding (`platform.envo`) that `envoc --lib` loads for the
+target, or for `--os none`. Threads, executors and networking come with M6 and M7.
