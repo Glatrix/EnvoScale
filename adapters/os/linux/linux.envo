@@ -9,7 +9,6 @@ use core.text as ct;
 use alloc.text;
 use os.linux.sys;
 
-
 const i64 O_WRONLY = 1;
 const i64 O_CREAT = 0x40;
 const i64 O_TRUNC = 0x200;
@@ -447,7 +446,6 @@ impl IProcess for Process {
 public i64 SysCall(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __syscall(n, a, b, c, d, e, f);
 
 // ------------------------------------------------------------------ network
-
 
 // The IoError for a negative errno from a socket call.
 IoError NetErrorOf(i64 r) {
