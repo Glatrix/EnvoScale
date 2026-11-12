@@ -1,0 +1,6 @@
+// expect-error: E0504 @ 5:5
+// [own.borrow.3] a view of a local array cannot leave the function
+i64[] Make() {
+    i64[4] a;
+    return a[0..2];
+}

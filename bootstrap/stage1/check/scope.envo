@@ -203,6 +203,7 @@ void BufType(*Buf b, *Checker c, u32 t) {
         BufByte(b, '*');
         BufType(b, c, ty.Elem);
     } else if (ty.Kind == TYK_SLICE) {
+        if (ty.Count == 1) BufStr(b, "mut ");
         BufType(b, c, ty.Elem);
         BufStr(b, "[]");
     } else if (ty.Kind == TYK_ARRAY) {
@@ -488,6 +489,13 @@ void InitScope(*Checker c) {
     AddBuiltin(c, "panic", B_PANIC, T_VOID, 1, T_STR, 0, 0);
     AddBuiltin(c, "str_from", B_STR_FROM, T_STR, 2, T_PTR_U8, T_USIZE, 0);
     if (!CCore(c)) {
+        // the Envo-S1 built-ins (envo-s1.md section 7); a program's own items hide them
+        AddBuiltin(c, "free", B_FREE, T_VOID, 1, T_PTR_U8, 0, 0);
+        MarkLastPrelude(c);
+        AddBuiltin(c, "slice_from", B_SLICE_FROM, 0, 2, T_PTR_U8, T_USIZE, 0);
+        MarkLastPrelude(c);
+        AddBuiltin(c, "slice_from_mut", B_SLICE_FROM_MUT, 0, 2, T_PTR_U8, T_USIZE, 0);
+        MarkLastPrelude(c);
         // `Copy`, the automatic interface ([type.copy.1]); a program's own `Copy` hides it
         u32 s = SymNew(c, SK_IFACE, 0);
         unsafe {
@@ -505,6 +513,14 @@ void InitScope(*Checker c) {
         // target intrinsics for the runtime's OS layer (docs/architecture/stage1.md)
         AddBuiltinN(c, "__syscall", B_SYSCALL, T_I64, 7, T_I64);
         AddBuiltinN(c, "__wincall", B_WINCALL, T_I64, 9, T_I64);
+    }
+}
+
+// The symbol just added is a prelude item, hidden by a program's own item of its name.
+void MarkLastPrelude(*Checker c) {
+    unsafe {
+        u32 s = (VecLen(&c.Syms) - 1) as u32;
+        SymPtr(c, s).Flags = SymGet(c, s).Flags | SF_PRELUDE;
     }
 }
 

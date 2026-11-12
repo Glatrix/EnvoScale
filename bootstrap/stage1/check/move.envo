@@ -28,6 +28,9 @@ struct MoveCx {
     u32 Caps;       // in a lambda body: its captures (in Checker.Captures)
     u32 NCaps;
     Vec Frozen;     // u32 locals that a match arm's bindings borrow: no changes or moves
+    Vec Viewed;     // u32 local arrays a kept view borrows, from there on (check/views.envo)
+    Vec ViewLocals; // u32 pairs (local, the local array its view borrows)
+    u32 DirectArg;  // the argument node being checked as a call's direct argument
 }
 
 MoveSnap SnapNew() {
@@ -102,6 +105,8 @@ MoveCx MoveCxNew() {
     x.St = SnapNew();
     x.Loops = VecNew(sizeof(LoopFrame), 4);
     x.Frozen = VecNew(4, 4);
+    x.Viewed = VecNew(4, 4);
+    x.ViewLocals = VecNew(4, 4);
     return x;
 }
 
@@ -110,15 +115,99 @@ bool IsFrozen(*MoveCx x, u32 s) {
         for (usize i = 0; i < VecLen(&x.Frozen); i++) {
             if (MemLoadU32(VecAt(&x.Frozen, i)) == s) return true;
         }
+        for (usize i = 0; i < VecLen(&x.Viewed); i++) {
+            if (MemLoadU32(VecAt(&x.Viewed, i)) == s) return true;
+        }
     }
     return false;
+}
+
+// The local array whose storage the value of expression e may view ([expr.slice.4]), or 0.
+u32 ViewOfLocal(*Checker c, *MoveCx x, u32 e) {
+    if (e == 0) return 0;
+    Node node = CNode(c, e);
+    u16 k = node.Kind;
+    if (k == NK_LAMBDA) {
+        u64 cv = NValue(c, e);
+        u32 first = (cv & 0xFFFFFFFF) as u32;
+        u32 count = (cv >> 32) as u32;
+        for (u32 i = 0; i < count; i++) {
+            u32 r = ViewLocalOf(x, CaptureAt(c, first + i));
+            if (r != 0) return r;
+        }
+        return 0;
+    }
+    if (!HoldsBorrow(c, NType(c, e))) return 0;
+    if (IsSlicing(c, e)) {
+        if (TyKind(c, NType(c, node.A)) == TYK_ARRAY) {
+            u32 root = PlaceRoot(c, node.A);
+            if (root != 0 && NSym(c, root) != 0 && SymGet(c, NSym(c, root)).Kind == SK_LOCAL && SymGet(c, NSym(c, root)).Flags & SF_BYREF == 0) return NSym(c, root);
+            return 0;
+        }
+        return ViewOfLocal(c, x, node.A);
+    }
+    if (k == NK_NAME || k == NK_THIS) return ViewLocalOf(x, NSym(c, e));
+    if (k == NK_MEMBER || k == NK_INDEX || k == NK_CAST || k == NK_TRY) return ViewOfLocal(c, x, node.A);
+    if (k == NK_COND) {
+        u32 r = ViewOfLocal(c, x, node.B);
+        if (r != 0) return r;
+        return ViewOfLocal(c, x, node.C);
+    }
+    if (k == NK_CALL) {
+        if (NKind(c, node.A) == NK_MEMBER) {
+            u32 r = ViewOfLocal(c, x, CNode(c, node.A).A);
+            if (r != 0) return r;
+        }
+        u32 a = node.B;
+        while (a != 0) {
+            u32 r = ViewOfLocal(c, x, a);
+            if (r != 0) return r;
+            a = CNode(c, a).Next;
+        }
+        return 0;
+    }
+    if (k == NK_NEW) {
+        u32 init = node.B;
+        while (init != 0) {
+            u32 r = ViewOfLocal(c, x, CNode(c, init).A);
+            if (r != 0) return r;
+            init = CNode(c, init).Next;
+        }
+    }
+    return 0;
+}
+
+u32 ViewLocalOf(*MoveCx x, u32 s) {
+    unsafe {
+        for (usize i = 0; i < VecLen(&x.ViewLocals); i += 2) {
+            if (MemLoadU32(VecAt(&x.ViewLocals, i)) == s) return MemLoadU32(VecAt(&x.ViewLocals, i + 1));
+        }
+    }
+    return 0;
+}
+
+// A value kept in local s: if it views a local array, s does too.
+void KeepView(*Checker c, *MoveCx x, u32 s, u32 e) {
+    u32 r = ViewOfLocal(c, x, e);
+    if (r == 0 || s == 0) return;
+    unsafe {
+        MemStoreU32(VecPush(&x.ViewLocals), s);
+        MemStoreU32(VecPush(&x.ViewLocals), r);
+    }
+}
+
+// A value that leaves the function (returned, or stored outside its locals) may not view
+// one of its local arrays ([own.borrow.3]: the array is dropped while borrowed).
+void ViewEscapes(*Checker c, *MoveCx x, u32 e, u32 tok) {
+    u32 r = ViewOfLocal(c, x, e);
+    if (r != 0) BorrowError(c, tok, r, E_MOVED_WHILE_BORROWED, "` is dropped when this function returns, but a view of it would outlive it");
 }
 
 // A change to place n (assignment, `++`, `ref`): not while a binding borrows its local.
 void MvMutate(*Checker c, *MoveCx x, u32 n) {
     u32 root = PlaceRoot(c, n);
     if (root == 0 || NSym(c, root) == 0) return;
-    if (IsFrozen(x, NSym(c, root))) BorrowError(c, NTok(c, root), NSym(c, root), E_BORROW_CONFLICT, "` is borrowed by a binding of this `match` arm, so it cannot change here");
+    if (IsFrozen(x, NSym(c, root))) BorrowError(c, NTok(c, root), NSym(c, root), E_BORROW_CONFLICT, "` is borrowed here (by a view, a `foreach` element or a `match` binding), so it cannot change");
 }
 
 // A `match` in Envo-S1 form ([s1.expr.1]): a temporary scrutinee is taken; an arm whose
@@ -254,7 +343,7 @@ void UseLocal(*Checker c, *MoveCx x, u32 n, u32 s, bool move) {
         }
     }
     if (!move || IsCopy(c, sym.Type)) return;
-    if (IsFrozen(x, s)) BorrowError(c, tok, s, E_MOVED_WHILE_BORROWED, "` is moved while a binding of this `match` arm borrows it");
+    if (IsFrozen(x, s)) BorrowError(c, tok, s, E_MOVED_WHILE_BORROWED, "` is moved while it is borrowed (by a view, a `foreach` element or a `match` binding)");
     if (sym.Flags & SF_BYREF != 0) MoveOutOfBorrow(c, tok, "", s, ", which is borrowed; borrow it or clone it instead");
     if (IsCapture(c, x, s)) MoveOutOfBorrow(c, tok, "", s, ", which this lambda captures");
     PlaceSet(x, s, 0, MS_MOVED);
@@ -334,6 +423,23 @@ void MvExpr(*Checker c, *MoveCx x, u32 n, bool move) {
         if (move && !IsCopy(c, NType(c, n)) && TyKind(c, NType(c, node.A)) != TYK_PTR) {
             MoveOutOfBorrow(c, node.Tok, "a field of a temporary or an element", 0, "; move the whole value");
         }
+        return;
+    }
+    if (k == NK_RANGE) {
+        MvExpr(c, x, node.A, false);
+        MvExpr(c, x, node.B, false);
+        return;
+    }
+    if (IsSlicing(c, n)) {
+        // a view borrows the sliced storage; one kept past this call freezes a local array,
+        // and an exclusive view changes it
+        if (IsMutView(c, NType(c, n))) MvMutate(c, x, node.A);
+        MvExpr(c, x, node.A, false);
+        MvExpr(c, x, node.B, false);
+        u32 r = ViewOfLocal(c, x, n);
+        bool direct;
+        unsafe { direct = x.DirectArg == n; }
+        if (r != 0 && !direct && !IsFrozen(x, r)) unsafe { MemStoreU32(VecPush(&x.Viewed), r); }
         return;
     }
     if (k == NK_INDEX) {
@@ -422,7 +528,16 @@ void MvCall(*Checker c, *MoveCx x, u32 n) {
         u32 p = FirstParam(c, cs);
         while (a != 0) {
             if (CNode(c, p).Flags & NF_REF != 0) MvMutate(c, x, a);
-            MvExpr(c, x, a, CNode(c, p).Flags & (NF_IN | NF_REF) == 0);
+            bool take = CNode(c, p).Flags & (NF_IN | NF_REF) == 0;
+            // [view.4] a `mut T[]` passed to a `mut T[]` parameter is reborrowed
+            if (IsMutView(c, NType(c, p)) && IsMutView(c, NType(c, a))) take = false;
+            u32 outer;
+            unsafe {
+                outer = x.DirectArg;
+                x.DirectArg = a;
+            }
+            MvExpr(c, x, a, take);
+            unsafe { x.DirectArg = outer; }
             a = CNode(c, a).Next;
             p = CNode(c, p).Next;
         }
@@ -522,7 +637,12 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
     }
     if (k == NK_RETURN) {
         MvExpr(c, x, node.A, true);
+        ViewEscapes(c, x, node.A, node.Tok);
         unsafe { x.St = SnapDead(); }
+        return;
+    }
+    if (k == NK_FOREACH) {
+        MvForeach(c, x, n);
         return;
     }
     if (k == NK_MATCH && NValue(c, n) != 0) {
@@ -549,6 +669,7 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
         MvExpr(c, x, node.B, true);
         u32 s = NSym(c, n);
         if (s != 0) PlaceReset(x, s);
+        KeepView(c, x, s, node.B);
         return;
     }
     if (k == NK_EXPR) {
@@ -563,8 +684,14 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
         u16 tk = NKind(c, target);
         if (plain && (tk == NK_NAME || tk == NK_THIS) && NSym(c, target) != 0 && SymGet(c, NSym(c, target)).Kind == SK_LOCAL) {
             PlaceReset(x, NSym(c, target));
+            if (SymGet(c, NSym(c, target)).Flags & SF_BYREF != 0) ViewEscapes(c, x, node.B, node.Tok);
+            else KeepView(c, x, NSym(c, target), node.B);
             return;
         }
+        // stored somewhere that may outlive the function
+        u32 vroot = PlaceRoot(c, target);
+        if (vroot == 0 || NSym(c, vroot) == 0 || SymGet(c, NSym(c, vroot)).Kind != SK_LOCAL || SymGet(c, NSym(c, vroot)).Flags & SF_BYREF != 0) ViewEscapes(c, x, node.B, node.Tok);
+        else KeepView(c, x, NSym(c, vroot), node.B);
         u32 top = 0;
         u32 s;
         unsafe { s = MemberRoot(c, target, &top); }
@@ -583,6 +710,25 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
     MvExpr(c, x, node.A, false);
 }
 
+// foreach: the sequence is read (a borrowed element freezes a local sequence during the
+// loop), then the body runs like a `while` that may stop before any iteration.
+void MvForeach(*Checker c, *MoveCx x, u32 n) {
+    Node node = CNode(c, n);
+    MvExpr(c, x, node.B, false);
+    u32 root = 0;
+    if (NSym(c, node.A) != 0 && SymGet(c, NSym(c, node.A)).Flags & SF_BYREF != 0) {
+        root = PlaceRoot(c, node.B);
+        if (root != 0) root = NSym(c, root);
+    }
+    unsafe {
+        if (root != 0) MemStoreU32(VecPush(&x.Frozen), root);
+    }
+    MvLoopParts(c, x, 0, node.C, 0, false);
+    unsafe {
+        if (root != 0) VecPop(&x.Frozen);
+    }
+}
+
 // while / for: the body runs from the join of the entry and every way back to the head,
 // until that join stops changing (states only grow, so this ends).
 void MvLoop(*Checker c, *MoveCx x, u32 n) {
@@ -590,16 +736,22 @@ void MvLoop(*Checker c, *MoveCx x, u32 n) {
     bool isFor = node.Kind == NK_FOR;
     u32 cond = node.A;
     u32 body = node.B;
+    u32 step = 0;
     if (isFor) {
         cond = node.B;
         body = node.D;
+        step = node.C;
     }
+    // `while (true)` and `for (;;)` leave only through `break`
+    bool forever = cond == 0 || (NKind(c, cond) == NK_BOOL && StrEq(TokText(c, NTok(c, cond)), "true"));
+    MvLoopParts(c, x, cond, body, step, forever);
+}
+
+void MvLoopParts(*Checker c, *MoveCx x, u32 cond, u32 body, u32 step, bool forever) {
     unsafe {
         MoveSnap entry = SnapCopy(x.St);
         MoveSnap head = SnapCopy(entry);
         MoveSnap exit = SnapDead();
-        // `while (true)` and `for (;;)` leave only through `break`
-        bool forever = cond == 0 || (NKind(c, cond) == NK_BOOL && StrEq(TokText(c, NTok(c, cond)), "true"));
         for (u32 round = 0; round < 8; round++) {
             x.St = SnapCopy(head);
             if (cond != 0) MvExpr(c, x, cond, false);
@@ -613,7 +765,7 @@ void MvLoop(*Checker c, *MoveCx x, u32 n) {
             LoopFrame done = *(VecAt(&x.Loops, VecLen(&x.Loops) - 1) as *LoopFrame);
             VecPop(&x.Loops);
             x.St = SnapJoin(x.St, done.Cont);
-            if (isFor && node.C != 0) MvStmt(c, x, node.C);
+            if (step != 0) MvStmt(c, x, step);
             exit = SnapJoin(exit, done.Brk);
             MoveSnap next = SnapJoin(entry, x.St);
             if (SnapEq(next, head)) break;

@@ -103,6 +103,10 @@ void LowerStmt(*Lower l, u32 n) {
         LowerReturnValue(l, node.A);
         return;
     }
+    if (k == NK_FOREACH) {
+        LowerForeach(l, n);
+        return;
+    }
     if (k == NK_MATCH) {
         if (NValue(c, n) != 0) LowerMatchS1(l, n, false);     // the Envo-S1 form
         else LowerMatch(l, n);

@@ -81,6 +81,7 @@ u32 LowerExpr(*Lower l, u32 n) {
         }
         return LoadPlace(l, t, LowerPlace(l, n));
     }
+    if (k == NK_INDEX && NKind(c, node.B) == NK_RANGE) return LowerSlice(l, n, t);
     if (k == NK_INDEX) return LoadPlace(l, t, LowerPlace(l, n));
     if (k == NK_UNARY) {
         u16 op = node.Op;
@@ -357,7 +358,8 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     Sym sym = SymGet(c, s);
     Vec args = VecNew(4, 8);
     u32 retTmp = 0;
-    bool inline = sym.Kind == SK_BUILTIN && (sym.Aux2 == B_STR_FROM || sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL);
+    bool fromParts = sym.Kind == SK_BUILTIN && (sym.Aux2 == B_STR_FROM || sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT);
+    bool inline = fromParts || (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL));
     if (IsAggregate(l, t) && !inline) {
         retTmp = LSlot(l, LType(l, t));
         unsafe { MemStoreU32(VecPush(&args), retTmp); }
@@ -378,7 +380,7 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     }
     u32 f = 0;
     if (sym.Kind == SK_BUILTIN) {
-        if (sym.Aux2 == B_STR_FROM) {
+        if (fromParts) {
             u32 st = StrTypeOf(l);
             u32 tmp = LSlot(l, st);
             unsafe {

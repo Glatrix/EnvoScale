@@ -16,7 +16,8 @@ bool IsPreludeNode(*Checker c, u32 n) {
 bool IsCopy(*Checker c, u32 t) {
     Type ty = TypeGet(c, t);
     u8 k = ty.Kind;
-    if (k == TYK_BOOL || k == TYK_INT || k == TYK_STR || k == TYK_PTR || k == TYK_ENUM || k == TYK_SLICE) return true;
+    if (k == TYK_BOOL || k == TYK_INT || k == TYK_STR || k == TYK_PTR || k == TYK_ENUM) return true;
+    if (k == TYK_SLICE) return ty.Count == 0;      // a `mut T[]` is exclusive ([view.1])
     if (k == TYK_ARRAY) return IsCopy(c, ty.Elem);
     if (k == TYK_PARAM) {
         u32 copy;

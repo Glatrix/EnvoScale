@@ -1,0 +1,5 @@
+// expect-error: E0315 @ 4:11
+// [view.5] a `T[]` is read-only
+void Zero(i64[] xs) {
+    xs[0] = 0;
+}

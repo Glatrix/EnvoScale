@@ -1,0 +1,6 @@
+// expect-error: E0315 @ 5:10
+// [view.3] an exclusive view needs a place that may change
+void Take(mut i64[] xs) { }
+void F(i64[] xs) {
+    Take(xs[0..1]);
+}

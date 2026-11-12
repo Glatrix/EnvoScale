@@ -1,0 +1,6 @@
+// expect-error: E0501 @ 5:5
+// [view.1] a `mut T[]` is moved by assignment
+void F(mut i64[] xs) {
+    mut i64[] ys = xs;
+    xs[0] = 1;
+}

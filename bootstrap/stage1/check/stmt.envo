@@ -90,7 +90,7 @@ bool CheckStmt(*Checker c, u32 n) {
         return true;
     }
     if (k == NK_MATCH) return CheckMatch(c, n);
-    if (k == NK_FOREACH) CNotYet(c, "`foreach`", node.Tok);
+    if (k == NK_FOREACH) return CheckForeach(c, n);
     return CheckSimple(c, n);
 }
 
@@ -301,6 +301,7 @@ bool PlaceCheck(*Checker c, u32 n, bool assign) {
         u8 k = TyKind(c, NType(c, node.A));
         if (k == TYK_ARRAY) return PlaceCheck(c, node.A, assign);
         if (k == TYK_PTR) return true;
+        if (k == TYK_SLICE && TypeGet(c, NType(c, node.A)).Count == 1) return true;     // `mut T[]`
         return !assign;     // &s[i] of a slice or str is fine
     }
     return node.Kind == NK_UNARY && node.Op == TK_STAR;

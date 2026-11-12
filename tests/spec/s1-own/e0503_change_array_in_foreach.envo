@@ -1,0 +1,10 @@
+// expect-error: E0503 @ 9:5
+// [s1.stmt.1] a borrowed element's sequence cannot change in the loop
+struct Job { fn() Run; }
+void Hi() => print("hi");
+Job[2] jobs;
+jobs[0].Run = Hi;
+jobs[1].Run = Hi;
+foreach (var j in jobs) {
+    jobs[0].Run = Hi;
+}

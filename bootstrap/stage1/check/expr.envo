@@ -153,6 +153,7 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
     if (k == NK_RANGE) CNotYet(c, "ranges and slicing", node.Tok);
     if (k == NK_MATCH) return CheckMatchS1(c, n, CheckValue(c, node.A, 0), expected, true);
     if (k == NK_BINARY && node.Op == TK_QQ) return CheckCoalesce(c, n, expected);
+    if (k == NK_INDEX && !CCore(c) && NKind(c, node.B) == NK_RANGE) return CheckSlice(c, n, expected);
     if (k == NK_INDEX) {
         u32 objType = CheckValue(c, node.A, 0);
         Type obj = TypeGet(c, objType);
@@ -277,9 +278,11 @@ u32 CheckCall(*Checker c, u32 n, u32 expected) {
     if (sym.Kind != SK_FN && sym.Kind != SK_BUILTIN) CError(c, E_NOT_CALLABLE, node.Tok);
     u32 typeArgs = CNode(c, node.A).E;
     if (sym.Kind == SK_FN && !CCore(c)) return CheckCallTo(c, n, s, 0, typeArgs, calleeTok);
-    if (typeArgs != 0) TypeArgCount(c, calleeTok, 0, ListCount(c, typeArgs));
+    if (typeArgs != 0 && !(sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT))) TypeArgCount(c, calleeTok, 0, ListCount(c, typeArgs));
     // str_from vouches for raw memory
     if (sym.Kind == SK_BUILTIN && sym.Aux2 == B_STR_FROM) NeedsUnsafe(c, n);
+    if (sym.Kind == SK_BUILTIN && sym.Aux2 == B_FREE) NeedsUnsafe(c, n);
+    if (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT)) return CheckSliceFrom(c, n, sym.Aux2 == B_SLICE_FROM_MUT);
     // [core.expr.8] count the arguments first
     u32 count = 0;
     u32 a = node.B;

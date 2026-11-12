@@ -1,0 +1,4 @@
+// expect-error: E0302 @ 4:19
+// [s1.stmt.1] foreach needs an array, a view, a `str` or a range
+i64 n = 3;
+foreach (var x in n) print("x");

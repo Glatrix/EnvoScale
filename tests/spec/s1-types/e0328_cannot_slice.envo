@@ -1,0 +1,4 @@
+// expect-error: E0328 @ 4:10
+// [expr.slice.1] only arrays, views and `str` are sliced
+i64 n = 5;
+var s = n[0..1];

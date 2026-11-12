@@ -1,0 +1,7 @@
+// expect-error: E0504 @ 6:13
+// [own.borrow.3] nor can it be stored outside the function
+struct Holder { i64[] Items; }
+void Fill(ref Holder h) {
+    i64[2] a;
+    h.Items = a[..];
+}

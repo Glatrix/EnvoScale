@@ -1,0 +1,7 @@
+// expect-error: E0504 @ 6:5
+// [own.borrow.3] nor can a local holding such a view
+i64[] Make() {
+    i64[4] a;
+    i64[] v = a[1..];
+    return v;
+}

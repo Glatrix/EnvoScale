@@ -98,6 +98,9 @@ const u32 B_PANIC = 10;
 const u32 B_STR_FROM = 11;
 const u32 B_SYSCALL = 12;
 const u32 B_WINCALL = 13;
+const u32 B_FREE = 14;              // Envo-S1 built-ins (envo-s1.md section 7)
+const u32 B_SLICE_FROM = 15;
+const u32 B_SLICE_FROM_MUT = 16;
 
 const u64 MAX_TYPE_SIZE = 0x7FFFFFFF;
 
@@ -134,6 +137,8 @@ const u32 E_VOID_VALUE = 322;
 const u32 E_DUPLICATE_VALUE = 323;
 const u32 E_BAD_REPR = 324;
 const u32 E_VOID_TYPE = 327;
+const u32 E_CANNOT_SLICE = 328;
+const u32 E_SLICE_TEMP = 329;
 const u32 E_LAMBDA_INFER = 330;
 const u32 E_LAMBDA_KIND = 331;
 const u32 E_MUT_FN_SHARED = 332;
@@ -176,6 +181,7 @@ str CheckMessage(u32 code) {
         E_BAD_REPR => { return "enum representation must be an integer type"; }
         E_VOID_TYPE => { return "`void` is only allowed as a return type"; }
         E_BAD_THIS => { return "`this` is only allowed as the first parameter of a method"; }
+        E_SLICE_TEMP => { return "cannot slice a temporary array; store it in a variable first"; }
         E_INST_TOO_DEEP => { return "generic instantiation too deep"; }
         _ => { return "?"; }
     }

@@ -101,6 +101,8 @@ bool Assignable(*Checker c, u32 got, u32 want) {
     if (got == want) return true;
     Type g = TypeGet(c, got);
     Type w = TypeGet(c, want);
+    // `mut T[]` is also a `T[]` ([view.5])
+    if (g.Kind == TYK_SLICE && w.Kind == TYK_SLICE && g.Count == 1 && w.Count == 0 && g.Elem == w.Elem) return true;
     if (g.Kind != TYK_FN || w.Kind != TYK_FN) return false;
     if (g.Count > w.Count || g.Elem != w.Elem || g.NArgs != w.NArgs) return false;
     for (u32 i = 0; i < g.NArgs; i++) {

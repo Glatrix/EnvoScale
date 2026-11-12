@@ -423,6 +423,10 @@ void OriginStmt(*Checker c, *OriginCx x, u32 n) {
         return;
     }
     if (k == NK_EXPR) unsafe { OriginOf(c, x, node.A); }
+    if (k == NK_FOREACH) {
+        unsafe { AddLocalOrigins(x, NSym(c, node.A), OriginOf(c, x, node.B)); }
+        OriginStmt(c, x, node.C);
+    }
 }
 
 // A match: its bindings carry the scrutinee's origins; an expression match's value, those

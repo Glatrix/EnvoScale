@@ -138,11 +138,13 @@ u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
     u32 t = 0;
     if (node.Kind == NK_TOPT) return OptionOf(c, ResolveType(c, node.A, false), node.Tok);
     if (node.Kind == NK_TFN) return ResolveFnType(c, n);
-    if (node.Kind == NK_TSLICE && node.Flags & NF_MUT != 0) CNotYet(c, "`mut` views", node.Tok);
+
     if (node.Kind == NK_TPTR) {
         t = TypePtrTo(c, ResolveType(c, node.A, false));
     } else if (node.Kind == NK_TSLICE) {
-        t = TypeDerived(c, TYK_SLICE, ResolveType(c, node.A, false), 0);
+        u32 mutable = 0;
+        if (node.Flags & NF_MUT != 0) mutable = 1;      // `mut T[]` ([view.1])
+        t = TypeDerived(c, TYK_SLICE, ResolveType(c, node.A, false), mutable);
     } else if (node.Kind == NK_TARRAY) {
         u32 elem = ResolveType(c, node.A, false);
         u32 countNode = node.B;

@@ -1,0 +1,4 @@
+// expect-error: E0301 @ 4:11
+// [expr.slice.1] slice bounds are integers
+i64[3] a;
+var s = a[true..2];

@@ -1,0 +1,4 @@
+// expect-error: E0306 @ 4:19
+// [expr.slice.5] `slice_from` needs `unsafe`
+i64[2] a;
+var s = slice_from(&a[0], 2);

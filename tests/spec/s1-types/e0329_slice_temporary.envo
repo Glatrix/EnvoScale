@@ -1,0 +1,7 @@
+// expect-error: E0329 @ 7:15
+// [expr.slice.4] a temporary array cannot be sliced
+i64[3] Make() {
+    i64[3] a;
+    return a;
+}
+var s = Make()[0..2];
