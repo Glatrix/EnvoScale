@@ -23,6 +23,10 @@ it.
 
 IPv6, UDP for programs, timeouts and non-blocking sockets come later.
 
+`ports.ITrust` gives the system's trust anchors as DER: `os.windows` reads the ROOT and
+AuthRoot stores, `os.linux` the first CA bundle among the usual places, `os.none` the
+certificates added with `Add`.
+
 ## HTTP (D42)
 
 [`lib/envo/http`](../../lib/envo/http/README.md): HTTP/1.1 messages, a client
@@ -31,4 +35,9 @@ connection.
 
 ## TLS (D41)
 
-Planned in M7.7: a TLS 1.3 client with certificate verification, under `https://`.
+[`lib/envo/tls`](../../lib/envo/tls/README.md): a TLS 1.3 client, X25519 with
+ChaCha20-Poly1305 or AES-128-GCM, verifying the server's chain, name, CertificateVerify
+and Finished before any data; `https://` in `envo.http` goes through it. Trust anchors
+come from `SSL_CERT_FILE` or the `ITrust` port: the Windows ROOT and AuthRoot stores
+(`CRYPT32.dll`, the executable's fourth imported DLL, slots 47–49, in both stages) and
+the Linux CA bundle. `tests/tls` checks it against `openssl s_server`.

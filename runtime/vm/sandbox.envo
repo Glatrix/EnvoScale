@@ -15,6 +15,7 @@
 namespace envo.vm;
 
 use envoc.util;
+use core.text as ct;
 
 const u32 CAP_READ = 0;
 const u32 CAP_WRITE = 1;
@@ -166,7 +167,7 @@ public struct Sandbox {
         // the environment comes from /proc/self/environ
         if (Same(path.AsStr(), "/proc/self/environ")) return this.May(CAP_ENV, "");
         // name lookup reads these: it comes with the network
-        if ((Same(path.AsStr(), "/etc/hosts") || Same(path.AsStr(), "/etc/resolv.conf")) && this.Quietly(CAP_NET, "")) return true;
+        if ((Same(path.AsStr(), "/etc/hosts") || Same(path.AsStr(), "/etc/resolv.conf") || ct.StartsWith(path.AsStr(), "/etc/ssl/") || ct.StartsWith(path.AsStr(), "/etc/pki/")) && this.Quietly(CAP_NET, "")) return true;
         bool writes = flags & 3 != 0 || flags & 0x40 != 0 || flags & 0x200 != 0;    // O_WRONLY/O_RDWR, O_CREAT, O_TRUNC
         if (writes && !this.May(CAP_WRITE, path.AsStr())) return false;
         if (flags & 3 != 1 && !this.May(CAP_READ, path.AsStr())) return false;

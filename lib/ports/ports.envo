@@ -115,3 +115,9 @@ public interface INet {
     // Closes a connection or listening socket.
     void Close(ref this, i64 handle);
 }
+
+// The certificates the system trusts as roots, for TLS (PLAN D41).
+public interface ITrust {
+    // The DER of each trusted root certificate.
+    List<List<u8>> Roots(ref this);
+}

@@ -4,7 +4,7 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -551,6 +551,9 @@ public i64 WinCall(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h
         43 => { return __wincall(43, a, b, c, d, e, f, g, h, i, j); }
         44 => { return __wincall(44, a, b, c, d, e, f, g, h, i, j); }
         45 => { return __wincall(45, a, b, c, d, e, f, g, h, i, j); }
+        47 => { return __wincall(47, a, b, c, d, e, f, g, h, i, j); }
+        48 => { return __wincall(48, a, b, c, d, e, f, g, h, i, j); }
+        49 => { return __wincall(49, a, b, c, d, e, f, g, h, i, j); }
         _ => { return -1; }
     }
 }
@@ -760,5 +763,53 @@ impl INet for Net {
 
     void Close(ref this, i64 handle) {
         Call(W_CLOSESOCKET, handle, 0, 0, 0, 0, 0);
+    }
+}
+
+// ------------------------------------------------------------------ trust
+
+const i64 W_CERTOPENSYSTEMSTOREW = 47;
+const i64 W_CERTENUMCERTIFICATESINSTORE = 48;
+const i64 W_CERTCLOSESTORE = 49;
+
+// The certificates in the system's ROOT and AuthRoot stores (CRYPT32.dll).
+public struct Trust {
+    u8 Unused;
+
+    public static Trust New() => new Trust { Unused = 0 };
+}
+
+impl ITrust for Trust {
+    List<List<u8>> Roots(ref this) {
+        List<List<u8>> all = List<List<u8>>.New();
+        // ROOT holds the roots in use; AuthRoot those Windows distributes, which it adds
+        // to ROOT only when one is first needed
+        AddStore(ref all, "ROOT");
+        AddStore(ref all, "AuthRoot");
+        return all;
+    }
+}
+
+void AddStore(ref List<List<u8>> all, str storeName) {
+    {
+        *u8 name = Wide(storeName);
+        i64 store = Call(W_CERTOPENSYSTEMSTOREW, 0, Ptr(name), 0, 0, 0, 0);
+        if (store == 0) return;
+        i64 ctx = 0;
+        while (true) {
+            ctx = Call(W_CERTENUMCERTIFICATESINSTORE, store, ctx, 0, 0, 0, 0);
+            if (ctx == 0) break;
+            unsafe {
+                // CERT_CONTEXT: the encoding type, then the DER and its length
+                *u8 c = ctx as isize as *u8;
+                *u64 fields = c as *u64;
+                *u8 der = fields[1] as usize as *u8;
+                u32 len = (c as *u32)[4];
+                List<u8> one = List<u8>.New();
+                for (usize i = 0; i < len as usize; i++) one.Push(der[i]);
+                all.Push(one);
+            }
+        }
+        Call(W_CERTCLOSESTORE, store, 0, 0, 0, 0, 0);
     }
 }

@@ -85,7 +85,8 @@ executables stay byte-identical:
 - slot 28 ends KERNEL32's;
 - slot 29 is ADVAPI32's `SystemFunction036` (RtlGenRandom), the system's random
   generator, and slot 30 ends it;
-- M7 (D40) added WS2_32's Winsock functions at slots 31–45, ended by slot 46
+- M7 (D40) added WS2_32's Winsock functions at slots 31–45, ended by slot 46, and
+  (D41) CRYPT32's certificate store functions at slots 47–49, ended by slot 50
   ([`network.md`](network.md)).
 
 `__wincall` takes the slot and up to 10 arguments (`CreateProcessW` has 10).

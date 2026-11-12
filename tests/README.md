@@ -8,6 +8,7 @@
 | [`envo/`](envo/README.md) | The `envo` tool's commands, end to end | `bootstrap.* test` |
 | [`lsp/`](lsp/README.md) | A scripted language-server session | `bootstrap.* test` |
 | [`sandbox/`](sandbox/README.md) | Script permissions (`--allow`) | `bootstrap.* test` |
+| [`tls/`](tls/README.md) | The TLS 1.3 client against `openssl s_server` | `bootstrap.* test` |
 | [`bootstrap/`](bootstrap/README.md) | Stage equivalence and fixed-point checks | M2/M3 |
 | [`diff/`](diff/README.md) | `-O0` vs `-O3`, AOT vs script, GPU adapter vs software | M3+ |
 | [`fuzz/`](fuzz/README.md) | Fuzz corpora | M13 |

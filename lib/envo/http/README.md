@@ -1,8 +1,8 @@
 # `envo.http`
 
 > **Status:** Experimental (M7): HTTP/1.1 messages, a client and a server over the Net
-> port (PLAN D42). Tests: `lib/envo/http/tests/`. `https://` comes with the TLS client
-> (M7.7); HTTP/2 and HTTP/3 later.
+> port (PLAN D42). Tests: `lib/envo/http/tests/`. `https://` goes through `envo.tls`;
+> HTTP/2 and HTTP/3 later.
 
 ## Simple door
 
@@ -33,7 +33,8 @@ print(r.BodyText());
 - `WriteRequest`, `WriteResponse`, `ParseRequest`, `ParseResponse`: the wire format,
   with bodies by `Content-Length`, chunked transfer coding (read) or until close.
 - `SendWith(ref net, url, request)` and `ServeOneWith(ref net, ref router, listener)`
-  take any `INet`: the in-memory `os.none.Net` in a test.
+  take any `INet`: the in-memory `os.none.Net` in a test. `SendTrusting` takes the trust
+  anchors for `https://`.
 - `Router`: exact paths by method; 404 for an unknown path, 405 for a known path and
   another method; HEAD answers as GET without the body. Requests over 1 MiB get 413.
 

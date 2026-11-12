@@ -719,6 +719,51 @@ EOF_ERR
         printf 'one\ntwo words\n' > "$TMP/expected"
         if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/out"; then pass; else bad 'shebang script' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     fi
+    # The TLS 1.3 client against openssl s_server (tests/tls/README.md), where openssl is
+    # installed
+    if command -v openssl > /dev/null 2>&1; then
+        say 'tls: tests/tls/client.envo against openssl s_server'
+        tdir="$ROOT/build/run-tls"
+        rm -rf "$tdir"
+        mkdir -p "$tdir"
+        tls_ok=1
+        (
+            cd "$tdir"
+            export MSYS_NO_PATHCONV=1
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ca.key -out ca.pem -days 30 -subj "/CN=Envo Test CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" &&
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout other.key -out other.pem -days 30 -subj "/CN=Other CA" &&
+            printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n' > leaf.ext &&
+            openssl req -newkey rsa:2048 -nodes -keyout rsa.key -out rsa.csr -subj "/CN=localhost" &&
+            openssl x509 -req -in rsa.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out rsa.pem -days 30 -sha256 -extfile leaf.ext &&
+            openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ec.key -out ec.csr -subj "/CN=localhost" &&
+            openssl x509 -req -in ec.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ec.pem -days 30 -sha256 -extfile leaf.ext
+        ) > "$TMP/out" 2>&1 || tls_ok=0
+        if [ "$tls_ok" -eq 0 ]; then bad 'tls certificates' "$(cat "$TMP/out")"; else
+            EXE=$envoc2
+            run "$tdir" build --lib "$ROOT" "$ROOT/tests/tls/client.envo" -o "$tdir/client$(host_suffix)"
+            if [ "$rc" -ne 0 ]; then bad 'tls client build' "$(cat "$TMP/err")"; else
+                port=18443
+                for case in "rsa:TLS_AES_128_GCM_SHA256:ca.pem:HTTP/1.0 200 ok" "ec:TLS_CHACHA20_POLY1305_SHA256:ca.pem:HTTP/1.0 200 ok" "ec:TLS_AES_128_GCM_SHA256:other.pem:failed: the server's certificate is not trusted"; do
+                    key=${case%%:*}; rest=${case#*:}
+                    suite=${rest%%:*}; rest=${rest#*:}
+                    trust=${rest%%:*}; want=${rest#*:}
+                    port=$((port + 1))
+                    (cd "$tdir" && exec openssl s_server -tls1_3 -accept "$port" -cert "$key.pem" -key "$key.key" -ciphersuites "$suite" -www -quiet) > "$tdir/server.log" 2>&1 &
+                    spid=$!
+                    sleep 1
+                    set +e
+                    (cd "$tdir" && "$tdir/client$(host_suffix)" "$trust" "$port") > "$TMP/out" 2> "$TMP/err"
+                    rc=$?
+                    set -e
+                    kill "$spid" 2> /dev/null || true
+                    wait "$spid" 2> /dev/null || true
+                    if [ "$rc" -eq 0 ] && grep -q -F "$want" "$TMP/out"; then pass; else bad "tls $key $suite trusting $trust" "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+                done
+            fi
+        fi
+    else
+        say 'tls: skipped (no openssl on this machine)'
+    fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     say 'envo commands: new, run, test, check, explain, version'
     erun="$ROOT/build/run-envo"

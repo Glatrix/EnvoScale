@@ -1,0 +1,583 @@
+// envo.tls: a TLS 1.3 client (RFC 8446; PLAN D41) over the Net port. Key exchange X25519;
+// cipher suites TLS_CHACHA20_POLY1305_SHA256 and TLS_AES_128_GCM_SHA256; the server's
+// certificate chain is verified (envo.crypto.x509) to the trust anchors given, its name
+// against the host asked for, and its CertificateVerify signature, before any application
+// data. A connection that cannot be verified fails: there is no switch to skip it.
+// Not supported yet: HelloRetryRequest, client certificates, resumption, 0-RTT, KeyUpdate.
+namespace envo.tls;
+
+use envo.crypto.sha2;
+use envo.crypto.mac;
+use envo.crypto.chacha;
+use envo.crypto.aes;
+use envo.crypto.curve25519;
+use envo.crypto.random;
+use envo.crypto.x509;
+use ports.{INet, ITrust, IoError};
+use std.time;
+use std.env;
+use std.fs;
+use platform;
+use alloc.text;
+
+const u16 SUITE_AES_128_GCM = 0x1301;
+const u16 SUITE_CHACHA20 = 0x1303;
+
+// ------------------------------------------------------------------ the key schedule
+
+void Push16(ref List<u8> b, usize v) {
+    b.Push((v >> 8) as u8);
+    b.Push(v as u8);
+}
+
+void Push24(ref List<u8> b, usize v) {
+    b.Push((v >> 16) as u8);
+    b.Push((v >> 8) as u8);
+    b.Push(v as u8);
+}
+
+void PushAll(ref List<u8> b, u8[] data) {
+    for (usize i = 0; i < data.Len; i++) b.Push(data[i]);
+}
+
+void PushText(ref List<u8> b, str s) {
+    for (usize i = 0; i < s.Len; i++) b.Push(s[i]);
+}
+
+// HKDF-Expand-Label (RFC 8446 section 7.1) into okm.
+void ExpandLabel(u8[] secret, str label, u8[] context, mut u8[] okm) {
+    List<u8> info = List<u8>.New();
+    Push16(ref info, okm.Len);
+    info.Push((6 + label.Len) as u8);
+    PushText(ref info, "tls13 ");
+    PushText(ref info, label);
+    info.Push(context.Len as u8);
+    PushAll(ref info, context);
+    mac.HkdfExpand256(secret, info.AsSlice(), okm);
+}
+
+void Hash(u8[] data, mut u8[] out32) {
+    sha2.Sha256 h = sha2.Sha256.New();
+    h.Update(data);
+    h.Finish(out32);
+}
+
+// One direction's record protection.
+struct Keys {
+    u16 Suite;
+    u8[32] Key;
+    u8[12] Iv;
+    u64 Seq;
+    aes.Gcm Gcm;
+}
+
+Keys KeysFrom(u16 suite, u8[] secret) {
+    u8[32] key;
+    u8[12] iv;
+    usize keyLen = 32;
+    if (suite == SUITE_AES_128_GCM) keyLen = 16;
+    u8[1] none;
+    ExpandLabel(secret, "key", none[0..0], key[0..keyLen]);
+    ExpandLabel(secret, "iv", none[0..0], iv[0..12]);
+    u8[16] dummy;
+    aes.Gcm g = aes.Gcm.New(dummy[0..16]);
+    if (suite == SUITE_AES_128_GCM) g = aes.Gcm.New(key[0..16]);
+    Keys k = new Keys { Suite = suite, Key = key, Iv = iv, Seq = 0, Gcm = g };
+    return k;
+}
+
+void Nonce(in Keys k, mut u8[] nonce12) {
+    for (usize i = 0; i < 12; i++) nonce12[i] = k.Iv[i];
+    for (usize i = 0; i < 8; i++) nonce12[4 + i] = nonce12[4 + i] ^ (k.Seq >> (56 - 8 * i as u64)) as u8;
+}
+
+// ------------------------------------------------------------------ the connection
+
+public struct Conn {
+    i64 Socket;
+    List<u8> In;            // bytes received and not yet read as records
+    usize InAt;
+    Keys Read;
+    Keys Write;
+    List<u8> Plain;         // application data received and not yet given out
+    usize PlainAt;
+    bool Closed;
+    string Error;
+
+    public str Why(in this) => this.Error.AsStr();
+}
+
+// Reads the next record: its content type (kind) and payload; false at the end or on an error.
+bool ReadRecord<N>(ref N net, ref Conn c, ref u8 kind, ref List<u8> payload) where N : INet {
+    while (true) {
+        usize have = c.In.Len() - c.InAt;
+        if (have >= 5) {
+            u8[] b = c.In.AsSlice();
+            usize len = ((b[c.InAt + 3] as usize) << 8) | b[c.InAt + 4] as usize;
+            if (len > 16384 + 256) return false;
+            if (have >= 5 + len) {
+                kind = b[c.InAt];
+                List<u8> p = List<u8>.New();
+                for (usize i = 0; i < len; i++) p.Push(b[c.InAt + 5 + i]);
+                payload = p;
+                c.InAt += 5 + len;
+                if (c.InAt > 65536) {
+                    // drop what has been read
+                    List<u8> rest = List<u8>.New();
+                    for (usize i = c.InAt; i < c.In.Len(); i++) rest.Push(c.In.AsSlice()[i]);
+                    c.In = rest;
+                    c.InAt = 0;
+                }
+                return true;
+            }
+        }
+        u8[4096] buf;
+        Result<usize, IoError> r = net.Recv(c.Socket, buf[0..4096]);
+        if (r.IsErr() || r.Unwrap() == 0) return false;
+        for (usize i = 0; i < r.Unwrap(); i++) c.In.Push(buf[i]);
+    }
+    return false;
+}
+
+// Decrypts a protected record's payload in place; gives the inner content type, or 0 if
+// it does not decrypt.
+u8 Unprotect(ref Keys k, ref List<u8> payload) {
+    if (payload.Len() < 17) return 0;
+    usize n = payload.Len() - 16;
+    List<u8> aad = List<u8>.New();
+    aad.Push(0x17);
+    aad.Push(3);
+    aad.Push(3);
+    Push16(ref aad, payload.Len());
+    u8[12] nonce;
+    Nonce(k, nonce[0..12]);
+    u8[16] tag;
+    for (usize i = 0; i < 16; i++) tag[i] = payload.AsSlice()[n + i];
+    List<u8> body = List<u8>.New();
+    for (usize i = 0; i < n; i++) body.Push(payload.AsSlice()[i]);
+    bool ok = false;
+    if (k.Suite == SUITE_CHACHA20) ok = chacha.Open(k.Key[0..32], nonce[0..12], aad.AsSlice(), body.AsMutSlice(), tag[0..16]);
+    else ok = k.Gcm.Open(nonce[0..12], aad.AsSlice(), body.AsMutSlice(), tag[0..16]);
+    if (!ok) return 0;
+    k.Seq = k.Seq + 1;
+    // the inner plaintext ends with the content type, then zero padding
+    usize end = body.Len();
+    while (end > 0 && body.AsSlice()[end - 1] == 0) end--;
+    if (end == 0) return 0;
+    u8 kind = body.AsSlice()[end - 1];
+    List<u8> content = List<u8>.New();
+    for (usize i = 0; i + 1 < end; i++) content.Push(body.AsSlice()[i]);
+    payload = content;
+    return kind;
+}
+
+// A protected record of type with content.
+List<u8> Protect(ref Keys k, u8 kind, u8[] content) {
+    List<u8> inner = List<u8>.New();
+    PushAll(ref inner, content);
+    inner.Push(kind);
+    List<u8> record = List<u8>.New();
+    record.Push(0x17);
+    record.Push(3);
+    record.Push(3);
+    Push16(ref record, inner.Len() + 16);
+    u8[12] nonce;
+    Nonce(k, nonce[0..12]);
+    u8[16] tag;
+    if (k.Suite == SUITE_CHACHA20) chacha.Seal(k.Key[0..32], nonce[0..12], record.AsSlice()[0..5], inner.AsMutSlice(), tag[0..16]);
+    else k.Gcm.Seal(nonce[0..12], record.AsSlice()[0..5], inner.AsMutSlice(), tag[0..16]);
+    k.Seq = k.Seq + 1;
+    PushAll(ref record, inner.AsSlice());
+    PushAll(ref record, tag[0..16]);
+    return record;
+}
+
+// ------------------------------------------------------------------ the handshake
+
+List<u8> ClientHello(str host, u8[] random32, u8[] session32, u8[] public32) {
+    List<u8> ext = List<u8>.New();
+    // server_name
+    Push16(ref ext, 0);
+    Push16(ref ext, host.Len + 5);
+    Push16(ref ext, host.Len + 3);
+    ext.Push(0);
+    Push16(ref ext, host.Len);
+    PushText(ref ext, host);
+    // supported_groups: x25519
+    Push16(ref ext, 10);
+    Push16(ref ext, 4);
+    Push16(ref ext, 2);
+    Push16(ref ext, 0x001d);
+    // signature_algorithms
+    u16[7] algs;
+    algs[0] = 0x0403;           // ecdsa_secp256r1_sha256
+    algs[1] = 0x0503;           // ecdsa_secp384r1_sha384
+    algs[2] = 0x0804;           // rsa_pss_rsae_sha256
+    algs[3] = 0x0401;           // rsa_pkcs1_sha256 (certificates)
+    algs[4] = 0x0501;           // rsa_pkcs1_sha384 (certificates)
+    algs[5] = 0x0601;           // rsa_pkcs1_sha512 (certificates)
+    algs[6] = 0x0805;           // rsa_pss_rsae_sha384 (certificates)
+    Push16(ref ext, 13);
+    Push16(ref ext, 2 + 2 * 7);
+    Push16(ref ext, 2 * 7);
+    for (usize i = 0; i < 7; i++) Push16(ref ext, algs[i] as usize);
+    // supported_versions: TLS 1.3
+    Push16(ref ext, 43);
+    Push16(ref ext, 3);
+    ext.Push(2);
+    Push16(ref ext, 0x0304);
+    // key_share: x25519
+    Push16(ref ext, 51);
+    Push16(ref ext, 2 + 4 + 32);
+    Push16(ref ext, 4 + 32);
+    Push16(ref ext, 0x001d);
+    Push16(ref ext, 32);
+    PushAll(ref ext, public32);
+    List<u8> body = List<u8>.New();
+    Push16(ref body, 0x0303);
+    PushAll(ref body, random32);
+    body.Push(32);
+    PushAll(ref body, session32);
+    Push16(ref body, 4);
+    Push16(ref body, SUITE_CHACHA20 as usize);
+    Push16(ref body, SUITE_AES_128_GCM as usize);
+    body.Push(1);
+    body.Push(0);
+    Push16(ref body, ext.Len());
+    PushAll(ref body, ext.AsSlice());
+    List<u8> msg = List<u8>.New();
+    msg.Push(1);
+    Push24(ref msg, body.Len());
+    PushAll(ref msg, body.AsSlice());
+    return msg;
+}
+
+u16 Get16(u8[] b, usize at) => ((b[at] as u16) << 8) | b[at + 1] as u16;
+usize Get24(u8[] b, usize at) => ((b[at] as usize) << 16) | ((b[at + 1] as usize) << 8) | b[at + 2] as usize;
+
+// The current time as YYYYMMDDHHMMSS (UTC), for certificate validity.
+string NowText() {
+    time.Date d = time.Now();
+    string s = string.New();
+    s.Append(text.PadLeft(text.Int(d.Year).AsStr(), 4, '0').AsStr());
+    u32[5] parts;
+    parts[0] = d.Month;
+    parts[1] = d.Day;
+    parts[2] = d.Hour;
+    parts[3] = d.Minute;
+    parts[4] = d.Second;
+    for (usize i = 0; i < 5; i++) s.Append(text.PadLeft(text.Uint(parts[i] as u64).AsStr(), 2, '0').AsStr());
+    return s;
+}
+
+// The signature algorithm OID for a TLS SignatureScheme in CertificateVerify.
+str SchemeOid(u16 scheme) {
+    if (scheme == 0x0403) return "1.2.840.10045.4.3.2";
+    if (scheme == 0x0503) return "1.2.840.10045.4.3.3";
+    if (scheme == 0x0804) return "1.2.840.113549.1.1.10";
+    return "";
+}
+
+Result<Conn, string> Fail(str why) => Err(string.From(why));
+
+// Opens a TLS 1.3 connection to host and port over net, verifying the server against
+// trust (the trust anchors; see SystemRoots) and now (YYYYMMDDHHMMSS, UTC; "" for the
+// current time).
+public Result<Conn, string> ConnectWith<N>(ref N net, str host, u16 port, in List<x509.Certificate> trust, str now) where N : INet {
+    Result<i64, IoError> sock = net.Connect(host, port);
+    if (sock.IsErr()) return Fail("cannot connect");
+    u8[32] dummy;
+    Conn c = new Conn {
+        Socket = sock.Unwrap(), In = List<u8>.New(), InAt = 0, Read = KeysFrom(SUITE_CHACHA20, dummy[0..32]),
+        Write = KeysFrom(SUITE_CHACHA20, dummy[0..32]), Plain = List<u8>.New(), PlainAt = 0, Closed = false, Error = string.New(),
+    };
+    random.Rng rng = random.Rng.New();
+    u8[32] priv;
+    u8[32] pub;
+    u8[32] clientRandom;
+    u8[32] session;
+    rng.Fill(priv[0..32]);
+    rng.Fill(clientRandom[0..32]);
+    rng.Fill(session[0..32]);
+    curve25519.X25519Base(priv[0..32], pub[0..32]);
+    List<u8> ch = ClientHello(host, clientRandom[0..32], session[0..32], pub[0..32]);
+    List<u8> transcript = List<u8>.New();
+    PushAll(ref transcript, ch.AsSlice());
+    List<u8> rec = List<u8>.New();
+    rec.Push(0x16);
+    rec.Push(3);
+    rec.Push(1);
+    Push16(ref rec, ch.Len());
+    PushAll(ref rec, ch.AsSlice());
+    if (net.Send(c.Socket, rec.AsSlice()).IsErr()) return Fail("cannot send");
+
+    // ServerHello, in the clear
+    List<u8> hs = List<u8>.New();
+    u8 kind = 0;
+    List<u8> payload = List<u8>.New();
+    while (hs.Len() < 4 || hs.Len() < 4 + Get24(hs.AsSlice(), 1)) {
+        if (!ReadRecord(ref net, ref c, ref kind, ref payload)) return Fail("the server closed the connection during the handshake");
+        if (kind == 0x15) return Fail("the server sent an alert");
+        if (kind != 0x16) return Fail("expected a handshake record");
+        PushAll(ref hs, payload.AsSlice());
+    }
+    u8[] b = hs.AsSlice();
+    usize shLen = 4 + Get24(b, 1);
+    if (b[0] != 2 || shLen < 4 + 38) return Fail("expected ServerHello");
+    PushAll(ref transcript, b[0..shLen]);
+    // HelloRetryRequest has a fixed random (SHA-256 of "HelloRetryRequest")
+    if (b[6] == 0xcf && b[7] == 0x21 && b[8] == 0xad && b[9] == 0x74) return Fail("the server asked to retry the hello (not supported yet)");
+    usize at = 4 + 2 + 32;
+    usize sidLen = b[at] as usize;
+    at += 1 + sidLen;
+    u16 suite = Get16(b, at);
+    at += 3;
+    if (suite != SUITE_CHACHA20 && suite != SUITE_AES_128_GCM) return Fail("the server chose a cipher suite we did not offer");
+    usize extEnd = at + 2 + Get16(b, at) as usize;
+    at += 2;
+    bool tls13 = false;
+    List<u8> serverKey = List<u8>.New();
+    while (at + 4 <= extEnd && extEnd <= shLen) {
+        u16 et = Get16(b, at);
+        usize el = Get16(b, at + 2) as usize;
+        usize ed = at + 4;
+        if (et == 43 && el == 2 && Get16(b, ed) == 0x0304) tls13 = true;
+        if (et == 51 && el == 36 && Get16(b, ed) == 0x001d && Get16(b, ed + 2) == 32) {
+            for (usize i = 0; i < 32; i++) serverKey.Push(b[ed + 4 + i]);
+        }
+        at = ed + el;
+    }
+    if (!tls13) return Fail("the server does not speak TLS 1.3");
+    if (serverKey.Len() != 32) return Fail("the server sent no x25519 key share");
+    u8[32] shared;
+    curve25519.X25519(priv[0..32], serverKey.AsSlice(), shared[0..32]);
+    u8 any = 0;
+    for (usize i = 0; i < 32; i++) any = any | shared[i];
+    if (any == 0) return Fail("the key exchange gave zero");
+    // what came after ServerHello in the same records
+    List<u8> rest = List<u8>.New();
+    for (usize i = shLen; i < hs.Len(); i++) rest.Push(hs.AsSlice()[i]);
+    hs = rest;
+
+    // the key schedule up to the handshake secrets
+    u8[32] zeros;
+    u8[32] early;
+    mac.HkdfExtract256(zeros[0..32], zeros[0..32], early[0..32]);
+    u8[32] emptyHash;
+    Hash(zeros[0..0], emptyHash[0..32]);
+    u8[32] derived;
+    ExpandLabel(early[0..32], "derived", emptyHash[0..32], derived[0..32]);
+    u8[32] hsSecret;
+    mac.HkdfExtract256(derived[0..32], shared[0..32], hsSecret[0..32]);
+    u8[32] th;
+    Hash(transcript.AsSlice(), th[0..32]);
+    u8[32] cHs;
+    u8[32] sHs;
+    ExpandLabel(hsSecret[0..32], "c hs traffic", th[0..32], cHs[0..32]);
+    ExpandLabel(hsSecret[0..32], "s hs traffic", th[0..32], sHs[0..32]);
+    c.Read = KeysFrom(suite, sHs[0..32]);
+    c.Write = KeysFrom(suite, cHs[0..32]);
+
+    // EncryptedExtensions, Certificate, CertificateVerify, Finished
+    List<x509.Certificate> chain = List<x509.Certificate>.New();
+    bool verified = false;
+    while (true) {
+        // a whole message?
+        if (hs.Len() >= 4 && hs.Len() >= 4 + Get24(hs.AsSlice(), 1)) {
+            u8[] m = hs.AsSlice();
+            usize len = 4 + Get24(m, 1);
+            u8 mt = m[0];
+            if (mt == 11) {
+                // Certificate: context, then entries (data, extensions)
+                usize p = 4;
+                p += 1 + m[p] as usize;
+                usize listEnd = p + 3 + Get24(m, p);
+                p += 3;
+                while (p + 3 <= listEnd && listEnd <= len) {
+                    usize cl = Get24(m, p);
+                    p += 3;
+                    if (p + cl > listEnd) return Fail("a malformed Certificate message");
+                    x509.Certificate cert;
+                    if (!x509.Parse(m[p..p + cl], ref cert)) return Fail("the server sent a certificate that does not parse");
+                    chain.Push(cert);
+                    p += cl;
+                    p += 2 + Get16(m, p) as usize;
+                }
+                string nowText = string.From(now);
+                if (now.Len == 0) nowText = NowText();
+                string why = x509.VerifyChain(chain, trust, host, nowText.AsStr());
+                if (why.Len() > 0) {
+                    string msg = string.From("the server's certificate is not trusted: ");
+                    msg.Append(why.AsStr());
+                    return Err(msg);
+                }
+            } else if (mt == 15) {
+                // CertificateVerify: the signature over the transcript so far
+                if (chain.Len() == 0) return Fail("CertificateVerify without a certificate");
+                u16 scheme = Get16(m, 4);
+                usize sl = Get16(m, 6) as usize;
+                if (8 + sl > len) return Fail("a malformed CertificateVerify");
+                u8[32] h;
+                Hash(transcript.AsSlice(), h[0..32]);
+                List<u8> content = List<u8>.New();
+                for (usize i = 0; i < 64; i++) content.Push(0x20);
+                PushText(ref content, "TLS 1.3, server CertificateVerify");
+                content.Push(0);
+                PushAll(ref content, h[0..32]);
+                str oid = SchemeOid(scheme);
+                x509.Certificate[] certs = chain.AsSlice();
+                var leaf = certs[0];
+                if (oid.Len == 0 || !x509.VerifyWith(leaf, oid, content.AsSlice(), m[8..8 + sl])) return Fail("the server's CertificateVerify signature does not verify");
+                verified = true;
+            } else if (mt == 20) {
+                // Finished: the server's MAC over the transcript so far
+                if (!verified) return Fail("Finished before the server proved its key");
+                u8[32] fk;
+                u8[1] none;
+                ExpandLabel(sHs[0..32], "finished", none[0..0], fk[0..32]);
+                u8[32] h;
+                Hash(transcript.AsSlice(), h[0..32]);
+                u8[32] want;
+                mac.HmacSha256(fk[0..32], h[0..32], want[0..32]);
+                if (len != 4 + 32 || !mac.Equal(want[0..32], m[4..36])) return Fail("the server's Finished does not verify");
+                PushAll(ref transcript, m[0..len]);
+                break;
+            } else if (mt != 8) {
+                return Fail("an unexpected handshake message");
+            }
+            PushAll(ref transcript, m[0..len]);
+            List<u8> next = List<u8>.New();
+            for (usize i = len; i < hs.Len(); i++) next.Push(hs.AsSlice()[i]);
+            hs = next;
+            continue;
+        }
+        if (!ReadRecord(ref net, ref c, ref kind, ref payload)) return Fail("the server closed the connection during the handshake");
+        if (kind == 0x14) continue;         // ChangeCipherSpec, for middleboxes
+        if (kind != 0x17) return Fail("expected a protected record");
+        u8 inner = Unprotect(ref c.Read, ref payload);
+        if (inner == 0) return Fail("a handshake record did not decrypt");
+        if (inner == 0x15) return Fail("the server sent an alert");
+        if (inner != 0x16) return Fail("expected handshake data");
+        PushAll(ref hs, payload.AsSlice());
+    }
+
+    // the application secrets, then our Finished
+    u8[32] th2;
+    Hash(transcript.AsSlice(), th2[0..32]);
+    u8[32] derived2;
+    ExpandLabel(hsSecret[0..32], "derived", emptyHash[0..32], derived2[0..32]);
+    u8[32] master;
+    mac.HkdfExtract256(derived2[0..32], zeros[0..32], master[0..32]);
+    u8[32] cAp;
+    u8[32] sAp;
+    ExpandLabel(master[0..32], "c ap traffic", th2[0..32], cAp[0..32]);
+    ExpandLabel(master[0..32], "s ap traffic", th2[0..32], sAp[0..32]);
+    u8[32] cfk;
+    u8[1] none;
+    ExpandLabel(cHs[0..32], "finished", none[0..0], cfk[0..32]);
+    u8[32] verify;
+    mac.HmacSha256(cfk[0..32], th2[0..32], verify[0..32]);
+    List<u8> fin = List<u8>.New();
+    fin.Push(20);
+    Push24(ref fin, 32);
+    PushAll(ref fin, verify[0..32]);
+    List<u8> flight = List<u8>.New();
+    // ChangeCipherSpec for middleboxes, then Finished
+    flight.Push(0x14);
+    flight.Push(3);
+    flight.Push(3);
+    Push16(ref flight, 1);
+    flight.Push(1);
+    List<u8> protectedFin = Protect(ref c.Write, 0x16, fin.AsSlice());
+    PushAll(ref flight, protectedFin.AsSlice());
+    if (net.Send(c.Socket, flight.AsSlice()).IsErr()) return Fail("cannot send Finished");
+    c.Read = KeysFrom(suite, sAp[0..32]);
+    c.Write = KeysFrom(suite, cAp[0..32]);
+    return Ok(c);
+}
+
+// Sends data as application data records.
+public Result<usize, IoError> Send<N>(ref N net, ref Conn c, u8[] data) where N : INet {
+    usize at = 0;
+    while (at < data.Len) {
+        usize n = data.Len - at;
+        if (n > 16384) n = 16384;
+        List<u8> rec = Protect(ref c.Write, 0x17, data[at..at + n]);
+        Result<usize, IoError> r = net.Send(c.Socket, rec.AsSlice());
+        if (r.IsErr()) return r;
+        at += n;
+    }
+    return Ok(data.Len);
+}
+
+// Receives application data: up to into.Len bytes; 0 at the end of the connection.
+public Result<usize, IoError> Recv<N>(ref N net, ref Conn c, mut u8[] into) where N : INet {
+    while (c.PlainAt >= c.Plain.Len()) {
+        if (c.Closed) return Ok(0);
+        u8 kind = 0;
+        List<u8> payload = List<u8>.New();
+        if (!ReadRecord(ref net, ref c, ref kind, ref payload)) {
+            c.Closed = true;
+            return Ok(0);
+        }
+        if (kind != 0x17) continue;
+        u8 inner = Unprotect(ref c.Read, ref payload);
+        if (inner == 0) return Err(IoError.Invalid);
+        if (inner == 0x15) {
+            // an alert: close_notify ends the data
+            c.Closed = true;
+            return Ok(0);
+        }
+        if (inner != 0x17) continue;        // NewSessionTicket and the like
+        c.Plain = payload;
+        c.PlainAt = 0;
+    }
+    usize n = 0;
+    while (n < into.Len && c.PlainAt < c.Plain.Len()) {
+        into[n] = c.Plain.AsSlice()[c.PlainAt];
+        n++;
+        c.PlainAt++;
+    }
+    return Ok(n);
+}
+
+// Sends close_notify and closes the connection.
+public void Close<N>(ref N net, ref Conn c) where N : INet {
+    u8[2] alert;
+    alert[0] = 1;
+    alert[1] = 0;
+    List<u8> rec = Protect(ref c.Write, 0x15, alert[0..2]);
+    net.Send(c.Socket, rec.AsSlice());
+    net.Close(c.Socket);
+}
+
+// ------------------------------------------------------------------ trust anchors
+
+// Trust anchors from PEM text.
+public List<x509.Certificate> RootsFromPem(str pem) {
+    List<x509.Certificate> roots = List<x509.Certificate>.New();
+    List<List<u8>> ders = x509.FromPem(pem);
+    foreach (var d in ders.AsSlice()) {
+        x509.Certificate c;
+        if (x509.Parse(d.AsSlice(), ref c)) roots.Push(c);
+    }
+    return roots;
+}
+
+// The system's trust anchors: the PEM file named by SSL_CERT_FILE if it is set, else the
+// platform's (the Windows ROOT store; the Linux CA bundle).
+public List<x509.Certificate> SystemRoots() {
+    string? file = env.Var("SSL_CERT_FILE");
+    if (file.IsSome()) {
+        Result<string, IoError> r = fs.ReadText(file.Unwrap().AsStr());
+        if (r.IsOk()) return RootsFromPem(r.Unwrap().AsStr());
+    }
+    var trust = platform.Trust();
+    List<List<u8>> ders = trust.Roots();
+    List<x509.Certificate> roots = List<x509.Certificate>.New();
+    foreach (var d in ders.AsSlice()) {
+        x509.Certificate c;
+        if (x509.Parse(d.AsSlice(), ref c)) roots.Push(c);
+    }
+    return roots;
+}

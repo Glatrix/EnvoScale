@@ -111,6 +111,7 @@ lib/envo/term
 lib/envo/test
 lib/envo/text
 lib/envo/time
+lib/envo/tls
 lib/envo/ui
 lib/envo/web
 lib/ports
@@ -131,6 +132,7 @@ tests/fuzz
 tests/golden
 tests/lsp
 tests/sandbox
+tests/tls
 tests/spec
 tests/vectors
 tools

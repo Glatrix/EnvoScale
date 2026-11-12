@@ -692,6 +692,54 @@ function Invoke-Test {
         }
         if ($problem) { Bad "sandbox $($f.Name)" $problem } else { Pass "sandbox $($f.Name)" }
     }
+    # The TLS 1.3 client against openssl s_server (tests\tls\README.md), where openssl is
+    # installed. Keep in step with bootstrap.sh.
+    $openssl = Get-Command openssl -ErrorAction SilentlyContinue
+    if (-not $openssl -and (Test-Path -LiteralPath 'C:\Program Files\Git\usr\bin\openssl.exe')) { $openssl = Get-Command 'C:\Program Files\Git\usr\bin\openssl.exe' }
+    if ($openssl) {
+        Say 'tls: tests/tls/client.envo against openssl s_server'
+        $tdir = Join-Path $Root 'build\run-tls'
+        if (Test-Path -LiteralPath $tdir) { Remove-Item -Recurse -Force $tdir }
+        New-Item -ItemType Directory -Force $tdir | Out-Null
+        $os = $openssl.Source
+        [IO.File]::WriteAllText((Join-Path $tdir 'leaf.ext'), "subjectAltName=DNS:localhost,IP:127.0.0.1`nbasicConstraints=CA:FALSE`n", $Utf8)
+        $steps = @(
+            @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '30', '-subj', '/CN=Envo Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign'),
+            @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'other.key', '-out', 'other.pem', '-days', '30', '-subj', '/CN=Other CA'),
+            @('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rsa.key', '-out', 'rsa.csr', '-subj', '/CN=localhost'),
+            @('x509', '-req', '-in', 'rsa.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'rsa.pem', '-days', '30', '-sha256', '-extfile', 'leaf.ext'),
+            @('req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'ec.key', '-out', 'ec.csr', '-subj', '/CN=localhost'),
+            @('x509', '-req', '-in', 'ec.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'ec.pem', '-days', '30', '-sha256', '-extfile', 'leaf.ext')
+        )
+        $certsOk = $true
+        foreach ($s in $steps) {
+            $r = Invoke-Tool $os $s $tdir
+            if ($r.Code -ne 0) { $certsOk = $false; Bad 'tls certificates' $r.Err.Trim(); break }
+        }
+        if ($certsOk) {
+            $client = Join-Path $tdir 'client.exe'
+            $r = Invoke-Tool $envoc @('build', '--lib', $Root, (Join-Path $Root 'tests\tls\client.envo'), '-o', $client) $tdir
+            if ($r.Code -ne 0) { Bad 'tls client build' $r.Err.Trim() }
+            else {
+                $port = 18443
+                $cases = @(
+                    @{ Key = 'rsa'; Suite = 'TLS_AES_128_GCM_SHA256'; Trust = 'ca.pem'; Want = 'HTTP/1.0 200 ok' },
+                    @{ Key = 'ec'; Suite = 'TLS_CHACHA20_POLY1305_SHA256'; Trust = 'ca.pem'; Want = 'HTTP/1.0 200 ok' },
+                    @{ Key = 'ec'; Suite = 'TLS_AES_128_GCM_SHA256'; Trust = 'other.pem'; Want = "failed: the server's certificate is not trusted" }
+                )
+                foreach ($c in $cases) {
+                    $port++
+                    $server = Start-Process -FilePath $os -ArgumentList @('s_server', '-tls1_3', '-accept', "$port", '-cert', "$($c.Key).pem", '-key', "$($c.Key).key", '-ciphersuites', $c.Suite, '-www', '-quiet') -WorkingDirectory $tdir -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $tdir 'server.log') -RedirectStandardError (Join-Path $tdir 'server.err')
+                    Start-Sleep -Seconds 1
+                    $r = Invoke-Tool $client @($c.Trust, "$port") $tdir
+                    Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+                    if ($r.Code -eq 0 -and $r.Out.Contains($c.Want)) { Pass "tls $($c.Key)" } else { Bad "tls $($c.Key) $($c.Suite) trusting $($c.Trust)" "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+                }
+            }
+        }
+    } else {
+        Say 'tls: skipped (no openssl on this machine)'
+    }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     Say 'envo commands: new, run, test, check, explain, version'
     $envoRun = Join-Path $Root 'build\run-envo'

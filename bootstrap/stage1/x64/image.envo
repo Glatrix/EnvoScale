@@ -3,8 +3,8 @@
 // KERNEL32.dll and ADVAPI32.dll; the runtime and the native adapters reach import k
 // through `wincall`, where k is the import's slot in the address table: KERNEL32's
 // functions are 0-27, slot 28 ends them, ADVAPI32's SystemFunction036 (RtlGenRandom) is
-// slot 29 and slot 30 ends it, and WS2_32's are slots 31-45, ended by slot 46 (PLAN D25,
-// D28, D40). Stage 2 writes the same tables.
+// slot 29 and slot 30 ends it, WS2_32's are slots 31-45, ended by slot 46, and CRYPT32's
+// are slots 47-49, ended by slot 50 (PLAN D25, D28, D40, D41). Stage 2 writes the same tables.
 
 const u64 IMAGE_BASE = 0x400000;
 const u64 ELF_HEADERS = 176;        // ELF header (64) + 2 program headers (56 each)
@@ -15,6 +15,7 @@ const u32 TARGET_WINDOWS = 2;
 
 const u32 WIN_IMPORTS = 28;        // from KERNEL32.dll; then ADVAPI32's one, at slot 29
 const u32 WS_IMPORTS = 15;         // from WS2_32.dll, at slots 31-45
+const u32 CR_IMPORTS = 3;          // from CRYPT32.dll, at slots 47-49
 
 // The KERNEL32.dll functions, by wincall index.
 str WinImport(u32 k) {
@@ -71,8 +72,17 @@ str WsImport(u32 k) {
     }
 }
 
+// The CRYPT32.dll functions (D41), by their index after WS2_32's: import slot 47 + k.
+str CrImport(u32 k) {
+    match k {
+        0 => { return "CertOpenSystemStoreW"; }
+        1 => { return "CertEnumCertificatesInStore"; }
+        _ => { return "CertCloseStore"; }
+    }
+}
+
 struct WinImports {
-    u32 Dir;        // the import directory (four descriptors, 80 bytes)
+    u32 Dir;        // the import directory (five descriptors, 100 bytes)
     u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
 }
 
@@ -82,6 +92,10 @@ WinImports EmitImports(*Asm a) {
     WinImports w;
     u32[28] names;
     u32[15] wsNames;
+    u32[3] crNames;
+    u32 ilt4 = NewLabel(a);
+    u32 dll4 = NewLabel(a);
+    u32 iat4 = NewLabel(a);
     u32 ilt3 = NewLabel(a);
     u32 dll3 = NewLabel(a);
     u32 iat3 = NewLabel(a);
@@ -95,6 +109,7 @@ WinImports EmitImports(*Asm a) {
     w.Iat = NewLabel(a);
     for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = NewLabel(a);
     for (u32 k = 0; k < WS_IMPORTS; k++) wsNames[k] = NewLabel(a);
+    for (u32 k = 0; k < CR_IMPORTS; k++) crNames[k] = NewLabel(a);
     unsafe {
         DataAlign(a, 8);
         BindData(a, w.Dir);
@@ -113,6 +128,11 @@ WinImports EmitImports(*Asm a) {
         DataU32(a, 0);
         DataRva(a, dll3, 4);
         DataRva(a, iat3, 4);
+        DataRva(a, ilt4, 4);        // CRYPT32.dll
+        DataU32(a, 0);
+        DataU32(a, 0);
+        DataRva(a, dll4, 4);
+        DataRva(a, iat4, 4);
         BufRepeat(&a.Data, 0, 20);  // the null descriptor
         DataAlign(a, 8);
         BindData(a, ilt);
@@ -124,6 +144,9 @@ WinImports EmitImports(*Asm a) {
         BindData(a, ilt3);
         for (u32 k = 0; k < WS_IMPORTS; k++) DataRva(a, wsNames[k], 8);
         BufRepeat(&a.Data, 0, 8);
+        BindData(a, ilt4);
+        for (u32 k = 0; k < CR_IMPORTS; k++) DataRva(a, crNames[k], 8);
+        BufRepeat(&a.Data, 0, 8);
         BindData(a, w.Iat);
         for (u32 k = 0; k < WIN_IMPORTS; k++) DataRva(a, names[k], 8);
         BufRepeat(&a.Data, 0, 8);   // slot 28 ends KERNEL32's
@@ -133,6 +156,9 @@ WinImports EmitImports(*Asm a) {
         BindData(a, iat3);          // slots 31-45
         for (u32 k = 0; k < WS_IMPORTS; k++) DataRva(a, wsNames[k], 8);
         BufRepeat(&a.Data, 0, 8);   // slot 46 ends WS2_32's
+        BindData(a, iat4);          // slots 47-49
+        for (u32 k = 0; k < CR_IMPORTS; k++) DataRva(a, crNames[k], 8);
+        BufRepeat(&a.Data, 0, 8);   // slot 50 ends CRYPT32's
         for (u32 k = 0; k < WIN_IMPORTS; k++) {
             DataAlign(a, 2);
             BindData(a, names[k]);
@@ -152,6 +178,13 @@ WinImports EmitImports(*Asm a) {
             BufStr(&a.Data, WsImport(k));
             BufByte(&a.Data, 0);
         }
+        for (u32 k = 0; k < CR_IMPORTS; k++) {
+            DataAlign(a, 2);
+            BindData(a, crNames[k]);
+            BufRepeat(&a.Data, 0, 2);       // hint
+            BufStr(&a.Data, CrImport(k));
+            BufByte(&a.Data, 0);
+        }
         BindData(a, dll);
         BufStr(&a.Data, "KERNEL32.dll");
         BufByte(&a.Data, 0);
@@ -160,6 +193,9 @@ WinImports EmitImports(*Asm a) {
         BufByte(&a.Data, 0);
         BindData(a, dll3);
         BufStr(&a.Data, "WS2_32.dll");
+        BufByte(&a.Data, 0);
+        BindData(a, dll4);
+        BufStr(&a.Data, "CRYPT32.dll");
         BufByte(&a.Data, 0);
     }
     return w;
@@ -219,7 +255,7 @@ str WriteImage(*Asm a, u32 target, WinImports imports) {
         PutU64(f, 0xB8, 0x1000);                // heap commit
         PutU32(f, 0xC4, 16);                    // NumberOfRvaAndSizes
         PutU32(f, 0xD0, PE_SECTION_RVA + LabelOffset(a, imports.Dir, dataStart));
-        PutU32(f, 0xD4, 80);
+        PutU32(f, 0xD4, 100);
         PutU32(f, 0x148, 0x7865742E);           // ".tex"
         PutU16(f, 0x14C, 0x74);                 // "t"
         PutU32(f, 0x150, size);                 // VirtualSize

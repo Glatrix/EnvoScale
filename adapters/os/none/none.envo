@@ -7,7 +7,7 @@
 // share it (the heap never frees in Envo-S1, so nothing is lost).
 namespace os.none;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, IoError};
 use alloc.map.{Map};
 use alloc.set.{Set};
 use alloc.text;
@@ -770,5 +770,45 @@ public Net SharedNet() {
             SharedNetState = n.State as usize;
         }
         return new Net { State = SharedNetState as *NetState };
+    }
+}
+
+// ------------------------------------------------------------------ trust
+
+struct TrustState {
+    List<List<u8>> Roots;
+}
+
+// Trust anchors given with Add: none at first.
+public struct Trust {
+    *TrustState State;
+
+    public static Trust New() {
+        unsafe {
+            *TrustState p = alloc(sizeof(TrustState)) as *TrustState;
+            p[0] = new TrustState { Roots = List<List<u8>>.New() };
+            return new Trust { State = p };
+        }
+    }
+
+    // Trusts the certificate in der.
+    public void Add(ref this, u8[] der) {
+        List<u8> one = List<u8>.New();
+        for (usize i = 0; i < der.Len; i++) one.Push(der[i]);
+        unsafe { this.State[0].Roots.Push(one); }
+    }
+}
+
+impl ITrust for Trust {
+    List<List<u8>> Roots(ref this) {
+        List<List<u8>> all = List<List<u8>>.New();
+        unsafe {
+            foreach (var r in this.State[0].Roots.AsSlice()) {
+                List<u8> one = List<u8>.New();
+                foreach (var b in r.AsSlice()) one.Push(b);
+                all.Push(one);
+            }
+        }
+        return all;
     }
 }
