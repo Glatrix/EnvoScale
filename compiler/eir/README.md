@@ -1,5 +1,7 @@
 # `compiler/eir`
 
-> **Status:** Not started. Planned for **M2 (first version in Stage 1), M3**.
+> **Status:** Started in M3.6: the in-memory module, the text reader, the canonical
+> printer and the verifier (`envoc eir-check`), with the same results as `envoc1`.
+> Lowering and the binary form come next.
 
 EIR, the Envo IR: SSA-based, typed and versioned, with textual (`.eir`) and binary forms, a builder and a verifier. Spec: `docs/spec/eir.md`.

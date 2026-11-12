@@ -26,3 +26,7 @@ sema/move.envo
 sema/borrow.envo
 sema/summary.envo
 sema/dump.envo
+eir/ir.envo
+eir/print.envo
+eir/verify.envo
+eir/read.envo

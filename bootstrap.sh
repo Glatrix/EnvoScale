@@ -461,6 +461,31 @@ do_test() {
         done
       done
     done
+    # EIR (M3.6): the same goldens and verifier errors as Stage 1.
+    say 'stage 2 golden tests: tests/golden/eir'
+    dir="$ROOT/tests/golden/eir"
+    for f in "$dir"/*.eir; do
+        base=$(basename "$f")
+        tr -d '\r' < "${f%.eir}.out" > "$TMP/expected"
+        for input in "$base" "${base%.eir}.out"; do
+            run "$dir" eir-check "$input"
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+            else bad "stage2 golden/eir/$input" "exit $rc: $(tr -d '\r' < "$TMP/err")"; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+        done
+    done
+    say 'stage 2 spec tests: tests/spec/eir'
+    dir="$ROOT/tests/spec/eir"
+    for f in "$dir"/*.eir; do
+        base=$(basename "$f")
+        line=$(grep -m1 '^; expect-error: ' "$f" | tr -d '\r' || true)
+        code=$(printf '%s\n' "$line" | sed 's|^; expect-error: \(E[0-9]*\) @ .*|\1|')
+        pos=${line##* @ }; pos=${pos%% *}
+        want="$base:$pos: error[$code]"
+        run "$dir" eir-check "$base"
+        if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
+        else bad "stage2 spec/eir/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+    done
     say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens'
     for f in $(cd "$ROOT" && find compiler bootstrap/stage1 tests -name '*.envo' | LC_ALL=C sort); do
         dir="$ROOT/$(dirname "$f")"

@@ -75,6 +75,14 @@ its snapshots and loop frames, `OriginCx`) is owned data passed `ref` next to th
 `Checker`. Stage 2 accepts and rejects exactly what Stage 1 does; accepting what chapter 5
 allows beyond that is increment 3.10, after the fixed point.
 
+## EIR (M3.6)
+
+`envoc.eir` holds EIR v1 in memory (`ir.envo`), the text reader, the canonical printer
+and the verifier, ported from Stage 1. `envoc eir-check` matches `envoc1 eir-check` on the
+EIR goldens and error tests, and on the whole-program EIR `envoc1 eir` writes for every run
+program and for Stage 2 itself (1.7 MB). Lowering, the binary form, the backend and the
+image writers follow; the goal is `envoc build` writing the same bytes as `envoc1 build`.
+
 ## Stage 1 bugs found by Stage 2
 
 Stage 2 is the largest Envo-S1 program, so it finds `envoc1` bugs. Each is fixed in

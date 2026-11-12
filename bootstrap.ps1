@@ -462,6 +462,28 @@ function Invoke-Test {
         }
       }
     }
+    # EIR (M3.6): the same goldens and verifier errors as Stage 1.
+    Say 'stage 2 golden tests: tests/golden/eir'
+    $dir = Join-Path $Root 'tests\golden\eir'
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.eir' | Sort-Object Name) {
+        $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.eir$', '.out'), $Utf8))
+        foreach ($input in @($f.Name, ($f.Name -replace '\.eir$', '.out'))) {
+            $r = Invoke-Tool $envoc @('eir-check', $input) $dir
+            $actual = Normalize $r.Out
+            if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass $input }
+            else { Bad "stage2 golden/eir/$input" "exit $($r.Code), stderr: $($r.Err.Trim())"; Show-Diff $expected $actual }
+        }
+    }
+    Say 'stage 2 spec tests: tests/spec/eir'
+    $dir = Join-Path $Root 'tests\spec\eir'
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.eir' | Sort-Object Name) {
+        $m = [regex]::Match([IO.File]::ReadAllText($f.FullName, $Utf8), '(?m)^; expect-error: (E\d{4}) @ (\d+:\d+)')
+        if (-not $m.Success) { Bad "stage2 spec/eir/$($f.Name)" 'no ; expect-error: annotation'; continue }
+        $want = "$($f.Name):$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
+        $r = Invoke-Tool $envoc @('eir-check', $f.Name) $dir
+        if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $f.Name }
+        else { Bad "stage2 spec/eir/$($f.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+    }
     Say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens'
     $sources = @('compiler', 'bootstrap\stage1', 'tests') | ForEach-Object {
         Get-ChildItem -LiteralPath (Join-Path $Root $_) -Filter '*.envo' -Recurse -File
