@@ -1,5 +1,6 @@
-// expect-error: E0502 @ 6:22
-// [fn.cap.1] a lambda cannot move out of what it captured (Stage 1: no `once fn` inference yet)
+// expect-error: E0502 @ 7:22
+// [fn.cap.1] a lambda passed to a `fn()` parameter borrows its captures, so it cannot move
+// one out (a lambda with no target that does is a `once fn`; Stage 1 does not infer it)
 void Hello() => print("hello");
 void Run(fn() f) { f(); }
 fn() f = Hello;

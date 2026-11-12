@@ -1,0 +1,10 @@
+// expect-error: E0501 @ 10:1
+// [fn.type.2] a lambda that moves out a capture is a `once fn`; calling it uses it up
+void Hello() => print("hello");
+fn() h = Hello;
+var f = () => {
+    fn() g = h;
+    g();
+};
+f();
+f();

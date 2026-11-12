@@ -92,9 +92,16 @@ still gives:
   E0502.
 
 - **`once fn` lambdas** (`once_fn.envo`). A lambda whose type is `once fn` and that
-  owns its captures may move them out. Calling a `once fn` uses it up. The kind is not
-  inferred yet: a lambda without a `once fn` type that moves a capture is still E0502,
-  as is a borrowing lambda (one passed to a function-typed parameter without `move`).
+  owns its captures may move them out. Calling a `once fn` uses it up.
+- **`once fn` inferred** ([fn.type.2], issue #79; `once_fn_inferred.envo`). A lambda with
+  no target type (`var f = () => { … };`) whose body moves out a capture is a `once fn`.
+  The kind must be known before the variable's uses are checked, so `CheckLambda` runs a
+  quiet move check of the body alone (`LambdaMovesCapture`) once the body's types are
+  known; only moves of the lambda's own captures count. A lambda with a `fn` or `mut fn`
+  target that moves a capture is still E0502, as is a borrowing lambda (one passed to a
+  function-typed parameter without `move`); an inferred `once fn` passed where a `fn` is
+  expected is E0301 (`s2-own/e0501_inferred_once_twice.envo`,
+  `s2-own/e0301_inferred_once_as_fn.envo`).
 
 - **Locals that borrow** (`borrow_locals.envo`). `var x = place;` without a type, where
   taking the value would move out of a borrow (an array element, an element of a shared
@@ -119,7 +126,6 @@ still gives:
   otherwise never compile), so a view passed into a `ref T` inside generic code is not
   tracked yet: a known gap, closed when instances are checked one by one.
 
-Still to come: inferring `once fn` from the body ([fn.type.2]).
 
 ## EIR (M3.6)
 

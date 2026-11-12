@@ -82,6 +82,34 @@ jobs:
           path: build/from-windows
       - run: ./bootstrap.sh compare build/from-linux build/from-windows
 
+  # M10 (PLAN D69): the run tests built for aarch64-linux on x86-64, then run on an arm64
+  # machine (free for public repositories).
+  aarch64-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: sh adapters/ci/github/install-nasm.sh
+      - run: ./bootstrap.sh cross
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aarch64-linux-programs
+          path: build/cross/aarch64-linux
+
+  aarch64-linux:
+    needs: [aarch64-build]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: aarch64-linux-programs
+          path: build/cross/aarch64-linux
+      - run: ./bootstrap.sh cross-run build/cross/aarch64-linux
+
   # PLAN D18 (M3.9): Stage 2 built by itself at -O2 reproduces itself, on both hosts, and
   # the fixed-point compilers are the same bytes on both.
   fixed-point-linux:
@@ -92,10 +120,13 @@ jobs:
           persist-credentials: false
       - run: sh adapters/ci/github/install-nasm.sh
       - run: ./bootstrap.sh fixedpoint
+      # the release archive (docs/guides/offline-install.md): the same bytes on both hosts
+      - run: ./bootstrap.sh dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fixed-point-on-linux
           path: |
+            build/dist/SHA256SUMS
             build/stage0/envoc0
             build/stage0/envoc0.exe
             build/stage1/envoc1
@@ -114,10 +145,13 @@ jobs:
       - run: choco install nasm --no-progress -y
       - run: .\bootstrap.ps1 fixedpoint
         shell: powershell
+      - run: .\bootstrap.ps1 dist
+        shell: powershell
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fixed-point-on-windows
           path: |
+            build/dist/SHA256SUMS
             build/stage0/envoc0
             build/stage0/envoc0.exe
             build/stage1/envoc1

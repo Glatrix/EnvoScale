@@ -181,6 +181,7 @@ List<templates.NavItem> Nav(str from) {
     Add(ref nav, from, "Contributing", "CONTRIBUTING.md", 0);
     Add(ref nav, from, "RFCs", "docs/rfcs/README.md", 0);
     Add(ref nav, from, "Security", "SECURITY.md", 0);
+    Add(ref nav, from, "Enterprise", "docs/guides/enterprise.md", 0);
     Add(ref nav, from, "Licensing", "LICENSING.md", 0);
     Add(ref nav, from, "Trademarks", "TRADEMARKS.md", 0);
     Add(ref nav, from, "Code of conduct", "CODE_OF_CONDUCT.md", 0);

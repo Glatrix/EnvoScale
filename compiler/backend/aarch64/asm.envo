@@ -1,0 +1,480 @@
+// An AArch64 encoder (M10, PLAN D69): machine code into a buffer, with labels and fixups.
+// Every instruction is one 32-bit word. Encodings are fixed for a given instruction (a
+// constant is always built the same way, a far branch always takes two words), so the
+// output depends only on the instructions. Only the forms the backend needs are here.
+namespace envoc.a64;
+
+use envoc.util;
+use envoc.diag;
+
+// Registers: x0-x30; 31 is sp as a base or in ADD/SUB (immediate), else xzr.
+public const u8 X0 = 0;
+public const u8 X1 = 1;
+public const u8 X2 = 2;
+public const u8 X3 = 3;
+public const u8 X4 = 4;
+public const u8 X5 = 5;
+public const u8 X8 = 8;
+public const u8 X9 = 9;         // the first operand and the result (rax in the x86-64 backend)
+public const u8 X10 = 10;       // the second operand (rcx)
+public const u8 X11 = 11;       // the third (rdx)
+public const u8 X12 = 12;       // scratch (r11)
+public const u8 X13 = 13;
+public const u8 X14 = 14;
+public const u8 X16 = 16;       // addresses and large offsets, inside one instruction's sequence
+public const u8 FP = 29;
+public const u8 LR = 30;
+public const u8 SP = 31;
+public const u8 XZR = 31;
+
+// Condition codes.
+public const u8 C_EQ = 0;
+public const u8 C_NE = 1;
+public const u8 C_HS = 2;       // unsigned >=, carry set
+public const u8 C_LO = 3;       // unsigned <, carry clear
+public const u8 C_MI = 4;
+public const u8 C_VS = 6;       // signed overflow; an unordered float compare
+public const u8 C_VC = 7;
+public const u8 C_HI = 8;       // unsigned >
+public const u8 C_LS = 9;       // unsigned <=
+public const u8 C_GE = 10;
+public const u8 C_LT = 11;
+public const u8 C_GT = 12;
+public const u8 C_LE = 13;
+
+// Fixup kinds.
+const u8 FX_B26 = 1;        // b / bl: imm26, words from the instruction
+const u8 FX_B19 = 2;        // b.cond / cbz: imm19, words from the instruction
+const u8 FX_ADRP = 3;       // adrp: the 4 KiB page of the label, from the instruction's page
+const u8 FX_LO12 = 4;       // add (immediate): the label's offset in its 4 KiB page
+const u8 FX_ABS64 = 5;      // the label's absolute address (in the data; relocated at start)
+const u8 FX_ADR = 6;        // adr: the byte offset from the instruction, 21 bits
+
+struct Fixup {
+    u32 At;         // offset of the word (or 8 bytes) in its buffer
+    u32 Label;
+    u8 Kind;
+    bool InData;
+}
+
+const u64 UNBOUND = 18446744073709551615;
+const u64 DATA_BIT = 0x8000000000000000;
+
+// The data starts on a 64 KiB boundary: the largest page size AArch64 Linux uses.
+public const u64 PAGE = 0x10000;
+
+// Overwrites n bytes of s at `at`, little-endian.
+void PutBytes(ref string s, usize at, u64 v, usize n) {
+    unsafe {
+        for (usize i = 0; i < n; i++) s.Data[at + i] = ((v >> (8 * i) as u64) & 0xFF) as u8;
+    }
+}
+
+u32 GetWord(in string s, usize at) {
+    str b = s.AsStr();
+    return (b[at] as u32) | (b[at + 1] as u32) << 8 | (b[at + 2] as u32) << 16 | (b[at + 3] as u32) << 24;
+}
+
+public struct Asm {
+    string Code;
+    string Data;
+    List<u64> Labels;   // per label: (in data << 63) | offset, or UNBOUND
+    List<Fixup> Fixups;
+
+    public static Asm New() {
+        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New() };
+        a.Labels.Push(UNBOUND);     // label 0: none
+        return a;
+    }
+
+    public u32 NewLabel(ref this) {
+        u32 l = this.Labels.Len() as u32;
+        this.Labels.Push(UNBOUND);
+        return l;
+    }
+
+    public void Bind(ref this, u32 l) => this.Labels.Set(l as usize, this.Code.Len() as u64);
+    public void BindData(ref this, u32 l) => this.Labels.Set(l as usize, this.Data.Len() as u64 | DATA_BIT);
+    public void BindDataStart(ref this, u32 l) => this.Labels.Set(l as usize, DATA_BIT);
+
+    // The code offset of label l (data labels: after the code, at dataStart).
+    public u64 LabelOffset(in this, u32 l, u64 dataStart) {
+        u64 v = this.Labels.Get(l as usize);
+        if (v & DATA_BIT != 0) return (v & ~DATA_BIT) + dataStart;
+        return v;
+    }
+
+    public void W(ref this, u32 w) {
+        this.Code.AppendByte((w & 0xFF) as u8);
+        this.Code.AppendByte((w >> 8 & 0xFF) as u8);
+        this.Code.AppendByte((w >> 16 & 0xFF) as u8);
+        this.Code.AppendByte((w >> 24) as u8);
+    }
+
+    void Fix(ref this, u32 label, u8 kind) {
+        this.Fixups.Push(new Fixup { At = this.Code.Len() as u32, Label = label, Kind = kind, InData = false });
+    }
+
+    // ------------------------------------------------------------------ data
+
+    public void DataByte(ref this, u8 b) => this.Data.AppendByte(b);
+
+    public void DataU32(ref this, u64 v) {
+        for (u64 i = 0; i < 4; i++) this.Data.AppendByte(((v >> (8 * i)) & 0xFF) as u8);
+    }
+
+    public void DataAlign(ref this, usize n) {
+        while (this.Data.Len() % n != 0) this.Data.AppendByte(0);
+    }
+
+    // An 8-byte absolute address of label l, relocated when the program starts.
+    public void DataAddr(ref this, u32 l) {
+        this.Fixups.Push(new Fixup { At = this.Data.Len() as u32, Label = l, Kind = FX_ABS64, InData = true });
+        for (u32 i = 0; i < 8; i++) this.Data.AppendByte(0);
+    }
+
+    // ------------------------------------------------------------------ moves
+
+    // mov xd, xm
+    public void MovRR(ref this, u8 d, u8 m) {
+        if (d == SP || m == SP) this.W(0x91000000 | (m as u32) << 5 | d as u32);    // add xd, xm, #0
+        else this.W(0xAA0003E0 | (m as u32) << 16 | d as u32);                       // orr xd, xzr, xm
+    }
+
+    // mov xd, imm64: movz, or movn for mostly-ones values, then movk for each other
+    // 16-bit part.
+    public void MovRI(ref this, u8 d, u64 imm) {
+        u32 zeros = 0;
+        u32 ones = 0;
+        for (u64 k = 0; k < 4; k++) {
+            u64 part = (imm >> (16 * k)) & 0xFFFF;
+            if (part == 0) zeros++;
+            if (part == 0xFFFF) ones++;
+        }
+        bool inverted = ones > zeros;
+        u64 fill = 0;
+        if (inverted) fill = 0xFFFF;
+        // the first part to set (all of them the fill: part 0)
+        u64 lead = 0;
+        while (lead < 4 && ((imm >> (16 * lead)) & 0xFFFF) == fill) lead++;
+        if (lead == 4) lead = 0;
+        bool first = true;
+        for (u64 k = 0; k < 4; k++) {
+            u64 part = (imm >> (16 * k)) & 0xFFFF;
+            if (k != lead && (first || part == fill)) continue;
+            if (first) {
+                u64 v = part;
+                if (inverted) v = part ^ 0xFFFF;
+                u32 op = 0xD2800000;                // movz
+                if (inverted) op = 0x92800000;      // movn
+                this.W(op | (k as u32) << 21 | (v as u32) << 5 | d as u32);
+                first = false;
+            } else {
+                this.W(0xF2800000 | (k as u32) << 21 | (part as u32) << 5 | d as u32);    // movk
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ arithmetic
+
+    // Three-register data processing: op | rm << 16 | rn << 5 | rd.
+    public void R3(ref this, u32 op, u8 d, u8 n, u8 m) => this.W(op | (m as u32) << 16 | (n as u32) << 5 | d as u32);
+
+    public void Add(ref this, u8 d, u8 n, u8 m) => this.R3(0x8B000000, d, n, m);
+    public void Adds(ref this, u8 d, u8 n, u8 m) => this.R3(0xAB000000, d, n, m);
+    public void Sub(ref this, u8 d, u8 n, u8 m) => this.R3(0xCB000000, d, n, m);
+    public void Subs(ref this, u8 d, u8 n, u8 m) => this.R3(0xEB000000, d, n, m);
+    public void And(ref this, u8 d, u8 n, u8 m) => this.R3(0x8A000000, d, n, m);
+    public void Orr(ref this, u8 d, u8 n, u8 m) => this.R3(0xAA000000, d, n, m);
+    public void Eor(ref this, u8 d, u8 n, u8 m) => this.R3(0xCA000000, d, n, m);
+    public void Mvn(ref this, u8 d, u8 m) => this.R3(0xAA200000, d, XZR, m);           // orn xd, xzr, xm
+    public void Mul(ref this, u8 d, u8 n, u8 m) => this.R3(0x9B007C00, d, n, m);       // madd xd, xn, xm, xzr
+    public void Smulh(ref this, u8 d, u8 n, u8 m) => this.R3(0x9B407C00, d, n, m);
+    public void Umulh(ref this, u8 d, u8 n, u8 m) => this.R3(0x9BC07C00, d, n, m);
+    public void Sdiv(ref this, u8 d, u8 n, u8 m) => this.R3(0x9AC00C00, d, n, m);
+    public void Udiv(ref this, u8 d, u8 n, u8 m) => this.R3(0x9AC00800, d, n, m);
+    public void Lslv(ref this, u8 d, u8 n, u8 m) => this.R3(0x9AC02000, d, n, m);
+    public void Lsrv(ref this, u8 d, u8 n, u8 m) => this.R3(0x9AC02400, d, n, m);
+    public void Asrv(ref this, u8 d, u8 n, u8 m) => this.R3(0x9AC02800, d, n, m);
+    public void Cmp(ref this, u8 n, u8 m) => this.R3(0xEB000000, XZR, n, m);           // subs xzr, xn, xm
+    public void Negs(ref this, u8 d, u8 m) => this.R3(0xEB000000, d, XZR, m);          // subs xd, xzr, xm
+
+    // msub xd, xn, xm, xa: xa - xn * xm
+    public void Msub(ref this, u8 d, u8 n, u8 m, u8 a) => this.W(0x9B008000 | (m as u32) << 16 | (a as u32) << 10 | (n as u32) << 5 | d as u32);
+
+    // madd xd, xn, xm, xa: xa + xn * xm
+    public void Madd(ref this, u8 d, u8 n, u8 m, u8 a) => this.W(0x9B000000 | (m as u32) << 16 | (a as u32) << 10 | (n as u32) << 5 | d as u32);
+
+    // add/sub xd, xn, #imm12 (xn and xd may be sp)
+    public void AddImm(ref this, u8 d, u8 n, u32 imm) => this.W(0x91000000 | (imm & 0xFFF) << 10 | (n as u32) << 5 | d as u32);
+    public void SubImm(ref this, u8 d, u8 n, u32 imm) => this.W(0xD1000000 | (imm & 0xFFF) << 10 | (n as u32) << 5 | d as u32);
+    public void SubsImm(ref this, u8 d, u8 n, u32 imm) => this.W(0xF1000000 | (imm & 0xFFF) << 10 | (n as u32) << 5 | d as u32);
+    public void CmpImm(ref this, u8 n, u32 imm) => this.SubsImm(XZR, n, imm);
+
+    // sp = sp - n, or sp + n: an immediate when it fits, else through x16
+    public void SpSub(ref this, u64 n) {
+        if (n < 4096) {
+            if (n > 0) this.SubImm(SP, SP, n as u32);
+            return;
+        }
+        this.MovRI(X16, n);
+        this.W(0xCB206000 | (X16 as u32) << 16 | (SP as u32) << 5 | SP as u32);    // sub sp, sp, x16, uxtx
+    }
+
+    public void SpAdd(ref this, u64 n) {
+        if (n < 4096) {
+            if (n > 0) this.AddImm(SP, SP, n as u32);
+            return;
+        }
+        this.MovRI(X16, n);
+        this.W(0x8B206000 | (X16 as u32) << 16 | (SP as u32) << 5 | SP as u32);    // add sp, sp, x16, uxtx
+    }
+
+    // xd = xn + imm (any 64-bit imm), through x16 when it does not fit 12 bits
+    public void AddConst(ref this, u8 d, u8 n, i64 imm) {
+        if (imm >= 0 && imm < 4096) {
+            this.AddImm(d, n, imm as u32);
+            return;
+        }
+        if (imm < 0 && imm > -4096) {
+            this.SubImm(d, n, (0 - imm) as u32);
+            return;
+        }
+        this.MovRI(X16, imm as u64);
+        if (n == SP || d == SP) this.W(0x8B206000 | (X16 as u32) << 16 | (n as u32) << 5 | d as u32);
+        else this.Add(d, n, X16);
+    }
+
+    // cset xd, cond
+    public void Cset(ref this, u8 d, u8 cond) => this.W(0x9A9F07E0 | ((cond ^ 1) as u32) << 12 | d as u32);
+
+    // csel xd, xn, xm, cond
+    public void Csel(ref this, u8 d, u8 n, u8 m, u8 cond) => this.W(0x9A800000 | (m as u32) << 16 | (cond as u32) << 12 | (n as u32) << 5 | d as u32);
+
+    // Extends the low size bytes of r to 64 bits, with or without sign.
+    public void Extend(ref this, u8 r, u32 size, bool signed) {
+        u32 imms = 0;
+        if (size == 1) imms = 7;
+        else if (size == 2) imms = 15;
+        else if (size == 4) imms = 31;
+        else return;
+        u32 op = 0xD3400000;            // ubfm xd, xn, #0, #imms
+        if (signed) op = 0x93400000;    // sbfm
+        this.W(op | imms << 10 | (r as u32) << 5 | r as u32);
+    }
+
+    // ------------------------------------------------------------------ memory
+
+    // ldr/str with a 9-bit signed offset (ldur/stur), or a register offset through x16.
+    // size: 1, 2, 4 or 8 bytes; loads zero- or sign-extend to 64 bits.
+    public void Load(ref this, u8 d, u8 bn, i32 off, u32 size, bool signed) {
+        u32 unscaled = 0;
+        u32 reg = 0;
+        if (size == 8) {
+            unscaled = 0xF8400000;
+            reg = 0xF8606800;
+        } else if (size == 4 && signed) {
+            unscaled = 0xB8800000;
+            reg = 0xB8A06800;
+        } else if (size == 4) {
+            unscaled = 0xB8400000;
+            reg = 0xB8606800;
+        } else if (size == 2 && signed) {
+            unscaled = 0x78800000;
+            reg = 0x78A06800;
+        } else if (size == 2) {
+            unscaled = 0x78400000;
+            reg = 0x78606800;
+        } else if (signed) {
+            unscaled = 0x38800000;
+            reg = 0x38A06800;
+        } else {
+            unscaled = 0x38400000;
+            reg = 0x38606800;
+        }
+        this.Mem(unscaled, reg, d, bn, off);
+    }
+
+    public void Store(ref this, u8 bn, i32 off, u8 s, u32 size) {
+        u32 unscaled = 0x38000000;
+        u32 reg = 0x38206800;
+        if (size == 8) {
+            unscaled = 0xF8000000;
+            reg = 0xF8206800;
+        } else if (size == 4) {
+            unscaled = 0xB8000000;
+            reg = 0xB8206800;
+        } else if (size == 2) {
+            unscaled = 0x78000000;
+            reg = 0x78206800;
+        }
+        this.Mem(unscaled, reg, s, bn, off);
+    }
+
+    void Mem(ref this, u32 unscaled, u32 reg, u8 t, u8 bn, i32 off) {
+        if (off >= -256 && off < 256) {
+            this.W(unscaled | ((off as u32) & 0x1FF) << 12 | (bn as u32) << 5 | t as u32);
+            return;
+        }
+        this.MovRI(X16, off as i64 as u64);
+        this.W(reg | (X16 as u32) << 16 | (bn as u32) << 5 | t as u32);
+    }
+
+    // str xt, [sp, #-16]!  and  ldr xt, [sp], #16: a push and a pop that keep sp aligned
+    public void Push(ref this, u8 t) => this.W(0xF81F0FE0 | t as u32);
+    public void Pop(ref this, u8 t) => this.W(0xF84107E0 | t as u32);
+
+    // strb wt, [xn], #1  and  ldrb wt, [xn], #1
+    public void StrbPost(ref this, u8 t, u8 n) => this.W(0x38001400 | (n as u32) << 5 | t as u32);
+    public void LdrbPost(ref this, u8 t, u8 n) => this.W(0x38401400 | (n as u32) << 5 | t as u32);
+
+    // stp x29, x30, [sp, #-16]!  and  ldp x29, x30, [sp], #16
+    public void PushFrame(ref this) => this.W(0xA9BF7BFD);
+    public void PopFrame(ref this) => this.W(0xA8C17BFD);
+
+    // ------------------------------------------------------------------ branches
+
+    public void B(ref this, u32 l) {
+        this.Fix(l, FX_B26);
+        this.W(0x14000000);
+    }
+
+    public void Bl(ref this, u32 l) {
+        this.Fix(l, FX_B26);
+        this.W(0x94000000);
+    }
+
+    // b.cond to a label nearby (within 1 MiB: the same instruction's sequence)
+    public void BcondNear(ref this, u8 cond, u32 l) {
+        this.Fix(l, FX_B19);
+        this.W(0x54000000 | cond as u32);
+    }
+
+    // b.cond anywhere: the inverse condition skips an unconditional branch
+    public void Bcond(ref this, u8 cond, u32 l) {
+        this.W(0x54000040 | (cond ^ 1) as u32);        // b.!cond +8
+        this.B(l);
+    }
+
+    // cbz / cbnz xt to a label nearby
+    public void CbzNear(ref this, u8 t, u32 l) {
+        this.Fix(l, FX_B19);
+        this.W(0xB4000000 | t as u32);
+    }
+
+    public void CbnzNear(ref this, u8 t, u32 l) {
+        this.Fix(l, FX_B19);
+        this.W(0xB5000000 | t as u32);
+    }
+
+    public void Blr(ref this, u8 n) => this.W(0xD63F0000 | (n as u32) << 5);
+    public void Ret(ref this) => this.W(0xD65F03C0);
+    public void Svc(ref this) => this.W(0xD4000001);
+    public void Brk(ref this) => this.W(0xD4200000);
+
+    // xd = the address of label l (adrp + add: anywhere within 4 GiB)
+    public void AdrLabel(ref this, u8 d, u32 l) {
+        this.Fix(l, FX_ADRP);
+        this.W(0x90000000 | d as u32);
+        this.Fix(l, FX_LO12);
+        this.W(0x91000000 | (d as u32) << 5 | d as u32);
+    }
+
+    // ------------------------------------------------------------------ floats
+
+    // fmov between x / w registers and d / s registers
+    public void FmovToF(ref this, u8 v, u8 x, bool dbl) {
+        if (dbl) this.W(0x9E670000 | (x as u32) << 5 | v as u32);
+        else this.W(0x1E270000 | (x as u32) << 5 | v as u32);
+    }
+
+    public void FmovFromF(ref this, u8 x, u8 v, bool dbl) {
+        if (dbl) this.W(0x9E660000 | (v as u32) << 5 | x as u32);
+        else this.W(0x1E260000 | (v as u32) << 5 | x as u32);
+    }
+
+    // fadd / fsub / fmul / fdiv vd, vn, vm: op is the double form's
+    public void FArith(ref this, u32 op, u8 d, u8 n, u8 m, bool dbl) {
+        u32 o = op;
+        if (!dbl) o = o & ~0x00400000;
+        this.R3(o, d, n, m);
+    }
+
+    public void Fcmp(ref this, u8 n, u8 m, bool dbl) {
+        u32 o = 0x1E602000;
+        if (!dbl) o = 0x1E202000;
+        this.W(o | (m as u32) << 16 | (n as u32) << 5);
+    }
+
+    // a two-register float instruction: op | vn << 5 | rd
+    public void F2(ref this, u32 op, u8 d, u8 n) => this.W(op | (n as u32) << 5 | d as u32);
+
+    // ------------------------------------------------------------------ the self-relocation
+    // stub (PLAN D68)
+
+    // At the entry of the program, which sits at offset `headers` of the image: adds the
+    // load address to each 8-byte absolute address in the data. table holds their count,
+    // then each one's data offset (WriteImage fills it); data0 is the data's start.
+    public void RelocStub(ref this, u32 data0, u32 table, u64 headers) {
+        u32 back = (0 - headers as i64) as u32 & 0x1FFFFF;
+        this.W(0x10000009 | (back & 3) << 29 | (back >> 2) << 5);     // adr x9, base
+        this.AdrLabel(X10, data0);
+        this.AdrLabel(X11, table);
+        this.W(0xB840456C);                         // ldr w12, [x11], #4: the count
+        this.W(0x340000EC);                         // cbz w12, +28: past the loop
+        this.W(0xB840456D);                         // loop: ldr w13, [x11], #4
+        this.W(0xF86D694E);                         // ldr x14, [x10, x13]
+        this.W(0x8B0901CE);                         // add x14, x14, x9
+        this.W(0xF82D694E);                         // str x14, [x10, x13]
+        this.W(0x7100058C);                         // subs w12, w12, #1
+        this.W(0x54FFFF61);                         // b.ne loop (-20)
+    }
+
+    // ------------------------------------------------------------------ linking
+
+    // The code, padding to the next page boundary (counted from `at`, the code's offset in
+    // the image), and the data, with every fixup resolved. dataStart gets the data's offset
+    // from the start of the code.
+    public string Link(in this, u64 at, ref u64 dataStart) {
+        usize codeLen = this.Code.Len();
+        usize dataOff = ((at as usize + codeLen + PAGE as usize - 1) & ~(PAGE as usize - 1)) - at as usize;
+        dataStart = dataOff as u64;
+        string img = string.New();
+        img.Append(this.Code);
+        for (usize i = codeLen; i < dataOff; i++) img.AppendByte(0);
+        img.Append(this.Data);
+        foreach (var f in this.Fixups.AsSlice()) {
+            u64 lv = this.Labels.Get(f.Label as usize);
+            if (lv == UNBOUND) ToolFail("a64: a label is used but never bound", EXIT_INTERNAL);
+            u64 target = lv & ~DATA_BIT;
+            if (lv & DATA_BIT != 0) target += dataOff as u64;
+            u64 pos = f.At as u64;
+            if (f.InData) pos += dataOff as u64;
+            if (f.Kind == FX_ABS64) {
+                PutBytes(ref img, pos as usize, at + target, 8);
+                continue;
+            }
+            u32 w = GetWord(img, pos as usize);
+            i64 delta = (target as i64) - (pos as i64);
+            if (f.Kind == FX_B26) {
+                if (delta < -(1 << 27) || delta >= (1 << 27)) ToolFail("a64: a branch is out of range (128 MiB)", EXIT_INTERNAL);
+                w = w | ((delta >> 2) as u32 & 0x3FFFFFF);
+            } else if (f.Kind == FX_B19) {
+                if (delta < -(1 << 20) || delta >= (1 << 20)) ToolFail("a64: a short branch is out of range (1 MiB)", EXIT_INTERNAL);
+                w = w | ((delta >> 2) as u32 & 0x7FFFF) << 5;
+            } else if (f.Kind == FX_ADR) {
+                u32 d = delta as u32 & 0x1FFFFF;
+                w = w | (d & 3) << 29 | (d >> 2) << 5;
+            } else if (f.Kind == FX_ADRP) {
+                // pages counted from the image's start: it loads on a page boundary
+                i64 pages = (((at + target) >> 12) as i64) - (((at + pos) >> 12) as i64);
+                u32 d = pages as u32 & 0x1FFFFF;
+                w = w | (d & 3) << 29 | (d >> 2) << 5;
+            } else {
+                w = w | (((at + target) & 0xFFF) as u32) << 10;
+            }
+            PutBytes(ref img, pos as usize, w as u64, 4);
+        }
+        return img;
+    }
+}

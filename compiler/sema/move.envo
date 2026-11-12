@@ -426,7 +426,10 @@ impl Checker {
         if (!move || this.IsCopy(sym.Type)) return;
         if (x.IsFrozen(s)) this.BorrowError(tok, s, E_MOVED_WHILE_BORROWED, "` is moved while it is borrowed (by a view, a `foreach` element or a `match` binding)");
         if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "", s, ", which is borrowed; borrow it or clone it instead");
-        if (this.IsCapture(x, s) && !x.CapsOnce) this.MoveOutOfBorrow(tok, "", s, ", which this lambda captures");
+        if (this.IsCapture(x, s) && !x.CapsOnce) {
+            this.NoteCapMoved(x);
+            this.MoveOutOfBorrow(tok, "", s, ", which this lambda captures");
+        }
         x.PlaceSet(s, 0, PS_MOVED);
         this.NMove.Set(n as usize, 1);
     }
@@ -443,7 +446,10 @@ impl Checker {
         if (st != PS_OWNED) this.UsedAfterMove(tok, s, st, true);
         if (!move || this.IsCopy(this.NType(top))) return;
         if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "a field of ", s, ", which is borrowed");
-        if (this.IsCapture(x, s) && !x.CapsOnce) this.MoveOutOfBorrow(tok, "a field of ", s, ", which this lambda captures");
+        if (this.IsCapture(x, s) && !x.CapsOnce) {
+            this.NoteCapMoved(x);
+            this.MoveOutOfBorrow(tok, "a field of ", s, ", which this lambda captures");
+        }
         // the rest of a partly moved value is dropped field by field, with a drop flag per
         // field (M3.10; Stage 1 has one flag per local and rejects this). A type with its
         // own `Drop` needs all of itself, and flags go one level deep only.
@@ -694,6 +700,45 @@ impl Checker {
         inner.CapsOnce = copies && this.TypeAt(this.NType(n)).Count == FK_ONCE;
         if (this.NKind(lam.B) == NK_BLOCK) this.MvStmt(ref inner, lam.B);
         else this.MvExpr(ref inner, lam.B, true);
+    }
+
+    // [fn.type.2] Does lambda n's body move out a value the lambda captured? Then a lambda
+    // with no target type is a `once fn`: it owns its captures and calling it uses it up.
+    // A quiet move check of the body alone tells, while the lambda is checked (its body's
+    // types are known by then); moves inside lambdas nested in it count only when they
+    // take a capture of n itself.
+    bool LambdaMovesCapture(ref this, u32 n) {
+        u64 cv = this.NValue(n);
+        u32 count = (cv >> 32) as u32;
+        if (count == 0) return false;
+        bool sQuiet = this.MvQuiet;
+        bool sRecord = this.MvRecord;
+        bool sEarly = this.MvEarly;
+        u32 sStamp = this.MvStamp;
+        this.MvQuiet = true;
+        this.MvRecord = false;
+        this.MvEarly = false;
+        this.MvProbing = true;
+        this.MvProbeCaps = (cv & 0xFFFFFFFF) as u32;
+        this.MvCapMoved = false;
+        MoveCx inner = MoveCx.New();
+        inner.Caps = this.MvProbeCaps;
+        inner.NCaps = count;
+        Node lam = this.NodeAt(n);
+        if (this.NKind(lam.B) == NK_BLOCK) this.MvStmt(ref inner, lam.B);
+        else this.MvExpr(ref inner, lam.B, true);
+        bool moved = this.MvCapMoved;
+        this.MvProbing = false;
+        this.MvCapMoved = false;
+        this.MvQuiet = sQuiet;
+        this.MvRecord = sRecord;
+        this.MvEarly = sEarly;
+        this.MvStamp = sStamp;
+        return moved;
+    }
+
+    void NoteCapMoved(ref this, in MoveCx x) {
+        if (this.MvProbing && x.Caps == this.MvProbeCaps) this.MvCapMoved = true;
     }
 
     void MvStmt(ref this, ref MoveCx x, u32 n) {

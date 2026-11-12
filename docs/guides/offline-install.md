@@ -11,6 +11,7 @@ organization.
 |---|---|
 | `envoscale-<version>.tar` | the toolchain: `bin/` (`envo` and `envoc` for Linux and Windows), `lib/`, `adapters/`, `docs/`, the licenses |
 | `envoscale-<version>.tar.sig` | the Ed25519 signature of the archive's SHA-256 |
+| `envoscale-<version>.provenance.json` | how the archive was built (see [Provenance](#provenance)) |
 | `SHA256SUMS` | the archive's SHA-256 |
 
 The archive is reproducible: `bootstrap.sh dist` (or `bootstrap.ps1 dist`) on the same
@@ -74,6 +75,16 @@ Package dependencies come from registries you choose (`tools/pkg/README.md`):
 
 Every archive is checked against `envo.lock.envon` and, when the manifest has a `trust`
 block, against your signing keys, wherever it came from.
+
+## Provenance
+
+`dist` also writes `envoscale-<version>.provenance.json`, an
+[in-toto](https://in-toto.io) statement in the SLSA provenance v1 format: the archive's
+SHA-256, the source commit, the command that built it, the build time it used
+(`SOURCE_DATE_EPOCH`), the CI run that built it (or `local`), and the SHA-256 of each
+compiler stage on the way (`envoc0`, `envoc1`, `envoc`). The release manager signs it
+with `envo sign` like the archive. CI builds the archive on Linux and on Windows from the
+same commit and fails if the two digests differ.
 
 ## 5. Bills of materials
 

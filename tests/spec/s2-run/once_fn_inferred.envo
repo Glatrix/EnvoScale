@@ -1,0 +1,23 @@
+// [fn.type.2] A lambda with no target type that moves out a value it captured is a
+// `once fn`: it owns its captures, and calling it uses it up (issue #79). Stage 1 does not
+// infer the kind and rejects the move.
+// stage1-error: E0502
+// expect: hello
+// expect: hello again
+void Hello() => print("hello");
+void Again() => print("hello again");
+void Run(once fn() f) { f(); }
+
+fn() h = Hello;
+var first = () => {
+    fn() g = h;
+    g();
+};
+first();
+
+fn() a = Again;
+var second = () => {
+    fn() g = a;
+    g();
+};
+Run(second);

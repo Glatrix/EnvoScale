@@ -20,14 +20,14 @@ void Usage(i32 fd) {
     write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
     write(fd, "  check <file.envo>...\n");
     write(fd, "                      check names and types; print the typed syntax tree\n");
-    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [--lib <dir> [--os none]] [-map <file>] [--target x86_64-windows|x86_64-linux|wasm32-web]\n");
+    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [--lib <dir> [--os none]] [-map <file>] [--target x86_64-windows|x86_64-linux|wasm32-web|aarch64-linux]\n");
     write(fd, "                      compile a program to an executable\n");
     write(fd, "  compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(fd, "                      compile to an EIR object: the code of one file (--unit)\n");
     write(fd, "                      or of all of them; the others are read for their declarations\n");
     write(fd, "  link <file.eo>... -o <output> [-O0|-O2]\n");
     write(fd, "                      link EIR objects of one program into an executable\n");
-    write(fd, "  eir <file.envo>... [--target x86_64-windows|x86_64-linux|wasm32-web]\n");
+    write(fd, "  eir <file.envo>... [--target x86_64-windows|x86_64-linux|wasm32-web|aarch64-linux]\n");
     write(fd, "                      print the program's EIR, runtime included (-o: binary EIR)\n");
     write(fd, "  eir-check <file.eir|file.eirb> [-O2] [-o <out.eirb>]\n");
     write(fd, "                      read and verify EIR, text or binary (-O2: and optimize it);\n");
@@ -170,7 +170,7 @@ i32 CmdEirCheck(usize argi) {
 }
 
 void BuildUsage() {
-    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [--lib <dir> [--os none]] [-map <file>] [--target x86_64-windows|x86_64-linux|wasm32-web]\n");
+    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [--lib <dir> [--os none]] [-map <file>] [--target x86_64-windows|x86_64-linux|wasm32-web|aarch64-linux]\n");
     write(2, "       envoc compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(2, "       envoc link <file.eo>... -o <output> [-O0|-O2]\n");
     exit(EXIT_USAGE);
@@ -205,6 +205,7 @@ BuildArgs ParseBuildArgs(usize argi) {
             if (Same(t, "x86_64-windows")) b.Target = TARGET_WINDOWS;
             else if (Same(t, "x86_64-linux")) b.Target = TARGET_LINUX;
             else if (Same(t, "wasm32-web")) b.Target = TARGET_WASM;
+            else if (Same(t, "aarch64-linux")) b.Target = TARGET_A64;
             else BuildUsage();
             b.TargetSet = true;
             i += 2;
@@ -304,6 +305,7 @@ i32 CmdLink(usize argi) {
     u32 target = TARGET_LINUX;
     if (TextIs(m.Target, "x86_64-windows")) target = TARGET_WINDOWS;
     else if (TextIs(m.Target, "wasm32-web")) target = TARGET_WASM;
+    else if (TextIs(m.Target, "aarch64-linux")) target = TARGET_A64;
     else if (!TextIs(m.Target, "x86_64-linux")) ToolFail("the objects are for an unknown target", EXIT_ERRORS);
     if (b.TargetSet && b.Target != target) ToolFail("--target differs from the objects' target", EXIT_ERRORS);
     m.Verify();
