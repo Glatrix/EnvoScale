@@ -57,3 +57,17 @@ Until a port is implemented, its reference adapter (`adapters/os/none`, `gpu/sof
 - [ ] Target triple added to the target list and `#if target.os == "<os>"`.
 - [ ] CI adapter job for the platform.
 - [ ] Row in `STATUS.md` with a tier.
+
+## Worked example: AArch64 Linux and macOS (M10, PLAN D69, D70)
+
+- **No Stage 0 port.** Programs for the new CPU are cross-compiled on x86-64
+  (`--target aarch64-linux`, `--target aarch64-macos`); `bootstrap.sh cross` builds the
+  run tests and the library's tests, and `bootstrap.sh cross-run` runs them on the target
+  (CI's arm64 Linux and macOS runners), with no compiler there.
+- **Backend:** `compiler/backend/aarch64/`: the encoder, the code generator (it follows
+  the x86-64 one instruction for instruction, so the same tests apply), and the ELF and
+  Mach-O writers.
+- **Runtime OS layer:** `compiler/runtime/<os>_aarch64.envo`, embedded in `envoc`.
+- **Adapters:** where only the system calls differ, a module gets a file per architecture
+  (`adapters/os/linux/sys/sys.<arch>.envo`); the loader takes `<name>.<arch>.envo` before
+  `<name>.envo`.

@@ -1,9 +1,10 @@
 # `compiler/backend/aarch64`
 
-> **Status:** Experimental (M10, PLAN D69). Linux programs without the standard platform's
-> Linux adapter (`--target aarch64-linux`); tested on an arm64 machine in CI.
+> **Status:** Experimental (M10, PLAN D69, D70). Linux (`--target aarch64-linux`), with the
+> standard platform; macOS (`--target aarch64-macos`), with the reference adapters only so
+> far. Tested on CI's arm64 Linux and macOS runners.
 
-The AArch64 backend, for Linux:
+The AArch64 backend, for Linux and macOS:
 
 - `asm.envo`: the encoder. One 32-bit word per instruction, labels and fixups, the
   self-relocation stub (PLAN D68), and linking (64 KiB pages).
@@ -12,10 +13,17 @@ The AArch64 backend, for Linux:
   stack, results in x0, system calls through `svc #0` (number in x8, arguments in x0-x5).
 - `image.envo`: the ELF executable: position-independent (ET_DYN), code read and execute,
   data read and write.
+- `macho.envo`: the Mach-O executable for macOS: started by dyld (`LC_MAIN`), the same
+  layout and self-relocation, and an ad-hoc code signature (SHA-256 of each 4 KiB page).
+- `regalloc.envo`: at -O2, the x86-64 backend's linear scan (PLAN D20) over x19-x28;
+  constants, frame addresses and labels are recomputed where used.
 
-The runtime's OS layer for it is `compiler/runtime/linux_aarch64.envo` (embedded as
-`compiler/driver/runtime_a64.envo`). `bootstrap.sh cross` builds the run tests for it and
-`bootstrap.sh cross-run` runs them on an AArch64 machine.
+The runtime's OS layers are `compiler/runtime/linux_aarch64.envo` and
+`compiler/runtime/macos_aarch64.envo` (embedded as `compiler/driver/runtime_a64.envo` and
+`runtime_macos.envo`). On Linux the standard platform's adapter takes its system calls
+from `adapters/os/linux/sys/sys.aarch64.envo`. `bootstrap.sh cross` builds the run tests
+and the library's tests for both, and `bootstrap.sh cross-run` runs them on an AArch64
+machine.
 
-Still to come: the Linux adapter's system calls for AArch64 (so `--lib` works with the
-Linux platform), registers at -O2, and macOS (Mach-O).
+Still to come: the macOS adapters (files, processes, network, terminal, window, Metal),
+and libSystem imports in place of raw system calls on macOS.

@@ -55,4 +55,5 @@ backend/wasm/wasm.envo
 backend/aarch64/asm.envo
 backend/aarch64/image.envo
 backend/aarch64/macho.envo
+backend/aarch64/regalloc.envo
 backend/aarch64/gen.envo

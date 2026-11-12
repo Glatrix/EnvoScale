@@ -141,8 +141,8 @@ Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool c
 // Module m's code for target: an executable, or a WebAssembly module (D48).
 string GenFor(ref Module m, u32 target, bool opt, bool wantMap, ref string map) {
     if (target == TARGET_WASM) return GenWasm(m);
-    if (target == TARGET_A64) return GenModuleA64(ref m, false, wantMap, ref map);
-    if (target == TARGET_MACOS) return GenModuleA64(ref m, true, wantMap, ref map);
+    if (target == TARGET_A64) return GenModuleA64(ref m, false, opt, wantMap, ref map);
+    if (target == TARGET_MACOS) return GenModuleA64(ref m, true, opt, wantMap, ref map);
     return GenModule(ref m, target, opt, wantMap, ref map);
 }
 
