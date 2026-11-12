@@ -20,13 +20,23 @@ The public response process above applies to everyone.
 
 ## Cryptography audit status
 
-`envo.crypto` does not exist yet (milestone M7). When it lands it stays
-**Experimental** until an independent audit is completed and published here. Until
-then, do not use it to protect anything that matters.
+`envo.crypto` is being written (milestone M7). It stays **Experimental** until an
+independent audit is completed and published here. Until then, do not use it to protect
+anything that matters.
 
 | Module | Audit | Notes |
 |---|---|---|
-| `envo.crypto` | none | not implemented yet |
+| `envo.crypto.sha2` | none | SHA-256, SHA-512; FIPS 180-4 examples pass |
+| `envo.crypto.mac` | none | HMAC, HKDF; RFC 4231 and RFC 5869 vectors pass |
+| `envo.crypto.chacha` | none | ChaCha20, Poly1305, ChaCha20-Poly1305; RFC 8439 vectors pass |
+| `envo.crypto.aes` | none | AES-128/256, AES-GCM; FIPS 197 and GCM vectors pass; no tables (computed S-box) |
+| `envo.crypto.curve25519` | none | X25519, Ed25519; RFC 7748 and RFC 8032 vectors pass |
+| `envo.crypto.random` | none | ChaCha20 from the Entropy port, fast key erasure |
+
+The code is written to be constant time (no branch, loop bound or memory index depends
+on a secret), but this has not been measured yet: timing-variance tests and a lint come
+later (brief §7.2). Secrets are not yet zeroed on drop (`Secret<T>` needs the language's
+drop support for library types to reach Envo-S1's runtime).
 
 ## Supply chain
 

@@ -1,0 +1,68 @@
+// envo.crypto's simple door, and the CSPRNG: digests as hex, MACs, and random bytes that
+// are reproducible from a seed (os.none's entropy), equal to the ChaCha20 key stream after
+// its first 32 bytes, and never repeat across requests.
+// os: none
+// expect: dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f
+// expect: hmac ok
+// expect: digests equal ok
+// expect: seeded same ok
+// expect: stream ok
+// expect: rekeyed ok
+// expect: below ok
+// expect: random hex 32
+use envo.crypto;
+use envo.crypto.random;
+use envo.crypto.chacha;
+use os.none;
+
+print(crypto.Sha256("Hello, World!").Hex().AsStr());
+if (crypto.HmacSha256("Jefe", "what do ya want for nothing?").Hex().Equals("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")) print("hmac ok");
+crypto.Digest a = crypto.Sha256("x");
+crypto.Digest b = crypto.Sha256("x");
+crypto.Digest c = crypto.Sha256("y");
+if (a.Equals(b) && !a.Equals(c)) print("digests equal ok");
+
+none.Entropy e1 = none.Entropy.Seeded(7);
+none.Entropy e2 = none.Entropy.Seeded(7);
+random.Rng r1 = random.Rng.From(ref e1);
+random.Rng r2 = random.Rng.From(ref e2);
+u8[100] x;
+u8[100] y;
+r1.Fill(x[0..100]);
+r2.Fill(y[0..100]);
+bool same = true;
+for (usize i = 0; i < 100; i++) {
+    if (x[i] != y[i]) same = false;
+}
+if (same) print("seeded same ok");
+
+// the first request is the key stream (key from the seed, nonce 0) after its first 32
+// bytes
+none.Entropy e3 = none.Entropy.Seeded(7);
+u8[32] key;
+e3.Fill(key[0..32]);
+u8[132] stream;
+u8[12] nonce;
+chacha.Xor(key[0..32], 0, nonce[0..12], stream[0..132]);
+bool match1 = true;
+for (usize i = 0; i < 100; i++) {
+    if (stream[32 + i] != x[i]) match1 = false;
+}
+if (match1) print("stream ok");
+
+// the next request uses a new key: no overlap with the first
+u8[100] z;
+r1.Fill(z[0..100]);
+bool differs = false;
+for (usize i = 0; i < 100; i++) {
+    if (z[i] != x[i]) differs = true;
+}
+if (differs) print("rekeyed ok");
+
+bool inRange = true;
+for (usize i = 0; i < 200; i++) {
+    if (r1.Below(10) >= 10) inRange = false;
+}
+if (inRange) print("below ok");
+write(1, "random hex ");
+if (crypto.RandomHex(16).Len() == 32) print("32");

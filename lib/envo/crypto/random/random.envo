@@ -1,0 +1,67 @@
+// envo.crypto.random: a cryptographically secure generator (PLAN D39). ChaCha20 keyed
+// with 32 bytes from the Entropy port; each request takes the key stream's first 32 bytes
+// as the next key and gives the rest, so a later compromise of the state does not reveal
+// earlier output (fast key erasure). The system's generator is read once per generator.
+namespace envo.crypto.random;
+
+use envo.crypto.chacha;
+use ports.{IEntropy};
+use platform;
+
+public struct Rng {
+    u8[32] Key;
+
+    // A generator keyed from the platform's entropy.
+    public static Rng New() {
+        var e = platform.Entropy();
+        return Rng.From(ref e);
+    }
+
+    // A generator keyed from entropy (a seeded os.none.Entropy gives a reproducible one,
+    // for tests only).
+    public static Rng From<E>(ref E entropy) where E : IEntropy {
+        Rng r;
+        entropy.Fill(r.Key[0..32]);
+        return r;
+    }
+
+    // Fills into with random bytes.
+    public void Fill(ref this, mut u8[] into) {
+        u8[12] nonce;
+        u8[64] block;
+        u8[32] next;
+        // block 0: the next key, then the first 32 output bytes
+        chacha.Block(this.Key[0..32], 0, nonce[0..12], block[0..64]);
+        for (usize i = 0; i < 32; i++) next[i] = block[i];
+        usize at = 0;
+        for (usize i = 32; i < 64 && at < into.Len; i++) {
+            into[at] = block[i];
+            at++;
+        }
+        u32 counter = 1;
+        while (at < into.Len) {
+            chacha.Block(this.Key[0..32], counter, nonce[0..12], block[0..64]);
+            for (usize i = 0; i < 64 && at < into.Len; i++) {
+                into[at] = block[i];
+                at++;
+            }
+            counter++;
+        }
+        for (usize i = 0; i < 32; i++) this.Key[i] = next[i];
+        for (usize i = 0; i < 64; i++) block[i] = 0;
+    }
+
+    // A random number below n (n > 0), without bias: draws until one falls below the
+    // largest multiple of n.
+    public u64 Below(ref this, u64 n) {
+        u64 limit = 0xFFFFFFFFFFFFFFFF - (0xFFFFFFFFFFFFFFFF % n + 1) % n;
+        while (true) {
+            u8[8] b;
+            this.Fill(b[0..8]);
+            u64 v = 0;
+            for (usize i = 0; i < 8; i++) v = (v << 8) | b[i] as u64;
+            if (v <= limit) return v % n;
+        }
+        return 0;
+    }
+}

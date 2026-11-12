@@ -1,0 +1,62 @@
+// envo.crypto.chacha: ChaCha20, Poly1305 and AEAD_CHACHA20_POLY1305 (RFC 8439 sections
+// 2.4.2, 2.5.2 and 2.8.2). Sources: tests/vectors/README.md.
+// expect: chacha20 ok
+// expect: poly1305 ok
+// expect: aead ct ok
+// expect: aead tag ok
+// expect: open ok
+// expect: forgery rejected
+use envo.crypto.chacha;
+use alloc.text;
+
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> FromHex(str h) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i + 1 < h.Len; i += 2) b.Push(Nib(h[i]) * 16 + Nib(h[i + 1]));
+    return b;
+}
+
+string ToHex(u8[] b) {
+    string s = string.New();
+    for (usize i = 0; i < b.Len; i++) s.Append(text.Hex(b[i] as u64, 2).AsStr());
+    return s;
+}
+
+List<u8> key = FromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+List<u8> nonce = FromHex("000000000000004a00000000");
+str pt = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+List<u8> data = List<u8>.New();
+for (usize i = 0; i < pt.Len; i++) data.Push(pt[i]);
+chacha.Xor(key.AsSlice(), 1, nonce.AsSlice(), data.AsMutSlice());
+if (ToHex(data.AsSlice()).Equals("6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0bf91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d807ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab77937365af90bbf74a35be6b40b8eedf2785e42874d")) print("chacha20 ok");
+else print(ToHex(data.AsSlice()).AsStr());
+
+List<u8> pkey = FromHex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b");
+chacha.Poly1305 p = chacha.Poly1305.New(pkey.AsSlice());
+str msg = "Cryptographic Forum Research Group";
+List<u8> m = List<u8>.New();
+for (usize i = 0; i < msg.Len; i++) m.Push(msg[i]);
+p.Update(m.AsSlice());
+u8[16] tag;
+p.Finish(tag[0..16]);
+if (ToHex(tag[0..16]).Equals("a8061dc1305136c6c22b8baf0c0127a9")) print("poly1305 ok");
+else print(ToHex(tag[0..16]).AsStr());
+
+List<u8> akey = FromHex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+List<u8> anonce = FromHex("070000004041424344454647");
+List<u8> aad = FromHex("50515253c0c1c2c3c4c5c6c7");
+List<u8> ad = List<u8>.New();
+for (usize i = 0; i < pt.Len; i++) ad.Push(pt[i]);
+u8[16] atag;
+chacha.Seal(akey.AsSlice(), anonce.AsSlice(), aad.AsSlice(), ad.AsMutSlice(), atag[0..16]);
+if (ToHex(ad.AsSlice()).Equals("d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116")) print("aead ct ok");
+else print(ToHex(ad.AsSlice()).AsStr());
+if (ToHex(atag[0..16]).Equals("1ae10b594f09e26a7e902ecbd0600691")) print("aead tag ok");
+else print(ToHex(atag[0..16]).AsStr());
+if (chacha.Open(akey.AsSlice(), anonce.AsSlice(), aad.AsSlice(), ad.AsMutSlice(), atag[0..16]) && ad.AsSlice()[0] == 'L') print("open ok");
+atag[0] = atag[0] ^ 1;
+if (!chacha.Open(akey.AsSlice(), anonce.AsSlice(), aad.AsSlice(), ad.AsMutSlice(), atag[0..16])) print("forgery rejected");

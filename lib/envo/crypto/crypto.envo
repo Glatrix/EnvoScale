@@ -1,0 +1,92 @@
+// envo.crypto: the simple door to the cryptography modules (PLAN D37). Experimental and
+// not audited: see lib/envo/crypto/README.md and SECURITY.md.
+//
+//   print(crypto.Sha256("hello").Hex());
+//
+// The modules behind it (sha2, mac, chacha, aes, curve25519, random) are the full-control
+// door.
+namespace envo.crypto;
+
+use envo.crypto.sha2;
+use envo.crypto.mac;
+use envo.crypto.random;
+use alloc.text;
+
+// A digest or MAC: up to 64 bytes.
+public struct Digest {
+    u8[64] B;
+    usize Len;
+
+    // The bytes, as lowercase hex.
+    public string Hex(in this) {
+        string s = string.New();
+        for (usize i = 0; i < this.Len; i++) s.Append(text.Hex(this.B[i] as u64, 2).AsStr());
+        return s;
+    }
+
+    // Byte i.
+    public u8 At(in this, usize i) {
+        if (i >= this.Len) panic("envo.crypto: digest index out of range");
+        return this.B[i];
+    }
+
+    // Are the two digests equal? In time that depends only on their lengths.
+    public bool Equals(in this, in Digest other) {
+        if (this.Len != other.Len) return false;
+        u8 d = 0;
+        for (usize i = 0; i < this.Len; i++) d = d | (this.B[i] ^ other.B[i]);
+        return d == 0;
+    }
+}
+
+List<u8> BytesOf(str s) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i < s.Len; i++) b.Push(s[i]);
+    return b;
+}
+
+// The SHA-256 digest of text.
+public Digest Sha256(str data) {
+    sha2.Sha256 h = sha2.Sha256.New();
+    h.UpdateText(data);
+    Digest d = new Digest { Len = 32 };
+    h.Finish(d.B[0..32]);
+    return d;
+}
+
+// The SHA-512 digest of text.
+public Digest Sha512(str data) {
+    sha2.Sha512 h = sha2.Sha512.New();
+    h.UpdateText(data);
+    Digest d = new Digest { Len = 64 };
+    h.Finish(d.B[0..64]);
+    return d;
+}
+
+// HMAC-SHA-256 of data under key.
+public Digest HmacSha256(str key, str data) {
+    List<u8> k = BytesOf(key);
+    List<u8> m = BytesOf(data);
+    Digest d = new Digest { Len = 32 };
+    mac.HmacSha256(k.AsSlice(), m.AsSlice(), d.B[0..32]);
+    return d;
+}
+
+// Fills into with cryptographically secure random bytes (a new generator each call; keep
+// a random.Rng for many).
+public void RandomBytes(mut u8[] into) {
+    random.Rng r = random.Rng.New();
+    r.Fill(into);
+}
+
+// n random bytes as hex: a token, an identifier.
+public string RandomHex(usize n) {
+    random.Rng r = random.Rng.New();
+    string s = string.New();
+    for (usize i = 0; i < n; i++) {
+        u8[1] b;
+        r.Fill(b[0..1]);
+        s.Append(text.Hex(b[0] as u64, 2).AsStr());
+    }
+    return s;
+}

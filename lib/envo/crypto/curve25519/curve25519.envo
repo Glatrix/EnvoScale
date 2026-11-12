@@ -1,0 +1,504 @@
+// envo.crypto.curve25519: X25519 key agreement (RFC 7748) and Ed25519 signatures
+// (RFC 8032). Field elements mod p = 2^255 - 19 are sixteen 16-bit limbs held in i64, so
+// products and their sums fit without overflow; scalars mod the group order L are reduced
+// one bit at a time. Constant time: every loop runs a fixed number of times and secret
+// bits choose values by masks, not branches; branches look only at public data (public
+// keys, signatures, exponents).
+namespace envo.crypto.curve25519;
+
+use envo.crypto.sha2;
+
+// A field element: value = sum of L[i] * 2^(16 i), limbs not necessarily reduced.
+struct Fe {
+    i64[16] L;
+}
+
+Fe Small(i64 v) {
+    Fe r;
+    r.L[0] = v & 0xffff;
+    r.L[1] = v >> 16;
+    return r;
+}
+
+Fe Add(Fe a, Fe b) {
+    Fe r;
+    for (usize i = 0; i < 16; i++) r.L[i] = a.L[i] + b.L[i];
+    return r;
+}
+
+Fe Sub(Fe a, Fe b) {
+    Fe r;
+    for (usize i = 0; i < 16; i++) r.L[i] = a.L[i] - b.L[i];
+    return r;
+}
+
+// Moves each limb's excess into the next one; what leaves the top limb comes back into the
+// bottom one times 38 (2^256 = 38 mod p).
+void Carry(ref Fe a) {
+    for (usize i = 0; i < 16; i++) {
+        i64 c = a.L[i] >> 16;
+        a.L[i] = a.L[i] - c * 65536;
+        if (i < 15) a.L[i + 1] = a.L[i + 1] + c;
+        else a.L[0] = a.L[0] + 38 * c;
+    }
+}
+
+Fe Mul(Fe a, Fe b) {
+    i64[31] t;
+    for (usize i = 0; i < 16; i++) {
+        for (usize j = 0; j < 16; j++) t[i + j] = t[i + j] + a.L[i] * b.L[j];
+    }
+    for (usize i = 0; i < 15; i++) t[i] = t[i] + 38 * t[i + 16];
+    Fe r;
+    for (usize i = 0; i < 16; i++) r.L[i] = t[i];
+    Carry(ref r);
+    Carry(ref r);
+    return r;
+}
+
+Fe Sq(Fe a) => Mul(a, a);
+
+// a raised to the public exponent e (32 bytes, little-endian), most significant bit first.
+Fe Pow(Fe a, u8[] e) {
+    Fe r = Small(1);
+    usize bit = 256;
+    while (bit > 0) {
+        bit--;
+        r = Sq(r);
+        if ((e[bit / 8] >> (bit % 8) as u8) & 1 != 0) r = Mul(r, a);
+    }
+    return r;
+}
+
+// Swaps a and b if bit is 1, in constant time.
+void CSwap(ref Fe a, ref Fe b, i64 bit) {
+    i64 mask = 0 - bit;
+    for (usize i = 0; i < 16; i++) {
+        i64 t = mask & (a.L[i] ^ b.L[i]);
+        a.L[i] = a.L[i] ^ t;
+        b.L[i] = b.L[i] ^ t;
+    }
+}
+
+// The canonical 32-byte little-endian encoding of a (fully reduced mod p).
+void Pack(Fe a, mut u8[] out32) {
+    Fe t = a;
+    Carry(ref t);
+    Carry(ref t);
+    Carry(ref t);
+    // subtract p twice, keeping the result each time it does not go below zero
+    for (usize round = 0; round < 2; round++) {
+        Fe m;
+        i64 borrow = 0;
+        for (usize i = 0; i < 16; i++) {
+            i64 p = 0xffff;
+            if (i == 0) p = 0xffed;
+            if (i == 15) p = 0x7fff;
+            i64 d = t.L[i] - p - borrow;
+            borrow = (d >> 16) & 1;
+            m.L[i] = d & 0xffff;
+        }
+        // borrow 0: t >= p, so m = t - p is the smaller representative
+        CSwap(ref t, ref m, 1 - borrow);
+    }
+    for (usize i = 0; i < 16; i++) {
+        out32[2 * i] = (t.L[i] & 0xff) as u8;
+        out32[2 * i + 1] = ((t.L[i] >> 8) & 0xff) as u8;
+    }
+}
+
+Fe Unpack(u8[] b32) {
+    Fe r;
+    for (usize i = 0; i < 16; i++) r.L[i] = b32[2 * i] as i64 | (b32[2 * i + 1] as i64 << 8);
+    r.L[15] = r.L[15] & 0x7fff;
+    return r;
+}
+
+// p - 2, (p - 5) / 8 and (p - 1) / 4 as little-endian exponents.
+void Exponent(mut u8[] e32, u8 low, u8 high) {
+    e32[0] = low;
+    for (usize i = 1; i < 31; i++) e32[i] = 0xff;
+    e32[31] = high;
+}
+
+Fe Inv(Fe a) {
+    u8[32] e;
+    Exponent(e[0..32], 0xeb, 0x7f);     // p - 2 = 2^255 - 21
+    return Pow(a, e[0..32]);
+}
+
+Fe Pow2523(Fe a) {
+    u8[32] e;
+    Exponent(e[0..32], 0xfd, 0x0f);     // (p - 5) / 8 = 2^252 - 3
+    return Pow(a, e[0..32]);
+}
+
+bool FeEqual(Fe a, Fe b) {
+    u8[32] x;
+    u8[32] y;
+    Pack(a, x[0..32]);
+    Pack(b, y[0..32]);
+    u8 d = 0;
+    for (usize i = 0; i < 32; i++) d = d | (x[i] ^ y[i]);
+    return d == 0;
+}
+
+u8 Parity(Fe a) {
+    u8[32] x;
+    Pack(a, x[0..32]);
+    return x[0] & 1;
+}
+
+// ------------------------------------------------------------------ X25519
+
+// X25519(scalar, u): the u-coordinate of scalar times the point with u-coordinate u, all
+// 32 bytes (RFC 7748 section 5).
+public void X25519(u8[] scalar32, u8[] u32b, mut u8[] out32) {
+    u8[32] k;
+    for (usize i = 0; i < 32; i++) k[i] = scalar32[i];
+    k[0] = k[0] & 248;
+    k[31] = (k[31] & 127) | 64;
+    Fe x1 = Unpack(u32b);
+    Fe x2 = Small(1);
+    Fe z2 = Small(0);
+    Fe x3 = x1;
+    Fe z3 = Small(1);
+    Fe a24 = Small(121665);
+    i64 swap = 0;
+    usize t = 255;
+    while (t > 0) {
+        t--;
+        i64 bit = ((k[t / 8] >> (t % 8) as u8) & 1) as i64;
+        swap = swap ^ bit;
+        CSwap(ref x2, ref x3, swap);
+        CSwap(ref z2, ref z3, swap);
+        swap = bit;
+        Fe a = Add(x2, z2);
+        Fe aa = Sq(a);
+        Fe b = Sub(x2, z2);
+        Fe bb = Sq(b);
+        Fe e = Sub(aa, bb);
+        Fe c = Add(x3, z3);
+        Fe d = Sub(x3, z3);
+        Fe da = Mul(d, a);
+        Fe cb = Mul(c, b);
+        x3 = Sq(Add(da, cb));
+        z3 = Mul(x1, Sq(Sub(da, cb)));
+        x2 = Mul(aa, bb);
+        z2 = Mul(e, Add(aa, Mul(a24, e)));
+    }
+    CSwap(ref x2, ref x3, swap);
+    CSwap(ref z2, ref z3, swap);
+    Pack(Mul(x2, Inv(z2)), out32);
+}
+
+// The public key for a private key: X25519(private, 9).
+public void X25519Base(u8[] private32, mut u8[] public32) {
+    u8[32] nine;
+    nine[0] = 9;
+    X25519(private32, nine[0..32], public32);
+}
+
+// ------------------------------------------------------------------ Ed25519 points
+
+// A point in extended coordinates: x = X/Z, y = Y/Z, x y = T/Z.
+struct Point {
+    Fe X;
+    Fe Y;
+    Fe Z;
+    Fe T;
+}
+
+struct Curve {
+    Fe D;           // -121665/121666
+    Fe D2;          // 2 d
+    Fe SqrtM1;      // sqrt(-1)
+    Point B;        // the base point
+}
+
+Curve TheCurve() {
+    Curve c;
+    c.D = Mul(Sub(Small(0), Small(121665)), Inv(Small(121666)));
+    c.D2 = Add(c.D, c.D);
+    u8[32] e;
+    Exponent(e[0..32], 0xfb, 0x1f);     // (p - 1) / 4 = 2^253 - 5
+    c.SqrtM1 = Pow(Small(2), e[0..32]);
+    // the base point: y = 4/5, x even
+    u8[32] enc;
+    Pack(Mul(Small(4), Inv(Small(5))), enc[0..32]);
+    Point b = Identity();
+    Decode(c, enc[0..32], ref b);
+    c.B = b;
+    return c;
+}
+
+Point Identity() {
+    Point p;
+    p.X = Small(0);
+    p.Y = Small(1);
+    p.Z = Small(1);
+    p.T = Small(0);
+    return p;
+}
+
+Point PointAdd(in Curve c, Point p, Point q) {
+    Fe a = Mul(Sub(p.Y, p.X), Sub(q.Y, q.X));
+    Fe b = Mul(Add(p.Y, p.X), Add(q.Y, q.X));
+    Fe cc = Mul(Mul(p.T, q.T), c.D2);
+    Fe d = Mul(Add(p.Z, p.Z), q.Z);
+    Fe e = Sub(b, a);
+    Fe f = Sub(d, cc);
+    Fe g = Add(d, cc);
+    Fe h = Add(b, a);
+    Point r;
+    r.X = Mul(e, f);
+    r.Y = Mul(g, h);
+    r.Z = Mul(f, g);
+    r.T = Mul(e, h);
+    return r;
+}
+
+// s times p (s: 32 bytes, little-endian): double, add, and keep the sum by mask.
+Point ScalarMul(in Curve c, Point p, u8[] s32) {
+    Point q = Identity();
+    usize bit = 256;
+    while (bit > 0) {
+        bit--;
+        q = PointAdd(c, q, q);
+        Point r = PointAdd(c, q, p);
+        i64 b = ((s32[bit / 8] >> (bit % 8) as u8) & 1) as i64;
+        CSwap(ref q.X, ref r.X, b);
+        CSwap(ref q.Y, ref r.Y, b);
+        CSwap(ref q.Z, ref r.Z, b);
+        CSwap(ref q.T, ref r.T, b);
+    }
+    return q;
+}
+
+void Encode(Point p, mut u8[] out32) {
+    Fe zi = Inv(p.Z);
+    Fe x = Mul(p.X, zi);
+    Fe y = Mul(p.Y, zi);
+    Pack(y, out32[0..32]);
+    out32[31] = out32[31] ^ (Parity(x) << 7);
+}
+
+// Decodes a point (RFC 8032 section 5.1.3); false if b32 is not one.
+bool Decode(in Curve c, u8[] b32, ref Point dst) {
+    Fe y = Unpack(b32);
+    // y must be canonical (below p)
+    u8[32] check;
+    Pack(y, check[0..32]);
+    for (usize i = 0; i < 31; i++) {
+        if (check[i] != b32[i]) return false;
+    }
+    if (check[31] != b32[31] & 0x7f) return false;
+    u8 sign = b32[31] >> 7;
+    Fe y2 = Sq(y);
+    Fe u = Sub(y2, Small(1));
+    Fe v = Add(Mul(c.D, y2), Small(1));
+    Fe v3 = Mul(Sq(v), v);
+    Fe v7 = Mul(Sq(v3), v);
+    Fe x = Mul(Mul(u, v3), Pow2523(Mul(u, v7)));
+    Fe vx2 = Mul(v, Sq(x));
+    if (!FeEqual(vx2, u)) {
+        if (!FeEqual(vx2, Sub(Small(0), u))) return false;
+        x = Mul(x, c.SqrtM1);
+    }
+    if (FeEqual(x, Small(0)) && sign == 1) return false;
+    if (Parity(x) != sign) x = Sub(Small(0), x);
+    dst.X = x;
+    dst.Y = y;
+    dst.Z = Small(1);
+    dst.T = Mul(x, y);
+    return true;
+}
+
+// ------------------------------------------------------------------ scalars mod L
+
+// L = 2^252 + 27742317777372353535851937790883648493, in 32-bit limbs.
+void OrderLimbs(mut u32[] l9) {
+    l9[0] = 0x5cf5d3ed;
+    l9[1] = 0x5812631a;
+    l9[2] = 0xa2f79cd6;
+    l9[3] = 0x14def9de;
+    l9[4] = 0;
+    l9[5] = 0;
+    l9[6] = 0;
+    l9[7] = 0x10000000;
+    l9[8] = 0;
+}
+
+// x (n 32-bit limbs, little-endian) mod L into out32: one bit at a time, from the top,
+// r = 2 r + bit and then r - L kept by mask when it does not borrow.
+void ReduceL(u32[] x, mut u8[] out32) {
+    u32[9] l;
+    OrderLimbs(l[0..9]);
+    u32[9] r;
+    u32[9] t;
+    usize bit = x.Len * 32;
+    while (bit > 0) {
+        bit--;
+        u32 carry = (x[bit / 32] >> (bit % 32) as u32) & 1;
+        for (usize k = 0; k < 9; k++) {
+            u32 v = (r[k] << 1) | carry;
+            carry = r[k] >> 31;
+            r[k] = v;
+        }
+        u64 borrow = 0;
+        for (usize k = 0; k < 9; k++) {
+            u64 d = r[k] as u64 -% l[k] as u64 -% borrow;
+            t[k] = d as u32;
+            borrow = (d >> 63) & 1;
+        }
+        u32 keep = (borrow as u32) -% 1;        // all ones: no borrow, take t
+        for (usize k = 0; k < 9; k++) r[k] = (t[k] & keep) | (r[k] & ~keep);
+    }
+    for (usize k = 0; k < 8; k++) {
+        out32[4 * k] = r[k] as u8;
+        out32[4 * k + 1] = (r[k] >> 8) as u8;
+        out32[4 * k + 2] = (r[k] >> 16) as u8;
+        out32[4 * k + 3] = (r[k] >> 24) as u8;
+    }
+}
+
+void ToLimbs(u8[] b, mut u32[] limbs) {
+    for (usize k = 0; k < limbs.Len; k++) {
+        usize i = 4 * k;
+        limbs[k] = b[i] as u32 | (b[i + 1] as u32 << 8) | (b[i + 2] as u32 << 16) | (b[i + 3] as u32 << 24);
+    }
+}
+
+// A 64-byte hash mod L.
+void ReduceHash(u8[] h64, mut u8[] out32) {
+    u32[16] x;
+    ToLimbs(h64, x[0..16]);
+    ReduceL(x[0..16], out32);
+}
+
+// (a b + c) mod L, for 32-byte scalars.
+void MulAdd(u8[] a, u8[] b, u8[] c, mut u8[] out32) {
+    u32[8] x;
+    u32[8] y;
+    u32[8] z;
+    ToLimbs(a, x[0..8]);
+    ToLimbs(b, y[0..8]);
+    ToLimbs(c, z[0..8]);
+    u32[17] p;
+    for (usize i = 0; i < 8; i++) {
+        u64 carry = 0;
+        for (usize j = 0; j < 8; j++) {
+            u64 v = p[i + j] as u64 + x[i] as u64 * y[j] as u64 + carry;
+            p[i + j] = v as u32;
+            carry = v >> 32;
+        }
+        p[i + 8] = carry as u32;
+    }
+    u64 carry = 0;
+    for (usize k = 0; k < 17; k++) {
+        u64 add = 0;
+        if (k < 8) add = z[k] as u64;
+        u64 v = p[k] as u64 + add + carry;
+        p[k] = v as u32;
+        carry = v >> 32;
+    }
+    ReduceL(p[0..17], out32);
+}
+
+// Is the 32-byte scalar s below L?
+bool BelowL(u8[] s) {
+    u32[9] l;
+    OrderLimbs(l[0..9]);
+    u32[8] x;
+    ToLimbs(s, x[0..8]);
+    u64 borrow = 0;
+    for (usize k = 0; k < 8; k++) {
+        u64 d = x[k] as u64 -% l[k] as u64 -% borrow;
+        borrow = (d >> 63) & 1;
+    }
+    return borrow == 1;
+}
+
+// ------------------------------------------------------------------ Ed25519
+
+// The expanded private key: the clamped scalar and the prefix (RFC 8032 section 5.1.5).
+void Expand(u8[] secret32, mut u8[] s32, mut u8[] prefix32) {
+    sha2.Sha512 h = sha2.Sha512.New();
+    h.Update(secret32);
+    u8[64] d;
+    h.Finish(d[0..64]);
+    for (usize i = 0; i < 32; i++) {
+        s32[i] = d[i];
+        prefix32[i] = d[32 + i];
+    }
+    s32[0] = s32[0] & 248;
+    s32[31] = (s32[31] & 127) | 64;
+}
+
+// The public key (32 bytes) for a 32-byte secret key.
+public void Ed25519Public(u8[] secret32, mut u8[] public32) {
+    Curve c = TheCurve();
+    u8[32] s;
+    u8[32] prefix;
+    Expand(secret32, s[0..32], prefix[0..32]);
+    Encode(ScalarMul(c, c.B, s[0..32]), public32);
+}
+
+// Signs msg with a 32-byte secret key: a 64-byte signature into sig64.
+public void Ed25519Sign(u8[] secret32, u8[] msg, mut u8[] sig64) {
+    Curve c = TheCurve();
+    u8[32] s;
+    u8[32] prefix;
+    Expand(secret32, s[0..32], prefix[0..32]);
+    u8[32] a;
+    Encode(ScalarMul(c, c.B, s[0..32]), a[0..32]);
+    sha2.Sha512 hr = sha2.Sha512.New();
+    hr.Update(prefix[0..32]);
+    hr.Update(msg);
+    u8[64] rh;
+    hr.Finish(rh[0..64]);
+    u8[32] r;
+    ReduceHash(rh[0..64], r[0..32]);
+    u8[32] rEnc;
+    Encode(ScalarMul(c, c.B, r[0..32]), rEnc[0..32]);
+    sha2.Sha512 hk = sha2.Sha512.New();
+    hk.Update(rEnc[0..32]);
+    hk.Update(a[0..32]);
+    hk.Update(msg);
+    u8[64] kh;
+    hk.Finish(kh[0..64]);
+    u8[32] k;
+    ReduceHash(kh[0..64], k[0..32]);
+    u8[32] sum;
+    MulAdd(k[0..32], s[0..32], r[0..32], sum[0..32]);
+    for (usize i = 0; i < 32; i++) {
+        sig64[i] = rEnc[i];
+        sig64[32 + i] = sum[i];
+    }
+}
+
+// Checks a 64-byte signature of msg under a 32-byte public key (RFC 8032 section 5.1.7).
+public bool Ed25519Verify(u8[] public32, u8[] msg, u8[] sig64) {
+    if (public32.Len != 32 || sig64.Len != 64) return false;
+    Curve c = TheCurve();
+    Point a;
+    Point r;
+    if (!Decode(c, public32, ref a)) return false;
+    if (!Decode(c, sig64[0..32], ref r)) return false;
+    if (!BelowL(sig64[32..64])) return false;
+    sha2.Sha512 hk = sha2.Sha512.New();
+    hk.Update(sig64[0..32]);
+    hk.Update(public32);
+    hk.Update(msg);
+    u8[64] kh;
+    hk.Finish(kh[0..64]);
+    u8[32] k;
+    ReduceHash(kh[0..64], k[0..32]);
+    u8[32] left;
+    u8[32] right;
+    Encode(ScalarMul(c, c.B, sig64[32..64]), left[0..32]);
+    Encode(PointAdd(c, r, ScalarMul(c, a, k[0..32])), right[0..32]);
+    u8 d = 0;
+    for (usize i = 0; i < 32; i++) d = d | (left[i] ^ right[i]);
+    return d == 0;
+}

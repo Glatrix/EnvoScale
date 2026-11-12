@@ -1,0 +1,295 @@
+// envo.crypto.sha2: SHA-256 and SHA-512 (FIPS 180-4). Constant time: the work depends
+// only on the input's length, never on its bytes.
+namespace envo.crypto.sha2;
+
+static u32[64] K256;
+static u64[80] K512;
+static bool Ready = false;
+static bool Ready512 = false;
+
+void SetUp() {
+    unsafe {
+        if (Ready) return;
+        // the first 32 bits of the fractional parts of the cube roots of the first 64 primes
+        K256[0] = 0x428a2f98; K256[1] = 0x71374491; K256[2] = 0xb5c0fbcf; K256[3] = 0xe9b5dba5;
+        K256[4] = 0x3956c25b; K256[5] = 0x59f111f1; K256[6] = 0x923f82a4; K256[7] = 0xab1c5ed5;
+        K256[8] = 0xd807aa98; K256[9] = 0x12835b01; K256[10] = 0x243185be; K256[11] = 0x550c7dc3;
+        K256[12] = 0x72be5d74; K256[13] = 0x80deb1fe; K256[14] = 0x9bdc06a7; K256[15] = 0xc19bf174;
+        K256[16] = 0xe49b69c1; K256[17] = 0xefbe4786; K256[18] = 0x0fc19dc6; K256[19] = 0x240ca1cc;
+        K256[20] = 0x2de92c6f; K256[21] = 0x4a7484aa; K256[22] = 0x5cb0a9dc; K256[23] = 0x76f988da;
+        K256[24] = 0x983e5152; K256[25] = 0xa831c66d; K256[26] = 0xb00327c8; K256[27] = 0xbf597fc7;
+        K256[28] = 0xc6e00bf3; K256[29] = 0xd5a79147; K256[30] = 0x06ca6351; K256[31] = 0x14292967;
+        K256[32] = 0x27b70a85; K256[33] = 0x2e1b2138; K256[34] = 0x4d2c6dfc; K256[35] = 0x53380d13;
+        K256[36] = 0x650a7354; K256[37] = 0x766a0abb; K256[38] = 0x81c2c92e; K256[39] = 0x92722c85;
+        K256[40] = 0xa2bfe8a1; K256[41] = 0xa81a664b; K256[42] = 0xc24b8b70; K256[43] = 0xc76c51a3;
+        K256[44] = 0xd192e819; K256[45] = 0xd6990624; K256[46] = 0xf40e3585; K256[47] = 0x106aa070;
+        K256[48] = 0x19a4c116; K256[49] = 0x1e376c08; K256[50] = 0x2748774c; K256[51] = 0x34b0bcb5;
+        K256[52] = 0x391c0cb3; K256[53] = 0x4ed8aa4a; K256[54] = 0x5b9cca4f; K256[55] = 0x682e6ff3;
+        K256[56] = 0x748f82ee; K256[57] = 0x78a5636f; K256[58] = 0x84c87814; K256[59] = 0x8cc70208;
+        K256[60] = 0x90befffa; K256[61] = 0xa4506ceb; K256[62] = 0xbef9a3f7; K256[63] = 0xc67178f2;
+        Ready = true;
+    }
+}
+
+u32 Rotr(u32 x, u32 n) => (x >> n) | (x << (32 - n));
+
+// SHA-256 in progress.
+public struct Sha256 {
+    u32[8] H;
+    u8[64] Block;
+    usize Fill;         // bytes in Block
+    u64 Total;          // bytes hashed
+
+    public static Sha256 New() {
+        SetUp();
+        Sha256 s = new Sha256 { Fill = 0, Total = 0 };
+        s.H[0] = 0x6a09e667;
+        s.H[1] = 0xbb67ae85;
+        s.H[2] = 0x3c6ef372;
+        s.H[3] = 0xa54ff53a;
+        s.H[4] = 0x510e527f;
+        s.H[5] = 0x9b05688c;
+        s.H[6] = 0x1f83d9ab;
+        s.H[7] = 0x5be0cd19;
+        return s;
+    }
+
+    void Compress(ref this) {
+        u32[64] w;
+        for (usize t = 0; t < 16; t++) {
+            w[t] = (this.Block[4 * t] as u32 << 24) | (this.Block[4 * t + 1] as u32 << 16) | (this.Block[4 * t + 2] as u32 << 8) | this.Block[4 * t + 3] as u32;
+        }
+        for (usize t = 16; t < 64; t++) {
+            u32 s0 = Rotr(w[t - 15], 7) ^ Rotr(w[t - 15], 18) ^ (w[t - 15] >> 3);
+            u32 s1 = Rotr(w[t - 2], 17) ^ Rotr(w[t - 2], 19) ^ (w[t - 2] >> 10);
+            w[t] = w[t - 16] +% s0 +% w[t - 7] +% s1;
+        }
+        u32 a = this.H[0];
+        u32 b = this.H[1];
+        u32 c = this.H[2];
+        u32 d = this.H[3];
+        u32 e = this.H[4];
+        u32 f = this.H[5];
+        u32 g = this.H[6];
+        u32 h = this.H[7];
+        for (usize t = 0; t < 64; t++) {
+            u32 k = 0;
+            unsafe { k = K256[t]; }
+            u32 t1 = h +% (Rotr(e, 6) ^ Rotr(e, 11) ^ Rotr(e, 25)) +% ((e & f) ^ (~e & g)) +% k +% w[t];
+            u32 t2 = (Rotr(a, 2) ^ Rotr(a, 13) ^ Rotr(a, 22)) +% ((a & b) ^ (a & c) ^ (b & c));
+            h = g;
+            g = f;
+            f = e;
+            e = d +% t1;
+            d = c;
+            c = b;
+            b = a;
+            a = t1 +% t2;
+        }
+        this.H[0] = this.H[0] +% a;
+        this.H[1] = this.H[1] +% b;
+        this.H[2] = this.H[2] +% c;
+        this.H[3] = this.H[3] +% d;
+        this.H[4] = this.H[4] +% e;
+        this.H[5] = this.H[5] +% f;
+        this.H[6] = this.H[6] +% g;
+        this.H[7] = this.H[7] +% h;
+    }
+
+    // Hashes more bytes.
+    public void Update(ref this, u8[] data) {
+        for (usize i = 0; i < data.Len; i++) {
+            this.Block[this.Fill] = data[i];
+            this.Fill++;
+            if (this.Fill == 64) {
+                this.Compress();
+                this.Fill = 0;
+            }
+        }
+        this.Total = this.Total +% data.Len as u64;
+    }
+
+    public void UpdateText(ref this, str text) {
+        for (usize i = 0; i < text.Len; i++) {
+            this.Block[this.Fill] = text[i];
+            this.Fill++;
+            if (this.Fill == 64) {
+                this.Compress();
+                this.Fill = 0;
+            }
+        }
+        this.Total = this.Total +% text.Len as u64;
+    }
+
+    // The digest of everything hashed: 32 bytes into out.
+    public void Finish(ref this, mut u8[] out32) {
+        u64 bits = this.Total *% 8;
+        this.Block[this.Fill] = 0x80;
+        this.Fill++;
+        if (this.Fill > 56) {
+            while (this.Fill < 64) {
+                this.Block[this.Fill] = 0;
+                this.Fill++;
+            }
+            this.Compress();
+            this.Fill = 0;
+        }
+        while (this.Fill < 56) {
+            this.Block[this.Fill] = 0;
+            this.Fill++;
+        }
+        for (usize i = 0; i < 8; i++) this.Block[56 + i] = (bits >> (56 - 8 * i as u64)) as u8;
+        this.Compress();
+        for (usize i = 0; i < 8; i++) {
+            out32[4 * i] = (this.H[i] >> 24) as u8;
+            out32[4 * i + 1] = (this.H[i] >> 16) as u8;
+            out32[4 * i + 2] = (this.H[i] >> 8) as u8;
+            out32[4 * i + 3] = this.H[i] as u8;
+        }
+    }
+}
+
+u64 Rotr64(u64 x, u64 n) => (x >> n) | (x << (64 - n));
+
+void SetUp512() {
+    unsafe {
+        if (Ready512) return;
+        // the first 64 bits of the fractional parts of the cube roots of the first 80 primes
+        K512[0] = 0x428a2f98d728ae22; K512[1] = 0x7137449123ef65cd; K512[2] = 0xb5c0fbcfec4d3b2f; K512[3] = 0xe9b5dba58189dbbc;
+        K512[4] = 0x3956c25bf348b538; K512[5] = 0x59f111f1b605d019; K512[6] = 0x923f82a4af194f9b; K512[7] = 0xab1c5ed5da6d8118;
+        K512[8] = 0xd807aa98a3030242; K512[9] = 0x12835b0145706fbe; K512[10] = 0x243185be4ee4b28c; K512[11] = 0x550c7dc3d5ffb4e2;
+        K512[12] = 0x72be5d74f27b896f; K512[13] = 0x80deb1fe3b1696b1; K512[14] = 0x9bdc06a725c71235; K512[15] = 0xc19bf174cf692694;
+        K512[16] = 0xe49b69c19ef14ad2; K512[17] = 0xefbe4786384f25e3; K512[18] = 0x0fc19dc68b8cd5b5; K512[19] = 0x240ca1cc77ac9c65;
+        K512[20] = 0x2de92c6f592b0275; K512[21] = 0x4a7484aa6ea6e483; K512[22] = 0x5cb0a9dcbd41fbd4; K512[23] = 0x76f988da831153b5;
+        K512[24] = 0x983e5152ee66dfab; K512[25] = 0xa831c66d2db43210; K512[26] = 0xb00327c898fb213f; K512[27] = 0xbf597fc7beef0ee4;
+        K512[28] = 0xc6e00bf33da88fc2; K512[29] = 0xd5a79147930aa725; K512[30] = 0x06ca6351e003826f; K512[31] = 0x142929670a0e6e70;
+        K512[32] = 0x27b70a8546d22ffc; K512[33] = 0x2e1b21385c26c926; K512[34] = 0x4d2c6dfc5ac42aed; K512[35] = 0x53380d139d95b3df;
+        K512[36] = 0x650a73548baf63de; K512[37] = 0x766a0abb3c77b2a8; K512[38] = 0x81c2c92e47edaee6; K512[39] = 0x92722c851482353b;
+        K512[40] = 0xa2bfe8a14cf10364; K512[41] = 0xa81a664bbc423001; K512[42] = 0xc24b8b70d0f89791; K512[43] = 0xc76c51a30654be30;
+        K512[44] = 0xd192e819d6ef5218; K512[45] = 0xd69906245565a910; K512[46] = 0xf40e35855771202a; K512[47] = 0x106aa07032bbd1b8;
+        K512[48] = 0x19a4c116b8d2d0c8; K512[49] = 0x1e376c085141ab53; K512[50] = 0x2748774cdf8eeb99; K512[51] = 0x34b0bcb5e19b48a8;
+        K512[52] = 0x391c0cb3c5c95a63; K512[53] = 0x4ed8aa4ae3418acb; K512[54] = 0x5b9cca4f7763e373; K512[55] = 0x682e6ff3d6b2b8a3;
+        K512[56] = 0x748f82ee5defb2fc; K512[57] = 0x78a5636f43172f60; K512[58] = 0x84c87814a1f0ab72; K512[59] = 0x8cc702081a6439ec;
+        K512[60] = 0x90befffa23631e28; K512[61] = 0xa4506cebde82bde9; K512[62] = 0xbef9a3f7b2c67915; K512[63] = 0xc67178f2e372532b;
+        K512[64] = 0xca273eceea26619c; K512[65] = 0xd186b8c721c0c207; K512[66] = 0xeada7dd6cde0eb1e; K512[67] = 0xf57d4f7fee6ed178;
+        K512[68] = 0x06f067aa72176fba; K512[69] = 0x0a637dc5a2c898a6; K512[70] = 0x113f9804bef90dae; K512[71] = 0x1b710b35131c471b;
+        K512[72] = 0x28db77f523047d84; K512[73] = 0x32caab7b40c72493; K512[74] = 0x3c9ebe0a15c9bebc; K512[75] = 0x431d67c49c100d4c;
+        K512[76] = 0x4cc5d4becb3e42b6; K512[77] = 0x597f299cfc657e2a; K512[78] = 0x5fcb6fab3ad6faec; K512[79] = 0x6c44198c4a475817;
+        Ready512 = true;
+    }
+}
+
+// SHA-512 in progress.
+public struct Sha512 {
+    u64[8] H;
+    u8[128] Block;
+    usize Fill;
+    u64 Total;          // bytes hashed (inputs past 2^61 bytes are not supported)
+
+    public static Sha512 New() {
+        SetUp512();
+        Sha512 s = new Sha512 { Fill = 0, Total = 0 };
+        s.H[0] = 0x6a09e667f3bcc908;
+        s.H[1] = 0xbb67ae8584caa73b;
+        s.H[2] = 0x3c6ef372fe94f82b;
+        s.H[3] = 0xa54ff53a5f1d36f1;
+        s.H[4] = 0x510e527fade682d1;
+        s.H[5] = 0x9b05688c2b3e6c1f;
+        s.H[6] = 0x1f83d9abfb41bd6b;
+        s.H[7] = 0x5be0cd19137e2179;
+        return s;
+    }
+
+    void Compress(ref this) {
+        u64[80] w;
+        for (usize t = 0; t < 16; t++) {
+            u64 v = 0;
+            for (usize k = 0; k < 8; k++) v = (v << 8) | this.Block[8 * t + k] as u64;
+            w[t] = v;
+        }
+        for (usize t = 16; t < 80; t++) {
+            u64 s0 = Rotr64(w[t - 15], 1) ^ Rotr64(w[t - 15], 8) ^ (w[t - 15] >> 7);
+            u64 s1 = Rotr64(w[t - 2], 19) ^ Rotr64(w[t - 2], 61) ^ (w[t - 2] >> 6);
+            w[t] = w[t - 16] +% s0 +% w[t - 7] +% s1;
+        }
+        u64 a = this.H[0];
+        u64 b = this.H[1];
+        u64 c = this.H[2];
+        u64 d = this.H[3];
+        u64 e = this.H[4];
+        u64 f = this.H[5];
+        u64 g = this.H[6];
+        u64 h = this.H[7];
+        for (usize t = 0; t < 80; t++) {
+            u64 k = 0;
+            unsafe { k = K512[t]; }
+            u64 t1 = h +% (Rotr64(e, 14) ^ Rotr64(e, 18) ^ Rotr64(e, 41)) +% ((e & f) ^ (~e & g)) +% k +% w[t];
+            u64 t2 = (Rotr64(a, 28) ^ Rotr64(a, 34) ^ Rotr64(a, 39)) +% ((a & b) ^ (a & c) ^ (b & c));
+            h = g;
+            g = f;
+            f = e;
+            e = d +% t1;
+            d = c;
+            c = b;
+            b = a;
+            a = t1 +% t2;
+        }
+        this.H[0] = this.H[0] +% a;
+        this.H[1] = this.H[1] +% b;
+        this.H[2] = this.H[2] +% c;
+        this.H[3] = this.H[3] +% d;
+        this.H[4] = this.H[4] +% e;
+        this.H[5] = this.H[5] +% f;
+        this.H[6] = this.H[6] +% g;
+        this.H[7] = this.H[7] +% h;
+    }
+
+    // Hashes more bytes.
+    public void Update(ref this, u8[] data) {
+        for (usize i = 0; i < data.Len; i++) {
+            this.Block[this.Fill] = data[i];
+            this.Fill++;
+            if (this.Fill == 128) {
+                this.Compress();
+                this.Fill = 0;
+            }
+        }
+        this.Total = this.Total +% data.Len as u64;
+    }
+
+    public void UpdateText(ref this, str text) {
+        for (usize i = 0; i < text.Len; i++) {
+            this.Block[this.Fill] = text[i];
+            this.Fill++;
+            if (this.Fill == 128) {
+                this.Compress();
+                this.Fill = 0;
+            }
+        }
+        this.Total = this.Total +% text.Len as u64;
+    }
+
+    // The digest of everything hashed: 64 bytes into out64.
+    public void Finish(ref this, mut u8[] out64) {
+        u64 bits = this.Total *% 8;
+        this.Block[this.Fill] = 0x80;
+        this.Fill++;
+        if (this.Fill > 112) {
+            while (this.Fill < 128) {
+                this.Block[this.Fill] = 0;
+                this.Fill++;
+            }
+            this.Compress();
+            this.Fill = 0;
+        }
+        while (this.Fill < 120) {
+            this.Block[this.Fill] = 0;
+            this.Fill++;
+        }
+        for (usize i = 0; i < 8; i++) this.Block[120 + i] = (bits >> (56 - 8 * i as u64)) as u8;
+        this.Compress();
+        for (usize i = 0; i < 8; i++) {
+            for (usize k = 0; k < 8; k++) out64[8 * i + k] = (this.H[i] >> (56 - 8 * k as u64)) as u8;
+        }
+    }
+}

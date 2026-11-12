@@ -1,0 +1,86 @@
+// envo.crypto.mac: HMAC (RFC 2104) and HKDF (RFC 5869) over SHA-256 and SHA-512.
+namespace envo.crypto.mac;
+
+use envo.crypto.sha2;
+
+// HMAC-SHA-256 of data under key, into out32.
+public void HmacSha256(u8[] key, u8[] data, mut u8[] out32) {
+    u8[64] k;
+    if (key.Len > 64) {
+        sha2.Sha256 h = sha2.Sha256.New();
+        h.Update(key);
+        h.Finish(k[0..32]);
+    } else {
+        for (usize i = 0; i < key.Len; i++) k[i] = key[i];
+    }
+    u8[64] pad;
+    for (usize i = 0; i < 64; i++) pad[i] = k[i] ^ 0x36;
+    sha2.Sha256 inner = sha2.Sha256.New();
+    inner.Update(pad[0..64]);
+    inner.Update(data);
+    u8[32] ih;
+    inner.Finish(ih[0..32]);
+    for (usize i = 0; i < 64; i++) pad[i] = k[i] ^ 0x5c;
+    sha2.Sha256 outer = sha2.Sha256.New();
+    outer.Update(pad[0..64]);
+    outer.Update(ih[0..32]);
+    outer.Finish(out32);
+}
+
+// HMAC-SHA-512 of data under key, into out64.
+public void HmacSha512(u8[] key, u8[] data, mut u8[] out64) {
+    u8[128] k;
+    if (key.Len > 128) {
+        sha2.Sha512 h = sha2.Sha512.New();
+        h.Update(key);
+        h.Finish(k[0..64]);
+    } else {
+        for (usize i = 0; i < key.Len; i++) k[i] = key[i];
+    }
+    u8[128] pad;
+    for (usize i = 0; i < 128; i++) pad[i] = k[i] ^ 0x36;
+    sha2.Sha512 inner = sha2.Sha512.New();
+    inner.Update(pad[0..128]);
+    inner.Update(data);
+    u8[64] ih;
+    inner.Finish(ih[0..64]);
+    for (usize i = 0; i < 128; i++) pad[i] = k[i] ^ 0x5c;
+    sha2.Sha512 outer = sha2.Sha512.New();
+    outer.Update(pad[0..128]);
+    outer.Update(ih[0..64]);
+    outer.Finish(out64);
+}
+
+// HKDF-Extract with SHA-256: the pseudorandom key from salt and input keying material.
+public void HkdfExtract256(u8[] salt, u8[] ikm, mut u8[] prk32) {
+    HmacSha256(salt, ikm, prk32);
+}
+
+// HKDF-Expand with SHA-256: okm.Len bytes (at most 255 × 32) into okm from prk and info.
+public void HkdfExpand256(u8[] prk, u8[] info, mut u8[] okm) {
+    u8[32] t;
+    usize tLen = 0;
+    usize at = 0;
+    u8 counter = 1;
+    while (at < okm.Len) {
+        List<u8> msg = List<u8>.New();
+        for (usize i = 0; i < tLen; i++) msg.Push(t[i]);
+        for (usize i = 0; i < info.Len; i++) msg.Push(info[i]);
+        msg.Push(counter);
+        HmacSha256(prk, msg.AsSlice(), t[0..32]);
+        tLen = 32;
+        for (usize i = 0; i < 32 && at < okm.Len; i++) {
+            okm[at] = t[i];
+            at++;
+        }
+        counter++;
+    }
+}
+
+// Are a and b equal, in time that depends only on their lengths?
+public bool Equal(u8[] a, u8[] b) {
+    if (a.Len != b.Len) return false;
+    u8 diff = 0;
+    for (usize i = 0; i < a.Len; i++) diff = diff | (a[i] ^ b[i]);
+    return diff == 0;
+}

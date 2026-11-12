@@ -1,0 +1,212 @@
+// envo.crypto.aes: AES-128 and AES-256 (FIPS 197) and AES-GCM (NIST SP 800-38D). Constant
+// time without tables: the S-box is computed (the inverse in GF(2^8), then the affine map)
+// and every multiplication masks instead of branching, so no branch or memory index
+// depends on the key or the data. Slow next to table or AES-NI code; hardware
+// acceleration comes when the compiler has intrinsics for it.
+namespace envo.crypto.aes;
+
+// a times b in GF(2^8) mod x^8 + x^4 + x^3 + x + 1.
+u8 GMul(u8 a, u8 b) {
+    u8 p = 0;
+    u8 x = a;
+    u8 y = b;
+    for (usize i = 0; i < 8; i++) {
+        p = p ^ (x & (0 -% (y & 1)));
+        u8 hi = x >> 7;
+        x = (x << 1) ^ (0x1b & (0 -% hi));
+        y = y >> 1;
+    }
+    return p;
+}
+
+u8 Rotl8(u8 x, u8 n) => (x << n) | (x >> (8 - n));
+
+// The S-box: the inverse of x (x^254; 0 for 0), then the affine map.
+u8 SBox(u8 x) {
+    u8 r = 1;
+    // 254 = 0b11111110, most significant bit first
+    for (usize bit = 0; bit < 8; bit++) {
+        r = GMul(r, r);
+        if (bit < 7) r = GMul(r, x);
+    }
+    return r ^ Rotl8(r, 1) ^ Rotl8(r, 2) ^ Rotl8(r, 3) ^ Rotl8(r, 4) ^ 0x63;
+}
+
+u8 XTime(u8 x) => (x << 1) ^ (0x1b & (0 -% (x >> 7)));
+
+// An expanded key: 4 (Nr + 1) words, as 16-byte round keys.
+public struct Aes {
+    u8[240] Round;
+    usize Rounds;
+
+    // A cipher for a 16- or 32-byte key (AES-128 or AES-256).
+    public static Aes New(u8[] key) {
+        Aes a = new Aes { Rounds = 10 };
+        usize nk = key.Len / 4;
+        if (nk == 8) a.Rounds = 14;
+        usize words = 4 * (a.Rounds + 1);
+        for (usize i = 0; i < key.Len; i++) a.Round[i] = key[i];
+        u8 rcon = 1;
+        for (usize w = nk; w < words; w++) {
+            u8[4] t;
+            for (usize k = 0; k < 4; k++) t[k] = a.Round[4 * (w - 1) + k];
+            if (w % nk == 0) {
+                u8 first = t[0];
+                t[0] = SBox(t[1]) ^ rcon;
+                t[1] = SBox(t[2]);
+                t[2] = SBox(t[3]);
+                t[3] = SBox(first);
+                rcon = XTime(rcon);
+            } else if (nk > 6 && w % nk == 4) {
+                for (usize k = 0; k < 4; k++) t[k] = SBox(t[k]);
+            }
+            for (usize k = 0; k < 4; k++) a.Round[4 * w + k] = a.Round[4 * (w - nk) + k] ^ t[k];
+        }
+        return a;
+    }
+
+    // Encrypts one 16-byte block in place.
+    public void EncryptBlock(in this, mut u8[] block) {
+        u8[16] s;
+        for (usize i = 0; i < 16; i++) s[i] = block[i] ^ this.Round[i];
+        for (usize round = 1; round <= this.Rounds; round++) {
+            // SubBytes and ShiftRows: byte (row r, column c) comes from column c + r
+            u8[16] t;
+            for (usize c = 0; c < 4; c++) {
+                for (usize r = 0; r < 4; r++) t[4 * c + r] = SBox(s[4 * ((c + r) % 4) + r]);
+            }
+            if (round < this.Rounds) {
+                // MixColumns
+                for (usize c = 0; c < 4; c++) {
+                    u8 a0 = t[4 * c];
+                    u8 a1 = t[4 * c + 1];
+                    u8 a2 = t[4 * c + 2];
+                    u8 a3 = t[4 * c + 3];
+                    s[4 * c] = XTime(a0) ^ (XTime(a1) ^ a1) ^ a2 ^ a3;
+                    s[4 * c + 1] = a0 ^ XTime(a1) ^ (XTime(a2) ^ a2) ^ a3;
+                    s[4 * c + 2] = a0 ^ a1 ^ XTime(a2) ^ (XTime(a3) ^ a3);
+                    s[4 * c + 3] = (XTime(a0) ^ a0) ^ a1 ^ a2 ^ XTime(a3);
+                }
+            } else {
+                for (usize i = 0; i < 16; i++) s[i] = t[i];
+            }
+            for (usize i = 0; i < 16; i++) s[i] = s[i] ^ this.Round[16 * round + i];
+        }
+        for (usize i = 0; i < 16; i++) block[i] = s[i];
+    }
+}
+
+// ------------------------------------------------------------------ GCM
+
+// x times y in GF(2^128) with GCM's bit order (SP 800-38D section 6.3); blocks as two
+// big-endian halves.
+void GfMul(ref u64[2] x, u64[2] y) {
+    u64 zh = 0;
+    u64 zl = 0;
+    u64 vh = y[0];
+    u64 vl = y[1];
+    for (usize i = 0; i < 128; i++) {
+        u64 word = x[0];
+        if (i >= 64) word = x[1];
+        u64 bit = (word >> (63 - (i % 64) as u64)) & 1;
+        u64 m = 0 -% bit;
+        zh = zh ^ (vh & m);
+        zl = zl ^ (vl & m);
+        u64 lsb = vl & 1;
+        vl = (vl >> 1) | (vh << 63);
+        vh = (vh >> 1) ^ (0xe100000000000000 & (0 -% lsb));
+    }
+    x[0] = zh;
+    x[1] = zl;
+}
+
+u64 Be64(u8[] b, usize at) {
+    u64 v = 0;
+    for (usize i = 0; i < 8; i++) v = (v << 8) | b[at + i] as u64;
+    return v;
+}
+
+void PutBe64(mut u8[] b, usize at, u64 v) {
+    for (usize i = 0; i < 8; i++) b[at + i] = (v >> (56 - 8 * i as u64)) as u8;
+}
+
+// GHASH over data, padded with zeros to whole blocks, into y.
+void GHashBlocks(ref u64[2] y, u64[2] h, u8[] data) {
+    usize at = 0;
+    while (at < data.Len) {
+        u8[16] b;
+        for (usize i = 0; i < 16 && at + i < data.Len; i++) b[i] = data[at + i];
+        y[0] = y[0] ^ Be64(b[0..16], 0);
+        y[1] = y[1] ^ Be64(b[0..16], 8);
+        GfMul(ref y, h);
+        at += 16;
+    }
+}
+
+// AES-GCM with a key and a 12-byte nonce (never reused with a key).
+public struct Gcm {
+    Aes Cipher;
+    u64[2] H;
+
+    public static Gcm New(u8[] key) {
+        Aes a = Aes.New(key);
+        u8[16] zero;
+        a.EncryptBlock(zero[0..16]);
+        Gcm g = new Gcm { Cipher = a };
+        g.H[0] = Be64(zero[0..16], 0);
+        g.H[1] = Be64(zero[0..16], 8);
+        return g;
+    }
+
+    // CTR mode from counter block ctr (its last 32 bits count), over data in place.
+    void Ctr(in this, u8[] nonce12, u32 first, mut u8[] data) {
+        usize at = 0;
+        u32 n = first;
+        while (at < data.Len) {
+            u8[16] block;
+            for (usize i = 0; i < 12; i++) block[i] = nonce12[i];
+            block[12] = (n >> 24) as u8;
+            block[13] = (n >> 16) as u8;
+            block[14] = (n >> 8) as u8;
+            block[15] = n as u8;
+            this.Cipher.EncryptBlock(block[0..16]);
+            for (usize i = 0; i < 16 && at + i < data.Len; i++) data[at + i] = data[at + i] ^ block[i];
+            at += 16;
+            n = n +% 1;
+        }
+    }
+
+    void Tag(in this, u8[] nonce12, u8[] aad, u8[] ct, mut u8[] tag16) {
+        u64[2] y;
+        GHashBlocks(ref y, this.H, aad);
+        GHashBlocks(ref y, this.H, ct);
+        y[0] = y[0] ^ (aad.Len as u64 * 8);
+        y[1] = y[1] ^ (ct.Len as u64 * 8);
+        GfMul(ref y, this.H);
+        u8[16] s;
+        PutBe64(s[0..16], 0, y[0]);
+        PutBe64(s[0..16], 8, y[1]);
+        u8[16] j0;
+        for (usize i = 0; i < 12; i++) j0[i] = nonce12[i];
+        j0[15] = 1;
+        this.Cipher.EncryptBlock(j0[0..16]);
+        for (usize i = 0; i < 16; i++) tag16[i] = s[i] ^ j0[i];
+    }
+
+    // Encrypts data in place and writes the 16-byte tag over aad and the ciphertext.
+    public void Seal(in this, u8[] nonce12, u8[] aad, mut u8[] data, mut u8[] tag16) {
+        this.Ctr(nonce12, 2, data[0..data.Len]);
+        this.Tag(nonce12, aad, data, tag16);
+    }
+
+    // Checks the tag and decrypts data in place; false (and data untouched) if it is wrong.
+    public bool Open(in this, u8[] nonce12, u8[] aad, mut u8[] data, u8[] tag16) {
+        u8[16] want;
+        this.Tag(nonce12, aad, data[0..data.Len], want[0..16]);
+        u8 d = 0;
+        for (usize i = 0; i < 16; i++) d = d | (want[i] ^ tag16[i]);
+        if (d != 0) return false;
+        this.Ctr(nonce12, 2, data);
+        return true;
+    }
+}

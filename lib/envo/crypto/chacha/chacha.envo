@@ -1,0 +1,252 @@
+// envo.crypto.chacha: ChaCha20, Poly1305 and the ChaCha20-Poly1305 AEAD (RFC 8439).
+// Constant time: no branch or memory address depends on a secret.
+namespace envo.crypto.chacha;
+
+u32 Le32(u8[] b, usize at) => b[at] as u32 | (b[at + 1] as u32 << 8) | (b[at + 2] as u32 << 16) | (b[at + 3] as u32 << 24);
+
+void Put32(mut u8[] b, usize at, u32 v) {
+    b[at] = v as u8;
+    b[at + 1] = (v >> 8) as u8;
+    b[at + 2] = (v >> 16) as u8;
+    b[at + 3] = (v >> 24) as u8;
+}
+
+u32 Rotl(u32 x, u32 n) => (x << n) | (x >> (32 - n));
+
+// ------------------------------------------------------------------ ChaCha20
+
+// One 64-byte block of the key stream for key (32 bytes), counter and nonce (12 bytes).
+public void Block(u8[] key, u32 counter, u8[] nonce, mut u8[] out64) {
+    u32[16] s;
+    s[0] = 0x61707865;
+    s[1] = 0x3320646e;
+    s[2] = 0x79622d32;
+    s[3] = 0x6b206574;
+    for (usize i = 0; i < 8; i++) s[4 + i] = Le32(key, 4 * i);
+    s[12] = counter;
+    for (usize i = 0; i < 3; i++) s[13 + i] = Le32(nonce, 4 * i);
+    u32[16] x;
+    for (usize i = 0; i < 16; i++) x[i] = s[i];
+    for (usize round = 0; round < 10; round++) {
+        Quarter(ref x, 0, 4, 8, 12);
+        Quarter(ref x, 1, 5, 9, 13);
+        Quarter(ref x, 2, 6, 10, 14);
+        Quarter(ref x, 3, 7, 11, 15);
+        Quarter(ref x, 0, 5, 10, 15);
+        Quarter(ref x, 1, 6, 11, 12);
+        Quarter(ref x, 2, 7, 8, 13);
+        Quarter(ref x, 3, 4, 9, 14);
+    }
+    for (usize i = 0; i < 16; i++) Put32(out64, 4 * i, x[i] +% s[i]);
+}
+
+void Quarter(ref u32[16] x, usize a, usize b, usize c, usize d) {
+    x[a] = x[a] +% x[b];
+    x[d] = Rotl(x[d] ^ x[a], 16);
+    x[c] = x[c] +% x[d];
+    x[b] = Rotl(x[b] ^ x[c], 12);
+    x[a] = x[a] +% x[b];
+    x[d] = Rotl(x[d] ^ x[a], 8);
+    x[c] = x[c] +% x[d];
+    x[b] = Rotl(x[b] ^ x[c], 7);
+}
+
+// Encrypts (or decrypts: the same) data in place with ChaCha20 from block counter.
+public void Xor(u8[] key, u32 counter, u8[] nonce, mut u8[] data) {
+    u8[64] stream;
+    usize at = 0;
+    u32 n = counter;
+    while (at < data.Len) {
+        Block(key, n, nonce, stream[0..64]);
+        for (usize i = 0; i < 64 && at + i < data.Len; i++) data[at + i] = data[at + i] ^ stream[i];
+        at += 64;
+        n = n +% 1;
+    }
+}
+
+// ------------------------------------------------------------------ Poly1305
+
+// Poly1305 in progress: 26-bit limbs, products in 64 bits.
+public struct Poly1305 {
+    u32[5] R;
+    u32[5] H;
+    u32[4] Pad;
+    u8[16] Buf;
+    usize Fill;
+
+    // A MAC keyed with key (32 bytes: r, then s). Use a key once.
+    public static Poly1305 New(u8[] key) {
+        Poly1305 p = new Poly1305 { Fill = 0 };
+        p.R[0] = Le32(key, 0) & 0x3ffffff;
+        p.R[1] = (Le32(key, 3) >> 2) & 0x3ffff03;
+        p.R[2] = (Le32(key, 6) >> 4) & 0x3ffc0ff;
+        p.R[3] = (Le32(key, 9) >> 6) & 0x3f03fff;
+        p.R[4] = (Le32(key, 12) >> 8) & 0x00fffff;
+        for (usize i = 0; i < 4; i++) p.Pad[i] = Le32(key, 16 + 4 * i);
+        return p;
+    }
+
+    // Adds the 16-byte block in Buf; hibit is 1 << 24 for a full block, 0 for the padded
+    // last one.
+    void Blocks(ref this, u32 hibit) {
+        u8[16] m;
+        for (usize i = 0; i < 16; i++) m[i] = this.Buf[i];
+        u32 r0 = this.R[0];
+        u32 r1 = this.R[1];
+        u32 r2 = this.R[2];
+        u32 r3 = this.R[3];
+        u32 r4 = this.R[4];
+        u32 s1 = r1 * 5;
+        u32 s2 = r2 * 5;
+        u32 s3 = r3 * 5;
+        u32 s4 = r4 * 5;
+        u32 h0 = this.H[0] + (Le32(m[0..16], 0) & 0x3ffffff);
+        u32 h1 = this.H[1] + ((Le32(m[0..16], 3) >> 2) & 0x3ffffff);
+        u32 h2 = this.H[2] + ((Le32(m[0..16], 6) >> 4) & 0x3ffffff);
+        u32 h3 = this.H[3] + ((Le32(m[0..16], 9) >> 6) & 0x3ffffff);
+        u32 h4 = this.H[4] + ((Le32(m[0..16], 12) >> 8) | hibit);
+        u64 d0 = h0 as u64 * r0 as u64 + h1 as u64 * s4 as u64 + h2 as u64 * s3 as u64 + h3 as u64 * s2 as u64 + h4 as u64 * s1 as u64;
+        u64 d1 = h0 as u64 * r1 as u64 + h1 as u64 * r0 as u64 + h2 as u64 * s4 as u64 + h3 as u64 * s3 as u64 + h4 as u64 * s2 as u64;
+        u64 d2 = h0 as u64 * r2 as u64 + h1 as u64 * r1 as u64 + h2 as u64 * r0 as u64 + h3 as u64 * s4 as u64 + h4 as u64 * s3 as u64;
+        u64 d3 = h0 as u64 * r3 as u64 + h1 as u64 * r2 as u64 + h2 as u64 * r1 as u64 + h3 as u64 * r0 as u64 + h4 as u64 * s4 as u64;
+        u64 d4 = h0 as u64 * r4 as u64 + h1 as u64 * r3 as u64 + h2 as u64 * r2 as u64 + h3 as u64 * r1 as u64 + h4 as u64 * r0 as u64;
+        u64 c = d0 >> 26;
+        h0 = (d0 & 0x3ffffff) as u32;
+        d1 += c;
+        c = d1 >> 26;
+        h1 = (d1 & 0x3ffffff) as u32;
+        d2 += c;
+        c = d2 >> 26;
+        h2 = (d2 & 0x3ffffff) as u32;
+        d3 += c;
+        c = d3 >> 26;
+        h3 = (d3 & 0x3ffffff) as u32;
+        d4 += c;
+        c = d4 >> 26;
+        h4 = (d4 & 0x3ffffff) as u32;
+        h0 = h0 + (c * 5) as u32;
+        u32 c2 = h0 >> 26;
+        h0 = h0 & 0x3ffffff;
+        h1 = h1 + c2;
+        this.H[0] = h0;
+        this.H[1] = h1;
+        this.H[2] = h2;
+        this.H[3] = h3;
+        this.H[4] = h4;
+    }
+
+    public void Update(ref this, u8[] data) {
+        for (usize i = 0; i < data.Len; i++) {
+            this.Buf[this.Fill] = data[i];
+            this.Fill++;
+            if (this.Fill == 16) {
+                this.Blocks(1 << 24);
+                this.Fill = 0;
+            }
+        }
+    }
+
+    // The 16-byte tag into tag16.
+    public void Finish(ref this, mut u8[] tag16) {
+        if (this.Fill > 0) {
+            this.Buf[this.Fill] = 1;
+            for (usize i = this.Fill + 1; i < 16; i++) this.Buf[i] = 0;
+            this.Blocks(0);
+        }
+        u32 h0 = this.H[0];
+        u32 h1 = this.H[1];
+        u32 h2 = this.H[2];
+        u32 h3 = this.H[3];
+        u32 h4 = this.H[4];
+        u32 c = h1 >> 26;
+        h1 = h1 & 0x3ffffff;
+        h2 = h2 + c;
+        c = h2 >> 26;
+        h2 = h2 & 0x3ffffff;
+        h3 = h3 + c;
+        c = h3 >> 26;
+        h3 = h3 & 0x3ffffff;
+        h4 = h4 + c;
+        c = h4 >> 26;
+        h4 = h4 & 0x3ffffff;
+        h0 = h0 + c * 5;
+        c = h0 >> 26;
+        h0 = h0 & 0x3ffffff;
+        h1 = h1 + c;
+        // h - p = h + 5 - 2^130: keep it if it is not negative
+        u32 g0 = h0 + 5;
+        c = g0 >> 26;
+        g0 = g0 & 0x3ffffff;
+        u32 g1 = h1 + c;
+        c = g1 >> 26;
+        g1 = g1 & 0x3ffffff;
+        u32 g2 = h2 + c;
+        c = g2 >> 26;
+        g2 = g2 & 0x3ffffff;
+        u32 g3 = h3 + c;
+        c = g3 >> 26;
+        g3 = g3 & 0x3ffffff;
+        u32 g4 = h4 +% c -% (1 << 26);
+        u32 mask = (g4 >> 31) -% 1;        // all ones if g4 is not negative
+        h0 = (h0 & ~mask) | (g0 & mask);
+        h1 = (h1 & ~mask) | (g1 & mask);
+        h2 = (h2 & ~mask) | (g2 & mask);
+        h3 = (h3 & ~mask) | (g3 & mask);
+        h4 = (h4 & ~mask) | (g4 & mask);
+        // to 4 32-bit words, plus s
+        u32 w0 = h0 | (h1 << 26);
+        u32 w1 = (h1 >> 6) | (h2 << 20);
+        u32 w2 = (h2 >> 12) | (h3 << 14);
+        u32 w3 = (h3 >> 18) | (h4 << 8);
+        u64 f = w0 as u64 + this.Pad[0] as u64;
+        Put32(tag16, 0, f as u32);
+        f = w1 as u64 + this.Pad[1] as u64 + (f >> 32);
+        Put32(tag16, 4, f as u32);
+        f = w2 as u64 + this.Pad[2] as u64 + (f >> 32);
+        Put32(tag16, 8, f as u32);
+        f = w3 as u64 + this.Pad[3] as u64 + (f >> 32);
+        Put32(tag16, 12, f as u32);
+    }
+}
+
+// ------------------------------------------------------------------ the AEAD
+
+// The tag over aad and ciphertext with the one-time key from key and nonce.
+void AeadTag(u8[] key, u8[] nonce, u8[] aad, u8[] ct, mut u8[] tag16) {
+    u8[64] block;
+    Block(key, 0, nonce, block[0..64]);
+    Poly1305 p = Poly1305.New(block[0..32]);
+    u8[16] zeros;
+    p.Update(aad);
+    if (aad.Len % 16 != 0) p.Update(zeros[0..16 - aad.Len % 16]);
+    p.Update(ct);
+    if (ct.Len % 16 != 0) p.Update(zeros[0..16 - ct.Len % 16]);
+    u8[16] lens;
+    u64 a = aad.Len as u64;
+    u64 c = ct.Len as u64;
+    for (usize i = 0; i < 8; i++) {
+        lens[i] = (a >> (8 * i as u64)) as u8;
+        lens[8 + i] = (c >> (8 * i as u64)) as u8;
+    }
+    p.Update(lens[0..16]);
+    p.Finish(tag16);
+}
+
+// Encrypts data in place with key (32 bytes) and nonce (12 bytes, never reused with a
+// key), and writes the 16-byte tag over aad and the ciphertext.
+public void Seal(u8[] key, u8[] nonce, u8[] aad, mut u8[] data, mut u8[] tag16) {
+    Xor(key, 1, nonce, data[0..data.Len]);
+    AeadTag(key, nonce, aad, data, tag16);
+}
+
+// Checks the tag and decrypts data in place; false (and data untouched) if the tag is
+// wrong.
+public bool Open(u8[] key, u8[] nonce, u8[] aad, mut u8[] data, u8[] tag16) {
+    u8[16] want;
+    AeadTag(key, nonce, aad, data[0..data.Len], want[0..16]);
+    u8 diff = 0;
+    for (usize i = 0; i < 16; i++) diff = diff | (want[i] ^ tag16[i]);
+    if (diff != 0) return false;
+    Xor(key, 1, nonce, data);
+    return true;
+}

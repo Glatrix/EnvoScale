@@ -1,0 +1,73 @@
+// envo.crypto.aes: AES-128 and AES-256 (FIPS 197 appendix C.1 and C.3) and AES-GCM (the
+// GCM specification's test cases 1 to 3). Sources: tests/vectors/README.md.
+// expect: aes128 ok
+// expect: aes256 ok
+// expect: gcm tc1 tag ok
+// expect: gcm tc2 ct ok
+// expect: gcm tc2 tag ok
+// expect: gcm tc3 ct ok
+// expect: gcm tc3 tag ok
+// expect: gcm open ok
+// expect: gcm forgery rejected
+use envo.crypto.aes;
+use alloc.text;
+
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> FromHex(str h) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i + 1 < h.Len; i += 2) b.Push(Nib(h[i]) * 16 + Nib(h[i + 1]));
+    return b;
+}
+
+string ToHex(u8[] b) {
+    string s = string.New();
+    for (usize i = 0; i < b.Len; i++) s.Append(text.Hex(b[i] as u64, 2).AsStr());
+    return s;
+}
+
+void Check(str name, u8[] got, str want) {
+    write(1, name);
+    if (ToHex(got).Equals(want)) print(" ok");
+    else {
+        write(1, " got ");
+        print(ToHex(got).AsStr());
+    }
+}
+
+void Block(str name, str key, str pt, str want) {
+    List<u8> k = FromHex(key);
+    List<u8> b = FromHex(pt);
+    aes.Aes a = aes.Aes.New(k.AsSlice());
+    a.EncryptBlock(b.AsMutSlice());
+    Check(name, b.AsSlice(), want);
+}
+
+Block("aes128", "000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff", "69c4e0d86a7b0430d8cdb78070b4c55a");
+Block("aes256", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "00112233445566778899aabbccddeeff", "8ea2b7ca516745bfeafc49904b496089");
+
+List<u8> zeroKey = FromHex("00000000000000000000000000000000");
+List<u8> zeroIv = FromHex("000000000000000000000000");
+List<u8> none = List<u8>.New();
+aes.Gcm g = aes.Gcm.New(zeroKey.AsSlice());
+List<u8> empty = List<u8>.New();
+u8[16] tag;
+g.Seal(zeroIv.AsSlice(), none.AsSlice(), empty.AsMutSlice(), tag[0..16]);
+Check("gcm tc1 tag", tag[0..16], "58e2fccefa7e3061367f1d57a4e7455a");
+List<u8> p2 = FromHex("00000000000000000000000000000000");
+g.Seal(zeroIv.AsSlice(), none.AsSlice(), p2.AsMutSlice(), tag[0..16]);
+Check("gcm tc2 ct", p2.AsSlice(), "0388dace60b6a392f328c2b971b2fe78");
+Check("gcm tc2 tag", tag[0..16], "ab6e47d42cec13bdf53a67b21257bddf");
+List<u8> k3 = FromHex("feffe9928665731c6d6a8f9467308308");
+List<u8> iv3 = FromHex("cafebabefacedbaddecaf888");
+List<u8> p3 = FromHex("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255");
+aes.Gcm g3 = aes.Gcm.New(k3.AsSlice());
+g3.Seal(iv3.AsSlice(), none.AsSlice(), p3.AsMutSlice(), tag[0..16]);
+Check("gcm tc3 ct", p3.AsSlice(), "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091473f5985");
+Check("gcm tc3 tag", tag[0..16], "4d5c2af327cd64a62cf35abd2ba6fab4");
+if (g3.Open(iv3.AsSlice(), none.AsSlice(), p3.AsMutSlice(), tag[0..16]) && p3.AsSlice()[0] == 0xd9) print("gcm open ok");
+tag[15] = tag[15] ^ 1;
+if (!g3.Open(iv3.AsSlice(), none.AsSlice(), p3.AsMutSlice(), tag[0..16])) print("gcm forgery rejected");

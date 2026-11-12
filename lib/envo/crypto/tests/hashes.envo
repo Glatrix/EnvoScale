@@ -1,0 +1,87 @@
+// envo.crypto.sha2 and mac: SHA-256 and SHA-512 (FIPS 180-4 examples), HMAC (RFC 4231
+// test cases 1 and 2) and HKDF (RFC 5869 test case 1). Sources: tests/vectors/README.md.
+// expect: sha256 abc ok
+// expect: sha256 empty ok
+// expect: sha256 two blocks ok
+// expect: sha512 abc ok
+// expect: sha512 empty ok
+// expect: hmac256 tc1 ok
+// expect: hmac512 tc1 ok
+// expect: hmac256 tc2 ok
+// expect: hmac512 tc2 ok
+// expect: hkdf prk ok
+// expect: hkdf okm ok
+use envo.crypto.sha2;
+use envo.crypto.mac;
+use alloc.text;
+
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> FromHex(str h) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i + 1 < h.Len; i += 2) b.Push(Nib(h[i]) * 16 + Nib(h[i + 1]));
+    return b;
+}
+
+string ToHex(u8[] b) {
+    string s = string.New();
+    for (usize i = 0; i < b.Len; i++) s.Append(text.Hex(b[i] as u64, 2).AsStr());
+    return s;
+}
+
+void Check(str name, u8[] got, str want) {
+    write(1, name);
+    if (ToHex(got).Equals(want)) print(" ok");
+    else {
+        write(1, " got ");
+        print(ToHex(got).AsStr());
+    }
+}
+
+void Sha256Of(str name, str msg, str want) {
+    sha2.Sha256 h = sha2.Sha256.New();
+    h.UpdateText(msg);
+    u8[32] d;
+    h.Finish(d[0..32]);
+    Check(name, d[0..32], want);
+}
+
+void Sha512Of(str name, str msg, str want) {
+    sha2.Sha512 h = sha2.Sha512.New();
+    h.UpdateText(msg);
+    u8[64] d;
+    h.Finish(d[0..64]);
+    Check(name, d[0..64], want);
+}
+
+Sha256Of("sha256 abc", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+Sha256Of("sha256 empty", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+Sha256Of("sha256 two blocks", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+Sha512Of("sha512 abc", "abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+Sha512Of("sha512 empty", "", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+List<u8> k1 = FromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+List<u8> d1 = FromHex("4869205468657265");
+u8[32] h256;
+u8[64] h512;
+mac.HmacSha256(k1.AsSlice(), d1.AsSlice(), h256[0..32]);
+Check("hmac256 tc1", h256[0..32], "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+mac.HmacSha512(k1.AsSlice(), d1.AsSlice(), h512[0..64]);
+Check("hmac512 tc1", h512[0..64], "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854");
+List<u8> k2 = FromHex("4a656665");
+List<u8> d2 = FromHex("7768617420646f2079612077616e7420666f72206e6f7468696e673f");
+mac.HmacSha256(k2.AsSlice(), d2.AsSlice(), h256[0..32]);
+Check("hmac256 tc2", h256[0..32], "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+mac.HmacSha512(k2.AsSlice(), d2.AsSlice(), h512[0..64]);
+Check("hmac512 tc2", h512[0..64], "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737");
+List<u8> ikm = FromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+List<u8> salt = FromHex("000102030405060708090a0b0c");
+List<u8> info = FromHex("f0f1f2f3f4f5f6f7f8f9");
+u8[32] prk;
+mac.HkdfExtract256(salt.AsSlice(), ikm.AsSlice(), prk[0..32]);
+Check("hkdf prk", prk[0..32], "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5");
+u8[42] okm;
+mac.HkdfExpand256(prk[0..32], info.AsSlice(), okm[0..42]);
+Check("hkdf okm", okm[0..42], "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865");
