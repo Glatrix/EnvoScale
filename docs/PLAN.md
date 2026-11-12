@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M2 (Stage 1). M0 and M1 are done; their records are in §4.
+- **Current milestone:** M3 (self-hosting). M0–M2 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -51,6 +51,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D13 | Stage 1 compiles generics by monomorphization and interfaces by static dispatch through generic bounds, plus `dyn` objects with vtables only if the Stage 2 design needs them. Simplest correct choice; Stage 2 may add other strategies. | `docs/spec/envo-s1.md` |
 | D14 | Stage 1 is tested **differentially**: every Envo-Core test runs under both `envoc0` and `envoc1` and must give the same result, and `envoc1 lex` must print the same token dumps as `envoc0 lex`. Two independent implementations of Core catch each other's bugs. | `bootstrap.*`, `tests/` |
 | D15 | Stage 1's backend is deliberately simple: EIR → x86-64 with every SSA value in a stack slot, no optimizer, the same one-section executable layout as Stage 0. Speed comes in Stage 2. | `docs/architecture/bootstrap.md` |
+| D16 | Stage 2 (`envoc`) is written in **Envo-S1** in `compiler/`, one file per pass in the existing folders, built by `envoc1` from `compiler/files.txt`, until the fixed point (D18); after it, `envoc` may use any Envo it compiles. | `compiler/README.md` |
+| D17 | Stage 2 keeps EIR v1 (now with its binary form, [eir.bin]) and implements Envo-S1's semantics first, so every Stage 1 test is a Stage 2 test and the two compilers are compared like Stage 0 and Stage 1 were (D14). Full Envo grows from there in later milestones. | `docs/architecture/stage2.md` |
+| D18 | The **fixed point**: `envoc1` builds `envoc` (stage2a); stage2a builds `envoc` (stage2b); stage2b builds `envoc` (stage2c). stage2b and stage2c must be byte-identical, and identical between the Windows and Linux hosts. CI checks it on every push. | `docs/architecture/stage2.md` |
+| D19 | Linking in M3 is **whole-program over EIR objects**: a source file compiles to a binary EIR object (`.eo`); `envoc link` merges objects with the runtime, generates code and writes PE or ELF directly. Foreign objects (COFF/ELF, `.lib`/`.a`) arrive with `extern "C"` in M4. | `docs/architecture/stage2.md` |
+| D20 | `-O0` keeps Stage 1's stack-slot code generation (fast and simple); `-O2` adds SSA optimizations (constant folding, copy propagation, dead-code elimination, CFG simplification, inlining of small functions) and linear-scan register allocation. Both are deterministic, and every run test runs at both levels and must agree. | `docs/architecture/stage2.md` |
 
 ## 3. Open questions
 
@@ -106,38 +111,41 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   versions. 249/249 tests on both OSes. Increments 1.1–1.9 were: spec, platform shims,
   runtime helpers, lexer, parser, checker, code generation and writers, built-ins, and
   the full spec suite with multi-file programs. DoD record in `STATUS.md`.
+- **M2 — Stage 1.** `envoc1`, about 17k lines of Envo-Core built by `envoc0`, compiles
+  Envo-Core and Envo-S1 to Windows and Linux executables through EIR v1. Increments
+  2.1–2.13 were: specs and RFCs 0002–0005, skeleton, lexer, parser, Core checker, EIR,
+  lowering and backend, generics and interfaces, closures, ownership, enums with
+  payloads, views and collections and namespaces, and the S1 suite complete. 739/739
+  tests on both OSes. DoD record in `STATUS.md`; design in
+  [`architecture/stage1.md`](architecture/stage1.md).
 
-## 5. M2 — Stage 1
+## 5. M3 — Self-hosting
 
-**DoD (brief §15):** `envoc1`, written in Envo-Core, builds with `envoc0` and compiles a
-larger subset (generics, interfaces, closures, basic borrow checker, EIR). Its spec tests
-pass. Read here as: Envo-S1 (D12) is specified, `envoc1` compiles every Envo-Core and
-Envo-S1 spec test correctly on Windows and Linux in CI, and its build is reproducible.
-
-The milestone is cut into increments that each end tested. Each one is an issue under
-the M2 epic on the roadmap project.
+**DoD (brief §15):** Stage 2 `envoc` in full Envo, with an x86-64 backend, `-O0`/`-O2`,
+and PE+ELF linking. **Fixed-point check passes in CI.** Read here as: `envoc`, written in
+Envo-S1 (D16) and built by `envoc1`, compiles every Envo-Core and Envo-S1 spec test at
+`-O0` and `-O2` on Windows and Linux, links separately compiled objects (D19), and
+reaches the fixed point (D18) in CI on both hosts.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [2.1](https://github.com/envoscale/EnvoScale/issues/46) | Specs and RFCs: `envo-s1.md`; RFCs for slices (#45), function types (#30), lifetimes (#31), EIR v1 (#29) | review | done: [`envo-s1.md`](spec/envo-s1.md), RFCs [0002](rfcs/0002-slicing.md)–[0005](rfcs/0005-eir-v1.md) |
-| [2.2](https://github.com/envoscale/EnvoScale/issues/47) | Stage 1 skeleton: build with `envoc0`, support library (arena, buffers, strings, hash map, files, diagnostics), `envoc1 version`; scripts and CI build it | smoke tests | done: support library, `envoc1 version` / `selftest`, built for both OSes by the scripts and CI |
-| [2.3](https://github.com/envoscale/EnvoScale/issues/48) | Lexer for the full lexical grammar | lexer goldens and `01-lexical` must match `envoc0` (D14) | done: all 13 goldens and 41 lexical tests match in `--core` and S1 modes; all 275 test inputs lex identically |
-| [2.4](https://github.com/envoscale/EnvoScale/issues/49) | Parser for Envo-S1 | `core-syntax` (same codes and positions as `envoc0`), new S1 syntax tests | done: the Core grammar matches `envoc0` on every parser golden, `core-syntax` test and test input; the S1 grammar has 4 hand-checked goldens and 13 error tests |
-| [2.5](https://github.com/envoscale/EnvoScale/issues/50) | Names and types for Envo-Core | `core-types` (same codes and positions) | done: every `check` golden, `core-types` and `core-multi` test and test input gives the same output as `envoc0`; `envoc1` checks its own source |
-| [2.6](https://github.com/envoscale/EnvoScale/issues/51) | EIR v1: data structures, text form (print and parse, round-trip), verifier | `tests/golden/eir/` | done: `envoc1 eir-check`; 3 round-trip goldens and 13 verifier/syntax tests (`tests/spec/eir/`). The binary form ([eir.bin.*]) moves to Stage 2, where it is first needed |
-| [2.7](https://github.com/envoscale/EnvoScale/issues/52) | Lowering Core to EIR; x86-64 backend; PE/ELF writer; runtime | `core-run`, `core-multi` under `envoc1` | done: every `core-run` and `core-multi` program built by `envoc1` gives the same output and exit code as under `envoc0`, on both OSes ([`architecture/stage1.md`](architecture/stage1.md)) |
-| [2.8](https://github.com/envoscale/EnvoScale/issues/53) | Generics and interfaces | S1 type and run tests | done: generic functions and structs (monomorphized), methods and receivers, `in`/`ref` parameters, interfaces with default bodies and bounds; 31 type and 4 run tests ([`architecture/stage1.md`](architecture/stage1.md)) |
-| [2.9](https://github.com/envoscale/EnvoScale/issues/54) | Closures and function types | S1 type and run tests | done: function types and kinds, lambdas with inferred types and captures (borrowed for function-typed parameters, copied otherwise), named functions as values, calls through function values; 10 type tests and a run test |
-| [2.10](https://github.com/envoscale/EnvoScale/issues/55) | Ownership: moves, borrows, lifetime elision, basic borrow checker (E05xx) | S1 ownership tests | done: `Copy` and the prelude's `IDrop`, the move checker (E0501, E0502), drops with drop flags, call borrows (E0503, E0504), escaping closures and `from` clauses (E0507, E0508); 28 ownership tests and a drop-order run test |
-| [2.11](https://github.com/envoscale/EnvoScale/issues/66) | Enums with payloads, `match` expressions with payload patterns and guards, `Option` and `Result`, `?:`, `??` and `?` | S1 type and run tests | done: tagged enums (generic, recursive through pointers, with drops), unqualified variants, `match` with payload bindings and guards, `match` expressions, `Option`/`Result` in the prelude with `T?`, `null`, `??` and `?`, the conditional; 20 type tests and 2 run tests |
-| [2.12](https://github.com/envoscale/EnvoScale/issues/67) | The rest of Envo-S1: `foreach`, slicing, namespaces and `use`, the prelude (`string`, `List<T>`, `IDrop`) | S1 type and run tests | done: views and slicing with run-time checks, `foreach`, `List<T>` and `string` in the prelude, namespaces, `use` and visibility; run tests for views and collections, 4 multi-file tests (`tests/spec/s1-multi/`), 16 error tests |
-| [2.13](https://github.com/envoscale/EnvoScale/issues/56) | Envo-S1 spec suite green on Windows and Linux in CI; reproducible `envoc1`; no E0951 left | CI | done: E0951 removed (partial payload takes compiled, the rest recorded as outside Envo-S1); 739/739 on both hosts; M2 DoD record in `STATUS.md` |
+| [3.1](https://github.com/envoscale/EnvoScale/issues/68) | Stage 2 skeleton: `compiler/` in Envo-S1 built by `envoc1`; support library over `List<T>` and `string` (buffers, maps, files, diagnostics); `envoc version`; scripts and CI build it | smoke tests | next |
+| [3.2](https://github.com/envoscale/EnvoScale/issues/69) | Lexer for the full lexical grammar | every lexer input matches `envoc1` (D17) | |
+| [3.3](https://github.com/envoscale/EnvoScale/issues/70) | Parser for Envo-S1, keeping trivia for tools | every parser and syntax input matches `envoc1` | |
+| [3.4](https://github.com/envoscale/EnvoScale/issues/71) | Names, types, generics, interfaces, closures, enums, views, namespaces | every type and error input matches `envoc1` | |
+| [3.5](https://github.com/envoscale/EnvoScale/issues/72) | Ownership and a flow-sensitive borrow checker (chapter 5) | `s1-own`, plus programs Stage 1 rejects that chapter 5 accepts | |
+| [3.6](https://github.com/envoscale/EnvoScale/issues/73) | Lowering to EIR v1 and its binary form; the `-O0` backend, PE/ELF writers and runtime | every run and multi-file program, as under `envoc1` | |
+| [3.7](https://github.com/envoscale/EnvoScale/issues/74) | Separate compilation: `.eo` objects and `envoc link` (D19) | multi-file programs built from objects | |
+| [3.8](https://github.com/envoscale/EnvoScale/issues/75) | `-O2`: SSA optimizations and linear-scan register allocation (D20) | every run program at `-O0` and `-O2` | |
+| [3.9](https://github.com/envoscale/EnvoScale/issues/76) | Self-hosting: `envoc` compiles itself; the fixed point (D18) in CI on both hosts | CI `fixed-point` job | |
 
 ## 6. Risks
 
-- **Stage 1 volume.** A compiler in Envo-Core, which has no generics or methods, is
-  verbose. Expect 30–50k lines. Mitigation: a small support library written once, one
-  file per pass, and tests per increment so size never hides bugs.
+- **Stage 2 volume and Stage 1 bugs.** `envoc` is the largest Envo-S1 program yet, so it
+  will find `envoc1` bugs. Mitigation: each bug gets a minimal `s1-run` or `s1-types`
+  reproduction and a fix in Stage 1 before Stage 2 works around it.
+- **Compile speed.** `envoc1` output is unoptimized and its heap never frees. Building
+  `envoc` with it is measured from 3.1 on; `-O2` (3.8) speeds up stages 2b and 2c.
 - **Stage 0 bugs found by a large program.** `envoc0` has only compiled tests so far.
   A miscompilation in Stage 1 looks like a Stage 1 bug. Mitigation: differential tests
   (D14) and a minimal reproduction added to `core-run` for every Stage 0 bug found.

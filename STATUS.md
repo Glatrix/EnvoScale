@@ -16,7 +16,7 @@ milestone, increments as sub-issues, and owner decisions marked **Needs Decision
 | M0 | Charter & skeleton | **Done** (see DoD record below) |
 | M1 | Stage 0 | **Done** (see DoD record below) |
 | M2 | Stage 1 | **Done** (see DoD record below): `envoc1`, written in Envo-Core and built by `envoc0`, compiles Envo-Core and Envo-S1 to Windows and Linux executables through EIR v1 |
-| M3 | Self-hosting | **Next**: Stage 2 `envoc` in Envo-S1, then the fixed point |
+| M3 | Self-hosting | **In progress**: increments 3.1–3.9 planned (`docs/PLAN.md` §5, decisions D16–D20); next the Stage 2 skeleton (M3.1) |
 | M4–M13 | | Not started |
 
 ### M0 Definition of Done — record
