@@ -40,14 +40,37 @@ host_suffix() {
 }
 
 # ------------------------------------------------------------------- build
+# seed_asm0: asm0, the seed assembler (bootstrap/seed, PLAN D67), made from its hex with
+# the OS's own tools; prints its path.
+seed_asm0() {
+    case "$(host_suffix)" in .exe) seed_os=windows ;; *) seed_os=linux ;; esac
+    mkdir -p "$ROOT/build/seed"
+    seed_bin="$ROOT/build/seed/asm0$(host_suffix)"
+    sh "$ROOT/bootstrap/seed/hex2bin.sh" "$ROOT/bootstrap/seed/seed-$seed_os.hex" "$seed_bin" \
+        || fail "hex2bin: bootstrap/seed/seed-$seed_os.hex"
+    chmod +x "$seed_bin"
+    printf '%s' "$seed_bin"
+}
+
 do_build() {
     mkdir -p "$BUILD"
     for unit in "envoc0-linux.eas:envoc0" "envoc0-windows.eas:envoc0.exe"; do
         src=${unit%%:*}
         out=${unit#*:}
         say "assemble  bootstrap/stage0/$src -> build/stage0/$out"
-        sh "$ROOT/adapters/bootstrap/nasm/assemble.sh" "$STAGE0/$src" "$BUILD/$out" "$STAGE0" \
-            || fail "assembling $src failed"
+        set +e
+        sh "$ROOT/adapters/bootstrap/nasm/assemble.sh" "$STAGE0/$src" "$BUILD/$out" "$STAGE0" 2> "$BUILD/assemble.err"
+        arc=$?
+        set -e
+        if [ "$arc" -eq 127 ]; then
+            # no NASM: the seed assembles Stage 0 to the same bytes (Phase B)
+            say "          NASM not found: assembling with the seed (bootstrap/seed)"
+            seed_tool=$(seed_asm0)
+            "$seed_tool" "$STAGE0/$src" "$BUILD/$out" || fail "assembling $src with the seed failed"
+        elif [ "$arc" -ne 0 ]; then
+            cat "$BUILD/assemble.err" >&2
+            fail "assembling $src failed"
+        fi
         size=$(wc -c < "$BUILD/$out" | tr -d ' ')
         say "          $size bytes  sha256 $(sha256 "$BUILD/$out")"
     done
@@ -156,6 +179,29 @@ do_test() {
     ENVOC1="$BUILD1/envoc1$(host_suffix)"
     TMP=$(mktemp -d)
     trap 'rm -rf "$TMP"' EXIT
+
+    # Phase B (PLAN D67): asm0 made from the hex seed with the OS's own tools assembles
+    # itself, the other OS's asm0 and Stage 0 to exactly the bytes NASM gives
+    say ''
+    say 'seed: asm0 from bootstrap/seed/*.hex assembles itself, the other asm0 and Stage 0 byte for byte'
+    seed_tool=$(seed_asm0)
+    for other in linux windows; do
+        sh "$ROOT/bootstrap/seed/hex2bin.sh" "$ROOT/bootstrap/seed/seed-$other.hex" "$TMP/asm0-$other.hex.bin"
+        set +e
+        "$seed_tool" "$ROOT/bootstrap/seed/asm0-$other.eas" "$TMP/asm0-$other.built" 2> "$TMP/err"
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ] && cmp -s "$TMP/asm0-$other.hex.bin" "$TMP/asm0-$other.built"; then pass; else bad "seed: asm0-$other.eas" "exit $rc: $(cat "$TMP/err")"; fi
+    done
+    for unit in "envoc0-linux.eas:envoc0" "envoc0-windows.eas:envoc0.exe"; do
+        src=${unit%%:*}
+        out=${unit#*:}
+        set +e
+        "$seed_tool" "$STAGE0/$src" "$TMP/$out.seed" 2> "$TMP/err"
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ] && cmp -s "$BUILD/$out" "$TMP/$out.seed"; then pass; else bad "seed: $src" "exit $rc: $(cat "$TMP/err")"; fi
+    done
 
     say ''
     say 'smoke tests'

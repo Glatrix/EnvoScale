@@ -1,6 +1,7 @@
 # `adapters/bootstrap/nasm` — Phase A assembler adapter
 
-> **Status:** Active (Phase A). Temporary by design; replaced by the hex seed in Phase B.
+> **Status:** Active, optional. Since M13 the hex seed (`bootstrap/seed`, PLAN D67) builds
+> Stage 0 to the same bytes when NASM is not installed; CI compares the two.
 
 Assembles Stage 0 (`bootstrap/stage0/*.eas`) with [NASM](https://www.nasm.us/) while the
 hex seed is being written (brief §5.4). It is **outside the core** and never needed to
@@ -41,8 +42,9 @@ bytes of Stage 0 and broke the fixed-size jump table of its runtime block. With 
 every NASM version emits rel32, and versions that already honoured `near` produce the
 same bytes as before.
 
-`bootstrap.ps1` / `bootstrap.sh` call these and nothing else knows NASM exists. A Phase B
-seed adapter will offer the same interface, and CI will compare the two outputs byte for byte.
+`bootstrap.ps1` / `bootstrap.sh` call these and nothing else knows NASM exists. When they
+report NASM missing (exit 127), the scripts assemble with the seed's asm0 instead, and
+their `test` compares the seed's output with NASM's byte for byte.
 
 ## Why flat binary
 

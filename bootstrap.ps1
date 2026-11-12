@@ -27,6 +27,16 @@ function Say([string]$msg) { Write-Host $msg }
 function Fail([string]$msg) { [Console]::Error.WriteLine("error: $msg"); exit 1 }
 
 # ------------------------------------------------------------------- build
+# asm0, the seed assembler (bootstrap/seed, PLAN D67), made from its hex with PowerShell
+# alone; gives its path.
+function Get-SeedAsm0 {
+    $dir = Join-Path $Root 'build\seed'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $bin = Join-Path $dir 'asm0.exe'
+    & (Join-Path $Root 'bootstrap\seed\hex2bin.ps1') (Join-Path $Root 'bootstrap\seed\seed-windows.hex') $bin
+    return $bin
+}
+
 function Invoke-Build {
     New-Item -ItemType Directory -Force $Build | Out-Null
     $adapter = Join-Path $Root 'adapters\bootstrap\nasm\assemble.ps1'
@@ -39,7 +49,13 @@ function Invoke-Build {
         $out = Join-Path $Build $u.Out
         Say "assemble  bootstrap/stage0/$($u.Src) -> build/stage0/$($u.Out)"
         & $adapter $src $out $Stage0
-        if ($LASTEXITCODE -ne 0) { Fail "assembling $($u.Src) failed (exit $LASTEXITCODE)" }
+        if ($LASTEXITCODE -eq 127) {
+            # no NASM: the seed assembles Stage 0 to the same bytes (Phase B, PLAN D67)
+            Say '          NASM not found: assembling with the seed (bootstrap/seed)'
+            $seedTool = Get-SeedAsm0
+            & $seedTool $src $out
+            if ($LASTEXITCODE -ne 0) { Fail "assembling $($u.Src) with the seed failed (exit $LASTEXITCODE)" }
+        } elseif ($LASTEXITCODE -ne 0) { Fail "assembling $($u.Src) failed (exit $LASTEXITCODE)" }
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
         $size = (Get-Item -LiteralPath $out).Length
         Say ("          {0,8} bytes  sha256 {1}" -f $size, $hash)
@@ -193,6 +209,25 @@ function Invoke-Test {
     $script:failed = 0
     function Pass([string]$name) { $script:passed++ }
     function Bad([string]$name, [string]$why) { $script:failed++; Say "FAIL  $name"; if ($why) { Say "      $why" } }
+
+    # Phase B (PLAN D67): asm0 made from the hex seed with PowerShell alone assembles
+    # itself, the other asm0 and Stage 0 to exactly the bytes NASM gives
+    Say ''
+    Say 'seed: asm0 from bootstrap/seed/*.hex assembles itself, the other asm0 and Stage 0 byte for byte'
+    $seedTool = Get-SeedAsm0
+    $seedTmp = Join-Path $Root 'build\seed'
+    foreach ($other in @('linux', 'windows')) {
+        $fromHex = Join-Path $seedTmp "asm0-$other.hex.bin"
+        & (Join-Path $Root 'bootstrap\seed\hex2bin.ps1') (Join-Path $Root "bootstrap\seed\seed-$other.hex") $fromHex
+        $built = Join-Path $seedTmp "asm0-$other.built"
+        $r = Invoke-Tool $seedTool @((Join-Path $Root "bootstrap\seed\asm0-$other.eas"), $built) $Root
+        if ($r.Code -eq 0 -and (Get-FileHash -LiteralPath $fromHex).Hash -eq (Get-FileHash -LiteralPath $built).Hash) { Pass "seed: asm0-$other.eas" } else { Bad "seed: asm0-$other.eas" "exit $($r.Code): $($r.Err.Trim())" }
+    }
+    foreach ($u in @(@{ Src = 'envoc0-windows.eas'; Out = 'envoc0.exe' }, @{ Src = 'envoc0-linux.eas'; Out = 'envoc0' })) {
+        $built = Join-Path $seedTmp "$($u.Out).seed"
+        $r = Invoke-Tool $seedTool @((Join-Path $Stage0 $u.Src), $built) $Root
+        if ($r.Code -eq 0 -and (Get-FileHash -LiteralPath (Join-Path $Build $u.Out)).Hash -eq (Get-FileHash -LiteralPath $built).Hash) { Pass "seed: $($u.Src)" } else { Bad "seed: $($u.Src)" "exit $($r.Code): $($r.Err.Trim())" }
+    }
 
     Say ''
     Say 'smoke tests'

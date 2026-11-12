@@ -1,7 +1,8 @@
 # EAS — Envo Assembly (`.eas`)
 
 > **Status:** Normative for the **Stage 0 subset** (§2–§6), which the Phase A adapter
-> (NASM), the future hex seed, and `envo asm` must all assemble to identical bytes.
+> (NASM), the hex seed's asm0 (`bootstrap/seed`), and `envo asm` must all assemble to
+> identical bytes. NASM and asm0 do, checked in CI.
 > The full syntax used by `envo asm` and `asm { }` blocks (§7) is a draft.
 
 ## 1. Design
