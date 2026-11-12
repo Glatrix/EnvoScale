@@ -67,8 +67,13 @@ is a borrow, and tables that own their entries cannot hold one. The text they po
 (source files, string literals, and names the checker builds and keeps in `Owned`) lives
 as long as the checker.
 
-The move and borrow checks are M3.5. Until then, three type tests whose errors come from
-those passes are skipped for Stage 2 (`stage2_later` in the scripts).
+## Ownership (M3.5)
+
+The move checker (`move.envo`), call borrows and closure origins (`borrow.envo`) and
+storage summaries (`summary.envo`) follow Stage 1's. The per-function state (`MoveCx`,
+its snapshots and loop frames, `OriginCx`) is owned data passed `ref` next to the
+`Checker`. Stage 2 accepts and rejects exactly what Stage 1 does; accepting what chapter 5
+allows beyond that is increment 3.10, after the fixed point.
 
 ## Stage 1 bugs found by Stage 2
 

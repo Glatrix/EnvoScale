@@ -16,6 +16,7 @@ public struct Checker {
     List<u32> NSyms;        // per node: the symbol a name resolved to; an item's symbol
     List<u8> NMatched;      // per node: a match pattern whose value was recorded
     List<u8> NConv;         // per node: 1 where a `string` is used as a `str`
+    List<u8> NMove;         // per node: 1 where a use moves a whole local, 2 a dropped temporary
     List<Type> Types;
     List<Sym> Syms;
     StrMap<u32> Global;     // program scope: name -> symbol
@@ -64,6 +65,7 @@ public struct Checker {
     List<u32> Uses;         // the `use` items
     StrMap<u32> TokSym;     // token index -> the item a qualified name resolved to
     List<string> Owned;     // text made by the checker (joined names), kept for good
+    StrMap<u64> Summaries;  // function symbol -> its storage summary (summary.envo)
 
     // A checker for a parsed program.
     public static Checker New(in Sources src, Tree tree, bool core, bool runtime) {
@@ -71,7 +73,7 @@ public struct Checker {
         Checker c = new Checker {
             T = tree, Paths = List<Text>.New(), Texts = List<Text>.New(),
             NTypes = List<u32>.New(), NValues = List<u64>.New(), NSyms = List<u32>.New(),
-            NMatched = List<u8>.New(), NConv = List<u8>.New(),
+            NMatched = List<u8>.New(), NConv = List<u8>.New(), NMove = List<u8>.New(),
             Types = List<Type>.New(), Syms = List<Sym>.New(),
             Global = StrMap<u32>.New(), Derived = StrMap<u32>.New(),
             Locals = List<u32>.New(), LSP = 0, LBase = 0, Unsafe = 0, Loops = 0, Ret = 0,
@@ -84,7 +86,7 @@ public struct Checker {
             PreludeFile = 0xFFFFFFFF, CopySym = 0, DropSym = 0, OptionSym = 0, ResultSym = 0,
             StringSym = 0, PreludeScope = StrMap<u32>.New(),
             FileNs = List<Text>.New(), NsSet = StrMap<u32>.New(), Uses = List<u32>.New(),
-            TokSym = StrMap<u32>.New(), Owned = List<string>.New()
+            TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New()
         };
         for (usize f = 0; f < src.Count(); f++) {
             c.Paths.Push(TextOf(src.Path(f)));
@@ -96,6 +98,7 @@ public struct Checker {
             c.NSyms.Push(0);
             c.NMatched.Push(0);
             c.NConv.Push(0);
+            c.NMove.Push(0);
         }
         return c;
     }

@@ -66,6 +66,7 @@ impl Checker {
             }
             n = this.NNext(n);
         }
+        if (!this.Core) this.MoveCheckMain(first);
         this.CollectInstances();
     }
 
@@ -573,6 +574,10 @@ impl Checker {
             terminates = true;
         }
         if (sym.Type != T_VOID && !terminates) this.Error(E_MISSING_RETURN, fn.Tok);
+        if (!this.Core) {
+            this.MoveCheckFn(s);
+            this.OriginCheckFn(s);
+        }
         this.LSP = saved;
         this.LBase = 0;
         Sym done = this.SymAt(s);

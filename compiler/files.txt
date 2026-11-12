@@ -22,4 +22,7 @@ sema/enums.envo
 sema/views.envo
 sema/names.envo
 sema/own.envo
+sema/move.envo
+sema/borrow.envo
+sema/summary.envo
 sema/dump.envo

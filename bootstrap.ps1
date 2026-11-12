@@ -407,13 +407,11 @@ function Invoke-Test {
     $r = Invoke-Tool $envoc @('frobnicate') $Root
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc: error: unknown command 'frobnicate'")) { Pass 'envoc unknown command' } else { Bad 'envoc unknown command' "exit $($r.Code)" }
 
-    # The Stage 2 front end and checker (M3.2-M3.4): the lexer, parser and checker goldens
-    # and the lexical, syntax and type spec tests, in the same modes as for Stage 1; then
-    # the same output as envoc1 from `lex` and `parse` on every source file, from `check`
-    # on the run programs and goldens, and on both compilers' sources (D17). Tests whose
-    # error comes from the move and borrow checks wait for M3.5 ($stage2Later).
+    # The Stage 2 front end and checker (M3.2-M3.5): the lexer, parser and checker goldens
+    # and the lexical, syntax, type and ownership spec tests, in the same modes as for
+    # Stage 1; then the same output as envoc1 from `lex` and `parse` on every source file,
+    # from `check` on the run programs and goldens, and on both compilers' sources (D17).
     # Keep in step with bootstrap.sh.
-    $stage2Later = @('e0503_change_while_bound.envo', 'e0950_from_function_param.envo', 'e0950_lambda_takes_drop_value.envo')
     $stage2Golden = @(
         @{ Dir = 'lexer';     Command = 'lex';   Ext = '.tokens'; Modes = @('--core', 's1') },
         @{ Dir = 'parser';    Command = 'parse'; Ext = '.ast';    Modes = @('--core', 's1') },
@@ -441,7 +439,8 @@ function Invoke-Test {
         @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
         @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') },
         @{ Dir = 'core-types';  Command = 'check'; Modes = @('--core') },
-        @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') }
+        @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') },
+        @{ Dir = 's1-own';      Command = 'check'; Modes = @('s1') }
     )
     foreach ($suite in $stage2Spec) {
       foreach ($mode in $suite.Modes) {
@@ -450,7 +449,6 @@ function Invoke-Test {
         Say "stage 2 spec tests ($mode): tests/spec/$($suite.Dir)"
         $dir = Join-Path $Root "tests\spec\$($suite.Dir)"
         foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
-            if ($stage2Later -contains $f.Name) { continue }
             $name = "stage2 $mode spec/$($suite.Dir)/$($f.Name)"
             $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($f.FullName))
             $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\d+:\d+)')

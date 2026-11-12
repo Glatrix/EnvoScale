@@ -1,0 +1,250 @@
+// Storage summaries ([life.infer.2]): which of a function's receiver (bit 0) and
+// parameters (bit i + 1) its result may view the storage of. Follows the second half of
+// Stage 1's bootstrap/stage1/check/views.envo. The move checker uses them to see which
+// local a kept view borrows.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.syntax;
+
+impl Checker {
+    // A slice of their array, a `str` of their `string`, a view made from a pointer read
+    // out of them, or the result of a call whose own summary says so. Found from the body;
+    // a recursive function starts from "none". A bodiless interface method is taken to view
+    // its receiver when its result can hold a view.
+    u64 StorageSummary(ref this, u32 fs) {
+        string key = Decimal(fs as u64);
+        u64? found = this.Summaries.Get(key);
+        if (found.IsSome()) return found.Unwrap();
+        this.Summaries.Put(key, 0);         // while computing: none
+        Sym sym = this.SymAt(fs);
+        Node fn = this.NodeAt(sym.Node);
+        u64 mask = 0;
+        if (fn.C == 0) {
+            if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0 && this.HasView(sym.Type)) mask = 1;
+        } else {
+            List<u32> params = List<u32>.New();
+            List<u32> locals = List<u32>.New();
+            params.Push(sym.Recv);
+            u32 p = this.FirstParam(fs);
+            while (p != 0) {
+                params.Push(this.NSym(p));
+                p = this.NNext(p);
+            }
+            // locals' masks until stable, then the returns
+            for (u32 round = 0; round < 4; round++) this.SumStmt(fn.C, params, ref locals, ref mask, false);
+            if (this.NKind(fn.C) == NK_BLOCK) this.SumStmt(fn.C, params, ref locals, ref mask, true);
+            else mask = this.SumExpr(fn.C, params, locals);
+        }
+        string done = Decimal(fs as u64);
+        this.Summaries.Put(done, mask);
+        return mask;
+    }
+
+    // Can a value of type t hold a view or a `str` (function values are not counted)?
+    bool HasView(ref this, u32 t) {
+        Type ty = this.TypeAt(t);
+        u8 k = ty.Kind;
+        if (k == TYK_STR || k == TYK_SLICE || k == TYK_PARAM) return true;
+        if (k == TYK_ARRAY) return this.HasView(ty.Elem);
+        if (k == TYK_STRUCT) {
+            u32 f = this.NodeAt(this.SymAt(ty.Sym).Node).A;
+            while (f != 0) {
+                u32 ft = this.FieldType(t, f);
+                if (this.HasView(ft)) return true;
+                f = this.NNext(f);
+            }
+            return false;
+        }
+        if (k == TYK_UNION) {
+            u32 v = this.NodeAt(this.SymAt(ty.Sym).Node).B;
+            while (v != 0) {
+                u32 f = this.NodeAt(v).E;
+                while (f != 0) {
+                    u32 pt = this.PayloadType(t, f);
+                    if (this.HasView(pt)) return true;
+                    f = this.NNext(f);
+                }
+                v = this.NNext(v);
+            }
+        }
+        return false;
+    }
+
+    // The parameter whose storage place e lies in (through fields, elements, and a pointer
+    // read from it), as a mask.
+    u64 PlaceMask(in this, u32 e, in List<u32> params) {
+        u32 n = e;
+        while (n != 0) {
+            Node node = this.NodeAt(n);
+            if (node.Kind == NK_NAME || node.Kind == NK_THIS) return ParamMaskOf(params, this.NSym(n));
+            if (node.Kind == NK_MEMBER || node.Kind == NK_INDEX || node.Kind == NK_UNARY || node.Kind == NK_CAST) n = node.A;
+            else return 0;
+        }
+        return 0;
+    }
+
+    // Which parameters' storage the value of e may view.
+    u64 SumExpr(ref this, u32 e, in List<u32> params, in List<u32> locals) {
+        if (e == 0) return 0;
+        Node node = this.NodeAt(e);
+        u16 k = node.Kind;
+        if (this.IsConverted(e)) return this.PlaceMask(e, params);
+        if (this.IsSlicing(e)) {
+            if (this.TyKind(this.NType(node.A)) == TYK_ARRAY) return this.PlaceMask(node.A, params);
+            return this.SumExpr(node.A, params, locals);
+        }
+        if (k == NK_NAME || k == NK_THIS) {
+            u32 s = this.NSym(e);
+            if (s == 0) return 0;
+            return LocalMaskOf(locals, s);
+        }
+        if (k == NK_MEMBER || k == NK_INDEX || k == NK_CAST || k == NK_TRY) {
+            if (!this.HasView(this.NType(e))) return 0;
+            return this.SumExpr(node.A, params, locals);
+        }
+        if (k == NK_COND) {
+            u64 b = this.SumExpr(node.B, params, locals);
+            return b | this.SumExpr(node.C, params, locals);
+        }
+        if (k == NK_BINARY && node.Op == TK_QQ) {
+            u64 a = this.SumExpr(node.A, params, locals);
+            return a | this.SumExpr(node.B, params, locals);
+        }
+        if (k == NK_MATCH) {
+            u64 m = 0;
+            u32 arm = node.B;
+            while (arm != 0) {
+                u32 body = this.NodeAt(arm).B;
+                if (this.NKind(body) != NK_BLOCK) m = m | this.SumExpr(body, params, locals);
+                arm = this.NNext(arm);
+            }
+            return m;
+        }
+        if (k == NK_NEW) {
+            u64 m = 0;
+            u32 init = node.B;
+            while (init != 0) {
+                m = m | this.SumExpr(this.NodeAt(init).A, params, locals);
+                init = this.NNext(init);
+            }
+            return m;
+        }
+        if (k != NK_CALL || !this.HasView(this.NType(e))) return 0;
+        u32 cs = this.NSym(e);
+        u32 a = node.B;
+        if (cs == 0) {
+            // a built-in: str_from and slice_from view what their pointer points into
+            u32 callee = node.A;
+            if (this.NKind(callee) == NK_NAME && a != 0) {
+                u32 s = this.Lookup(this.NTok(callee));
+                if (s != 0 && this.SymKind(s) == SK_BUILTIN) return this.PlaceMask(a, params);
+            }
+            return 0;
+        }
+        if (this.SymKind(cs) != SK_FN) return 0;
+        u64 sum = this.StorageSummary(cs);
+        u64 m = 0;
+        Sym fs = this.SymAt(cs);
+        if (sum & 1 != 0 && fs.Flags & SF_METHOD != 0 && fs.Flags & SF_STATIC == 0 && this.NKind(node.A) == NK_MEMBER) {
+            u32 obj = this.NodeAt(node.A).A;
+            m = m | this.PlaceMask(obj, params) | this.SumExpr(obj, params, locals);
+        }
+        u32 i = 1;
+        while (a != 0) {
+            if (i < 64 && sum & (1 as u64) << i != 0) m = m | this.PlaceMask(a, params) | this.SumExpr(a, params, locals);
+            a = this.NNext(a);
+            i++;
+        }
+        return m;
+    }
+
+    void SumStmt(ref this, u32 n, in List<u32> params, ref List<u32> locals, ref u64 mask, bool returns) {
+        if (n == 0) return;
+        Node node = this.NodeAt(n);
+        u16 k = node.Kind;
+        if (k == NK_BLOCK) {
+            u32 s = node.A;
+            while (s != 0) {
+                this.SumStmt(s, params, ref locals, ref mask, returns);
+                s = this.NNext(s);
+            }
+            return;
+        }
+        if (k == NK_UNSAFE) {
+            this.SumStmt(node.A, params, ref locals, ref mask, returns);
+            return;
+        }
+        if (k == NK_WHILE) {
+            this.SumStmt(node.B, params, ref locals, ref mask, returns);
+            return;
+        }
+        if (k == NK_IF) {
+            this.SumStmt(node.B, params, ref locals, ref mask, returns);
+            this.SumStmt(node.C, params, ref locals, ref mask, returns);
+            return;
+        }
+        if (k == NK_FOR) {
+            this.SumStmt(node.A, params, ref locals, ref mask, returns);
+            this.SumStmt(node.D, params, ref locals, ref mask, returns);
+            return;
+        }
+        if (k == NK_FOREACH) {
+            this.SumStmt(node.C, params, ref locals, ref mask, returns);
+            return;
+        }
+        if (k == NK_MATCH) {
+            u32 arm = node.B;
+            while (arm != 0) {
+                this.SumStmt(this.NodeAt(arm).B, params, ref locals, ref mask, returns);
+                arm = this.NNext(arm);
+            }
+            return;
+        }
+        if (k == NK_RETURN) {
+            if (returns) mask = mask | this.SumExpr(node.A, params, locals);
+            return;
+        }
+        if (k == NK_VAR) {
+            u64 m = this.SumExpr(node.B, params, locals);
+            AddLocalMask(ref locals, this.NSym(n), m);
+            return;
+        }
+        if (k == NK_ASSIGN) {
+            u32 t = node.A;
+            if (this.NKind(t) == NK_NAME && this.NSym(t) != 0) {
+                u64 m = this.SumExpr(node.B, params, locals);
+                AddLocalMask(ref locals, this.NSym(t), m);
+            }
+        }
+    }
+}
+
+// The bit of parameter (or receiver) local s, or 0.
+u64 ParamMaskOf(in List<u32> params, u32 s) {
+    for (usize i = 0; i < params.Len() && i < 64; i++) {
+        if (s != 0 && params.Get(i) == s) return (1 as u64) << i;
+    }
+    return 0;
+}
+
+u64 LocalMaskOf(in List<u32> locals, u32 s) {
+    for (usize i = 0; i < locals.Len(); i += 3) {
+        if (locals.Get(i) == s) return locals.Get(i + 1) as u64 | (locals.Get(i + 2) as u64) << 32;
+    }
+    return 0;
+}
+
+void AddLocalMask(ref List<u32> locals, u32 s, u64 m) {
+    if (m == 0 || s == 0) return;
+    for (usize i = 0; i < locals.Len(); i += 3) {
+        if (locals.Get(i) != s) continue;
+        u64 o = m | locals.Get(i + 1) as u64 | (locals.Get(i + 2) as u64) << 32;
+        locals.Set(i + 1, (o & 0xFFFFFFFF) as u32);
+        locals.Set(i + 2, (o >> 32) as u32);
+        return;
+    }
+    locals.Push(s);
+    locals.Push((m & 0xFFFFFFFF) as u32);
+    locals.Push((m >> 32) as u32);
+}

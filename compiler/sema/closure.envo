@@ -268,7 +268,10 @@ impl Checker {
             kind = tt.Count;
         }
         u32 lt = this.FnTypeOf(kind, pl, ml, count, ret);
-        if (!this.Core) this.SetNType(n, lt);
+        if (!this.Core) {
+            this.SetNType(n, lt);
+            this.OriginCheckLambda(n);
+        }
         return lt;
     }
 

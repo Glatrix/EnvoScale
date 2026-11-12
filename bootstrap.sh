@@ -413,14 +413,12 @@ do_test() {
     run "$ROOT" frobnicate
     if [ "$rc" -eq 2 ] && grep -q "^envoc: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc unknown command' "exit $rc"; fi
 
-    # The Stage 2 front end and checker (M3.2-M3.4): the lexer, parser and checker goldens
-    # and the lexical, syntax and type spec tests, in the same modes as for Stage 1; then
-    # the same output as envoc1 from `lex` and `parse` on every source file, from `check`
-    # on the run programs and goldens, and on both compilers' sources (D17). Tests whose
-    # error comes from the move and borrow checks wait for M3.5 (stage2_later).
+    # The Stage 2 front end and checker (M3.2-M3.5): the lexer, parser and checker goldens
+    # and the lexical, syntax, type and ownership spec tests, in the same modes as for
+    # Stage 1; then the same output as envoc1 from `lex` and `parse` on every source file,
+    # from `check` on the run programs and goldens, and on both compilers' sources (D17).
     # Keep in step with bootstrap.ps1.
     envoc2=$EXE
-    stage2_later=' e0503_change_while_bound.envo e0950_from_function_param.envo e0950_lambda_takes_drop_value.envo '
     for suite in lexer:lex:.tokens:both parser:parse:.ast:both s1-parser:parse:.ast:s1 check:check:.check:both; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; rest=${rest#*:}; ext=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
@@ -440,7 +438,7 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1 core-types:check:core s1-types:check:s1; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1 core-types:check:core s1-types:check:s1 s1-own:check:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue
@@ -450,7 +448,6 @@ do_test() {
         dir="$ROOT/tests/spec/$sdir"
         for f in "$dir"/*.envo; do
             base=$(basename "$f")
-            case "$stage2_later" in *" $base "*) continue ;; esac
             line=$(LC_ALL=C grep -a -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
             code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9][0-9][0-9][0-9]\).*|\1|')
             if [ "$mode" = s1 ]; then
