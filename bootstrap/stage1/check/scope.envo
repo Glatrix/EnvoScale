@@ -52,6 +52,11 @@ struct Checker {
     u32 ResultSym;      // the prelude's `Result`
     u32 StringSym;      // the prelude's `string`
     Map PreludeScope;   // the prelude's items by name, hidden or not
+    // namespaces (check/names.envo)
+    Vec FileNs;         // str per source file: its namespace
+    Map NsSet;          // every namespace and namespace prefix
+    Vec Uses;           // u32: the `use` items
+    Map TokSym;         // token index -> the item a qualified name resolved to
 }
 
 // ------------------------------------------------------------------ side tables
@@ -307,6 +312,8 @@ void LocalPushSym(*Checker c, u32 s, u32 t) {
 
 // Locals first, then program scope.
 u32 Lookup(*Checker c, u32 tok) {
+    u32 fixed = FixedSym(c, tok);
+    if (fixed != 0) return fixed;
     u32 s = LocalFind(c, tok);
     if (s != 0) return s;
     return GFindAt(c, tok);
@@ -315,13 +322,16 @@ u32 Lookup(*Checker c, u32 tok) {
 // The program-scope symbol token tok names. Inside the prelude, the prelude's own items
 // come first, so a program's items of the same names cannot change what it means.
 u32 GFindAt(*Checker c, u32 tok) {
+    u32 fixed = FixedSym(c, tok);
+    if (fixed != 0) return fixed;
     unsafe {
         if (c.PreludeFile != 0xFFFFFFFF && CTok(c, tok).File == c.PreludeFile) {
             u64 s;
             if (MapGet(&c.PreludeScope, TokText(c, tok), &s)) return s as u32;
         }
+        if (MapLen(&c.NsSet) == 0) return GFind(c, TokText(c, tok));
     }
-    return GFind(c, TokText(c, tok));
+    return FindInScope(c, TokText(c, tok), CTok(c, tok).File, tok);
 }
 
 // [core.name.2]: adds a local; E0204 if a visible local already has the name.

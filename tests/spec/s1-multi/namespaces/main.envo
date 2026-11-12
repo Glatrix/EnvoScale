@@ -1,0 +1,16 @@
+// Namespaces, `use` and visibility ([s1.item.1], [s1.item.2]): items of other files
+// imported whole, through an alias and qualified; types and enum variants named through
+// namespaces; a nested namespace; a private helper used inside its own namespace.
+// expect: ten
+// expect: title
+// expect: round
+// expect: hello
+use geo;
+use text.fmt as f;
+var p = new Point { X = 3, Y = 4 };
+geo.Shift(ref p, 1);
+print(f.Show(p.X + p.Y));
+print(f.Title);
+geo.Kind k = geo.Kind.Round;
+if (k == geo.Kind.Round) print("round");
+text.fmt.Hello();

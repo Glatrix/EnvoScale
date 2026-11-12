@@ -1,0 +1,2 @@
+struct Early { i64 X; }
+namespace late;

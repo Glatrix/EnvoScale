@@ -7,6 +7,7 @@
 void CheckProgram(*Checker c, u32 program) {
     InitScope(c);
     u32 first = CNode(c, program).A;
+    if (!CCore(c)) CollectNamespaces(c, first);
     // pass 1: collect item names
     u32 n = first;
     while (n != 0) {
@@ -18,7 +19,7 @@ void CheckProgram(*Checker c, u32 program) {
         else if (k == NK_CONST) sk = SK_CONST;
         else if (k == NK_STATIC) sk = SK_STATIC;
         else if (k == NK_INTERFACE) sk = SK_IFACE;
-        else if (k == NK_NAMESPACE || k == NK_USE) CNotYet(c, "namespaces and `use`", NTok(c, n));
+
         if (sk != 0) DefineItem(c, n, sk);
         n = CNode(c, n).Next;
     }
@@ -81,16 +82,23 @@ void MethodBodies(*Checker c, u32 m) {
 // Pass 1 for one item: its symbol (E0201 if the name is taken).
 void DefineItem(*Checker c, u32 n, u8 kind) {
     u32 tok = NTok(c, n);
-    u32 prev = GFind(c, TokText(c, tok));
+    // an item of a namespace is `ns.Name` in program scope ([s1.item.1])
+    str ns = FileNamespace(c, CTok(c, tok).File);
+    str key = JoinName(ns, TokText(c, tok));
+    u32 prev = GFind(c, key);
     bool prelude = IsPreludeNode(c, n);
     // the prelude comes last, so a program's own item of the same name hides it
     bool hidden = prev != 0 && prelude;
     if (prev != 0 && !prelude && SymGet(c, prev).Flags & SF_PRELUDE == 0) CFailName(c, tok, E_DUPLICATE, "`", tok, "` is already defined");
     u32 s = SymNew(c, kind, n);
     SetNSym(c, n, s);
+    unsafe {
+        SymPtr(c, s).Ns = ns;
+        if (CNode(c, n).Flags & (NF_PUBLIC | NF_INTERNAL) != 0) SymPtr(c, s).Flags = SF_PUBLIC;
+    }
     if (prelude) {
         unsafe {
-            SymPtr(c, s).Flags = SF_PRELUDE;
+            SymPtr(c, s).Flags = SymGet(c, s).Flags | SF_PRELUDE;
             if (kind == SK_IFACE && StrEq(SymGet(c, s).Name, "IDrop")) c.DropSym = s;
             if (kind == SK_ENUM && StrEq(SymGet(c, s).Name, "Option")) c.OptionSym = s;
             if (kind == SK_ENUM && StrEq(SymGet(c, s).Name, "Result")) c.ResultSym = s;
@@ -123,7 +131,7 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
             SymPtr(c, s).Flags = SymGet(c, s).Flags | SF_GENERIC;
         }
     }
-    if (!hidden) GAdd(c, s);
+    if (!hidden) unsafe { MapPut(&c.Global, key, s as u64); }
     if (prelude) unsafe { MapPut(&c.PreludeScope, SymGet(c, s).Name, s as u64); }
     if (kind == SK_IFACE) DeclareIfaceItem(c, s);
 }
@@ -158,7 +166,7 @@ u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
             if (overflow) DoesNotFit(c, countTok, T_USIZE);
             SetNType(c, countNode, T_USIZE);
         } else {
-            u32 s = GFind(c, TokText(c, countTok));
+            u32 s = GFindAt(c, countTok);
             if (s == 0) CFailName(c, countTok, E_UNKNOWN_NAME, "unknown name `", countTok, "`");
             if (SymGet(c, s).Kind != SK_CONST) CError(c, E_NOT_CONSTANT, countTok);
             ConstResolve(c, s, countTok);
@@ -182,14 +190,16 @@ u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
 // The type named by token tok with type arguments args (a list of type nodes): a type
 // parameter in scope, or a program-scope type ([type.gen.1]).
 u32 ResolveTypeName(*Checker c, u32 tok, u32 args, u32 quals) {
-    if (quals != 0) CNotYet(c, "qualified names", tok);
     u32 have = ListCount(c, args);
-    u32 tp = FindTParam(c, tok);
+    u32 tp = 0;
+    if (quals == 0) tp = FindTParam(c, tok);
     if (tp != 0) {
         if (have != 0) TypeArgCount(c, tok, 0, have);
         return SymGet(c, tp).Type;
     }
-    u32 s = GFindAt(c, tok);
+    u32 s = 0;
+    if (quals != 0) s = QualifiedType(c, quals, tok);
+    else s = GFindAt(c, tok);
     if (s == 0) CFailName(c, tok, E_UNKNOWN_TYPE, "unknown type `", tok, "`");
     Sym sym = SymGet(c, s);
     u8 k = sym.Kind;

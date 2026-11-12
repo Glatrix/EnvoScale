@@ -138,7 +138,9 @@ bracketed markers, tested by `tests/golden/s1-parser/` and `tests/spec/s1-syntax
 - **[s1.own.2] Drops.** A type implements `IDrop` (§8) to run code when its value is
   dropped; locals drop in reverse declaration order at the end of their scope and fields
   after their struct's own `Drop` ([own.drop.1]). Values moved on some paths only are
-  tracked with drop flags ([eir.model.2]).
+  tracked with drop flags ([eir.model.2]). In `unsafe` code, a write through a raw pointer
+  stores without dropping what was there (the memory may be empty), and reading a value
+  that is not `Copy` through one takes it ([own.unsafe.1]).
 - **[s1.own.3] Basic borrow checking.** `envoc1` checks borrows per local variable
   (a borrow of `a.b` counts as a borrow of `a`) and lets a borrow end at its last use
   ([own.borrow.2]). It may reject some programs that the full checker of Stage 2 accepts,
@@ -170,7 +172,7 @@ E0336. The prelude contains only:
 |---|---|
 | `enum Option<T> { None, Some(T value) }` | `IsSome`, `IsNone`, `Unwrap()` (panics on `None`), `UnwrapOr(T)` |
 | `enum Result<T, E> { Ok(T value), Err(E error) }` | `IsOk`, `IsErr`, `Unwrap()`, `UnwrapErr()` |
-| `struct List<T>` | `List<T>.New()`, `Len`, `Push(ref this, T)`, `Pop(ref this) -> T?`, `Get(i) -> in T`, `Set(ref this, i, T)`, `AsSlice() -> T[]`, `AsMutSlice(ref this) -> mut T[]`, `IDrop` |
+| `struct List<T>` | `List<T>.New()`, `Len`, `Push(ref this, T)`, `Pop(ref this) -> T?`, `Get(i) -> T` (for `Copy` items: Envo-S1 has no borrowed results, so other items are borrowed through `AsSlice`), `Set(ref this, i, T)`, `AsSlice() -> T[]`, `AsMutSlice(ref this) -> mut T[]`, `IDrop` |
 | `struct string` | `string.From(str)`, `Len`, `Append(ref this, str)`, `AppendByte(ref this, u8)`, `AsStr() -> str`, `Equals(str)`, `IDrop` |
 | `interface IDrop` | `void Drop(ref this)` |
 | `interface IEquatable<T>` | `bool Equals(in T other)` |

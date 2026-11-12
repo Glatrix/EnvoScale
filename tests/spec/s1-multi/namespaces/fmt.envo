@@ -1,0 +1,7 @@
+namespace text.fmt;
+public const str Title = "title";
+public str Show(i64 v) {
+    if (v == 10) return "ten";
+    return "other";
+}
+public void Hello() => print("hello");

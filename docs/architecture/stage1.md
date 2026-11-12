@@ -125,11 +125,12 @@ generic instance's argument count before its arguments: `Box.1.i64`), so differe
 instances never share a name.
 
 **Not yet (E0951).** Envo-S1 constructs `envoc1` does not compile yet are reported as
-E0951 rather than mis-compiled: `mut` views, slicing, `foreach`, namespaces and `use`,
-generic interface methods, generic functions, methods and built-ins used as values,
-bindings in `|` patterns, and an `impl` whose type parameters are not exactly its type's
-(`impl<T> I for Box<Box<T>>`). Each goes away with the increment that implements it;
-M2.13 removes the code.
+E0951 rather than mis-compiled: generic interface methods, generic functions, methods and
+built-ins used as values, bindings in `|` patterns, `foreach` ranges without both
+bounds, arrays of values with a drop, lambdas that take a value with a drop, and an
+`impl` whose type parameters are not exactly its type's (`impl<T> I for Box<Box<T>>`).
+M2.13 removes the code: each case is either implemented or recorded in `envo-s1.md` as
+not part of Envo-S1 (E0950).
 
 ## Closures (M2.9)
 
@@ -236,6 +237,40 @@ integers, exactly as in Envo-Core, so Core programs are unchanged.
   drops of a `return`; the function's result must be optional (or a `Result` with the
   same error type), else E0317.
 - **`c ? a : b`** evaluates one branch into a slot of the result type ([s1.expr.2]).
+
+## Views (M2.12)
+
+`check/views.envo` and `lower/views.envo` implement RFC 0002 and RFC 0004's views. `T[]`
+and `mut T[]` share `str`'s representation `{ ptr, u64 }`; `mut T[]` is a separate
+interned type that is not `Copy`, may be written through, converts to `T[]`, and is
+reborrowed (not moved) when passed to a `mut T[]` parameter. Slicing checks its bounds in
+`u64` (`lo <= hi <= length`, `..=` first checking `hi < length`) and, for `str`, that
+both ends are character boundaries. `foreach` walks an index over the sequence (a
+borrowed element is the element's address) or a counter over a range (`..=` stops at
+`hi` without stepping past it, so `hi` may be the type's maximum).
+
+Borrows of local storage are checked conservatively ([s1.own.3]): a view of a local array
+or a `str` of a local `string` that is kept (not just passed to a call) freezes the local
+for the rest of the function, entirely for a kept `mut T[]` (E0503); such a value cannot
+be returned or stored outside the function (E0504); and a `str` of a temporary `string`
+may only be passed straight to a call.
+
+The prelude's `List<T>` and `string` are Envo-S1 code over raw memory. In `unsafe` code
+a write through a raw pointer stores without dropping the old value (the memory may be
+empty) and a read of a value that is not `Copy` takes it ([own.unsafe.1]); that is how
+`List<T>` moves items in and out and how its `Drop` drops them. Names inside the
+prelude always mean the prelude's own items, whatever a program defines.
+
+## Namespaces (M2.12)
+
+`check/names.envo`. A file's `namespace a.b;` puts its items in program scope as
+`a.b.X`; files without one share the root. An unqualified name is looked up in the
+file's namespace and those around it, then in the file's `use` imports, then in the
+root. A qualified name in an expression (`a.b.F(x)`, `alias.T.Make()`) is resolved when it
+is met, as long as its first name is not a local, and is then a plain name with its item
+fixed; in a type, `a.b.T`. Private items (the default) are visible only in their
+namespace (E0212); `public` and `internal` ones everywhere, since a program is one
+package ([s1.item.2]).
 
 ## Executable images
 

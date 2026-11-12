@@ -24,6 +24,7 @@ check/move.envo
 check/borrow.envo
 check/enums.envo
 check/views.envo
+check/names.envo
 check/dump.envo
 eir/ir.envo
 eir/read.envo

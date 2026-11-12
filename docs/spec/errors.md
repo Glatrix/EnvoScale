@@ -68,6 +68,9 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0208 | `x` is not a type | [core.name.3] |
 | E0209 | `x` is a type, not a value | [core.name.3] |
 | E0210 | top-level statements are only allowed in the entry file (the first file given) | [item.mod.3] |
+| E0211 | `namespace` must come first in its file | [s1.item.1] (Envo-S1) |
+| E0212 | `X` is private to namespace `N` | [s1.item.2] (Envo-S1) |
+| E0213 | unknown namespace `N` | [s1.item.1] (Envo-S1) |
 
 ## Types (E0300–E0399)
 

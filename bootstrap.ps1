@@ -219,9 +219,13 @@ function Invoke-Test {
         # Multi-file programs: one folder per test. main.envo is the entry file and holds
         # the annotations; the other .envo files follow in name order. Either
         # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
-        Say "multi-file tests ($compiler): tests/spec/core-multi"
-        foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-multi') -Directory | Sort-Object Name) {
-            $name = "$compiler spec/core-multi/$($d.Name)"
+        # Envo-S1 programs of several files (tests/spec/s1-multi) under Stage 1 only.
+        $multiSuites = @('core-multi')
+        if ($compiler -eq 'envoc1') { $multiSuites += 's1-multi' }
+        foreach ($msuite in $multiSuites) {
+        Say "multi-file tests ($compiler): tests/spec/$msuite"
+        foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$msuite") -Directory | Sort-Object Name) {
+            $name = "$compiler spec/$msuite/$($d.Name)"
             $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
             $text = Normalize ([IO.File]::ReadAllText((Join-Path $d.FullName 'main.envo'), $Utf8))
             $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)$')
@@ -235,7 +239,7 @@ function Invoke-Test {
             $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
             $wantOut = ''
             if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
-            $program = Join-Path $runDir ("multi-" + $d.Name + '.exe')
+            $program = Join-Path $runDir ("$msuite-" + $d.Name + '.exe')
             $r = Invoke-Tool $exe (@('build') + $files + @('-o', $program)) $d.FullName
             if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
             $r = Invoke-Tool $program @() $runDir
@@ -243,6 +247,7 @@ function Invoke-Test {
             if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
             if ($r.Code -ne 0) { Bad $name "exit code $($r.Code); stderr: $($r.Err.Trim())"; continue }
             Pass $name
+        }
         }
     }
     $exe = $stage0Exe

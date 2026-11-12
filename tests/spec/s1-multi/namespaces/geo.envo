@@ -1,0 +1,8 @@
+namespace geo;
+public struct Point { i64 X; i64 Y; }
+public enum Kind { Flat, Round }
+public void Shift(ref Point p, i64 by) {
+    p.X += by;
+    p.Y += Twice(by);
+}
+i64 Twice(i64 v) => v * 2;

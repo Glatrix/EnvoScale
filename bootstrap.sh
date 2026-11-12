@@ -203,11 +203,15 @@ do_test() {
         # Multi-file programs: one folder per test. main.envo is the entry file and holds
         # the annotations; the other .envo files follow in name order. Either
         # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
-        say "multi-file tests ($compiler): tests/spec/core-multi"
-        for d in "$ROOT"/tests/spec/core-multi/*/; do
+        # Envo-S1 programs of several files (tests/spec/s1-multi) under Stage 1 only.
+        multi_suites=core-multi
+        [ "$compiler" = envoc1 ] && multi_suites="core-multi s1-multi"
+        for msuite in $multi_suites; do
+        say "multi-file tests ($compiler): tests/spec/$msuite"
+        for d in "$ROOT"/tests/spec/$msuite/*/; do
             d=${d%/}
             base=$(basename "$d")
-            name="$compiler spec/core-multi/$base"
+            name="$compiler spec/$msuite/$base"
             set -- main.envo
             for f in "$d"/*.envo; do
                 f=$(basename "$f")
@@ -223,7 +227,7 @@ do_test() {
                 continue
             fi
             sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
-            program="$rundir/multi-$base"
+            program="$rundir/$msuite-$base"
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$d" build "$@" -o "$program"
             if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
@@ -235,6 +239,7 @@ do_test() {
             if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
             if [ "$rc" -ne 0 ]; then bad "$name" "exit code $rc: $(cat "$TMP/err")"; continue; fi
             pass
+        done
         done
     done
     EXE=$stage0_exe

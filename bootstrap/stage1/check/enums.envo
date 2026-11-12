@@ -480,6 +480,7 @@ bool CheckTaggedPattern(*Checker c, u32 pat, u32 t, u32 kind, bool several) {
     u16 hk = NKind(c, head);
     u32 nameTok = NTok(c, head);
     if (hk == NK_MEMBER) {
+        TryQualified(c, CNode(c, head).A);
         u32 owner = CNode(c, head).A;
         if (NKind(c, owner) != NK_NAME || TypeNameSym(c, NTok(c, owner)) != TypeGet(c, t).Sym) {
             CFail(c, NTok(c, owner), E_MISMATCH, "this pattern names another type than the one matched");

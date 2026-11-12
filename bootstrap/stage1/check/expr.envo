@@ -101,6 +101,7 @@ void NeedsUnsafe(*Checker c, u32 n) {
 }
 
 u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
+    if (!CCore(c)) TryQualified(c, n);
     Node node = CNode(c, n);
     u16 k = node.Kind;
     if (k == NK_INT) {
@@ -275,6 +276,7 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
 }
 
 u32 CheckCall(*Checker c, u32 n, u32 expected) {
+    if (!CCore(c)) TryQualified(c, CNode(c, n).A);
     Node node = CNode(c, n);
     if (NKind(c, node.A) == NK_MEMBER && !CCore(c)) return CheckMethodCall(c, n, expected);
     if (NKind(c, node.A) != NK_NAME && !CCore(c)) return CheckIndirectCall(c, n, node.A);
@@ -424,6 +426,7 @@ u32 CheckCallTo(*Checker c, u32 n, u32 fs, u32 ownerEnv, u32 typeArgs, u32 tok) 
 u32 CheckMethodCall(*Checker c, u32 n, u32 expected) {
     Node node = CNode(c, n);
     u32 m = node.A;
+    TryQualified(c, CNode(c, m).A);
     Node mem = CNode(c, m);
     u32 obj = mem.A;
     u32 name = mem.Tok;
@@ -513,6 +516,7 @@ u32 TypeNameSym(*Checker c, u32 tok) {
 }
 
 u32 CheckMember(*Checker c, u32 n, u32 expected) {
+    if (!CCore(c)) TryQualified(c, CNode(c, n).A);
     Node node = CNode(c, n);
     u32 name = node.Tok;
     // Enum.Variant ([core.expr.7])

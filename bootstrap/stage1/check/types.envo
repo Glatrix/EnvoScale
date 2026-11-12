@@ -69,6 +69,7 @@ struct Sym {
     u32 NBounds;
     u32 Calls;      // first call node of the body in Checker.Calls
     u32 NCalls;
+    str Ns;         // an item's namespace ("" for the root)
 }
 
 const u8 SK_TYPE = 1;
@@ -91,6 +92,7 @@ const u32 SF_GENERIC = 16;      // has a generic environment (NEnv > 0)
 const u32 SF_BYREF = 32;        // a local reached through a pointer (`in`/`ref` parameter, receiver)
 const u32 SF_READONLY = 64;     // an `in` local
 const u32 SF_PRELUDE = 128;     // a prelude item: a program's own item of the same name hides it
+const u32 SF_PUBLIC = 256;      // `public` or `internal`: visible outside its namespace
 
 // Built-in ids (envo-core.md section 6), in Stage 0's order from 1.
 const u32 B_EXIT = 7;
@@ -114,6 +116,9 @@ const u32 E_NO_MEMBER = 206;
 const u32 E_FIELD_TWICE = 207;
 const u32 E_NOT_A_TYPE = 208;
 const u32 E_NOT_A_VALUE = 209;
+const u32 E_NAMESPACE_FIRST = 211;
+const u32 E_PRIVATE = 212;
+const u32 E_UNKNOWN_NAMESPACE = 213;
 const u32 E_MISMATCH = 301;
 const u32 E_BAD_OPERAND = 302;
 const u32 E_RECURSIVE = 303;
