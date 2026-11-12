@@ -111,7 +111,7 @@ i32 CmdCheck(usize argi, bool core) {
         i++;
     }
     // the libraries' native adapters use the target intrinsics, which come with the runtime
-    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, HostTargetCode()), core);
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, HostTargetCode()), ArchOf(HostTargetCode()), core);
     u32 prelude = 0xFFFFFFFF;
     if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
     List<usize> starts = List<usize>.New();

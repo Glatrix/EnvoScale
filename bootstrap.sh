@@ -474,6 +474,12 @@ do_test() {
     tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_WASM = /' > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
     else bad 'envoc embedded wasm runtime' 'compiler/driver/runtime_wasm.envo is stale: regenerate it with envoc1 embed compiler/runtime/wasm.envo, renaming RUNTIME_0 to RUNTIME_WASM'; fi
+    # and the AArch64 Linux OS layer, as RUNTIME_A64 (compiler/driver/runtime_a64.envo; M10)
+    run "$ROOT" embed compiler/runtime/linux_aarch64.envo
+    tr -d '\r' < "$ROOT/compiler/driver/runtime_a64.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_A64 = /' > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc embedded aarch64 runtime' 'compiler/driver/runtime_a64.envo is stale: regenerate it with envoc1 embed compiler/runtime/linux_aarch64.envo, renaming RUNTIME_0 to RUNTIME_A64'; fi
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
@@ -858,6 +864,11 @@ EOF_ERR
     else
         say 'wasm: skipped (no Node.js on this machine)'
     fi
+    # AArch64 Linux (M10, PLAN D69): programs build as AArch64 ELF executables, with and
+    # without the library; CI runs the run and library tests on an arm64 machine
+    # (bootstrap.sh cross, cross-run)
+    run "$ROOT" build "$ROOT/tests/spec/hello/console.envo" --lib "$ROOT" -o "$TMP/hello-a64" --target aarch64-linux
+    if [ "$rc" -eq 0 ] && [ "$(od -A n -t x1 -j 16 -N 4 "$TMP/hello-a64" | tr -d ' \n')" = "0300b700" ]; then pass; else bad 'aarch64-linux build' "exit $rc: $(cat "$TMP/err")"; fi
     # The website, written in Envo (website/README.md): it builds, and its pages are there
     say 'website: website/site.envo builds the site, with the sandbox (envoc.wasm)'
     cfiles=$(grep -v '^#' "$ROOT/compiler/files.txt" | tr -d '\r' | grep -v '^$' | tr '\n' ' ')
@@ -1310,10 +1321,13 @@ do_dist() {
 }
 
 # ------------------------------------------------------------------- cross
-# cross (M10, PLAN D69): the run programs (tests/spec/core-run, s1-run, s2-run) built for
-# aarch64-linux at -O0 and -O2, each with its expected stdout, exit code and panic message,
-# in build/cross/aarch64-linux. cross-run <dir> runs them on an AArch64 Linux machine (CI's
-# arm64 runner), which needs no compiler.
+# cross (M10, PLAN D69): the run programs (tests/spec/core-run, s1-run, s2-run) and the
+# library's tests (lib/**/tests, with the standard platform: `// os: none` ones with the
+# reference adapters, the others with the Linux adapter) built for aarch64-linux at -O0 and
+# -O2, each with its expected stdout, exit code and panic message, in
+# build/cross/aarch64-linux. cross-run <dir> runs them on an AArch64 Linux machine (CI's
+# arm64 runner) in a checkout, which needs no compiler: the library's tests in
+# build/envo-test/run, as `envo test` runs them.
 do_cross() {
     do_build
     out="$ROOT/build/cross/aarch64-linux"
@@ -1337,6 +1351,25 @@ do_cross() {
             n=$((n + 1))
         done
     done
+    for f in "$ROOT"/lib/*/tests/*.envo "$ROOT"/lib/*/*/tests/*.envo "$ROOT"/lib/*/*/*/tests/*.envo; do
+        [ -f "$f" ] || continue
+        rel=${f#"$ROOT"/lib/}
+        base="lib-$(printf '%s' "${rel%.envo}" | tr '/' '-')"
+        sed -n -e 's|^// expect: \(.*\)$|\1|p' -e 's|^// expect:$||p' "$f" | tr -d '\r' > "$out/$base.expected"
+        printf '0\n' > "$out/$base.exit"
+        printf '' > "$out/$base.panic"
+        os=$(sed -n 's|^// os: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+        for o in O0 O2; do
+            if [ -n "$os" ]; then
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" --os "$os" "$f" -o "$out/$base-$o" --target aarch64-linux) \
+                    || fail "building $f for aarch64-linux (-$o) failed"
+            else
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" "$f" -o "$out/$base-$o" --target aarch64-linux) \
+                    || fail "building $f for aarch64-linux (-$o) failed"
+            fi
+        done
+        n=$((n + 1))
+    done
     say "cross     $n programs, at -O0 and -O2, for aarch64-linux in build/cross/aarch64-linux"
 }
 
@@ -1351,8 +1384,10 @@ do_cross_run() {
         name=${p##*/}
         base=${name%-O?}
         chmod +x "$p"
+        rundir=$dir
+        case "$base" in lib-*) rundir="$ROOT/build/envo-test/run"; mkdir -p "$rundir" ;; esac
         set +e
-        (cd "$dir" && "$p") > "$t/out" 2> "$t/err"
+        (cd "$rundir" && "$p") > "$t/out" 2> "$t/err"
         rc=$?
         set -e
         want=$(cat "$dir/$base.exit")
