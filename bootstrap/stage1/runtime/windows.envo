@@ -1,5 +1,5 @@
 // The Stage 1 runtime, part 2 for Windows: the OS layer over KERNEL32.dll, with Stage 0's
-// behaviour (bootstrap/stage0/platform/windows.eas). __wincall(k, a1, …, a8) is a target
+// behaviour (bootstrap/stage0/platform/windows.eas). __wincall(k, a1, …, a10) is a target
 // intrinsic the backend encodes: it calls import k (x64/image.envo, WinImport) with the
 // Microsoft x64 convention. BOOL and DWORD results are 32 bits: only the low half of the
 // result is meaningful for them.
@@ -25,7 +25,7 @@ i64 __w_ptr(*u8 p) {
 }
 
 i64 __w_call0(i64 k) {
-    return __wincall(k, 0, 0, 0, 0, 0, 0, 0, 0);
+    return __wincall(k, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 // The HANDLE for fd: the standard handles for 0-2, the fd itself otherwise.
@@ -40,9 +40,9 @@ i64 __w_handle(i32 fd) {
 
 void __os_init(i64 sp) {
     unsafe {
-        __w_stdin = __wincall(__W_GETSTDHANDLE, -10, 0, 0, 0, 0, 0, 0, 0);
-        __w_stdout = __wincall(__W_GETSTDHANDLE, -11, 0, 0, 0, 0, 0, 0, 0);
-        __w_stderr = __wincall(__W_GETSTDHANDLE, -12, 0, 0, 0, 0, 0, 0, 0);
+        __w_stdin = __wincall(__W_GETSTDHANDLE, -10, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        __w_stdout = __wincall(__W_GETSTDHANDLE, -11, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        __w_stderr = __wincall(__W_GETSTDHANDLE, -12, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
     __w_build_args();
 }
@@ -59,10 +59,10 @@ void __os_init(i64 sp) {
 void __w_build_args() {
     i64 w = __w_call0(__W_GETCOMMANDLINEW);
     // bytes needed, including the NUL
-    i64 need = __wincall(__W_WIDECHARTOMULTIBYTE, 65001, 0, w, -1, 0, 0, 0, 0) as i32 as i64;
+    i64 need = __wincall(__W_WIDECHARTOMULTIBYTE, 65001, 0, w, -1, 0, 0, 0, 0, 0, 0) as i32 as i64;
     if (need <= 0) need = 1;
     *u8 line = __rt_alloc(need as usize);
-    __wincall(__W_WIDECHARTOMULTIBYTE, 65001, 0, w, -1, __w_ptr(line), need, 0, 0);
+    __wincall(__W_WIDECHARTOMULTIBYTE, 65001, 0, w, -1, __w_ptr(line), need, 0, 0, 0, 0);
     usize len = __rt_cstr_len(line);
     *str args = __rt_str_array(len + 2);
     *u8 text = __rt_alloc(len + 1);
@@ -148,7 +148,7 @@ isize __os_write(i32 fd, *u8 p, usize n) {
     u32 count = 0;
     i64 ok = 0;
     unsafe {
-        ok = __wincall(__W_WRITEFILE, __w_handle(fd), __w_ptr(p), n as i64, &count as isize as i64, 0, 0, 0, 0);
+        ok = __wincall(__W_WRITEFILE, __w_handle(fd), __w_ptr(p), n as i64, &count as isize as i64, 0, 0, 0, 0, 0, 0);
     }
     if (ok as i32 == 0) return -1;
     return count as isize;
@@ -159,7 +159,7 @@ isize __os_read(i32 fd, *u8 p, usize n) {
     u32 count = 0;
     i64 ok = 0;
     unsafe {
-        ok = __wincall(__W_READFILE, __w_handle(fd), __w_ptr(p), n as i64, &count as isize as i64, 0, 0, 0, 0);
+        ok = __wincall(__W_READFILE, __w_handle(fd), __w_ptr(p), n as i64, &count as isize as i64, 0, 0, 0, 0, 0, 0);
     }
     if (ok as i32 == 0) {
         // the writer closed the pipe: that is end of file
@@ -182,7 +182,7 @@ i32 __os_open(*u8 path, usize len, i32 mode) {
     }
     // UTF-16 needs at most one unit per UTF-8 byte
     *u8 wide = __rt_alloc((len + 1) * 2);
-    i64 chars = __wincall(__W_MULTIBYTETOWIDECHAR, 65001, 8, __w_ptr(z), -1, __w_ptr(wide), (len + 1) as i64, 0, 0);
+    i64 chars = __wincall(__W_MULTIBYTETOWIDECHAR, 65001, 8, __w_ptr(z), -1, __w_ptr(wide), (len + 1) as i64, 0, 0, 0, 0);
     if (chars as i32 == 0) return -1;
     i64 access = 0x80000000;       // GENERIC_READ
     i64 share = 1;                  // FILE_SHARE_READ
@@ -192,20 +192,20 @@ i32 __os_open(*u8 path, usize len, i32 mode) {
         share = 0;
         disposition = 2;            // CREATE_ALWAYS
     }
-    i64 h = __wincall(__W_CREATEFILEW, __w_ptr(wide), access, share, 0, disposition, 0x80, 0, 0);
+    i64 h = __wincall(__W_CREATEFILEW, __w_ptr(wide), access, share, 0, disposition, 0x80, 0, 0, 0, 0);
     return h as i32;
 }
 
 void __os_close(i32 fd) {
     if (fd < 3) return;
-    __wincall(__W_CLOSEHANDLE, fd as i64, 0, 0, 0, 0, 0, 0, 0);
+    __wincall(__W_CLOSEHANDLE, fd as i64, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 *u8 __os_pages(usize n) {
-    i64 p = __wincall(__W_VIRTUALALLOC, 0, n as i64, 0x3000, 4, 0, 0, 0, 0);   // commit | reserve, RW
+    i64 p = __wincall(__W_VIRTUALALLOC, 0, n as i64, 0x3000, 4, 0, 0, 0, 0, 0, 0);   // commit | reserve, RW
     unsafe { return p as isize as *u8; }
 }
 
 void __os_exit(i32 code) {
-    __wincall(__W_EXITPROCESS, code as i64, 0, 0, 0, 0, 0, 0, 0);
+    __wincall(__W_EXITPROCESS, code as i64, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }

@@ -23,7 +23,7 @@ i64 Ptr(*u8 p) {
     unsafe { return p as isize as i64; }
 }
 
-i64 Call(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __wincall(k, a, b, c, d, e, f, 0, 0);
+i64 Call(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __wincall(k, a, b, c, d, e, f, 0, 0, 0, 0);
 
 u32 LastError() => Call(W_GETLASTERROR, 0, 0, 0, 0, 0, 0) as u32;
 

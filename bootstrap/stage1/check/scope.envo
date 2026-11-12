@@ -527,7 +527,7 @@ void InitScope(*Checker c) {
     if (runtime) {
         // target intrinsics for the runtime's OS layer (docs/architecture/stage1.md)
         AddBuiltinN(c, "__syscall", B_SYSCALL, T_I64, 7, T_I64);
-        AddBuiltinN(c, "__wincall", B_WINCALL, T_I64, 9, T_I64);
+        AddBuiltinN(c, "__wincall", B_WINCALL, T_I64, 11, T_I64);     // import slot and up to 10 arguments
     }
 }
 
