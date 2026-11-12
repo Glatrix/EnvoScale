@@ -1,0 +1,146 @@
+// `envo prof` (PLAN D63): runs a program in the script runtime and counts, for every
+// function, its calls and the EIR instructions run in it. The counts are exact and the
+// same on every machine, so a profile can be compared across changes (and tested); time
+// on the CPU is for native profilers. The report goes to stderr, after the program's own
+// output.
+use std.env;
+use core.text as ct;
+use alloc.text;
+use core.fmt;
+use envoc.eir;
+use envoc.diag;
+use envo.vm;
+
+struct ProfRow {
+    u32 Func;
+    u64 Insts;
+}
+
+i32 CmdEnvoProf(usize from) {
+    BuildOpts o = new BuildOpts {
+        Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(),
+    };
+    usize top = 15;
+    bool all = false;
+    usize i = from;
+    while (i < env.ArgCount()) {
+        str a = env.Arg(i);
+        if (Eq(a, "--")) {
+            for (usize k = i + 1; k < env.ArgCount(); k++) o.RunArgs.Push(string.From(env.Arg(k)));
+            break;
+        }
+        if (Eq(a, "--top") && i + 1 < env.ArgCount()) {
+            top = ParseCount(env.Arg(i + 1), "--top");
+            i += 2;
+        } else if (Eq(a, "--runtime")) {
+            all = true;
+            i++;
+        } else if (Eq(a, "-O2") || Eq(a, "-O0")) {
+            o.Opt = Eq(a, "-O2");
+            i++;
+        } else if (Eq(a, "-A")) {
+            o.Allows.Push(string.From("all"));
+            i++;
+        } else if (Eq(a, "--allow") && i + 1 < env.ArgCount()) {
+            o.Allows.Push(string.From(env.Arg(i + 1)));
+            i += 2;
+        } else if (ct.StartsWith(a, "--allow=")) {
+            o.Allows.Push(string.From(a[8..a.Len]));
+            i++;
+        } else if (a.Len > 0 && a[0] == '-') {
+            string msg = string.From("unknown option '");
+            msg.Append(a);
+            msg.Append("' for `envo prof`; it takes --top N, --runtime, -O2, --allow and the program");
+            EnvoFail(msg.AsStr(), 2);
+        } else {
+            o.Inputs.Push(string.From(a));
+            i++;
+        }
+    }
+    Plan p = PlanScript(o);
+    string home = EnvoHome();
+    vm.Sandbox box = MakeSandbox(o);
+    Sources src = Sources.New();
+    Module m = CompileProgram(ref src, p.Files, HostTargetCode(), false, true, -1, o.Opt, home.AsStr(), o.Os.AsStr());
+    List<string> args = List<string>.New();
+    args.Push(string.From(p.Files.AsSlice()[0].AsStr()));
+    foreach (var a in o.RunArgs.AsSlice()) args.Push(string.From(a.AsStr()));
+    vm.Vm machine = vm.Vm.New(m, box);
+    machine.Profile();
+    machine.CatchExits(false);
+    i32 code = machine.Run(args);
+    // the functions by instructions, most first (ties: by name)
+    List<ProfRow> rows = List<ProfRow>.New();
+    u64 total = 0;
+    usize ran = 0;
+    for (u32 f = 1; f < machine.FuncCount() as u32; f++) {
+        u64 n = machine.FuncInsts(f);
+        total += n;
+        if (machine.FuncCalls(f) == 0) continue;
+        ran++;
+        str name = machine.FuncName(f);
+        if (!all && (ct.StartsWith(name, "__rt_") || ct.StartsWith(name, "__os_") || ct.StartsWith(name, "__w_"))) continue;
+        rows.Push(new ProfRow { Func = f, Insts = n });
+    }
+    mut ProfRow[] r = rows.AsMutSlice();
+    for (usize a = 1; a < r.Len; a++) {
+        usize b = a;
+        while (b > 0 && Before(machine, r[b], r[b - 1])) {
+            ProfRow t = r[b];
+            r[b] = r[b - 1];
+            r[b - 1] = t;
+            b--;
+        }
+    }
+    string report = string.From("envo prof: ");
+    report.Append(text.Uint(total).AsStr());
+    report.Append(" instructions in ");
+    report.Append(text.Uint(ran as u64).AsStr());
+    report.Append(" functions\n      calls  instructions       %  function\n");
+    for (usize k = 0; k < r.Len && k < top; k++) {
+        report.Append(text.PadLeft(text.Uint(machine.FuncCalls(r[k].Func)).AsStr(), 11, ' ').AsStr());
+        report.Append(text.PadLeft(text.Uint(r[k].Insts).AsStr(), 14, ' ').AsStr());
+        u64 tenths = 0;
+        if (total > 0) tenths = (r[k].Insts * 1000 + total / 2) / total;
+        string pct = text.Uint(tenths / 10);
+        pct.AppendByte('.');
+        pct.Append(text.Uint(tenths % 10).AsStr());
+        report.Append(text.PadLeft(pct.AsStr(), 8, ' ').AsStr());
+        report.Append("  ");
+        report.Append(machine.FuncName(r[k].Func));
+        report.AppendByte('\n');
+    }
+    write(2, report.AsStr());
+    return code;
+}
+
+bool Before(in vm.Vm m, ProfRow a, ProfRow b) {
+    if (a.Insts != b.Insts) return a.Insts > b.Insts;
+    return ct.Compare(m.FuncName(a.Func), m.FuncName(b.Func)) < 0;
+}
+
+// A whole number from an option, or exits.
+usize ParseCount(str s, str option) {
+    u64? v = fmt.ParseU64(s);
+    if (v.IsNone()) {
+        string msg = string.From(option);
+        msg.Append(" takes a whole number");
+        EnvoFail(msg.AsStr(), 2);
+    }
+    return v.Unwrap() as usize;
+}
+
+// The script runtime's sandbox with o's permissions, or exits on an unknown one.
+vm.Sandbox MakeSandbox(in BuildOpts o) {
+    vm.Sandbox box = vm.Sandbox.None(env.CurrentDir().AsStr());
+    foreach (var a in o.Allows.AsSlice()) {
+        if (!box.Allow(a.AsStr())) {
+            string msg = string.From("unknown permission in `--allow ");
+            msg.Append(a.AsStr());
+            msg.Append("`: use read, write, fs (each with an optional :path), env, run, net or all");
+            EnvoFail(msg.AsStr(), 2);
+        }
+    }
+    return box;
+}

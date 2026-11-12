@@ -1,0 +1,17 @@
+// envo fuzz's test target: it panics only for input starting with "FUZ!", checked one
+// byte at a time, so each right byte reaches a new block. Coverage guidance finds it in
+// a few thousand runs; blind random inputs would need billions.
+use std.env;
+use std.fs;
+
+var r = fs.ReadText(env.Arg(1));
+if (r.IsErr()) return;
+string data = r.Unwrap();
+str d = data.AsStr();
+if (d.Len >= 4 && d[0] == 'F') {
+    if (d[1] == 'U') {
+        if (d[2] == 'Z') {
+            if (d[3] == '!') panic("found the magic input");
+        }
+    }
+}

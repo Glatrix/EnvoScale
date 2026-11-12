@@ -1,0 +1,13 @@
+// envo prof's test program: Fib is called 177 times (fib(10) by recursion) and
+// Square ten times; the counts are exact.
+u64 Fib(u64 n) {
+    if (n < 2) return n;
+    return Fib(n - 1) + Fib(n - 2);
+}
+
+u64 Square(u64 x) => x * x;
+
+u64 total = 0;
+for (u64 i = 0; i < 10; i++) total += Square(i);
+total += Fib(10);
+if (total == 340) print("ok");

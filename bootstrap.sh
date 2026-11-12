@@ -798,7 +798,7 @@ EOF_ERR
         else bad 'website pages' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
-    say 'envo commands: new, run, test, check, explain, version'
+    say 'envo commands: new, run, test, check, explain, version, prof, fuzz'
     erun="$ROOT/build/run-envo"
     rm -rf "$erun"
     mkdir -p "$erun"
@@ -825,6 +825,12 @@ EOF_ERR
     if [ "$rc" -eq 1 ]; then pass; else bad 'envo explain (unknown)' "exit $rc"; fi
     envo_do version
     if [ "$rc" -eq 0 ] && grep -q '^envo ' "$TMP/out"; then pass; else bad 'envo version' "exit $rc"; fi
+    # envo prof: exact counts (tests/envo/prof); envo fuzz: finds a 4-byte magic input
+    cp "$ROOT/tests/envo/prof/hot.envo" "$ROOT/tests/envo/fuzz/magic.envo" "$erun/"
+    envo_do prof hot.envo
+    if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'ok' ] && grep -q -E '^ +177 +[0-9]+ +[0-9.]+  Fib$' "$TMP/err" && grep -q -E '^ +10 +[0-9]+ +[0-9.]+  Square$' "$TMP/err"; then pass; else bad 'envo prof' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    envo_do fuzz magic.envo --runs 50000 --seed 1
+    if [ "$rc" -eq 1 ] && grep -q '^crash: ' "$TMP/out" && grep -q 'panic: found the magic input' "$TMP/err" && [ -f "$erun/build/fuzz/magic/crash" ]; then pass; else bad 'envo fuzz' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
     set +e
     printf 'print("hello")\ni32 Twice(i32 x) {\n    return x * 2;\n}\nuse alloc.text;\nprint(text.Int(Twice(21) as i64).AsStr())\nu8 bad = nope;\n:quit\n' | (cd "$erun" && "$envo" repl) > "$TMP/out" 2> "$TMP/err"

@@ -8,3 +8,5 @@ tools/envo/script.envo
 runtime/vm/vm.envo
 runtime/vm/sandbox.envo
 tools/envo/repl.envo
+tools/envo/prof.envo
+tools/envo/fuzz.envo

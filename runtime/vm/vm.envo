@@ -47,6 +47,9 @@ struct Pre {
 
 const u32 NO_RESULT = 0xFFFFFFFF;
 
+// The descriptor (Linux) or handle (Windows) of the in-memory input file.
+const u64 VFD = 0x7EF0;
+
 public struct Vm {
     Module M;
     List<Pre> Pres;             // per instruction
@@ -61,6 +64,23 @@ public struct Vm {
     usize Depth;
     u32 TrapFunc;               // __rt_trap
     Sandbox Box;
+    // tools (M13): profiling counts, block coverage, and runs that end without ending
+    // the process
+    bool Profiling;
+    List<u64> FnInsts;          // per function: instructions run in it
+    List<u64> FnCalls;          // per function: calls
+    bool Covering;
+    List<u8> BlockHits;         // per block: 1 once it has run
+    bool Catching;              // exits and panics end the run, not the process
+    bool Quiet;                 // the program's stdout and stderr are dropped
+    bool Halted;
+    i32 HaltCode;
+    i64 StdOut;                 // Windows: the standard handles the program asked for
+    i64 StdErr;
+    // a file the program reads from memory (fuzzing: no disk per run)
+    string VPath;
+    List<u8> VData;
+    usize VPos;
 
     // A VM for module m (made for the host target, runtime included).
     public static Vm New(Module m, Sandbox box) {
@@ -73,6 +93,10 @@ public struct Vm {
                 GlobalAddr = List<u64>.New(),
                 Values = values, ValueTop = 0, Slots = slots, SlotTop = 0, Frames = frames, Depth = 0,
                 TrapFunc = 0, Box = box,
+                Profiling = false, FnInsts = List<u64>.New(), FnCalls = List<u64>.New(),
+                Covering = false, BlockHits = List<u8>.New(), Catching = false, Quiet = false,
+                Halted = false, HaltCode = 0, StdOut = -1, StdErr = -1,
+                VPath = string.New(), VData = List<u8>.New(), VPos = 0,
             };
             vm.Prepare();
             return vm;
@@ -201,6 +225,138 @@ public struct Vm {
 
     // ------------------------------------------------------------------ running
 
+    // ------------------------------------------------------------------ tools
+
+    // Counts the instructions run in, and the calls of, every function.
+    public void Profile(ref this) {
+        this.Profiling = true;
+        for (usize f = 0; f < this.M.Funcs.Len(); f++) {
+            this.FnInsts.Push(0);
+            this.FnCalls.Push(0);
+        }
+    }
+
+    // Notes every block that runs (for coverage-guided fuzzing).
+    public void Cover(ref this) {
+        this.Covering = true;
+        for (usize b = 0; b < this.M.Blocks.Len(); b++) this.BlockHits.Push(0);
+    }
+
+    // Makes exits and panics end the run instead of the process, so Rerun can run the
+    // program again; quiet drops what it writes to stdout and stderr.
+    public void CatchExits(ref this, bool quiet) {
+        this.Catching = true;
+        this.Quiet = quiet;
+    }
+
+    public usize FuncCount(in this) => this.M.Funcs.Len();
+    public str FuncName(in this, u32 f) => TextStr(this.M.Func(f).Name);
+    public u64 FuncInsts(in this, u32 f) => this.FnInsts.Get(f as usize);
+    public u64 FuncCalls(in this, u32 f) => this.FnCalls.Get(f as usize);
+    public usize BlockCount(in this) => this.BlockHits.Len();
+    public u8[] Hits(in this) => this.BlockHits.AsSlice();
+
+    public void ClearHits(ref this) {
+        mut u8[] h = this.BlockHits.AsMutSlice();
+        for (usize i = 0; i < h.Len; i++) h[i] = 0;
+    }
+
+    // Serves the file at path (as the program names it) from data, without the disk:
+    // opening, reading and closing it, and asking its kind and size.
+    public void SetInput(ref this, str path, u8[] data) {
+        this.VPath = string.From(path);
+        this.VData = List<u8>.New();
+        foreach (var b in data) this.VData.Push(b);
+        this.VPos = 0;
+    }
+
+    // Copies up to n bytes of the in-memory file to p; gives how many.
+    u64 VRead(ref this, u64 p, u64 n) {
+        u64 left = (this.VData.Len() - this.VPos) as u64;
+        u64 k = n;
+        if (k > left) k = left;
+        unsafe {
+            *u8 q = p as usize as *u8;
+            for (u64 i = 0; i < k; i++) q[i as usize] = this.VData.Data[this.VPos + i as usize];
+        }
+        this.VPos += k as usize;
+        return k;
+    }
+
+    bool IsVPath(in this, in string name) => this.VPath.Len() > 0 && name.Equals(this.VPath.AsStr());
+
+    // The constants the program's own code (its top level and functions outside any
+    // namespace, not the runtime's or the library's) compares values with: integer
+    // comparisons and switch cases, each once, in order. A fuzzer's dictionary.
+    public List<u64> CompareConstants(in this) {
+        List<u64> got = List<u64>.New();
+        for (u32 i = 1; i < this.M.Insts.Len() as u32; i++) {
+            Pre pre = this.Pres.Get(i as usize);
+            bool cmp = pre.Op >= 20 && pre.Op <= 25 && !pre.IsFloat;
+            if (!cmp && pre.Op != 57) continue;
+            str fname = TextStr(this.M.Func(this.M.Block(this.M.Inst(i).Block).Func).Name);
+            bool skip = !Same(fname, "__main") && (fname.Len >= 2 && fname[0] == '_' && fname[1] == '_');
+            for (usize c = 0; c < fname.Len && !skip; c++) {
+                if (fname[c] == '.') skip = true;
+            }
+            if (skip) continue;
+            for (u32 k = 0; k < pre.NOps; k++) {
+                u32 o = pre.FirstOp + k;
+                u64 v = this.OpV.Get(o as usize);
+                if (pre.Op == 57) v = this.M.Ops.Get(o as usize).Int;
+                if (this.OpIsVal.Get(o as usize)) {
+                    // a value: a constant if a const instruction made it
+                    EOp eo = this.M.Ops.Get(o as usize);
+                    if (eo.Kind != OK_VALUE) continue;
+                    u32 def = this.M.Val(eo.Ref).Inst;
+                    if (def == 0 || this.M.Inst(def).Op != 1) continue;
+                    v = this.M.Inst(def).Imm;
+                }
+                bool seen = false;
+                foreach (var g in got.AsSlice()) {
+                    if (g == v) seen = true;
+                }
+                if (!seen) got.Push(v);
+            }
+        }
+        return got;
+    }
+
+    // Did the last run end in a panic (a caught exit with code 101)?
+    public bool Panicked(in this) => this.Halted && this.HaltCode == 101;
+
+    // Runs the program again from a fresh state: its globals as at the start (the heap
+    // carries on where it was), empty stacks. For CatchExits mode.
+    public i32 Rerun(ref this, in List<string> args) {
+        this.Halted = false;
+        this.HaltCode = 0;
+        this.ValueTop = 0;
+        this.SlotTop = 0;
+        this.Depth = 0;
+        for (u32 g = 1; g < this.M.Globals.Len() as u32; g++) {
+            EGlobal gl = this.M.Global(g);
+            if (gl.ReadOnly) continue;
+            str name = TextStr(gl.Name);
+            if (Same(name, "static.__rt_heap_cur") || Same(name, "static.__rt_heap_end")) continue;
+            u64 at = this.GlobalAddr.Get(g as usize);
+            usize size = this.M.Ty(gl.Type).Size as usize;
+            unsafe {
+                *u8 q = at as usize as *u8;
+                for (usize k = 0; k < size; k++) q[k] = 0;
+            }
+            if (gl.Init != 0) this.Fill(at, gl.Type, gl.Init);
+        }
+        return this.Run(args);
+    }
+
+    // Ends the run (CatchExits mode) with code.
+    void Halt(ref this, i32 code) {
+        if (!this.Halted) {
+            this.Halted = true;
+            this.HaltCode = code;
+        }
+    }
+
     // Runs the program with its arguments (args[0] is its name) and gives its exit code.
     public i32 Run(ref this, in List<string> args) {
         u32 init = this.FuncNamed("__rt_init");
@@ -237,10 +393,12 @@ public struct Vm {
         this.SetArg(1, strs);
         this.Invoke(setArgs);
         u64 code = this.Invoke(main);
+        if (this.Halted) return this.HaltCode;
         if (exitFn != 0) {
             this.SetArg(0, code);
             this.Invoke(exitFn);
         }
+        if (this.Halted) return this.HaltCode;
         return code as i32;
     }
 
@@ -251,8 +409,23 @@ public struct Vm {
     }
 
     void Trap(ref this, u64 reason) {
+        if (this.Halted) return;
         this.SetArg(0, reason);
         this.Invoke(this.TrapFunc);
+        if (this.Catching) {
+            this.Halt(101);
+            return;
+        }
+        exit(101);
+    }
+
+    // The script's stack overflowed: the run ends as a panic does.
+    void Overflow(ref this) {
+        if (!this.Quiet) write(2, "envo: error: the script's stack overflowed\n");
+        if (this.Catching) {
+            this.Halt(101);
+            return;
+        }
         exit(101);
     }
 
@@ -295,9 +468,11 @@ public struct Vm {
         usize fb = this.ValueTop;
         // the frame, and room above it for branch copies and call arguments
         if (fb + fn.NValues as usize + 64 >= VALUE_STACK || this.Depth + 1 >= FRAME_STACK) {
-            write(2, "envo: error: the script's stack overflowed\n");
-            exit(101);
+            this.Overflow();
+            return;
         }
+        if (this.Profiling) unsafe { this.FnCalls.Data[f] = this.FnCalls.Data[f] + 1; }
+        if (this.Covering) unsafe { this.BlockHits.Data[fn.FirstBlock] = 1; }
         unsafe {
             *Frame fr = &this.Frames[this.Depth];
             fr.Func = f;
@@ -317,9 +492,15 @@ public struct Vm {
     u64 Invoke(ref this, u32 f) {
         usize bottom = this.Depth;
         this.Enter(f, NO_RESULT);
+        if (this.Halted) return 0;
         unsafe {
             while (true) {
+                if (this.Halted) {
+                    this.Depth = bottom;
+                    return 0;
+                }
                 *Frame fr = &this.Frames[this.Depth - 1];
+                if (this.Profiling) this.FnInsts.Data[fr.Func] = this.FnInsts.Data[fr.Func] + 1;
                 usize fb = fr.Base;
                 u32 first = fr.First;
                 u32 i = fr.Inst;
@@ -441,8 +622,8 @@ public struct Vm {
                     usize at = (this.SlotTop + align - 1) & ~(align - 1);
                     usize n = size as usize;
                     if (at + n > SLOT_STACK) {
-                        write(2, "envo: error: the script's stack overflowed\n");
-                        exit(101);
+                        this.Overflow();
+                        continue;
                     }
                     *u8 p = &this.Slots[at];
                     for (usize k = 0; k < n; k++) p[k] = 0;
@@ -536,6 +717,7 @@ public struct Vm {
     // Continues frame fr at the start of block b.
     void Jump(ref this, *Frame fr, u32 b) {
         unsafe {
+            if (this.Covering) this.BlockHits.Data[b] = 1;
             EBlock blk = this.M.Block(b);
             fr.Inst = blk.FirstInst;
         }
@@ -588,11 +770,17 @@ public struct Vm {
             return 0;
         }
         if (op == 12 || op == 13) {
-            if (c == 0) this.Trap(2);
+            if (c == 0) {
+                this.Trap(2);
+                return 0;
+            }
             if (signed) {
                 i64 x = a as i64;
                 i64 y = c as i64;
-                if (size == 8 && y == -1 && a == 0x8000000000000000) this.Trap(0);
+                if (size == 8 && y == -1 && a == 0x8000000000000000) {
+                    this.Trap(0);
+                    return 0;
+                }
                 if (op == 13) return Norm((x % y) as u64, size, true);
                 u64 q = (x / y) as u64;
                 if (size < 8 && Norm(q, size, true) != q) this.Trap(0);
@@ -622,13 +810,69 @@ public struct Vm {
         u64[13] a;
         for (u32 k = 0; k < n && k < 13; k++) a[k] = this.Operand(fb, first, o + k);
         if (Same(name, "syscall")) {
+            if (this.Catching && (a[0] == 60 || a[0] == 231)) {
+                this.Halt(a[1] as i32);                                 // exit, exit_group
+                return 0;
+            }
+            if (this.Quiet && a[0] == 1 && (a[1] == 1 || a[1] == 2)) return a[3];  // write to stdout/stderr
+            if (this.VPath.Len() > 0) {
+                if (a[0] == 2 && this.IsVPath(CString(a[1] as i64))) {
+                    this.VPos = 0;
+                    return VFD;                                         // open
+                }
+                if (a[0] == 257 && this.IsVPath(CString(a[2] as i64))) {
+                    this.VPos = 0;
+                    return VFD;                                         // openat
+                }
+                if (a[0] == 262 && this.IsVPath(CString(a[2] as i64))) {
+                    // newfstatat: a regular file of its size
+                    unsafe {
+                        *u8 st = a[3] as usize as *u8;
+                        for (usize k = 0; k < 144; k++) st[k] = 0;
+                        (&st[24] as *u32)[0] = 0x81A4;
+                        (&st[48] as *u64)[0] = this.VData.Len() as u64;
+                    }
+                    return 0;
+                }
+                if (a[0] == 0 && a[1] == VFD) return this.VRead(a[2], a[3]);
+                if (a[0] == 3 && a[1] == VFD) return 0;
+            }
             if (!this.Box.AllowSyscall(a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64)) return Denied(1);
             return platform.RawCall(1, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, 0, 0, 0, 0, 0, 0) as u64;
         }
         if (Same(name, "wincall")) {
             if (a[0] == 8 && this.Box.PendingDenied()) return 5;       // GetLastError after a denial: ACCESS_DENIED
             if (a[0] == 42 && this.Box.PendingDenied()) return 10013;  // WSAGetLastError: WSAEACCES
+            if (this.Catching && a[0] == 9) {
+                this.Halt(a[1] as i32);                                 // ExitProcess
+                return 0;
+            }
+            if (this.VPath.Len() > 0) {
+                if (a[0] == 2 && this.IsVPath(WideString(a[1] as i64))) {
+                    this.VPos = 0;
+                    return VFD;                                         // CreateFileW
+                }
+                if (a[0] == 3 && a[1] == VFD) {
+                    u64 k = this.VRead(a[2], a[3]);                     // ReadFile
+                    unsafe { (a[4] as usize as *u32)[0] = k as u32; }
+                    return 1;
+                }
+                if (a[0] == 5 && a[1] == VFD) return 1;                 // CloseHandle
+                if (a[0] == 18 && this.IsVPath(WideString(a[1] as i64))) return 0x80;   // GetFileAttributesW: normal
+            }
+            if (this.Quiet && a[0] == 4 && (a[1] as i64 == this.StdOut || a[1] as i64 == this.StdErr)) {
+                // WriteFile to stdout/stderr: report it all written
+                unsafe { (a[4] as usize as *u32)[0] = a[3] as u32; }
+                return 1;
+            }
             if (!this.Box.AllowWincall(a[0] as i64, a[1] as i64, a[2] as i64, a[5] as i64)) return DeniedWin(a[0]);
+            if (a[0] == 0) {
+                // GetStdHandle: remember stdout's and stderr's
+                u64 h = platform.RawCall(2, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, a[7] as i64, a[8] as i64, a[9] as i64, a[10] as i64, a[11] as i64, a[12] as i64) as u64;
+                if (a[1] as i64 == -11) this.StdOut = h as i64;
+                if (a[1] as i64 == -12) this.StdErr = h as i64;
+                return h;
+            }
             return platform.RawCall(2, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, a[7] as i64, a[8] as i64, a[9] as i64, a[10] as i64, a[11] as i64, a[12] as i64) as u64;
         }
         if (Same(name, "wincallp")) {
