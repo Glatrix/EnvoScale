@@ -73,7 +73,8 @@ to find the library (`ENVO_HOME`) and to give test programs absolute paths.
 
 `envo lsp` speaks the Language Server Protocol's base protocol on standard input and
 output, with `envo.json` for the messages. On `didOpen`, `didChange` and `didSave` it
-writes the document's text to `build/envo-lsp/` beside it, runs `envo check` on that
+writes the document's text to `build/envo-lsp/<server>/` beside it (a folder of its
+own, so two servers on one folder do not collide; removed when it exits), runs `envo check` on that
 copy (with the rest of the package, found by walking up to an `envo.envon` with a
 `package` block) as a child process, and publishes the first error with its code and
 `help:` line, its column converted to UTF-16 units. Running the check in a child keeps

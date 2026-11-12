@@ -486,7 +486,7 @@ json.Value SymbolsIn(in Doc d) {
 }
 
 // The whole document laid out by `envo fmt`, as one edit; no edits if it cannot be.
-json.Value Formatting(in List<Doc> docs, str self, in json.Value params) {
+json.Value Formatting(in List<Doc> docs, str self, str tag, in json.Value params) {
     json.Value edits = json.Value.NewArray();
     json.Value[] td = params.Field("textDocument");
     if (td.Len != 1 || td[0].GetStr("uri").IsNone()) return edits;
@@ -496,6 +496,7 @@ json.Value Formatting(in List<Doc> docs, str self, in json.Value params) {
     string file = UriToPath(uri);
     if (file.Len() == 0) return edits;
     string work = path.Join(path.Parent(file.AsStr()), "build/envo-lsp");
+    work = path.Join(work.AsStr(), tag);
     if (fs.CreateDirAll(work.AsStr()).IsErr()) return edits;
     string scratch = path.Join(work.AsStr(), "format.envo");
     str t = docs.AsSlice()[k as usize].Text.AsStr();

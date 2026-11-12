@@ -9,7 +9,7 @@ A language server over the Language Server Protocol's base protocol (JSON-RPC wi
 | Message | What `envo lsp` does |
 |---|---|
 | `initialize` | Answers with full-text document sync (`openClose`, `change: 1`, `save`) |
-| `textDocument/didOpen`, `didChange`, `didSave` | Writes the text to `build/envo-lsp/` beside the file, runs `envo check` on it (with the rest of its package) as a child process, and publishes the first error, with its code and `help:` line |
+| `textDocument/didOpen`, `didChange`, `didSave` | Writes the text to `build/envo-lsp/<server>/` beside the file (a folder of this server's own, removed when it exits), runs `envo check` on it (with the rest of its package) as a child process, and publishes the first error, with its code and `help:` line |
 | `textDocument/didClose` | Clears the document's diagnostics |
 | `shutdown`, `exit` | Ends; the exit code is 0 if `shutdown` came first |
 | any other request | Answers with error -32601 (method not found) |

@@ -26,6 +26,7 @@ specific platform, or connects EnvoScale to an outside system (CI, interop, remo
 | `audio/` | AudioDevice | wasapi, alsa, pulse, coreaudio, webaudio, null |
 | `input/`, `clipboard/`, `fonts-system/` | Input, Clipboard, FontSource | per platform |
 | `interop/` | — | c-abi, js |
+| `editors/` | — | vscode (the language server's client, M14.9) |
 | `ai-remote/` | — | HTTP adapters to external model APIs (optional) |
 | `ci/` | — | github |
 | `bootstrap/` | — | nasm (active), fasm (optional) — Phase A only |

@@ -10,6 +10,7 @@ use std.fs;
 use std.env;
 use std.path;
 use std.process;
+use std.random;
 use core.text as ct;
 use alloc.text;
 use envo.json;
@@ -25,6 +26,35 @@ struct Server {
     List<string> Shown;         // for each, the URI they are shown on
     string Self;                // this program, to run `envo check`
     List<Doc> Docs;             // open documents: their text and last good index
+    string Tag;                 // this server's own folder under build/envo-lsp
+    List<string> Works;         // the folders it made, removed when it exits
+}
+
+// This server's working folder for documents in dir: build/envo-lsp/<tag>, its own, so two
+// servers on one folder (two editor windows) do not overwrite each other's files.
+string WorkDir(ref Server s, str dir) {
+    string work = path.Join(dir, "build/envo-lsp");
+    work = path.Join(work.AsStr(), s.Tag.AsStr());
+    foreach (var w in s.Works.AsSlice()) {
+        if (w.Equals(work.AsStr())) return work;
+    }
+    if (fs.CreateDirAll(work.AsStr()).IsErr()) return string.New();
+    s.Works.Push(string.From(work.AsStr()));
+    return work;
+}
+
+// Removes the working folders and what is in them.
+void RemoveWorks(in Server s) {
+    foreach (var w in s.Works.AsSlice()) {
+        Result<List<string>, IoError> names = fs.ListDir(w.AsStr());
+        if (names.IsOk()) {
+            foreach (var n in names.Unwrap().AsSlice()) {
+                string f = path.Join(w.AsStr(), n.AsStr());
+                fs.Delete(f.AsStr());
+            }
+        }
+        fs.RemoveDir(w.AsStr());
+    }
 }
 
 // Where the next message is in b: 0 if b does not hold all of it yet, 1 if it does (its
@@ -292,8 +322,8 @@ void Diagnose(ref Server s, str uri, str t) {
     string file = UriToPath(uri);
     if (file.Len() == 0) return;
     str dir = path.Parent(file.AsStr());
-    string work = path.Join(dir, "build/envo-lsp");
-    if (fs.CreateDirAll(work.AsStr()).IsErr()) return;
+    string work = WorkDir(ref s, dir);
+    if (work.Len() == 0) return;
     string scratch = path.Join(work.AsStr(), path.FileName(file.AsStr()));
     if (fs.WriteText(scratch.AsStr(), t).IsErr()) return;
     // the files to check: the package's, with the scratch copy for this document
@@ -459,10 +489,15 @@ i32 CmdEnvoLsp(usize from) {
         Buf = string.New(), Ended = false, ShutDown = false, Checked = List<string>.New(),
         Shown = List<string>.New(),
         Self = string.From(env.Arg(0)), Docs = List<Doc>.New(),
+        Tag = text.Hex(random.U64(), 16), Works = List<string>.New(),
     };
     while (true) {
         string body = ReadMessage(ref s);
-        if (body.Len() == 0) return 1;      // the input ended without `exit`
+        if (body.Len() == 0) {
+            // the input ended without `exit`
+            RemoveWorks(s);
+            return 1;
+        }
         Result<json.Value, json.JsonError> pr = json.Parse(body.AsStr());
         if (pr.IsErr()) {
             RespondError(json.Value.Null(), -32700, "the message is not valid JSON");
@@ -480,6 +515,7 @@ i32 CmdEnvoLsp(usize from) {
             s.ShutDown = true;
             Respond(id[0], json.Value.Null());
         } else if (ct.Compare(m, "exit") == 0) {
+            RemoveWorks(s);
             if (s.ShutDown) return 0;
             return 1;
         } else if (ct.Compare(m, "textDocument/didOpen") == 0 && params.Len == 1) {
@@ -516,7 +552,7 @@ i32 CmdEnvoLsp(usize from) {
         } else if (ct.Compare(m, "textDocument/documentSymbol") == 0 && id.Len == 1 && params.Len == 1) {
             Respond(id[0], DocumentSymbols(s.Docs, params[0]));
         } else if (ct.Compare(m, "textDocument/formatting") == 0 && id.Len == 1 && params.Len == 1) {
-            Respond(id[0], Formatting(s.Docs, s.Self.AsStr(), params[0]));
+            Respond(id[0], Formatting(s.Docs, s.Self.AsStr(), s.Tag.AsStr(), params[0]));
         } else if (id.Len == 1) {
             RespondError(id[0], -32601, "envo lsp does not handle this method yet");
         }

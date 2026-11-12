@@ -1,0 +1,66 @@
+{
+  "name": "envo",
+  "displayName": "Envo",
+  "description": "The Envo language: highlighting, diagnostics, completion, hover, go to definition, symbols and formatting through envo lsp.",
+  "version": "0.1.0",
+  "publisher": "envoscale",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/envoscale/EnvoScale"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.envo"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "envo",
+        "aliases": [
+          "Envo",
+          "envo"
+        ],
+        "extensions": [
+          ".envo"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "envo",
+        "scopeName": "source.envo",
+        "path": "./syntaxes/envo.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Envo",
+      "properties": {
+        "envo.path": {
+          "type": "string",
+          "default": "envo",
+          "description": "The envo program: a path, or a name found on PATH. Its `lsp` command serves the editor."
+        },
+        "envo.trace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log the messages between the editor and envo lsp in the Envo output channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "envo.restart",
+        "title": "Envo: Restart the Language Server"
+      }
+    ]
+  }
+}
