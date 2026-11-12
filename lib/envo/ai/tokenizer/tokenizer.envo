@@ -1,0 +1,595 @@
+// envo.ai.tokenizer: text to token ids and back (PLAN D58). Two kinds, as models use them:
+//
+// - Byte-level BPE (GPT-2's scheme): every byte is a symbol of a 256-letter alphabet,
+//   text is split into words first, and ranked merges join symbols, lowest rank first.
+//   Decoding is exact for any bytes.
+// - SentencePiece-style (Llama's): spaces become U+2581, a merge is chosen by the
+//   score of the piece it makes, and bytes with no piece fall back to <0xNN> tokens.
+// - WordPiece (BERT's, as GGUF files store it: a word's first piece starts with U+2581,
+//   the pieces after it do not): lowercased words and punctuation, each matched longest
+//   piece first; a word with no match is [UNK].
+//
+// Train builds a byte-level vocabulary from a corpus, so a program can make its own.
+namespace envo.ai.tokenizer;
+
+use alloc.map.{Map};
+
+const u8 BPE = 0;
+const u8 SPM = 1;
+const u8 WPM = 2;
+const u32 NONE = 0xFFFFFFFF;
+
+public struct Tokenizer {
+    u8 Mode;
+    List<string> Pieces;        // each token's text, in the model's alphabet
+    Map<string, u32> Ids;
+    Map<u64, u32> Ranks;        // BPE: (left id, right id) -> rank
+    Map<u64, u32> Joined;       // BPE: (left id, right id) -> the merged id
+    List<f32> Scores;           // SPM: per token
+    List<u32> ByteIds;          // per byte: its token (BPE: its letter; SPM: <0xNN>), or NONE
+    u32 Bos;
+    u32 Eos;
+    List<u32> Specials;         // tokens matched whole in text (control and user-defined)
+    List<string> MergeText;     // BPE: the merges, by rank
+    u32 Unk;                    // WordPiece: the unknown token
+
+    static Tokenizer Empty(u8 mode) => new Tokenizer {
+        Mode = mode, Pieces = List<string>.New(), Ids = Map<string, u32>.New(),
+        Ranks = Map<u64, u32>.New(), Joined = Map<u64, u32>.New(), Scores = List<f32>.New(),
+        ByteIds = List<u32>.New(), Bos = NONE, Eos = NONE, Specials = List<u32>.New(),
+        MergeText = List<string>.New(), Unk = NONE
+    };
+
+    // Byte-level BPE from its vocabulary (pieces in GPT-2's byte alphabet, by id) and its
+    // merges ("left right", by rank). Merges naming unknown pieces are skipped.
+    public static Tokenizer Bpe(str[] vocab, str[] merges) {
+        Tokenizer t = Tokenizer.Empty(BPE);
+        foreach (var p in vocab) t.Add(p);
+        for (u32 b = 0; b < 256; b++) {
+            string letter = Letter(b as u8);
+            u32? id = t.Ids.Get(letter);
+            if (id.IsSome()) t.ByteIds.Push(id.Unwrap());
+            else t.ByteIds.Push(NONE);
+        }
+        u32 rank = 0;
+        foreach (var m in merges) {
+            usize sp = m.Len;
+            for (usize i = 0; i < m.Len; i++) {
+                if (m[i] == ' ' as u8) {
+                    sp = i;
+                    break;
+                }
+            }
+            if (sp == m.Len) continue;
+            u32 a = t.IdOf(m[0..sp]);
+            u32 b = t.IdOf(m[sp + 1..m.Len]);
+            string both = string.From(m[0..sp]);
+            both.Append(m[sp + 1..m.Len]);
+            u32? j = t.Ids.Get(both);
+            if (a == NONE || b == NONE || j.IsNone()) continue;
+            u64 key = Pair(a, b);
+            if (!t.Ranks.Has(key)) {
+                t.Ranks.Set(key, rank);
+                t.Joined.Set(key, j.Unwrap());
+                t.MergeText.Push(string.From(m));
+            }
+            rank++;
+        }
+        return t;
+    }
+
+    // SentencePiece-style from its pieces and their scores, by id.
+    public static Tokenizer Spm(str[] vocab, f32[] scores) {
+        Tokenizer t = Tokenizer.Empty(SPM);
+        for (usize i = 0; i < vocab.Len; i++) {
+            t.Add(vocab[i]);
+            if (i < scores.Len) t.Scores.Push(scores[i]);
+            else t.Scores.Push(0.0);
+        }
+        for (u32 b = 0; b < 256; b++) {
+            string name = string.From("<0x");
+            name.AppendByte(HexDigit((b >> 4) as u8));
+            name.AppendByte(HexDigit((b & 15) as u8));
+            name.AppendByte('>' as u8);
+            u32? id = t.Ids.Get(name);
+            if (id.IsSome()) t.ByteIds.Push(id.Unwrap());
+            else t.ByteIds.Push(NONE);
+        }
+        return t;
+    }
+
+    // WordPiece from its pieces, by id; unknown is the [UNK] token.
+    public static Tokenizer WordPiece(str[] vocab, u32 unknown) {
+        Tokenizer t = Tokenizer.Empty(WPM);
+        foreach (var p in vocab) t.Add(p);
+        t.Unk = unknown;
+        return t;
+    }
+
+    // Learns byte-level BPE from corpus: up to merges merges, each joining the most
+    // frequent adjacent pair (ties: the pair seen first). Deterministic.
+    public static Tokenizer Train(str corpus, u32 merges) {
+        List<string> vocab = List<string>.New();
+        for (u32 b = 0; b < 256; b++) vocab.Push(Letter(b as u8));
+        // the words, as id sequences, with their counts
+        List<List<u32>> words = List<List<u32>>.New();
+        List<u32> counts = List<u32>.New();
+        Map<string, u32> seen = Map<string, u32>.New();
+        List<Span> chunks = Words(corpus);
+        foreach (var c in chunks.AsSlice()) {
+            string w = string.From(corpus[c.From..c.To]);
+            u32? at = seen.Get(w);
+            if (at.IsSome()) {
+                counts.Set(at.Unwrap() as usize, counts.Get(at.Unwrap() as usize) + 1);
+                continue;
+            }
+            seen.Set(w, words.Len() as u32);
+            List<u32> ids = List<u32>.New();
+            for (usize i = c.From; i < c.To; i++) ids.Push(corpus[i] as u32);
+            words.Push(ids);
+            counts.Push(1);
+        }
+        List<string> rules = List<string>.New();
+        for (u32 m = 0; m < merges; m++) {
+            Map<u64, u32> freq = Map<u64, u32>.New();
+            List<u64> order = List<u64>.New();
+            for (usize w = 0; w < words.Len(); w++) {
+                u32[] ids = words.AsSlice()[w].AsSlice();
+                u32 n = counts.Get(w);
+                for (usize i = 0; i + 1 < ids.Len; i++) {
+                    u64 key = Pair(ids[i], ids[i + 1]);
+                    u32? f = freq.Get(key);
+                    if (f.IsSome()) freq.Set(key, f.Unwrap() + n);
+                    else {
+                        freq.Set(key, n);
+                        order.Push(key);
+                    }
+                }
+            }
+            u64 best = 0;
+            u32 bestN = 0;
+            foreach (var key in order.AsSlice()) {
+                u32 f = freq.GetOr(key, 0);
+                if (f > bestN) {
+                    bestN = f;
+                    best = key;
+                }
+            }
+            if (bestN < 2) break;
+            u32 a = (best >> 32) as u32;
+            u32 b = (best & 0xFFFFFFFF) as u32;
+            u32 j = vocab.Len() as u32;
+            string piece = string.From(vocab.AsSlice()[a as usize].AsStr());
+            piece.Append(vocab.AsSlice()[b as usize].AsStr());
+            string rule = string.From(vocab.AsSlice()[a as usize].AsStr());
+            rule.AppendByte(' ' as u8);
+            rule.Append(vocab.AsSlice()[b as usize].AsStr());
+            vocab.Push(piece);
+            rules.Push(rule);
+            mut List<u32>[] ws = words.AsMutSlice();
+            for (usize w = 0; w < ws.Len; w++) ws[w] = MergeAll(ws[w].AsSlice(), a, b, j);
+        }
+        List<str> v = List<str>.New();
+        foreach (var p in vocab.AsSlice()) v.Push(p.AsStr());
+        List<str> r = List<str>.New();
+        foreach (var p in rules.AsSlice()) r.Push(p.AsStr());
+        return Tokenizer.Bpe(v.AsSlice(), r.AsSlice());
+    }
+
+    void Add(ref this, str piece) {
+        string p = string.From(piece);
+        if (!this.Ids.Has(p)) this.Ids.Set(string.From(piece), this.Pieces.Len() as u32);
+        this.Pieces.Push(p);
+    }
+
+    u32 IdOf(in this, str piece) => this.Ids.GetOr(string.From(piece), NONE);
+
+    // The token for a piece of text in the model's alphabet, if there is one.
+    public u32? Find(in this, str piece) {
+        u32 id = this.IdOf(piece);
+        if (id == NONE) return null;
+        return Some(id);
+    }
+
+    public usize VocabSize(in this) => this.Pieces.Len();
+    public str Piece(in this, u32 id) => this.Pieces.AsSlice()[id as usize].AsStr();
+    public bool IsSentencePiece(in this) => this.Mode == SPM;
+
+    // The begin- and end-of-text tokens (NONE until set).
+    public void SetSpecial(ref this, u32 bos, u32 eos) {
+        this.Bos = bos;
+        this.Eos = eos;
+    }
+    public u32 BeginId(in this) => this.Bos;
+    public u32 EndId(in this) => this.Eos;
+
+    // The pieces by id, and (BPE) the merges by rank: what a model file stores.
+    public string[] Vocabulary(in this) => this.Pieces.AsSlice();
+    public string[] Merges(in this) => this.MergeText.AsSlice();
+
+    // Marks a token whose text Encode matches whole (a control token such as <|im_end|>).
+    public void MarkSpecial(ref this, u32 id) {
+        if ((id as usize) < this.Pieces.Len()) this.Specials.Push(id);
+    }
+
+    // The tokens of text (no begin token: the caller adds one if its model wants it).
+    // Special tokens' texts become those tokens; the text between them is encoded.
+    public List<u32> Encode(in this, str text) {
+        List<u32> got = List<u32>.New();
+        usize from = 0;
+        usize i = 0;
+        while (i < text.Len) {
+            u32 sp = NONE;
+            usize len = 0;
+            if (this.Specials.Len() > 0) {
+                foreach (var id in this.Specials.AsSlice()) {
+                    str p = this.Pieces.AsSlice()[id as usize].AsStr();
+                    if (p.Len > len && p.Len <= text.Len - i && Same(text, i, p)) {
+                        sp = id;
+                        len = p.Len;
+                    }
+                }
+            }
+            if (sp == NONE) {
+                i++;
+                continue;
+            }
+            if (i > from) this.EncodePart(text[from..i], from == 0, ref got);
+            got.Push(sp);
+            i += len;
+            from = i;
+        }
+        if (from < text.Len) this.EncodePart(text[from..text.Len], from == 0, ref got);
+        return got;
+    }
+
+    void EncodePart(in this, str text, bool first, ref List<u32> got) {
+        if (this.Mode == WPM) {
+            this.EncodeWpm(text, ref got);
+            return;
+        }
+        if (this.Mode == SPM) {
+            List<u32> ids = this.EncodeSpm(text, first);
+            foreach (var id in ids.AsSlice()) got.Push(id);
+            return;
+        }
+        List<Span> chunks = Words(text);
+        foreach (var c in chunks.AsSlice()) {
+            List<u32> ids = List<u32>.New();
+            bool ok = true;
+            for (usize i = c.From; i < c.To; i++) {
+                u32 id = this.ByteIds.Get(text[i] as usize);
+                if (id == NONE) ok = false;
+                ids.Push(id);
+            }
+            if (!ok) continue;      // a vocabulary missing a byte cannot encode it
+            while (ids.Len() > 1) {
+                u32[] s = ids.AsSlice();
+                u32 bestRank = NONE;
+                usize at = 0;
+                for (usize i = 0; i + 1 < s.Len; i++) {
+                    u32 r = this.Ranks.GetOr(Pair(s[i], s[i + 1]), NONE);
+                    if (r < bestRank) {
+                        bestRank = r;
+                        at = i;
+                    }
+                }
+                if (bestRank == NONE) break;
+                u32 a = s[at];
+                u32 b = s[at + 1];
+                ids = MergeAll(s, a, b, this.Joined.GetOr(Pair(a, b), NONE));
+            }
+            foreach (var id in ids.AsSlice()) got.Push(id);
+        }
+    }
+
+    void EncodeWpm(in this, str text, ref List<u32> got) {
+        usize i = 0;
+        while (i < text.Len) {
+            u8 c = text[i];
+            if (ClassOf(c) == C_SPACE) {
+                i++;
+                continue;
+            }
+            usize j = i + 1;
+            if (!Punct(c)) {
+                while (j < text.Len && ClassOf(text[j]) != C_SPACE && !Punct(text[j])) j++;
+            }
+            // the word, lowercased, after U+2581
+            string w = string.From("\u{2581}");
+            for (usize k = i; k < j; k++) {
+                u8 b = text[k];
+                if (b >= 'A' as u8 && b <= 'Z' as u8) b = b + 32;
+                w.AppendByte(b);
+            }
+            str ws = w.AsStr();
+            List<u32> pieces = List<u32>.New();
+            usize at = 0;
+            bool ok = true;
+            while (at < ws.Len && ok) {
+                usize end = ws.Len;
+                u32 id = NONE;
+                while (end > at) {
+                    id = this.IdOf(ws[at..end]);
+                    if (id != NONE) break;
+                    end--;
+                    while (end > at && ws[end] >= 0x80 && ws[end] < 0xC0) end--;
+                }
+                if (id == NONE) ok = false;
+                else {
+                    pieces.Push(id);
+                    at = end;
+                }
+            }
+            if (ok) {
+                foreach (var p in pieces.AsSlice()) got.Push(p);
+            } else if (this.Unk != NONE) got.Push(this.Unk);
+            i = j;
+        }
+    }
+
+    List<u32> EncodeSpm(in this, str text, bool first) {
+        // spaces become U+2581, with one in front of the text (SentencePiece's dummy prefix)
+        string norm = string.From("");
+        if (first) norm.Append("\u{2581}");
+        for (usize i = 0; i < text.Len; i++) {
+            if (text[i] == ' ' as u8) norm.Append("\u{2581}");
+            else norm.AppendByte(text[i]);
+        }
+        str s = norm.AsStr();
+        // symbols: UTF-8 characters, as byte ranges
+        List<Span> sym = List<Span>.New();
+        usize i = 0;
+        while (i < s.Len) {
+            usize n = Utf8Len(s[i]);
+            if (i + n > s.Len) n = s.Len - i;
+            sym.Push(new Span { From = i, To = i + n });
+            i += n;
+        }
+        while (sym.Len() > 1) {
+            Span[] y = sym.AsSlice();
+            f32 best = 0.0;
+            usize at = y.Len;
+            for (usize k = 0; k + 1 < y.Len; k++) {
+                u32 id = this.IdOf(s[y[k].From..y[k + 1].To]);
+                if (id == NONE) continue;
+                f32 sc = this.Scores.Get(id as usize);
+                if (at == y.Len || sc > best) {
+                    best = sc;
+                    at = k;
+                }
+            }
+            if (at == y.Len) break;
+            List<Span> next = List<Span>.New();
+            for (usize k = 0; k < y.Len; k++) {
+                if (k == at) {
+                    next.Push(new Span { From = y[k].From, To = y[k + 1].To });
+                    k++;
+                } else next.Push(y[k]);
+            }
+            sym = next;
+        }
+        List<u32> got = List<u32>.New();
+        foreach (var y in sym.AsSlice()) {
+            u32 id = this.IdOf(s[y.From..y.To]);
+            if (id != NONE) {
+                got.Push(id);
+                continue;
+            }
+            for (usize k = y.From; k < y.To; k++) {
+                u32 b = this.ByteIds.Get(s[k] as usize);
+                if (b != NONE) got.Push(b);
+            }
+        }
+        return got;
+    }
+
+    // The text of tokens. SentencePiece-style drops the dummy prefix's space.
+    public string Decode(in this, u32[] ids) {
+        string got = string.From("");
+        foreach (var id in ids) this.AppendTo(ref got, id);
+        if ((this.Mode == SPM || this.Mode == WPM) && got.Len() > 0 && got.AsStr()[0] == ' ' as u8) return string.From(got.AsStr()[1..got.Len()]);
+        return got;
+    }
+
+    // Appends the bytes of one token to text (for streaming output).
+    public void AppendTo(in this, ref string text, u32 id) {
+        if (id as usize >= this.Pieces.Len()) return;
+        str p = this.Pieces.AsSlice()[id as usize].AsStr();
+        if (this.Mode == SPM || this.Mode == WPM) {
+            if (this.Mode == SPM && p.Len == 6 && p[0] == '<' as u8 && p[1] == '0' as u8 && p[2] == 'x' as u8 && p[5] == '>' as u8) {
+                text.AppendByte(HexValue(p[3]) * 16 + HexValue(p[4]));
+                return;
+            }
+            usize i = 0;
+            while (i < p.Len) {
+                if (i + 2 < p.Len && p[i] == 0xE2 && p[i + 1] == 0x96 && p[i + 2] == 0x81) {
+                    text.AppendByte(' ' as u8);
+                    i += 3;
+                } else {
+                    text.AppendByte(p[i]);
+                    i++;
+                }
+            }
+            return;
+        }
+        // byte-level: each character of the alphabet is one byte
+        usize i = 0;
+        while (i < p.Len) {
+            u32 cp = p[i] as u32;
+            usize n = 1;
+            if (cp >= 0xC0 && i + 1 < p.Len) {
+                cp = ((cp & 0x1F) << 6) | (p[i + 1] as u32 & 0x3F);
+                n = 2;
+            }
+            text.AppendByte(ByteOf(cp));
+            i += n;
+        }
+    }
+}
+
+bool Same(str text, usize at, str p) {
+    for (usize k = 0; k < p.Len; k++) {
+        if (text[at + k] != p[k]) return false;
+    }
+    return true;
+}
+
+struct Span {
+    usize From;
+    usize To;
+}
+
+u64 Pair(u32 a, u32 b) => ((a as u64) << 32) | b as u64;
+
+// Every occurrence of the pair (a, b) in ids replaced by j, left to right.
+List<u32> MergeAll(u32[] ids, u32 a, u32 b, u32 j) {
+    List<u32> got = List<u32>.New();
+    usize i = 0;
+    while (i < ids.Len) {
+        if (i + 1 < ids.Len && ids[i] == a && ids[i + 1] == b) {
+            got.Push(j);
+            i += 2;
+        } else {
+            got.Push(ids[i]);
+            i++;
+        }
+    }
+    return got;
+}
+
+// GPT-2's byte alphabet: printable bytes stand for themselves, the others for the
+// characters from U+0100 on, in order.
+bool Printable(u8 b) => (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || b >= 174;
+
+u32 CodeOf(u8 b) {
+    if (Printable(b)) return b as u32;
+    u32 n = 0;
+    for (u32 c = 0; c < b as u32; c++) {
+        if (!Printable(c as u8)) n++;
+    }
+    return 256 + n;
+}
+
+u8 ByteOf(u32 cp) {
+    if (cp < 256) return cp as u8;
+    u32 n = cp - 256;
+    for (u32 c = 0; c < 256; c++) {
+        if (!Printable(c as u8)) {
+            if (n == 0) return c as u8;
+            n--;
+        }
+    }
+    return '?' as u8;
+}
+
+// The alphabet's character for byte b, as UTF-8.
+public string Letter(u8 b) {
+    u32 cp = CodeOf(b);
+    string s = string.From("");
+    if (cp < 0x80) s.AppendByte(cp as u8);
+    else {
+        s.AppendByte((0xC0 | (cp >> 6)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    }
+    return s;
+}
+
+usize Utf8Len(u8 b) {
+    if (b < 0x80) return 1;
+    if (b >= 0xF0) return 4;
+    if (b >= 0xE0) return 3;
+    if (b >= 0xC0) return 2;
+    return 1;
+}
+
+u8 HexDigit(u8 v) {
+    if (v < 10) return '0' as u8 + v;
+    return 'A' as u8 + v - 10;
+}
+
+u8 HexValue(u8 c) {
+    if (c >= '0' as u8 && c <= '9' as u8) return c - '0' as u8;
+    if (c >= 'a' as u8 && c <= 'f' as u8) return c - 'a' as u8 + 10;
+    if (c >= 'A' as u8 && c <= 'F' as u8) return c - 'A' as u8 + 10;
+    return 0;
+}
+
+const u8 C_SPACE = 0;
+const u8 C_LETTER = 1;
+const u8 C_DIGIT = 2;
+const u8 C_OTHER = 3;
+
+// ASCII punctuation: each character is a word of its own to WordPiece.
+bool Punct(u8 c) => (c >= 33 && c <= 47) || (c >= 58 && c <= 64) || (c >= 91 && c <= 96) || (c >= 123 && c <= 126);
+
+u8 ClassOf(u8 b) {
+    if (b == ' ' as u8 || b == '\t' as u8 || b == '\n' as u8 || b == '\r' as u8 || b == 11 || b == 12) return C_SPACE;
+    if ((b >= 'a' as u8 && b <= 'z' as u8) || (b >= 'A' as u8 && b <= 'Z' as u8) || b >= 0x80) return C_LETTER;
+    if (b >= '0' as u8 && b <= '9' as u8) return C_DIGIT;
+    return C_OTHER;
+}
+
+// GPT-2's split into words: contractions ('s 't 're 've 'm 'll 'd), then runs of
+// letters, digits or other characters, each with at most one space in front, and runs of
+// whitespace (all but the last space before a word). Bytes from 0x80 count as letters.
+List<Span> Words(str s) {
+    List<Span> got = List<Span>.New();
+    usize i = 0;
+    while (i < s.Len) {
+        usize c = Contraction(s, i);
+        if (c > 0) {
+            got.Push(new Span { From = i, To = i + c });
+            i += c;
+            continue;
+        }
+        u8 k = ClassOf(s[i]);
+        if (k == C_SPACE) {
+            usize j = i;
+            while (j < s.Len && ClassOf(s[j]) == C_SPACE) j++;
+            // the last space joins the word after it
+            if (j < s.Len && j - i > 1 && s[j - 1] == ' ' as u8) {
+                got.Push(new Span { From = i, To = j - 1 });
+                i = j - 1;
+                continue;
+            }
+            if (j < s.Len && j - i == 1 && s[i] == ' ' as u8) {
+                usize e = Run(s, j);
+                got.Push(new Span { From = i, To = e });
+                i = e;
+                continue;
+            }
+            if (j < s.Len && j - i > 1) {
+                got.Push(new Span { From = i, To = j - 1 });
+                i = j - 1;
+                continue;
+            }
+            got.Push(new Span { From = i, To = j });
+            i = j;
+            continue;
+        }
+        usize e = Run(s, i);
+        got.Push(new Span { From = i, To = e });
+        i = e;
+    }
+    return got;
+}
+
+// The end of the run of one class starting at i (not whitespace, not a contraction).
+usize Run(str s, usize i) {
+    u8 k = ClassOf(s[i]);
+    usize j = i + 1;
+    while (j < s.Len && ClassOf(s[j]) == k && (k != C_OTHER || Contraction(s, j) == 0)) j++;
+    return j;
+}
+
+usize Contraction(str s, usize i) {
+    if (s[i] != '\'' as u8 || i + 1 >= s.Len) return 0;
+    u8 a = s[i + 1];
+    if (a == 's' as u8 || a == 't' as u8 || a == 'm' as u8 || a == 'd' as u8) return 2;
+    if (i + 2 < s.Len) {
+        u8 b = s[i + 2];
+        if ((a == 'r' as u8 && b == 'e' as u8) || (a == 'v' as u8 && b == 'e' as u8) || (a == 'l' as u8 && b == 'l' as u8)) return 3;
+    }
+    return 0;
+}

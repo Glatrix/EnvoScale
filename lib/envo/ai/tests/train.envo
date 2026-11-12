@@ -1,0 +1,136 @@
+// envo.ai: a two-layer network learns XOR with Adam (losses at checkpoints, exact in
+// every build, since it is IEEE arithmetic from a seeded start), a gradient checked
+// against a finite difference, and a softmax classifier on a toy problem.
+// expect: step 0 loss 0.254573
+// expect: step 100 loss 0.000279
+// expect: step 600 loss 0.000024
+// expect: xor learned
+// expect: gradient matches a finite difference
+// expect: classifier: 6 of 6 right
+// expect: the device product agrees with the CPU
+use envo.ai;
+use alloc.text;
+use platform;
+
+void Loss(str label, f32 v) {
+    write(1, label);
+    write(1, " ");
+    print(text.Float(v as f64, 6).AsStr());
+}
+
+ai.Rng rng = ai.Rng.Seeded(42);
+ai.Tensor x = ai.Tensor.Zeros(4, 2);
+x.Set(1, 1, 1.0);
+x.Set(2, 0, 1.0);
+x.Set(3, 0, 1.0);
+x.Set(3, 1, 1.0);
+ai.Tensor y = ai.Tensor.Zeros(4, 1);
+y.Set(1, 0, 1.0);
+y.Set(2, 0, 1.0);
+ai.Tensor w1 = ai.Tensor.Random(2, 8, 1.0, ref rng);
+ai.Tensor b1 = ai.Tensor.Zeros(1, 8);
+ai.Tensor w2 = ai.Tensor.Random(8, 1, 1.0, ref rng);
+ai.Tensor b2 = ai.Tensor.Zeros(1, 1);
+ai.Adam o1 = ai.Adam.For(w1);
+ai.Adam o2 = ai.Adam.For(b1);
+ai.Adam o3 = ai.Adam.For(w2);
+ai.Adam o4 = ai.Adam.For(b2);
+f32 last = 0.0;
+for (u32 step = 0; step <= 600; step++) {
+    ai.Graph g = ai.Graph.New();
+    u32 in0 = g.Leaf(x);
+    u32 pw1 = g.Leaf(w1);
+    u32 pb1 = g.Leaf(b1);
+    u32 pw2 = g.Leaf(w2);
+    u32 pb2 = g.Leaf(b2);
+    u32 h = g.Tanh(g.AddRow(g.MatMul(in0, pw1), pb1));
+    u32 out0 = g.Sigmoid(g.AddRow(g.MatMul(h, pw2), pb2));
+    u32 loss = g.Mse(out0, y);
+    g.Backward(loss);
+    last = g.Scalar(loss);
+    if (step == 0 || step == 100 || step == 600) {
+        write(1, "step ");
+        write(1, text.Uint(step as u64).AsStr());
+        Loss(" loss", last);
+    }
+    o1.Step(ref w1, g.Grad(pw1), 0.05);
+    o2.Step(ref b1, g.Grad(pb1), 0.05);
+    o3.Step(ref w2, g.Grad(pw2), 0.05);
+    o4.Step(ref b2, g.Grad(pb2), 0.05);
+}
+if (last < 0.01) print("xor learned");
+
+// the gradient of one weight against a finite difference
+ai.Graph g1 = ai.Graph.New();
+u32 a = g1.Leaf(x);
+u32 w = g1.Leaf(w1);
+u32 l1 = g1.Mse(g1.Tanh(g1.MatMul(a, w)), ai.Tensor.Zeros(4, 8));
+g1.Backward(l1);
+f32 analytic = g1.Grad(w).At(0, 3);
+ai.Tensor wp = w1.Copy();
+wp.Set(0, 3, w1.At(0, 3) + 0.001);
+ai.Tensor wm = w1.Copy();
+wm.Set(0, 3, w1.At(0, 3) - 0.001);
+ai.Graph gp = ai.Graph.New();
+f32 lp = gp.Scalar(gp.Mse(gp.Tanh(gp.MatMul(gp.Leaf(x), gp.Leaf(wp))), ai.Tensor.Zeros(4, 8)));
+ai.Graph gm = ai.Graph.New();
+f32 lm = gm.Scalar(gm.Mse(gm.Tanh(gm.MatMul(gm.Leaf(x), gm.Leaf(wm))), ai.Tensor.Zeros(4, 8)));
+f32 numeric = (lp - lm) / 0.002;
+f32 diff = analytic - numeric;
+if (diff < 0.0) diff = -diff;
+if (diff < 0.001) print("gradient matches a finite difference");
+
+// three classes by the larger coordinate (or neither): softmax cross-entropy, plain SGD
+ai.Tensor px = ai.Tensor.Zeros(6, 2);
+ai.Tensor py = ai.Tensor.Zeros(6, 3);
+px.Set(0, 0, 2.0);
+py.Set(0, 0, 1.0);
+px.Set(1, 0, 1.5);
+px.Set(1, 1, 0.2);
+py.Set(1, 0, 1.0);
+px.Set(2, 1, 2.0);
+py.Set(2, 1, 1.0);
+px.Set(3, 0, 0.1);
+px.Set(3, 1, 1.4);
+py.Set(3, 1, 1.0);
+px.Set(4, 0, -1.0);
+px.Set(4, 1, -1.0);
+py.Set(4, 2, 1.0);
+px.Set(5, 0, -2.0);
+px.Set(5, 1, -0.5);
+py.Set(5, 2, 1.0);
+ai.Tensor cw = ai.Tensor.Random(2, 3, 0.5, ref rng);
+ai.Tensor cb = ai.Tensor.Zeros(1, 3);
+for (u32 step = 0; step < 300; step++) {
+    ai.Graph g = ai.Graph.New();
+    u32 pcw = g.Leaf(cw);
+    u32 pcb = g.Leaf(cb);
+    u32 l = g.SoftmaxCrossEntropy(g.AddRow(g.MatMul(g.Leaf(px), pcw), pcb), py);
+    g.Backward(l);
+    ai.Sgd(ref cw, g.Grad(pcw), 0.5);
+    ai.Sgd(ref cb, g.Grad(pcb), 0.5);
+}
+ai.Tensor logits = px.MatMul(cw);
+u32 right = 0;
+for (u32 i = 0; i < 6; i++) {
+    if (logits.ArgMax(i) == py.ArgMax(i)) right++;
+}
+write(1, "classifier: ");
+write(1, text.Uint(right as u64).AsStr());
+print(" of 6 right");
+
+// the same product on the platform's device (a GPU where there is one)
+ai.Tensor ma = ai.Tensor.Random(37, 64, 1.0, ref rng);
+ai.Tensor mb = ai.Tensor.Random(64, 21, 1.0, ref rng);
+var dev = platform.Gpu();
+ai.Tensor onDev = ai.MatMulOn(ref dev, ma, mb);
+ai.Tensor onCpu = ma.MatMul(mb);
+f32 worstDev = 0.0;
+for (u32 i = 0; i < 37; i++) {
+    for (u32 j = 0; j < 21; j++) {
+        f32 d = onDev.At(i, j) - onCpu.At(i, j);
+        if (d < 0.0) d = 0.0 - d;
+        if (d > worstDev) worstDev = d;
+    }
+}
+if (onDev.Rows() == 37 && onDev.Cols() == 21 && worstDev < 0.001) print("the device product agrees with the CPU");

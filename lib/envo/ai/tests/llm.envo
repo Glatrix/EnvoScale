@@ -1,0 +1,90 @@
+// envo.ai: two tiny generated models (tests/mkmodel.py) run through the transformer and
+// checked against the numpy reference stored in each file: the scores after a prompt,
+// and greedy generation. tiny-llama: rotary pairs, grouped-query attention, a
+// SentencePiece tokenizer, F16 and Q8_0 weights. tiny-qwen3: rotary halves, a head size
+// that is not width / heads, q/k norms and biases, tied output, ChatML and Ask.
+// expect: tiny-llama.gguf: 2 layers, width 32, vocabulary 279
+// expect:   scores match the reference
+// expect:   generation 252 126 39 207 220 215 52 227 matches the reference
+// expect:   tokens 260 261 262 259 274 275 260 259 278 271, round trip
+// expect:   ask: 6 bytes
+// expect: tiny-qwen3.gguf: 2 layers, width 32, vocabulary 265
+// expect:   scores match the reference
+// expect:   generation 170 236 252 24 94 94 109 252 matches the reference
+// expect:   tokens 263 116 257 261 264, round trip
+// expect:   ask: 6 bytes
+use envo.ai;
+use envo.ai.gguf;
+use alloc.text;
+
+void Check(str file) {
+    string at = string.From("../../../lib/envo/ai/tests/");
+    at.Append(file);
+    var fr = gguf.File.Load(at.AsStr());
+    if (fr.IsErr()) panic("cannot read the test model");
+    gguf.File f = fr.Unwrap();
+    var mr = ai.Model.From(f);
+    if (mr.IsErr()) {
+        string why = mr.UnwrapErr();
+        print(why.AsStr());
+        return;
+    }
+    ai.Model m = mr.Unwrap();
+    write(1, file);
+    write(1, ": ");
+    write(1, text.Uint(m.Layers() as u64).AsStr());
+    write(1, " layers, width ");
+    write(1, text.Uint(m.Width() as u64).AsStr());
+    write(1, ", vocabulary ");
+    print(text.Uint(m.VocabSize() as u64).AsStr());
+    List<u32> prompt = List<u32>.New();
+    foreach (var t in f.Numbers("test.prompt")) prompt.Push(t as u32);
+    ai.Context c = m.NewContext();
+    List<f32> logits = List<f32>.New();
+    foreach (var t in prompt.AsSlice()) logits = m.Next(ref c, t);
+    f64[] want = f.Numbers("test.logits");
+    f64 worst = 0.0;
+    for (usize i = 0; i < want.Len; i++) {
+        f64 e = logits.Get(i) as f64 - want[i];
+        if (e < 0.0) e = 0.0 - e;
+        if (e > worst) worst = e;
+    }
+    if (logits.Len() == want.Len && worst < 0.0005) print("  scores match the reference");
+    else {
+        write(1, "  scores differ by ");
+        print(text.FloatShort(worst).AsStr());
+    }
+    List<u32> got = m.Generate(prompt.AsSlice(), 8);
+    f64[] wantTokens = f.Numbers("test.tokens");
+    bool same = got.Len() == wantTokens.Len;
+    for (usize i = 0; same && i < got.Len(); i++) same = got.Get(i) as f64 == wantTokens[i];
+    write(1, "  generation ");
+    for (usize i = 0; i < got.Len(); i++) {
+        write(1, text.Uint(got.Get(i) as u64).AsStr());
+        write(1, " ");
+    }
+    if (same) print("matches the reference");
+    else print("DIFFERS");
+    List<u32> ids = m.Encode(Sample(file));
+    write(1, "  tokens");
+    foreach (var t in ids.AsSlice()) {
+        write(1, " ");
+        write(1, text.Uint(t as u64).AsStr());
+    }
+    string back = m.Decode(ids.AsSlice());
+    if (back.Equals(Sample(file))) print(", round trip");
+    else print(", CHANGED");
+    m.SetMaxTokens(6);
+    string answer = m.Ask("the cat");
+    write(1, "  ask: ");
+    write(1, text.Uint(answer.Len() as u64).AsStr());
+    print(" bytes");
+}
+
+str Sample(str file) {
+    if (file[5] == 'l' as u8) return "the cat sat on the mat";
+    return "<|im_start|>the cat<|im_end|>";
+}
+
+Check("tiny-llama.gguf");
+Check("tiny-qwen3.gguf");

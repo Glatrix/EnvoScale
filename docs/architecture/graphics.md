@@ -90,6 +90,18 @@ Direct3D is reached through `__wincallp`: `GetProcAddress` for the DLLs' exporte
 functions, and the objects' method tables for COM. Floats the driver needs (the clear
 color, the viewport) are built bit by bit from integer ratios.
 
+### Compute (D61)
+
+`MatMul(a, b, m, k, n, into)` multiplies an m × k matrix by a k × n one (row-major `f32`).
+The software adapter sums each element in order of k (`envo.gpu.MatMulCpu`, the
+reference). The Direct3D 12 adapter runs an HLSL compute shader (8 × 8 threads per group,
+one per element of the result) on a second pipeline: three root constants (m, k, n), the
+inputs as root shader-resource views into one upload buffer, the result as a root
+unordered-access view into a default buffer, copied to a read-back buffer. GPUs may fuse
+multiplies and adds, so results agree with the CPU's to a relative 1e-4, not bit for bit
+(`tests/conformance/gpu`). Wrong sizes are refused and leave the output alone.
+`envo.ai.MatMulOn` uses it.
+
 Vulkan (for Linux GPUs) comes after M8, with Linux windows. It needs SPIR-V shaders,
 which have no runtime compiler on the system.
 

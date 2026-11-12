@@ -209,7 +209,7 @@ public struct Vertex {
 }
 
 // A device that draws (PLAN D46): frames of colored triangles, rendered off-screen and
-// read back. The software adapter (envo.gpu) and the GPU adapters (D3D12, Vulkan) draw
+// read back; and computes (D61): matrix products. The software adapter (envo.gpu) and the GPU adapters (D3D12, Vulkan) draw
 // the same frames; a window presents them.
 public interface IGpu {
     // Which adapter and device this is: "software", or the API and the GPU's name.
@@ -223,4 +223,9 @@ public interface IGpu {
     void Triangles(ref this, Vertex[] vertices);
     // Finishes the frame: its pixels, RGBA, rows from the top.
     List<u8> End(ref this);
+    // Computes a × b for a (m × k) and b (k × n), row-major f32, into into (m × n values,
+    // replacing what it held): the first compute kernel (PLAN D61). A GPU may round
+    // differently from the CPU (fused multiply-add, another order of sums); results agree
+    // to a relative 1e-4. False, and into unchanged, if the sizes do not match.
+    bool MatMul(ref this, f32[] a, f32[] b, u32 m, u32 k, u32 n, ref List<f32> into);
 }

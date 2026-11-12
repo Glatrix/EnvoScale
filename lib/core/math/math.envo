@@ -119,6 +119,17 @@ public f64 FromBits(u64 b) {
     unsafe { return (&v as *f64)[0]; }
 }
 
+// The bits of an f32, and the f32 with bits b.
+public u32 F32Bits(f32 x) {
+    f32 v = x;
+    unsafe { return (&v as *u32)[0]; }
+}
+
+public f32 F32FromBits(u32 b) {
+    u32 v = b;
+    unsafe { return (&v as *f32)[0]; }
+}
+
 public f64 Infinity() => FromBits(0x7FF0000000000000);
 public f64 NaN() => FromBits(0x7FF8000000000000);
 public bool IsNaN(f64 x) => x != x;

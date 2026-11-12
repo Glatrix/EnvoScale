@@ -1,0 +1,105 @@
+// envo.ai: a tiny generated text encoder (tests/mkmodel.py, nomic-bert) against its numpy
+// reference (tokens and embedding), cosine similarity, and nearest-neighbour search:
+// HNSW's recall against the exact index on seeded random vectors.
+// expect: tokens: 17, as the reference
+// expect: embedding: width 32, matches the reference
+// expect: the same text embeds the same
+// expect: cosine 45 degrees: 0.707107
+// expect: hnsw at ef 16: recall at 10 326 of 400 (exact results best first)
+// expect: hnsw at ef 128: recall at 10 400 of 400 (exact results best first)
+// expect: a stored vector finds itself: 1000
+use envo.ai;
+use envo.ai.gguf;
+use alloc.text;
+
+var fr = gguf.File.Load("../../../lib/envo/ai/tests/tiny-nomic.gguf");
+if (fr.IsErr()) panic("cannot read the test model");
+gguf.File f = fr.Unwrap();
+var er = ai.Encoder.From(f);
+if (er.IsErr()) panic("the test encoder was refused");
+ai.Encoder enc = er.Unwrap();
+str sample = f.Str("test.text").Unwrap();
+List<u32> ids = enc.Tokens(sample);
+f64[] wantIds = f.Numbers("test.prompt");
+bool same = ids.Len() == wantIds.Len;
+for (usize i = 0; same && i < ids.Len(); i++) same = ids.Get(i) as f64 == wantIds[i];
+write(1, "tokens: ");
+write(1, text.Uint(ids.Len() as u64).AsStr());
+if (same) print(", as the reference");
+else print(", DIFFERENT");
+List<f32> e = enc.Embed(sample);
+f64[] want = f.Numbers("test.embedding");
+f64 worst = 0.0;
+for (usize i = 0; i < want.Len; i++) {
+    f64 d = e.Get(i) as f64 - want[i];
+    if (d < 0.0) d = 0.0 - d;
+    if (d > worst) worst = d;
+}
+write(1, "embedding: width ");
+write(1, text.Uint(e.Len() as u64).AsStr());
+if (e.Len() == want.Len && worst < 0.0001) print(", matches the reference");
+else {
+    write(1, ", differs by ");
+    print(text.FloatShort(worst).AsStr());
+}
+List<f32> e2 = enc.Embed(sample);
+if (ai.Cosine(e.AsSlice(), e2.AsSlice()) > 0.99999) print("the same text embeds the same");
+
+// cosine
+List<f32> a = List<f32>.New();
+List<f32> b = List<f32>.New();
+a.Push(1.0);
+a.Push(0.0);
+b.Push(1.0);
+b.Push(1.0);
+write(1, "cosine 45 degrees: ");
+print(text.Float(ai.Cosine(a.AsSlice(), b.AsSlice()) as f64, 6).AsStr());
+
+// search
+void Recall(ref ai.Hnsw graph, in ai.Index exact, u32 ef, u32 dim) {
+    graph.SetEf(ef);
+    ai.Rng rng = ai.Rng.Seeded(99);
+    u32 found = 0;
+    u32 total = 0;
+    bool ordered = true;
+    for (u32 qn = 0; qn < 40; qn++) {
+        List<f32> q = List<f32>.New();
+        for (u32 k = 0; k < dim; k++) q.Push(rng.Next() * 2.0 - 1.0);
+        List<ai.Hit> truth = exact.Nearest(q.AsSlice(), 10);
+        List<ai.Hit> got = graph.Nearest(q.AsSlice(), 10);
+        for (usize i = 0; i < truth.Len(); i++) {
+            total++;
+            for (usize j = 0; j < got.Len(); j++) {
+                if (got.Get(j).Id() == truth.Get(i).Id()) found++;
+            }
+            if (i > 0 && truth.Get(i).Similarity() > truth.Get(i - 1).Similarity()) ordered = false;
+        }
+    }
+    write(1, "hnsw at ef ");
+    write(1, text.Uint(ef as u64).AsStr());
+    write(1, ": recall at 10 ");
+    write(1, text.Uint(found as u64).AsStr());
+    write(1, " of ");
+    write(1, text.Uint(total as u64).AsStr());
+    if (ordered) print(" (exact results best first)");
+    else print(" (exact results OUT OF ORDER)");
+}
+
+ai.Rng rng = ai.Rng.Seeded(5);
+u32 dim = 24;
+ai.Index exact = ai.Index.New(dim);
+ai.Hnsw graph = ai.Hnsw.New(dim, 8, 64, 77);
+for (u32 i = 0; i < 1200; i++) {
+    List<f32> v = List<f32>.New();
+    for (u32 k = 0; k < dim; k++) v.Push(rng.Next() * 2.0 - 1.0);
+    exact.Add(i + 1000, v.AsSlice());
+    graph.Add(i + 1000, v.AsSlice());
+}
+Recall(ref graph, exact, 16, dim);
+Recall(ref graph, exact, 128, dim);
+List<f32> self0 = List<f32>.New();
+ai.Rng again = ai.Rng.Seeded(5);
+for (u32 k = 0; k < dim; k++) self0.Push(again.Next() * 2.0 - 1.0);
+List<ai.Hit> me = graph.Nearest(self0.AsSlice(), 1);
+write(1, "a stored vector finds itself: ");
+print(text.Uint(me.Get(0).Id() as u64).AsStr());

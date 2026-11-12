@@ -1354,10 +1354,14 @@ u32 F32(u64 num, u64 den) {
 
 const i64 D3D_FEATURE_LEVEL_11_0 = 0xB000;
 const u64 STATE_RENDER_TARGET = 0x4;
+const u64 STATE_UNORDERED_ACCESS = 0x8;
 const u64 STATE_COPY_DEST = 0x400;
 const u64 STATE_COPY_SOURCE = 0x800;
 const u64 STATE_GENERIC_READ = 0xAC3;
 const u64 FORMAT_RGBA8 = 28;            // DXGI_FORMAT_R8G8B8A8_UNORM
+
+// The matrix product (D61): one thread per element of the result, sums in order of k.
+str ComputeShader() => "cbuffer C : register(b0) { uint M; uint K; uint N; };\nStructuredBuffer<float> A : register(t0);\nStructuredBuffer<float> B : register(t1);\nRWStructuredBuffer<float> O : register(u0);\n[numthreads(8, 8, 1)]\nvoid cs(uint3 id : SV_DispatchThreadID) {\n    if (id.x >= N || id.y >= M) return;\n    float s = 0.0;\n    for (uint k = 0; k < K; k++) s += A[id.y * K + k] * B[k * N + id.x];\n    O[id.y * N + id.x] = s;\n}\n";
 
 str Shaders() => "cbuffer C : register(b0) { uint2 size; };\nstruct VI { int2 pos : POSITION; float4 col : COLOR; };\nstruct VO { float4 pos : SV_Position; float4 col : COLOR; };\nVO vs(VI i) { VO o; o.pos = float4(i.pos.x * 2.0 / size.x - 1.0, 1.0 - i.pos.y * 2.0 / size.y, 0.0, 1.0); o.col = i.col; return o; }\nfloat4 ps(VO i) : SV_Target { return i.col; }\n";
 
@@ -1388,11 +1392,15 @@ public struct Gpu {
     u32 ClearRgba;
     List<u8> Verts;
     gpu.Software Soft;
+    i64 CRoot;              // the compute pipeline, made on the first MatMul
+    i64 CPso;
+    bool CTried;
 
     public static Gpu New() => new Gpu {
         Tried = false, Ready = false, Desc = string.From("software"), Device = 0, Queue = 0, Alloc = 0, List = 0,
         Root = 0, Pso = 0, Fence = 0, FenceValue = 0, Heap = 0, Rtv = 0, Target = 0, Readback = 0, Upload = 0,
         UploadSize = 0, W = 0, H = 0, Pitch = 0, ClearRgba = 0, Verts = List<u8>.New(), Soft = gpu.Software.New(),
+        CRoot = 0, CPso = 0, CTried = false,
     };
 
     // A committed resource: a buffer (height 0) or a 2D texture.
@@ -1584,12 +1592,126 @@ public struct Gpu {
     }
 
     void Barrier(ref this, u64 before, u64 after) {
+        this.BarrierOn(this.Target, before, after);
+    }
+
+    void BarrierOn(ref this, i64 res, u64 before, u64 after) {
         *u8 b = Block(32);
-        Put64(b, 8, this.Target as u64);
+        Put64(b, 8, res as u64);
         Put32(b, 16, 0xFFFFFFFF);               // all subresources
         Put32(b, 20, before);
         Put32(b, 24, after);
         Com(this.List, 26, 1, Ptr(b), 0, 0, 0, 0, 0);
+    }
+
+    // The compute root signature (three constants, two read buffers, one written) and
+    // the matrix product's pipeline.
+    bool ComputeInit(ref this) {
+        i64 serialize = ProcAddress("d3d12.dll", "D3D12SerializeRootSignature");
+        i64 compile = ProcAddress("d3dcompiler_47.dll", "D3DCompile");
+        if (serialize == 0 || compile == 0) return false;
+        u8[8] got;
+        u8[8] err;
+        i64 dev = this.Device;
+        unsafe {
+            *u8 params = Block(128);
+            Put32(params, 0, 1);                // 32-bit constants: M, K, N at b0
+            Put32(params, 16, 3);
+            Put32(params, 32, 3);               // a root SRV at t0
+            Put32(params, 64, 3);               // a root SRV at t1
+            Put32(params, 72, 1);
+            Put32(params, 96, 4);               // a root UAV at u0
+            *u8 rs = Block(40);
+            Put32(rs, 0, 4);
+            Put64(rs, 8, Ptr(params) as u64);
+            if (Failed(__wincallp(serialize, Ptr(rs), 1, Ptr(&got[0]), Ptr(&err[0]), 0, 0, 0, 0, 0, 0, 0, 0))) return false;
+            i64 blob = Get64At(&got[0], 0);
+            i64 bp = Com(blob, 3, 0, 0, 0, 0, 0, 0, 0);
+            i64 bn = Com(blob, 4, 0, 0, 0, 0, 0, 0, 0);
+            if (Failed(Com(dev, 16, 0, bp, bn, IID_ROOT(), Ptr(&got[0]), 0, 0))) return false;
+            this.CRoot = Get64At(&got[0], 0);
+            ComRelease(blob);
+            *u8 src = CName(ComputeShader());
+            if (Failed(__wincallp(compile, Ptr(src), ComputeShader().Len as i64, 0, 0, 0, Ptr(CName("cs")), Ptr(CName("cs_5_0")), 0, 0, Ptr(&got[0]), Ptr(&err[0]), 0))) return false;
+            i64 cs = Get64At(&got[0], 0);
+            *u8 d = Block(56);
+            Put64(d, 0, this.CRoot as u64);
+            Put64(d, 8, Com(cs, 3, 0, 0, 0, 0, 0, 0, 0) as u64);
+            Put64(d, 16, Com(cs, 4, 0, 0, 0, 0, 0, 0, 0) as u64);
+            if (Failed(Com(dev, 11, Ptr(d), IID_PSO(), Ptr(&got[0]), 0, 0, 0, 0))) return false;   // CreateComputePipelineState
+            this.CPso = Get64At(&got[0], 0);
+            ComRelease(cs);
+        }
+        return true;
+    }
+
+    // a × b on the GPU: the inputs in an upload buffer, the result in a default buffer
+    // the shader writes, copied to a read-back buffer.
+    bool GpuMatMul(ref this, f32[] a, f32[] b, u32 m, u32 k, u32 n, ref List<f32> into) {
+        u64 aBytes = (a.Len * 4) as u64;
+        u64 bAt = (aBytes + 255) / 256 * 256;
+        u64 inBytes = bAt + (b.Len * 4) as u64;
+        u64 outBytes = (m as u64) * (n as u64) * 4;
+        if (inBytes == 0 || outBytes == 0) return false;
+        i64 up = this.Resource(2, inBytes, 0, STATE_GENERIC_READ, 0);
+        i64 res = this.Resource(1, outBytes, 0, 0, 4);                     // default heap, unordered access
+        i64 rb = this.Resource(3, outBytes, 0, STATE_COPY_DEST, 0);
+        bool ok = up != 0 && res != 0 && rb != 0;
+        u8[8] got;
+        unsafe {
+            if (ok) {
+                *u8 empty = Block(16);
+                ok = !Failed(Com(up, 8, 0, Ptr(empty), Ptr(&got[0]), 0, 0, 0, 0));
+                if (ok) {
+                    *u8 dst = Get64At(&got[0], 0) as usize as *u8;
+                    for (usize i = 0; i < a.Len; i++) Put32(dst, i * 4, Bits32(a[i]) as u64);
+                    for (usize i = 0; i < b.Len; i++) Put32(dst, bAt as usize + i * 4, Bits32(b[i]) as u64);
+                    Com(up, 9, 0, 0, 0, 0, 0, 0, 0);
+                }
+            }
+            if (ok) {
+                i64 upVa = Com(up, 11, 0, 0, 0, 0, 0, 0, 0);
+                Com(this.Alloc, 8, 0, 0, 0, 0, 0, 0, 0);                          // Reset
+                Com(this.List, 10, this.Alloc, this.CPso, 0, 0, 0, 0, 0);         // Reset
+                Com(this.List, 29, this.CRoot, 0, 0, 0, 0, 0, 0);                 // SetComputeRootSignature
+                *u8 c = Block(12);
+                Put32(c, 0, m as u64);
+                Put32(c, 4, k as u64);
+                Put32(c, 8, n as u64);
+                Com(this.List, 35, 0, 3, Ptr(c), 0, 0, 0, 0);                     // SetComputeRoot32BitConstants
+                Com(this.List, 39, 1, upVa, 0, 0, 0, 0, 0);                       // SetComputeRootShaderResourceView
+                Com(this.List, 39, 2, upVa + bAt as i64, 0, 0, 0, 0, 0);
+                Com(this.List, 41, 3, Com(res, 11, 0, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0, 0);  // SetComputeRootUnorderedAccessView
+                this.BarrierOn(res, 0, STATE_UNORDERED_ACCESS);
+                Com(this.List, 14, ((n + 7) / 8) as i64, ((m + 7) / 8) as i64, 1, 0, 0, 0, 0);    // Dispatch
+                this.BarrierOn(res, STATE_UNORDERED_ACCESS, STATE_COPY_SOURCE);
+                Com(this.List, 15, rb, 0, res, 0, outBytes as i64, 0, 0);         // CopyBufferRegion
+                Com(this.List, 9, 0, 0, 0, 0, 0, 0, 0);                           // Close
+                *u8 lists = Block(8);
+                Put64(lists, 0, this.List as u64);
+                Com(this.Queue, 10, 1, Ptr(lists), 0, 0, 0, 0, 0);                // ExecuteCommandLists
+                this.FenceValue = this.FenceValue + 1;
+                Com(this.Queue, 14, this.Fence, this.FenceValue as i64, 0, 0, 0, 0, 0);
+                Com(this.Fence, 9, this.FenceValue as i64, 0, 0, 0, 0, 0, 0);     // waits
+                *u8 range = Block(16);
+                Put64(range, 8, outBytes);
+                ok = !Failed(Com(rb, 8, 0, Ptr(range), Ptr(&got[0]), 0, 0, 0, 0));
+                if (ok) {
+                    *u8 src = Get64At(&got[0], 0) as usize as *u8;
+                    into = List<f32>.New();
+                    for (u64 i = 0; i < outBytes / 4; i++) {
+                        u32 v = (src[(4 * i) as usize] as u32) | (src[(4 * i + 1) as usize] as u32) << 8 | (src[(4 * i + 2) as usize] as u32) << 16 | (src[(4 * i + 3) as usize] as u32) << 24;
+                        into.Push(FromBits32(v));
+                    }
+                    *u8 none = Block(16);
+                    Com(rb, 9, 0, Ptr(none), 0, 0, 0, 0, 0);
+                }
+            }
+        }
+        ComRelease(up);
+        ComRelease(res);
+        ComRelease(rb);
+        return ok;
     }
 
     // Draws the frame on the GPU and copies it back.
@@ -1743,4 +1865,29 @@ impl IGpu for Gpu {
         if (!this.Ready) return this.Soft.End();
         return this.Render();
     }
+
+    bool MatMul(ref this, f32[] a, f32[] b, u32 m, u32 k, u32 n, ref List<f32> into) {
+        if (a.Len != (m as u64 * k as u64) as usize || b.Len != (k as u64 * n as u64) as usize) return false;
+        if (!this.Tried) {
+            this.Tried = true;
+            this.Ready = this.Init();
+            if (!this.Ready) this.Desc = string.From("software");
+        }
+        if (this.Ready && !this.CTried) {
+            this.CTried = true;
+            if (!this.ComputeInit()) this.CPso = 0;
+        }
+        if (this.Ready && this.CPso != 0 && m > 0 && n > 0 && k > 0 && this.GpuMatMul(a, b, m, k, n, ref into)) return true;
+        return gpu.MatMulCpu(a, b, m, k, n, ref into);
+    }
+}
+
+u32 Bits32(f32 x) {
+    f32 v = x;
+    unsafe { return (&v as *u32)[0]; }
+}
+
+f32 FromBits32(u32 b) {
+    u32 v = b;
+    unsafe { return (&v as *f32)[0]; }
 }

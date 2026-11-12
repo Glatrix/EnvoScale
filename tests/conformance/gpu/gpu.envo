@@ -1,8 +1,10 @@
 // GPU conformance: what every IGpu adapter promises (lib/ports). Its frames agree with
 // the software adapter's to within 1 in every channel (GPUs round colors slightly
 // differently): a frame with only a clear, gradients, overlapping translucent
-// triangles, triangles sharing edges, and frames of a new size.
+// triangles, triangles sharing edges, and frames of a new size. Its matrix products
+// agree with the CPU's to a relative 1e-4, and wrong sizes are refused.
 // expect: gpu: done
+// stage1-error: E0950 (the matrix products use f32, which Stage 1 does not have: RFC 0006)
 use ports.{IGpu, Vertex};
 use envo.gpu;
 use platform;
@@ -27,6 +29,34 @@ void Same<G>(ref G dev, u32 w, u32 h, u32 clear, in List<Vertex> v, str what) wh
     Check(gpu.Differing(got.AsSlice(), want.AsSlice(), 1) == 0, what);
 }
 
+// A seeded value in [-1, 1).
+f32 Noise(ref u64 s) {
+    s = s ^ (s << 13);
+    s = s ^ (s >> 7);
+    s = s ^ (s << 17);
+    return ((s >> 40) as f32) / 8388608.0 - 1.0;
+}
+
+void Product<G>(ref G dev, u32 m, u32 k, u32 n) where G : IGpu {
+    u64 seed = 0x9E3779B97F4A7C15 ^ (m * 1000 + k * 10 + n) as u64;
+    List<f32> a = List<f32>.New();
+    List<f32> b = List<f32>.New();
+    for (u32 i = 0; i < m * k; i++) a.Push(Noise(ref seed));
+    for (u32 i = 0; i < k * n; i++) b.Push(Noise(ref seed));
+    List<f32> got = List<f32>.New();
+    List<f32> want = List<f32>.New();
+    Check(dev.MatMul(a.AsSlice(), b.AsSlice(), m, k, n, ref got), "a product");
+    gpu.MatMulCpu(a.AsSlice(), b.AsSlice(), m, k, n, ref want);
+    Check(got.Len() == (m * n) as usize, "a product has m x n values");
+    bool close = got.Len() == want.Len();
+    for (usize i = 0; close && i < want.Len(); i++) {
+        f32 d = got.Get(i) - want.Get(i);
+        if (d < 0.0) d = 0.0 - d;
+        close = d <= 0.0001 * (k as f32);
+    }
+    Check(close, "a product agrees with the CPU's");
+}
+
 void Run<G>(ref G dev) where G : IGpu {
     Check(dev.Name().Len() > 0, "a name");
     Check(!dev.Begin(0, 16, 0), "an empty frame is refused");
@@ -44,6 +74,18 @@ void Run<G>(ref G dev) where G : IGpu {
     Same(ref dev, 96, 64, 0xF5F5F7FF, v, "gradients, translucent rectangles and a fan");
     Same(ref dev, 33, 17, 0x000000FF, v, "a frame of a new, odd size");
     Same(ref dev, 96, 64, 0xFFFFFF00, v, "a transparent clear");
+    Product(ref dev, 1, 1, 1);
+    Product(ref dev, 3, 5, 2);
+    Product(ref dev, 64, 96, 40);
+    Product(ref dev, 17, 300, 9);
+    List<f32> small = List<f32>.New();
+    small.Push(1.0);
+    List<f32> kept = List<f32>.New();
+    kept.Push(7.0);
+    Check(!dev.MatMul(small.AsSlice(), small.AsSlice(), 2, 1, 1, ref kept), "a product of the wrong sizes is refused");
+    Check(kept.Len() == 1 && kept.Get(0) == 7.0, "a refused product leaves its output alone");
+    // frames still draw after products
+    Same(ref dev, 16, 16, 0x336699FF, none, "a clear after products");
 }
 
 var dev = platform.Gpu();

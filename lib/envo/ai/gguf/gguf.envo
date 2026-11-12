@@ -1,0 +1,660 @@
+// envo.ai.gguf: GGUF model files (PLAN D59), versions 2 and 3. A file is a header, typed
+// metadata (key → value), a table of tensors (name, dimensions, type, offset) and the
+// aligned tensor data. Every count, length and offset is checked against the file before
+// it is used, so a malformed file is refused with a reason, never trusted.
+//
+// Tensors read as f32: F32, F16, BF16, Q8_0, Q4_0, Q4_1, Q5_0, Q5_1, Q4_K, Q5_K and
+// Q6_K are dequantized on
+// load. The Writer makes files (F32, F16 or Q8_0 tensors): for tests, and for models a
+// program trains itself.
+namespace envo.ai.gguf;
+
+use std.fs;
+use core.math as cm;
+
+// Tensor types (ggml's numbering).
+public const u32 F32 = 0;
+public const u32 F16 = 1;
+public const u32 Q4_0 = 2;
+public const u32 Q4_1 = 3;
+public const u32 Q5_0 = 6;
+public const u32 Q5_1 = 7;
+public const u32 Q8_0 = 8;
+public const u32 Q4_K = 12;
+public const u32 Q5_K = 13;
+public const u32 Q6_K = 14;
+public const u32 BF16 = 30;
+
+// Metadata value types.
+const u32 V_U8 = 0;
+const u32 V_I8 = 1;
+const u32 V_U16 = 2;
+const u32 V_I16 = 3;
+const u32 V_U32 = 4;
+const u32 V_I32 = 5;
+const u32 V_F32 = 6;
+const u32 V_BOOL = 7;
+const u32 V_STRING = 8;
+const u32 V_ARRAY = 9;
+const u32 V_U64 = 10;
+const u32 V_I64 = 11;
+const u32 V_F64 = 12;
+
+const u32 MAGIC = 0x46554747;   // "GGUF"
+
+// One metadata value: a number, a string, or an array of either.
+struct Meta {
+    u32 Type;
+    bool IsFloat;
+    i64 Int;
+    f64 Num;
+    string Text;
+    List<string> Texts;
+    List<f64> Nums;
+
+    static Meta Empty(u32 t) => new Meta { Type = t, IsFloat = false, Int = 0, Num = 0.0, Text = string.From(""), Texts = List<string>.New(), Nums = List<f64>.New() };
+}
+
+struct Info {
+    string Name;
+    List<u64> Dims;     // innermost first (ggml's ne[0], ne[1], …)
+    u32 Type;
+    u64 Offset;         // from the start of the data section
+    u64 Size;           // bytes
+}
+
+public struct File {
+    u32 Ver;
+    List<string> Keys;
+    List<Meta> Vals;
+    List<Info> Infos;
+    List<u8> Data;
+    usize Base;         // the data section's offset in Bytes
+    List<string> NoTexts;
+    List<f64> NoNums;
+
+    // Reads and checks the file at file.
+    public static Result<File, string> Load(str file) {
+        var r = fs.ReadText(file);
+        if (r.IsErr()) return Err(string.From("cannot read the model file"));
+        return File.Parse(r.Unwrap());
+    }
+
+    // Checks bytes as a GGUF file and keeps them.
+    public static Result<File, string> Parse(string bytes) {
+        List<u8> data = List<u8>.New();
+        foreach (var c in bytes.AsStr()) data.Push(c);
+        return File.FromBytes(data);
+    }
+
+    public static Result<File, string> FromBytes(List<u8> data) {
+        File f = new File { Ver = 0, Keys = List<string>.New(), Vals = List<Meta>.New(), Infos = List<Info>.New(), Data = data, Base = 0, NoTexts = List<string>.New(), NoNums = List<f64>.New() };
+        string why = f.Read();
+        if (why.Len() > 0) return Err(why);
+        return Ok(f);
+    }
+
+    // Fills the tables; the reason the file is refused, or "".
+    string Read(ref this) {
+        Cursor c = new Cursor { At = 0, Bad = false, Last = 0, LastSigned = 0 };
+        u8[] b = this.Data.AsSlice();
+        if (b.Len < 24 || c.U32(b) != MAGIC) return string.From("not a GGUF file");
+        this.Ver = c.U32(b);
+        if (this.Ver != 2 && this.Ver != 3) return string.From("an unsupported GGUF version");
+        u64 tensors = c.U64(b);
+        u64 kvs = c.U64(b);
+        // each entry takes at least a few bytes: a count beyond that is a lie
+        if (tensors > (b.Len / 8) as u64 || kvs > (b.Len / 8) as u64) return string.From("counts larger than the file");
+        for (u64 i = 0; i < kvs; i++) {
+            string key = c.Str(b);
+            if (c.Bad) return string.From("truncated metadata");
+            u32 t = c.U32(b);
+            Meta m = Meta.Empty(t);
+            if (t == V_ARRAY) {
+                u32 et = c.U32(b);
+                u64 n = c.U64(b);
+                if (c.Bad || n > (b.Len - c.At) as u64) return string.From("an array larger than the file");
+                if (et == V_ARRAY) return string.From("nested arrays are not supported");
+                m.IsFloat = et == V_F32 || et == V_F64;
+                for (u64 k = 0; k < n && !c.Bad; k++) {
+                    if (et == V_STRING) m.Texts.Push(c.Str(b));
+                    else m.Nums.Push(c.Number(b, et));
+                }
+            } else if (t == V_STRING) {
+                m.Text = c.Str(b);
+            } else {
+                m.IsFloat = t == V_F32 || t == V_F64;
+                m.Num = c.Number(b, t);
+                if (t == V_U64) m.Int = c.Last as i64;
+                else if (m.IsFloat) m.Int = m.Num as i64;
+                else m.Int = c.LastSigned;
+            }
+            if (c.Bad) return string.From("malformed metadata");
+            this.Keys.Push(key);
+            this.Vals.Push(m);
+        }
+        for (u64 i = 0; i < tensors; i++) {
+            string name = c.Str(b);
+            u32 nd = c.U32(b);
+            if (c.Bad || nd == 0 || nd > 4) return string.From("a tensor with a bad shape");
+            List<u64> dims = List<u64>.New();
+            u64 count = 1;
+            for (u32 k = 0; k < nd; k++) {
+                u64 d = c.U64(b);
+                if (d == 0 || d > (1 << 32) || count > (1 << 40) / d) return string.From("a tensor with a bad shape");
+                count *= d;
+                dims.Push(d);
+            }
+            u32 type = c.U32(b);
+            u64 off = c.U64(b);
+            if (c.Bad) return string.From("a truncated tensor table");
+            u64 block = BlockLen(type);
+            if (block == 0) return string.From("a tensor of an unsupported type");
+            if (dims.Get(0) % block != 0) return string.From("a tensor's rows do not fill its blocks");
+            u64 size = count / block * BlockBytes(type);
+            this.Infos.Push(new Info { Name = name, Dims = dims, Type = type, Offset = off, Size = size });
+        }
+        u64 align = 32;
+        u64? a = this.Uint("general.alignment");
+        if (a.IsSome()) align = a.Unwrap();
+        if (align == 0 || align > 65536 || align & (align - 1) != 0) return string.From("a bad alignment");
+        u64 start = (c.At as u64 + align - 1) / align * align;
+        if (start > b.Len as u64) return string.From("no tensor data");
+        this.Base = start as usize;
+        u64 room = b.Len as u64 - start;
+        foreach (var t in this.Infos.AsSlice()) {
+            if (t.Offset % align != 0 || t.Offset > room || t.Size > room - t.Offset) return string.From("a tensor outside the file");
+        }
+        return string.From("");
+    }
+
+    public u32 Version(in this) => this.Ver;
+    public usize MetaCount(in this) => this.Keys.Len();
+    public str KeyAt(in this, usize i) => this.Keys.AsSlice()[i].AsStr();
+
+    usize At(in this, str key) {
+        string[] ks = this.Keys.AsSlice();
+        for (usize i = 0; i < ks.Len; i++) {
+            if (ks[i].Equals(key)) return i;
+        }
+        return ks.Len;
+    }
+
+    public bool Has(in this, str key) => this.At(key) < this.Keys.Len();
+
+    // A string value.
+    public str? Str(in this, str key) {
+        usize i = this.At(key);
+        if (i >= this.Keys.Len() || this.Vals.AsSlice()[i].Type != V_STRING) return null;
+        return Some(this.Vals.AsSlice()[i].Text.AsStr());
+    }
+
+    // A whole-number value (of any integer type, or a bool).
+    public u64? Uint(in this, str key) {
+        usize i = this.At(key);
+        if (i >= this.Keys.Len()) return null;
+        Meta[] v = this.Vals.AsSlice();
+        if (v[i].Type == V_STRING || v[i].Type == V_ARRAY || v[i].IsFloat || v[i].Int < 0) return null;
+        return Some(v[i].Int as u64);
+    }
+
+    // A number of any type, as f64.
+    public f64? Number(in this, str key) {
+        usize i = this.At(key);
+        if (i >= this.Keys.Len()) return null;
+        Meta[] v = this.Vals.AsSlice();
+        if (v[i].Type == V_STRING || v[i].Type == V_ARRAY) return null;
+        return Some(v[i].Num);
+    }
+
+    // An array of strings (empty if key is not one).
+    public string[] Strings(in this, str key) {
+        usize i = this.At(key);
+        if (i >= this.Keys.Len()) return this.NoTexts.AsSlice();
+        return this.Vals.AsSlice()[i].Texts.AsSlice();
+    }
+
+    // An array of numbers (empty if key is not one).
+    public f64[] Numbers(in this, str key) {
+        usize i = this.At(key);
+        if (i >= this.Keys.Len()) return this.NoNums.AsSlice();
+        return this.Vals.AsSlice()[i].Nums.AsSlice();
+    }
+
+    public usize TensorCount(in this) => this.Infos.Len();
+    public str TensorName(in this, usize i) => this.Infos.AsSlice()[i].Name.AsStr();
+    public u32 TensorType(in this, usize i) => this.Infos.AsSlice()[i].Type;
+    public u64[] TensorDims(in this, usize i) => this.Infos.AsSlice()[i].Dims.AsSlice();
+
+    // The index of the tensor called name, or TensorCount().
+    public usize Find(in this, str name) {
+        Info[] t = this.Infos.AsSlice();
+        for (usize i = 0; i < t.Len; i++) {
+            if (t[i].Name.Equals(name)) return i;
+        }
+        return t.Len;
+    }
+
+    // The tensor's values, dequantized, innermost dimension fastest.
+    public List<f32> Floats(in this, usize i) {
+        Info t = this.InfoAt(i);
+        u8[] b = this.Data.AsSlice()[this.Base + t.Offset as usize..this.Base + (t.Offset + t.Size) as usize];
+        return Dequantize(t.Type, b);
+    }
+
+    Info InfoAt(in this, usize i) {
+        Info[] all = this.Infos.AsSlice();
+        return new Info { Name = string.From(""), Dims = List<u64>.New(), Type = all[i].Type, Offset = all[i].Offset, Size = all[i].Size };
+    }
+}
+
+// Reads little-endian values, noting when the file runs out.
+struct Cursor {
+    usize At;
+    bool Bad;
+    u64 Last;
+    i64 LastSigned;
+
+    u64 Take(ref this, u8[] b, usize n) {
+        if (this.Bad || n > b.Len - this.At) {
+            this.Bad = true;
+            return 0;
+        }
+        u64 v = 0;
+        for (usize i = 0; i < n; i++) v = v | ((b[this.At + i] as u64) << (8 * i as u64));
+        this.At += n;
+        return v;
+    }
+    u32 U32(ref this, u8[] b) => this.Take(b, 4) as u32;
+    u64 U64(ref this, u8[] b) => this.Take(b, 8);
+
+    string Str(ref this, u8[] b) {
+        u64 n = this.U64(b);
+        if (this.Bad || n > (b.Len - this.At) as u64) {
+            this.Bad = true;
+            return string.From("");
+        }
+        string s = string.From("");
+        for (usize i = this.At; i < this.At + n as usize; i++) s.AppendByte(b[i]);
+        this.At += n as usize;
+        return s;
+    }
+
+    // A number of type t as f64; Last and LastSigned keep its integer bits.
+    f64 Number(ref this, u8[] b, u32 t) {
+        usize n = 0;
+        if (t == V_U8 || t == V_I8 || t == V_BOOL) n = 1;
+        else if (t == V_U16 || t == V_I16) n = 2;
+        else if (t == V_U32 || t == V_I32 || t == V_F32) n = 4;
+        else if (t == V_U64 || t == V_I64 || t == V_F64) n = 8;
+        else {
+            this.Bad = true;
+            return 0.0;
+        }
+        u64 v = this.Take(b, n);
+        this.Last = v;
+        i64 s = v as i64;
+        if (t == V_I8 && v >= 0x80) s = v as i64 - 0x100;
+        if (t == V_I16 && v >= 0x8000) s = v as i64 - 0x10000;
+        if (t == V_I32 && v >= 0x80000000) s = v as i64 - 0x100000000;
+        this.LastSigned = s;
+        if (t == V_F32) return cm.F32FromBits(v as u32) as f64;
+        if (t == V_F64) return cm.FromBits(v);
+        if (t == V_U64) return v as f64;
+        return s as f64;
+    }
+}
+
+// Values stored as type in b (whole blocks), as f32.
+public List<f32> Dequantize(u32 type, u8[] b) {
+    usize count = (b.Len as u64 / BlockBytes(type) * BlockLen(type)) as usize;
+    if (BlockLen(type) == 0) return List<f32>.New();
+    List<f32> got = List<f32>.New();
+    if (type == F32) {
+        for (usize k = 0; k < count; k++) got.Push(cm.F32FromBits(Le32(b, k * 4)));
+    } else if (type == F16) {
+        for (usize k = 0; k < count; k++) got.Push(HalfToFloat(Le16(b, k * 2)));
+    } else if (type == BF16) {
+        for (usize k = 0; k < count; k++) got.Push(cm.F32FromBits((Le16(b, k * 2) as u32) << 16));
+    } else if (type == Q8_0) {
+        for (usize at = 0; at < b.Len - b.Len % 34; at += 34) {
+            f32 d = HalfToFloat(Le16(b, at));
+            for (usize k = 0; k < 32; k++) got.Push(d * (b[at + 2 + k] as i8) as f32);
+        }
+    } else if (type == Q4_0) {
+        for (usize at = 0; at < b.Len - b.Len % 18; at += 18) {
+            f32 d = HalfToFloat(Le16(b, at));
+            for (usize k = 0; k < 16; k++) got.Push(d * ((b[at + 2 + k] & 15) as i32 - 8) as f32);
+            for (usize k = 0; k < 16; k++) got.Push(d * ((b[at + 2 + k] >> 4) as i32 - 8) as f32);
+        }
+    } else if (type == Q4_1) {
+        for (usize at = 0; at < b.Len - b.Len % 20; at += 20) {
+            f32 d = HalfToFloat(Le16(b, at));
+            f32 m = HalfToFloat(Le16(b, at + 2));
+            for (usize k = 0; k < 16; k++) got.Push(d * (b[at + 4 + k] & 15) as f32 + m);
+            for (usize k = 0; k < 16; k++) got.Push(d * (b[at + 4 + k] >> 4) as f32 + m);
+        }
+    } else if (type == Q5_0 || type == Q5_1) {
+        usize size = 22;
+        if (type == Q5_1) size = 24;
+        for (usize at = 0; at < b.Len - b.Len % size; at += size) {
+            f32 d = HalfToFloat(Le16(b, at));
+            f32 m = 0.0;
+            usize q = at + 2;
+            i32 bias = 16;
+            if (type == Q5_1) {
+                m = HalfToFloat(Le16(b, at + 2));
+                q = at + 4;
+                bias = 0;
+            }
+            u32 qh = Le32(b, q);
+            for (usize k = 0; k < 16; k++) got.Push(d * ((((b[q + 4 + k] & 15) as u32) | (((qh >> k as u32) & 1) << 4)) as i32 - bias) as f32 + m);
+            for (usize k = 0; k < 16; k++) got.Push(d * ((((b[q + 4 + k] >> 4) as u32) | (((qh >> (k as u32 + 16)) & 1) << 4)) as i32 - bias) as f32 + m);
+        }
+    } else if (type == Q4_K) {
+        for (usize at = 0; at < b.Len - b.Len % 144; at += 144) Q4K(b[at..at + 144], ref got);
+    } else if (type == Q5_K) {
+        for (usize at = 0; at < b.Len - b.Len % 176; at += 176) Q5K(b[at..at + 176], ref got);
+    } else {
+        for (usize at = 0; at < b.Len - b.Len % 210; at += 210) Q6K(b[at..at + 210], ref got);
+    }
+    return got;
+}
+
+u64 BlockLen(u32 t) {
+    if (t == F32 || t == F16 || t == BF16) return 1;
+    if (t == Q8_0 || t == Q4_0 || t == Q4_1 || t == Q5_0 || t == Q5_1) return 32;
+    if (t == Q4_K || t == Q5_K || t == Q6_K) return 256;
+    return 0;
+}
+
+u64 BlockBytes(u32 t) {
+    if (t == F32) return 4;
+    if (t == F16 || t == BF16) return 2;
+    if (t == Q8_0) return 34;
+    if (t == Q4_0) return 18;
+    if (t == Q4_1) return 20;
+    if (t == Q5_0) return 22;
+    if (t == Q5_1) return 24;
+    if (t == Q4_K) return 144;
+    if (t == Q5_K) return 176;
+    if (t == Q6_K) return 210;
+    return 1;
+}
+
+u32 Le32(u8[] b, usize at) => (b[at] as u32) | ((b[at + 1] as u32) << 8) | ((b[at + 2] as u32) << 16) | ((b[at + 3] as u32) << 24);
+u16 Le16(u8[] b, usize at) => ((b[at] as u32) | ((b[at + 1] as u32) << 8)) as u16;
+
+// IEEE half precision to f32 (exact).
+public f32 HalfToFloat(u16 h) {
+    u64 sign = ((h >> 15) as u64) << 63;
+    u32 e = ((h >> 10) & 31) as u32;
+    u64 m = (h & 1023) as u64;
+    if (e == 0) {
+        f64 v = m as f64 * 0.000000059604644775390625;     // 2^-24
+        if (sign != 0) return (0.0 - v) as f32;
+        return v as f32;
+    }
+    if (e == 31) {
+        if (m == 0) return cm.FromBits(sign | 0x7FF0000000000000) as f32;
+        return cm.NaN() as f32;
+    }
+    return cm.FromBits(sign | ((e as u64 + 1008) << 52) | (m << 42)) as f32;
+}
+
+// f32 to IEEE half precision, rounding to nearest, ties to even.
+public u16 FloatToHalf(f32 x) {
+    u32 bits = cm.F32Bits(x);
+    u32 sign = (bits >> 16) & 0x8000;
+    i32 e = ((bits >> 23) & 255) as i32;
+    u32 m = bits & 0x7FFFFF;
+    if (e == 255) {
+        if (m != 0) return (sign | 0x7E00) as u16;
+        return (sign | 0x7C00) as u16;
+    }
+    i32 ne = e - 127 + 15;
+    if (ne >= 31) return (sign | 0x7C00) as u16;
+    if (ne <= 0) {
+        if (ne < -10) return sign as u16;
+        u32 full = m | 0x800000;
+        u32 shift = (14 - ne) as u32;
+        u32 half = full >> shift;
+        u32 rem = full & ((1 << shift) - 1);
+        u32 mid = 1 << (shift - 1);
+        if (rem > mid || (rem == mid && half & 1 == 1)) half++;
+        return (sign | half) as u16;
+    }
+    u32 half = ((ne as u32) << 10) | (m >> 13);
+    u32 rem = m & 0x1FFF;
+    if (rem > 0x1000 || (rem == 0x1000 && half & 1 == 1)) half++;
+    return (sign | half) as u16;
+}
+
+// Q4_K: 256 values in 8 groups of 32, each with a 6-bit scale and minimum.
+void Q4K(u8[] b, ref List<f32> got) {
+    f32 d = HalfToFloat(Le16(b, 0));
+    f32 dmin = HalfToFloat(Le16(b, 2));
+    u8[] sc = b[4..16];
+    u8[] q = b[16..144];
+    u32 is = 0;
+    for (usize j = 0; j < 256; j += 64) {
+        u32 s1 = ScaleK4(sc, is, false);
+        u32 m1 = ScaleK4(sc, is, true);
+        u32 s2 = ScaleK4(sc, is + 1, false);
+        u32 m2 = ScaleK4(sc, is + 1, true);
+        usize at = j / 2;
+        for (usize l = 0; l < 32; l++) got.Push(d * s1 as f32 * (q[at + l] & 15) as f32 - dmin * m1 as f32);
+        for (usize l = 0; l < 32; l++) got.Push(d * s2 as f32 * (q[at + l] >> 4) as f32 - dmin * m2 as f32);
+        is += 2;
+    }
+}
+
+// Q5_K: as Q4_K, with a fifth bit per value in qh.
+void Q5K(u8[] b, ref List<f32> got) {
+    f32 d = HalfToFloat(Le16(b, 0));
+    f32 dmin = HalfToFloat(Le16(b, 2));
+    u8[] sc = b[4..16];
+    u8[] qh = b[16..48];
+    u8[] q = b[48..176];
+    u32 is = 0;
+    u8 u1 = 1;
+    u8 u2 = 2;
+    for (usize j = 0; j < 256; j += 64) {
+        u32 s1 = ScaleK4(sc, is, false);
+        u32 m1 = ScaleK4(sc, is, true);
+        u32 s2 = ScaleK4(sc, is + 1, false);
+        u32 m2 = ScaleK4(sc, is + 1, true);
+        usize at = j / 2;
+        for (usize l = 0; l < 32; l++) {
+            u32 v = (q[at + l] & 15) as u32;
+            if (qh[l] & u1 != 0) v += 16;
+            got.Push(d * s1 as f32 * v as f32 - dmin * m1 as f32);
+        }
+        for (usize l = 0; l < 32; l++) {
+            u32 v = (q[at + l] >> 4) as u32;
+            if (qh[l] & u2 != 0) v += 16;
+            got.Push(d * s2 as f32 * v as f32 - dmin * m2 as f32);
+        }
+        is += 2;
+        u1 = u1 << 2;
+        u2 = u2 << 2;
+    }
+}
+
+u32 ScaleK4(u8[] q, u32 j, bool min) {
+    usize i = j as usize;
+    if (j < 4) {
+        if (min) return (q[i + 4] & 63) as u32;
+        return (q[i] & 63) as u32;
+    }
+    if (min) return ((q[i + 4] >> 4) | ((q[i] >> 6) << 4)) as u32;
+    return ((q[i + 4] & 15) | ((q[i - 4] >> 6) << 4)) as u32;
+}
+
+// Q6_K: 256 values of 6 bits (low 4 in ql, high 2 in qh), 16 signed 8-bit scales.
+void Q6K(u8[] b, ref List<f32> got) {
+    u8[] ql = b[0..128];
+    u8[] qh = b[128..192];
+    u8[] sc = b[192..208];
+    f32 d = HalfToFloat(Le16(b, 208));
+    for (usize n = 0; n < 2; n++) {
+        List<f32> y = List<f32>.New();
+        for (usize l = 0; l < 128; l++) y.Push(0.0);
+        mut f32[] ys = y.AsMutSlice();
+        usize lo = n * 64;
+        usize hi = n * 32;
+        usize so = n * 8;
+        for (usize l = 0; l < 32; l++) {
+            usize is = l / 16;
+            i32 q1 = ((ql[lo + l] & 15) | (((qh[hi + l] >> 0) & 3) << 4)) as i32 - 32;
+            i32 q2 = ((ql[lo + l + 32] & 15) | (((qh[hi + l] >> 2) & 3) << 4)) as i32 - 32;
+            i32 q3 = ((ql[lo + l] >> 4) | (((qh[hi + l] >> 4) & 3) << 4)) as i32 - 32;
+            i32 q4 = ((ql[lo + l + 32] >> 4) | (((qh[hi + l] >> 6) & 3) << 4)) as i32 - 32;
+            ys[l] = d * (sc[so + is] as i8) as f32 * q1 as f32;
+            ys[l + 32] = d * (sc[so + is + 2] as i8) as f32 * q2 as f32;
+            ys[l + 64] = d * (sc[so + is + 4] as i8) as f32 * q3 as f32;
+            ys[l + 96] = d * (sc[so + is + 6] as i8) as f32 * q4 as f32;
+        }
+        foreach (var v in y.AsSlice()) got.Push(v);
+    }
+}
+
+// ------------------------------------------------------------------ writing
+
+// Builds a GGUF (version 3) file.
+public struct Writer {
+    List<u8> Meta;
+    u64 MetaCount;
+    List<string> Names;
+    List<List<u64>> Shapes;
+    List<u32> Types;
+    List<List<u8>> Datas;
+
+    public static Writer New() => new Writer { Meta = List<u8>.New(), MetaCount = 0, Names = List<string>.New(), Shapes = List<List<u64>>.New(), Types = List<u32>.New(), Datas = List<List<u8>>.New() };
+
+    void Key(ref this, str key, u32 type) {
+        PutStr(ref this.Meta, key);
+        Put(ref this.Meta, type as u64, 4);
+        this.MetaCount++;
+    }
+
+    public void Str(ref this, str key, str value) {
+        this.Key(key, V_STRING);
+        PutStr(ref this.Meta, value);
+    }
+
+    public void U32(ref this, str key, u32 value) {
+        this.Key(key, V_U32);
+        Put(ref this.Meta, value as u64, 4);
+    }
+
+    public void F32(ref this, str key, f32 value) {
+        this.Key(key, V_F32);
+        Put(ref this.Meta, cm.F32Bits(value) as u64, 4);
+    }
+
+    public void Strings(ref this, str key, string[] values) {
+        this.Key(key, V_ARRAY);
+        Put(ref this.Meta, V_STRING as u64, 4);
+        Put(ref this.Meta, values.Len as u64, 8);
+        foreach (var v in values) PutStr(ref this.Meta, v.AsStr());
+    }
+
+    public void Floats(ref this, str key, f32[] values) {
+        this.Key(key, V_ARRAY);
+        Put(ref this.Meta, V_F32 as u64, 4);
+        Put(ref this.Meta, values.Len as u64, 8);
+        foreach (var v in values) Put(ref this.Meta, cm.F32Bits(v) as u64, 4);
+    }
+
+    // A tensor of rows × cols values (cols innermost; rows 1 makes it a vector), stored as
+    // type (F32, F16 or Q8_0; Q8_0 needs cols to be a multiple of 32).
+    public bool Tensor(ref this, str name, u64 rows, u64 cols, f32[] values, u32 type) {
+        if (values.Len as u64 != rows * cols) return false;
+        if (type != F32 && type != F16 && type != Q8_0) return false;
+        if (type == Q8_0 && cols % 32 != 0) return false;
+        List<u8> d = List<u8>.New();
+        if (type == F32) {
+            foreach (var v in values) Put(ref d, cm.F32Bits(v) as u64, 4);
+        } else if (type == F16) {
+            foreach (var v in values) Put(ref d, FloatToHalf(v) as u64, 2);
+        } else {
+            for (usize at = 0; at < values.Len; at += 32) {
+                f32 amax = 0.0;
+                for (usize k = 0; k < 32; k++) {
+                    f32 a = values[at + k];
+                    if (a < 0.0) a = 0.0 - a;
+                    if (a > amax) amax = a;
+                }
+                f32 scale = amax / 127.0;
+                u16 h = FloatToHalf(scale);
+                Put(ref d, h as u64, 2);
+                for (usize k = 0; k < 32; k++) {
+                    i32 q = 0;
+                    if (scale != 0.0) q = Round(values[at + k] / scale);
+                    if (q > 127) q = 127;
+                    if (q < -127) q = -127;
+                    d.Push((q & 255) as u8);
+                }
+            }
+        }
+        List<u64> shape = List<u64>.New();
+        shape.Push(cols);
+        if (rows != 1) shape.Push(rows);
+        this.Names.Push(string.From(name));
+        this.Shapes.Push(shape);
+        this.Types.Push(type);
+        this.Datas.Push(d);
+        return true;
+    }
+
+    // The file's bytes.
+    public string Bytes(in this) {
+        List<u8> f = List<u8>.New();
+        Put(ref f, MAGIC as u64, 4);
+        Put(ref f, 3, 4);
+        Put(ref f, this.Names.Len() as u64, 8);
+        Put(ref f, this.MetaCount, 8);
+        foreach (var b in this.Meta.AsSlice()) f.Push(b);
+        u64 off = 0;
+        for (usize i = 0; i < this.Names.Len(); i++) {
+            PutStr(ref f, this.Names.AsSlice()[i].AsStr());
+            u64[] dims = this.Shapes.AsSlice()[i].AsSlice();
+            Put(ref f, dims.Len as u64, 4);
+            foreach (var d in dims) Put(ref f, d, 8);
+            Put(ref f, this.Types.Get(i) as u64, 4);
+            Put(ref f, off, 8);
+            off += Align32(this.Datas.AsSlice()[i].Len() as u64);
+        }
+        while (f.Len() % 32 != 0) f.Push(0);
+        foreach (var d in this.Datas.AsSlice()) {
+            foreach (var b in d.AsSlice()) f.Push(b);
+            while (f.Len() % 32 != 0) f.Push(0);
+        }
+        string s = string.From("");
+        foreach (var b in f.AsSlice()) s.AppendByte(b);
+        return s;
+    }
+
+    // Writes the file.
+    public bool Save(in this, str file) {
+        string b = this.Bytes();
+        return fs.WriteText(file, b.AsStr()).IsOk();
+    }
+}
+
+u64 Align32(u64 n) => (n + 31) / 32 * 32;
+
+i32 Round(f32 x) {
+    if (x >= 0.0) return (x + 0.5) as i32;
+    return 0 - ((0.0 - x) + 0.5) as i32;
+}
+
+void Put(ref List<u8> b, u64 v, u32 n) {
+    for (u32 i = 0; i < n; i++) b.Push(((v >> (8 * i) as u64) & 255) as u8);
+}
+
+void PutStr(ref List<u8> b, str s) {
+    Put(ref b, s.Len as u64, 8);
+    for (usize i = 0; i < s.Len; i++) b.Push(s[i]);
+}

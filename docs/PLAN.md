@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M12 (AI); M10 (AArch64 and macOS) is blocked on test machines (§5). M0–M9 and M11 are done; their records are in §4.
+- **Current milestone:** M13 (Ecosystem); M10 (AArch64 and macOS) is blocked on test machines (§5). M0–M9, M11 and M12 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -92,6 +92,12 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D54 | **`envo.ecs`**: entities are generational ids; each component type has its own sparse set (`Store<T>`), dense and cache-friendly, with O(1) add, remove and lookup. Envo-S1 has no runtime types, so a program declares its stores; systems are functions over them. Archetype tables and a scheduler come with threads. | `lib/envo/ecs/README.md` |
 | D55 | **`envo.render3d` renders in software first**: perspective-correct triangles with a depth buffer, physically based shading (Cook-Torrance: GGX, Smith, Schlick) for directional and point lights, ACES tone mapping and sRGB output, into an `envo.gfx` canvas a window presents. The GPU adapters draw the same frames later. | `lib/envo/render3d/README.md` |
 | D56 | **glTF 2.0 import**: `.gltf` with `.bin` buffers or base64 data URIs; meshes (positions, normals, indices), the metallic-roughness material's factors, and the node hierarchy. Textures, skins and animation follow. | `lib/envo/render3d/README.md` |
+| D57 | **`envo.ai` tensors are dense row-major `f32`** with CPU kernels in Envo, and autograd is a **define-by-run tape** (`Graph`): each forward operation records its inputs, and `Backward` walks the tape in reverse. Training is IEEE arithmetic from a seeded generator, so it gives the same numbers in every build. f16, bf16 and int8 are storage formats, widened to `f32` to compute. | `lib/envo/ai/README.md` |
+| D58 | **The tokenizer is byte-level BPE** (GPT-2's byte alphabet): a vocabulary and ranked merges, loaded from a model file or given directly; encoding lowest-rank-first, decoding exact for any bytes. | `lib/envo/ai/README.md` |
+| D59 | **Models load from GGUF** (v2 and v3): metadata, the tensor table, and `f32`, `f16` and `Q8_0` tensors, dequantized on load. Every offset and size is checked; a malformed file is refused, never trusted. safetensors and a native `.envomodel` follow. | `lib/envo/ai/README.md` |
+| D60 | **Local inference runs the Llama architecture** on the CPU: RMSNorm, rotary positions, grouped-query attention with a KV cache, SwiGLU, greedy or seeded sampling. `ai.Load(path).Ask(prompt)` is the simple door. No model ships with Envo: which model to point to is the owner's decision. | `lib/envo/ai/README.md` |
+| D61 | **GPU kernels go through `IGpu`**: a compute entry (matrix multiply first) that the software adapter runs in Envo and the D3D12 adapter runs as a compute shader. GPU results match the CPU's within a stated tolerance, not bit for bit. | `docs/architecture/graphics.md` |
+| D62 | **Embeddings and vector search**: cosine similarity, an exact index, and HNSW for approximate nearest neighbours, deterministic for a given seed. | `lib/envo/ai/README.md` |
 
 ## 3. Open questions
 
@@ -205,6 +211,12 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   (D54), a software PBR renderer whose frames are identical in every build (D55), glTF
   2.0 import (D56), and the `scene` simple door. Increments 11.1–11.6.
 
+- **M12 — AI.** `envo.ai`: tensors, a define-by-run autograd tape and optimizers (D57);
+  byte-level BPE, SentencePiece-style and WordPiece tokenizers (D58); GGUF loading with
+  eleven tensor types (D59); Llama-family inference and `Ask` (D60); a matrix product on
+  the GPU through `IGpu` (D61); a nomic-bert text encoder, exact and HNSW search (D62).
+  Increments 12.1–12.7.
+
 ## 5. M10 — AArch64 and macOS (blocked)
 
 **DoD (brief §16):** AArch64 backend, Mach-O linker, macOS OS/window/Metal adapters.
@@ -220,11 +232,23 @@ macOS runners are billed for private repositories, so how to test is the owner's
 | # | Increment | Tested by | State |
 |---|---|---|---|
 | [11.1](https://github.com/envoscale/EnvoScale/issues/128) | `envo.math`: vectors, matrices, quaternions (D53) | `lib/envo/math/tests/` | done |
-| [11.2](https://github.com/envoscale/EnvoScale/issues/129) | `envo.ecs` (D54) | `lib/envo/ecs/tests/` || done |
-| [11.3](https://github.com/envoscale/EnvoScale/issues/130) | `envo.render3d`: the software PBR renderer (D55) | golden frames || done |
-| [11.4](https://github.com/envoscale/EnvoScale/issues/131) | glTF 2.0 import (D56) | a test asset || done |
-| [11.5](https://github.com/envoscale/EnvoScale/issues/132) | The `scene` simple door: a scene in a window in a few lines | the Hello World Gallery's 3D entry || done |
-| [11.6](https://github.com/envoscale/EnvoScale/issues/133) | Docs and status; M11 complete | CI || done |
+| [11.2](https://github.com/envoscale/EnvoScale/issues/129) | `envo.ecs` (D54) | `lib/envo/ecs/tests/` | done |
+| [11.3](https://github.com/envoscale/EnvoScale/issues/130) | `envo.render3d`: the software PBR renderer (D55) | golden frames | done |
+| [11.4](https://github.com/envoscale/EnvoScale/issues/131) | glTF 2.0 import (D56) | a test asset | done |
+| [11.5](https://github.com/envoscale/EnvoScale/issues/132) | The `scene` simple door: a scene in a window in a few lines | the Hello World Gallery's 3D entry | done |
+| [11.6](https://github.com/envoscale/EnvoScale/issues/133) | Docs and status; M11 complete | CI | done |
+
+- **M12 (AI)** follows M11:
+
+| # | Increment | Tested by | State |
+|---|---|---|---|
+| [12.1](https://github.com/envoscale/EnvoScale/issues/134) | Tensors, CPU kernels, autograd, optimizers (D57) | `lib/envo/ai/tests/train.envo` | done |
+| [12.2](https://github.com/envoscale/EnvoScale/issues/135) | Byte-level BPE tokenizer (D58) | round trips | done |
+| [12.3](https://github.com/envoscale/EnvoScale/issues/136) | GGUF loading (D59) | a generated model file, malformed files | done |
+| [12.4](https://github.com/envoscale/EnvoScale/issues/137) | Local inference: a Llama-style transformer (D60) | a tiny generated model, against a reference | done |
+| [12.5](https://github.com/envoscale/EnvoScale/issues/138) | GPU kernels through `IGpu` (D61) | software against D3D12 | done |
+| [12.6](https://github.com/envoscale/EnvoScale/issues/139) | Embeddings and a vector index (D62) | recall against the exact index | done |
+| [12.7](https://github.com/envoscale/EnvoScale/issues/140) | Docs and status; M12 complete | CI | done |
 
 ## 6. Risks
 

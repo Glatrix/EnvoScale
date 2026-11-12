@@ -1,0 +1,64 @@
+// envo.ai.tokenizer: byte-level BPE trained on a small corpus, round trips for any
+// bytes, the word split, and SentencePiece-style merges with byte fallback.
+// expect: vocabulary 266
+// expect: trained: 13 tokens [the| cat| |s|at| |o|n| the| |m|at|.] round trip
+// expect: unseen: 32 tokens [] round trip
+// expect: empty: 0 tokens [] round trip
+// expect: spm: 2 tokens [ hello| world] round trip
+// expect: spm fallback: 5 tokens [ h|i|,| world|!] round trip
+use envo.ai.tokenizer;
+use alloc.text;
+
+void Show(str label, in tokenizer.Tokenizer t, str s, bool pieces) {
+    List<u32> ids = t.Encode(s);
+    write(1, label);
+    write(1, ": ");
+    write(1, text.Uint(ids.Len() as u64).AsStr());
+    write(1, " tokens [");
+    for (usize i = 0; pieces && i < ids.Len(); i++) {
+        if (i > 0) write(1, "|");
+        string one = string.From("");
+        t.AppendTo(ref one, ids.Get(i));
+        write(1, one.AsStr());
+    }
+    write(1, "] ");
+    string back = t.Decode(ids.AsSlice());
+    if (back.Equals(s)) print("round trip");
+    else print("CHANGED");
+}
+
+str corpus = "the cat sat on the mat. the cat ate the rat. that cat is the fattest cat; the rat isn't. ";
+tokenizer.Tokenizer t = tokenizer.Tokenizer.Train(corpus, 30);
+write(1, "vocabulary ");
+print(text.Uint(t.VocabSize() as u64).AsStr());
+Show("trained", t, "the cat sat on the mat.", true);
+string odd = string.From("a dog's  life\n\tis 42 x\0");
+odd.AppendByte(0xFF);
+odd.AppendByte(0x80);
+odd.Append(" caf\u{E9}  ");
+Show("unseen", t, odd.AsStr(), false);
+Show("empty", t, "", true);
+
+// SentencePiece-style: pieces with scores, U+2581 for spaces, bytes as <0xNN>
+List<string> names = List<string>.New();
+List<f32> scores = List<f32>.New();
+names.Push(string.From("<unk>"));
+names.Push(string.From("<s>"));
+names.Push(string.From("</s>"));
+for (u32 b = 0; b < 256; b++) {
+    string n = string.From("<0x");
+    n.Append(text.Upper(text.Hex(b as u64, 2).AsStr()).AsStr());
+    n.Append(">");
+    names.Push(n);
+}
+for (usize i = 0; i < names.Len(); i++) scores.Push(0.0);
+List<str> words = text.Split("\u{2581} h e l o w r d \u{2581}h he ll \u{2581}he llo \u{2581}hello \u{2581}w or \u{2581}wor ld \u{2581}world", " ");
+for (usize i = 0; i < words.Len(); i++) {
+    names.Push(string.From(words.Get(i)));
+    scores.Push(-10.0 + (i as f32));
+}
+List<str> view = List<str>.New();
+foreach (var n in names.AsSlice()) view.Push(n.AsStr());
+tokenizer.Tokenizer sp = tokenizer.Tokenizer.Spm(view.AsSlice(), scores.AsSlice());
+Show("spm", sp, "hello world", true);
+Show("spm fallback", sp, "hi, world!", true);

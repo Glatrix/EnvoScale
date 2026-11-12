@@ -47,6 +47,21 @@ impl IGpu for Software {
         for (usize i = 0; i < px.Len; i++) done.Push(px[i]);
         return done;
     }
+    bool MatMul(ref this, f32[] a, f32[] b, u32 m, u32 k, u32 n, ref List<f32> into) => MatMulCpu(a, b, m, k, n, ref into);
+}
+
+// a × b on the CPU, each sum in order of k: the reference GPU adapters agree with.
+public bool MatMulCpu(f32[] a, f32[] b, u32 m, u32 k, u32 n, ref List<f32> into) {
+    if (a.Len != (m as u64 * k as u64) as usize || b.Len != (k as u64 * n as u64) as usize) return false;
+    into = List<f32>.New();
+    for (u32 i = 0; i < m; i++) {
+        for (u32 j = 0; j < n; j++) {
+            f32 s = 0.0;
+            for (u32 q = 0; q < k; q++) s += a[(i * k + q) as usize] * b[(q * n + j) as usize];
+            into.Push(s);
+        }
+    }
+    return true;
 }
 
 impl Software {

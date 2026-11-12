@@ -12,3 +12,4 @@ tests/golden/lexer/*.envo -text
 
 *.exe binary
 *.bin binary
+*.gguf binary

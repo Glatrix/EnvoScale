@@ -25,8 +25,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M9 | Web | **Done** (Experimental): the WebAssembly backend, the JS host and `os.wasm`, `envo.markdown`, `envo.web` with Lumen's Landing and Docs templates, the website and its in-browser sandbox, built by Envo programs (9.1–9.8) |
 | M10 | AArch64 and macOS | **Blocked** on test machines: no AArch64 or macOS hardware here, and GitHub's arm64 and macOS runners cost money for a private repository (an owner decision) |
 | M11 | 3D | **Done** (Experimental; ahead of M10): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR: the same frame bit for bit in every build), glTF 2.0 import, the 3D gallery program in a window (11.1–11.6) |
-| M12 | AI | **Next** |
-| M13 | | Not started |
+| M12 | AI | **Done** (Experimental): `envo.ai` tensors, autograd and optimizers; BPE, SentencePiece and WordPiece tokenizers; GGUF loading (11 tensor types); local inference for the Llama family; a text encoder (nomic-bert), exact and HNSW vector search; a matrix product on the GPU through `IGpu` (12.1–12.7) |
+| M13 | Ecosystem | **Next** |
 
 ### M0 Definition of Done
 
@@ -125,6 +125,17 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | PBR renderer | `envo.render3d`: Cook-Torrance (GGX, Smith-Schlick, Schlick), ACES, sRGB, in software; golden frames identical at -O0, -O2, in WebAssembly and the script runtime | Done (GPU drawing through `envo.gpu` follows) |
 | glTF import | `envo.render3d.gltf`: meshes, metallic-roughness factors, nodes; `.bin` and `data:` buffers; malformed input refused | Done (GLB, textures, skins follow) |
 | `scene { }` simple door | `render3d.Show(render3d.Scene.New().Cube().Spin().Sun(), "Hello")`, the gallery's 3D program | Done |
+
+### M12 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| Tensors | `envo.ai.Tensor`: dense `f32`, seeded initialization | Done (f16/bf16/int8 are storage formats, widened on load) |
+| CPU + GPU kernels | matrix product, elementwise ops, softmax, norms, attention on the CPU; the matrix product on the GPU through `IGpu` (Direct3D 12 compute; software elsewhere) | Done (GPU inference and Vulkan follow) |
+| Autograd | `envo.ai.Graph`: define-by-run tape, reverse mode, checked against finite differences; SGD and Adam | Done |
+| Tokenizer | `envo.ai.tokenizer`: byte-level BPE (with training), SentencePiece-style, WordPiece | Done |
+| Model loading | `envo.ai.gguf`: GGUF v2/v3, F32/F16/BF16/Q8_0/Q4_0/Q4_1/Q5_0/Q5_1/Q4_K/Q5_K/Q6_K; read on a real Q4_K_M model | Done (safetensors, `.envomodel` follow) |
+| Local inference | `envo.ai.Model` (llama, mistral, qwen2, qwen3) and `Encoder` (nomic-bert): two tiny models match a numpy reference; a real embedding model ranks texts sensibly | Done (checking a real chat model needs a model file: owner) |
 
 ## Subsystems
 

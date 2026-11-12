@@ -1,0 +1,173 @@
+// envo.ai.gguf: a file written and read back (metadata, F32, F16 and Q8_0 tensors),
+// half-precision conversion, the quantized block formats, and malformed files refused.
+// expect: file 896 bytes
+// expect: version 3, 5 keys, 3 tensors
+// expect: llama
+// expect: context 128
+// expect: epsilon 0.000009999999747
+// expect: tokens hi, score -1.5
+// expect: missing keys are none
+// expect: a dims 32x2 largest error 0
+// expect: b dims 64 largest error 0
+// expect: c dims 32x2 largest error 0.01513671875
+// expect: find by name
+// expect: half 1.0 1
+// expect: half -2.5 -2.5
+// expect: half smallest 0.000000059604645
+// expect: to half: 3c00 7c00 0001 3c02
+// expect: every finite half round trips: 31744
+// expect: q4_0 sum 16
+// expect: q4_k 256 values, sum 64
+// expect: q6_k 256 values, sum -1664
+// expect: empty: not a GGUF file
+// expect: not gguf: not a GGUF file
+// expect: cut short: malformed metadata
+// expect: cut in the data: a tensor outside the file
+// expect: huge count: counts larger than the file
+// expect: version 9: an unsupported GGUF version
+use envo.ai.gguf;
+use alloc.text;
+
+void Num(str label, f64 v) {
+    write(1, label);
+    write(1, " ");
+    print(text.FloatShort(v).AsStr());
+}
+
+void Refused(str label, string bytes) {
+    var r = gguf.File.Parse(bytes);
+    write(1, label);
+    write(1, ": ");
+    if (r.IsErr()) print(r.UnwrapErr().AsStr());
+    else print("accepted");
+}
+
+gguf.Writer w = gguf.Writer.New();
+w.Str("general.architecture", "llama");
+w.U32("llama.context_length", 128);
+w.F32("llama.attention.layer_norm_rms_epsilon", 0.00001);
+List<string> toks = List<string>.New();
+toks.Push(string.From("<s>"));
+toks.Push(string.From("hi"));
+w.Strings("tokenizer.ggml.tokens", toks.AsSlice());
+List<f32> sc = List<f32>.New();
+sc.Push(0.0);
+sc.Push(-1.5);
+w.Floats("tokenizer.ggml.scores", sc.AsSlice());
+List<f32> vals = List<f32>.New();
+for (u32 i = 0; i < 64; i++) vals.Push((i as f32 - 31.5) / 8.0);
+w.Tensor("a", 2, 32, vals.AsSlice(), gguf.F32);
+w.Tensor("b", 1, 64, vals.AsSlice(), gguf.F16);
+w.Tensor("c", 2, 32, vals.AsSlice(), gguf.Q8_0);
+string bytes = w.Bytes();
+write(1, "file ");
+write(1, text.Uint(bytes.Len() as u64).AsStr());
+print(" bytes");
+
+var pr = gguf.File.Parse(string.From(bytes.AsStr()));
+if (pr.IsErr()) panic("the file was refused");
+gguf.File f = pr.Unwrap();
+write(1, "version ");
+write(1, text.Uint(f.Version() as u64).AsStr());
+write(1, ", ");
+write(1, text.Uint(f.MetaCount() as u64).AsStr());
+write(1, " keys, ");
+write(1, text.Uint(f.TensorCount() as u64).AsStr());
+print(" tensors");
+print(f.Str("general.architecture").Unwrap());
+write(1, "context ");
+print(text.Uint(f.Uint("llama.context_length").Unwrap()).AsStr());
+Num("epsilon", f.Number("llama.attention.layer_norm_rms_epsilon").Unwrap());
+write(1, "tokens ");
+write(1, f.Strings("tokenizer.ggml.tokens")[1].AsStr());
+Num(", score", f.Numbers("tokenizer.ggml.scores")[1]);
+if (f.Str("missing").IsNone() && f.Strings("missing").Len == 0) print("missing keys are none");
+for (usize t = 0; t < f.TensorCount(); t++) {
+    List<f32> got = f.Floats(t);
+    f64 worst = 0.0;
+    for (usize i = 0; i < got.Len(); i++) {
+        f64 e = (got.Get(i) - vals.Get(i)) as f64;
+        if (e < 0.0) e = 0.0 - e;
+        if (e > worst) worst = e;
+    }
+    write(1, f.TensorName(t));
+    write(1, " dims ");
+    u64[] d = f.TensorDims(t);
+    for (usize k = 0; k < d.Len; k++) {
+        if (k > 0) write(1, "x");
+        write(1, text.Uint(d[k]).AsStr());
+    }
+    Num(" largest error", worst);
+}
+if (f.Find("b") == 1 && f.Find("zz") == 3) print("find by name");
+
+// half precision
+Num("half 1.0", gguf.HalfToFloat(0x3C00) as f64);
+Num("half -2.5", gguf.HalfToFloat(0xC100) as f64);
+Num("half smallest", gguf.HalfToFloat(1) as f64);
+write(1, "to half: ");
+write(1, text.Hex(gguf.FloatToHalf(1.0) as u64, 4).AsStr());
+write(1, " ");
+write(1, text.Hex(gguf.FloatToHalf(65520.0) as u64, 4).AsStr());
+write(1, " ");
+write(1, text.Hex(gguf.FloatToHalf(0.000000059604645) as u64, 4).AsStr());
+write(1, " ");
+print(text.Hex(gguf.FloatToHalf(1.0009765625 + 0.00048828125) as u64, 4).AsStr());
+u32 same = 0;
+for (u32 h = 0; h < 0x7C00; h++) {
+    if (gguf.FloatToHalf(gguf.HalfToFloat(h as u16)) == h as u16) same++;
+}
+write(1, "every finite half round trips: ");
+print(text.Uint(same as u64).AsStr());
+
+// quantized blocks
+List<u8> q4 = List<u8>.New();
+q4.Push(0x00);
+q4.Push(0x3C);
+for (u32 i = 0; i < 16; i++) q4.Push(0x98);
+List<f32> v4 = gguf.Dequantize(gguf.Q4_0, q4.AsSlice());
+f64 s4 = 0.0;
+foreach (var v in v4.AsSlice()) s4 += v as f64;
+Num("q4_0 sum", s4);
+List<u8> k4 = List<u8>.New();
+k4.Push(0x00);
+k4.Push(0x3C);
+k4.Push(0x00);
+k4.Push(0x38);
+for (u32 i = 0; i < 4; i++) k4.Push(1);
+for (u32 i = 0; i < 4; i++) k4.Push(2);
+for (u32 i = 0; i < 4; i++) k4.Push(0x31);
+for (u32 i = 0; i < 128; i++) k4.Push(0x21);
+List<f32> vk4 = gguf.Dequantize(gguf.Q4_K, k4.AsSlice());
+f64 sk4 = 0.0;
+foreach (var v in vk4.AsSlice()) sk4 += v as f64;
+write(1, "q4_k ");
+write(1, text.Uint(vk4.Len() as u64).AsStr());
+Num(" values, sum", sk4);
+List<u8> k6 = List<u8>.New();
+for (u32 i = 0; i < 128; i++) k6.Push(0x21);
+for (u32 i = 0; i < 64; i++) k6.Push(0xE4);
+for (u32 i = 0; i < 16; i++) k6.Push(1);
+k6.Push(0x00);
+k6.Push(0x3C);
+List<f32> vk6 = gguf.Dequantize(gguf.Q6_K, k6.AsSlice());
+f64 sk6 = 0.0;
+foreach (var v in vk6.AsSlice()) sk6 += v as f64;
+write(1, "q6_k ");
+write(1, text.Uint(vk6.Len() as u64).AsStr());
+Num(" values, sum", sk6);
+
+// malformed files
+Refused("empty", string.From(""));
+Refused("not gguf", string.From("GGML is not GGUF, nor this long enough to be"));
+str b = bytes.AsStr();
+Refused("cut short", string.From(b[0..100]));
+Refused("cut in the data", string.From(b[0..b.Len - 40]));
+string big = string.From(b[0..8]);
+for (u32 i = 0; i < 8; i++) big.AppendByte(0xFF);
+big.Append(b[16..b.Len]);
+Refused("huge count", big);
+string ver = string.From(b[0..4]);
+ver.AppendByte(9);
+ver.Append(b[5..b.Len]);
+Refused("version 9", ver);
