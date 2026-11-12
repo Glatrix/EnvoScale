@@ -3,6 +3,19 @@
 // of a place.
 
 u32 LowerExpr(*Lower l, u32 n) {
+    u32 v = LowerExprValue(l, n);
+    if (!IsConverted(LC(l), n)) return v;
+    // a `string` used as a `str`: { its bytes, its length }
+    *Checker c = LC(l);
+    u32 sv = LType(l, LNType(l, n));
+    u32 st = StrTypeOf(l);
+    u32 tmp = LSlot(l, st);
+    LStore(l, ET_PTR, LLoad(l, ET_PTR, LField(l, sv, v, 0)), LField(l, st, tmp, 0));
+    LStore(l, ET_U64, LLoad(l, ET_U64, LField(l, sv, v, 1)), LField(l, st, tmp, 1));
+    return tmp;
+}
+
+u32 LowerExprValue(*Lower l, u32 n) {
     *Checker c = LC(l);
     Node node = CNode(c, n);
     u32 t = LNType(l, n);

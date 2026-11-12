@@ -31,6 +31,7 @@ struct MoveCx {
     Vec Viewed;     // u32 local arrays a kept view borrows, from there on (check/views.envo)
     Vec ViewLocals; // u32 pairs (local, the local array its view borrows)
     u32 DirectArg;  // the argument node being checked as a call's direct argument
+    Vec Exclusive;  // u32 locals a kept `mut T[]` borrows exclusively: no other use at all
 }
 
 MoveSnap SnapNew() {
@@ -107,6 +108,7 @@ MoveCx MoveCxNew() {
     x.Frozen = VecNew(4, 4);
     x.Viewed = VecNew(4, 4);
     x.ViewLocals = VecNew(4, 4);
+    x.Exclusive = VecNew(4, 4);
     return x;
 }
 
@@ -137,6 +139,12 @@ u32 ViewOfLocal(*Checker c, *MoveCx x, u32 e) {
         }
         return 0;
     }
+    if (IsConverted(c, e)) {
+        // a `str` of a local `string`
+        u32 root = PlaceRoot(c, e);
+        if (root != 0 && NSym(c, root) != 0 && SymGet(c, NSym(c, root)).Kind == SK_LOCAL && SymGet(c, NSym(c, root)).Flags & SF_BYREF == 0) return NSym(c, root);
+        return 0;
+    }
     if (!HoldsBorrow(c, NType(c, e))) return 0;
     if (IsSlicing(c, e)) {
         if (TyKind(c, NType(c, node.A)) == TYK_ARRAY) {
@@ -155,8 +163,15 @@ u32 ViewOfLocal(*Checker c, *MoveCx x, u32 e) {
     }
     if (k == NK_CALL) {
         if (NKind(c, node.A) == NK_MEMBER) {
-            u32 r = ViewOfLocal(c, x, CNode(c, node.A).A);
+            u32 obj = CNode(c, node.A).A;
+            u32 r = ViewOfLocal(c, x, obj);
             if (r != 0) return r;
+            // a method borrowing a local receiver may return a borrow of it
+            u32 cs = NSym(c, e);
+            if (cs != 0 && SymGet(c, cs).Kind == SK_FN && SymGet(c, cs).Flags & (SF_RECV_IN | SF_RECV_REF) != 0) {
+                u32 root = PlaceRoot(c, obj);
+                if (root != 0 && NSym(c, root) != 0 && SymGet(c, NSym(c, root)).Kind == SK_LOCAL && SymGet(c, NSym(c, root)).Flags & SF_BYREF == 0) return NSym(c, root);
+            }
         }
         u32 a = node.B;
         while (a != 0) {
@@ -186,14 +201,26 @@ u32 ViewLocalOf(*MoveCx x, u32 s) {
     return 0;
 }
 
-// A value kept in local s: if it views a local array, s does too.
+// A value kept in local s: if it views a local, s does too, and the local is frozen
+// (entirely, for a kept `mut T[]`).
 void KeepView(*Checker c, *MoveCx x, u32 s, u32 e) {
     u32 r = ViewOfLocal(c, x, e);
     if (r == 0 || s == 0) return;
     unsafe {
         MemStoreU32(VecPush(&x.ViewLocals), s);
         MemStoreU32(VecPush(&x.ViewLocals), r);
+        if (!IsFrozen(x, r)) MemStoreU32(VecPush(&x.Viewed), r);
+        if (IsMutView(c, SymGet(c, s).Type)) MemStoreU32(VecPush(&x.Exclusive), r);
     }
+}
+
+bool IsExclusive(*MoveCx x, u32 s) {
+    unsafe {
+        for (usize i = 0; i < VecLen(&x.Exclusive); i++) {
+            if (MemLoadU32(VecAt(&x.Exclusive, i)) == s) return true;
+        }
+    }
+    return false;
 }
 
 // A value that leaves the function (returned, or stored outside its locals) may not view
@@ -336,6 +363,7 @@ void UseLocal(*Checker c, *MoveCx x, u32 n, u32 s, bool move) {
     u32 tok = NTok(c, n);
     u8 st = PlaceState(x, s, 0);
     if (st != MS_OWNED) UsedAfterMove(c, tok, s, st, false);
+    if (IsExclusive(x, s)) BorrowError(c, tok, s, E_BORROW_CONFLICT, "` is borrowed exclusively by a kept `mut` view, so it cannot be used here");
     unsafe {
         for (usize i = 0; i < VecLen(&x.Places); i += 2) {
             if (MemLoadU32(VecAt(&x.Places, i)) != s || MemLoadU32(VecAt(&x.Places, i + 1)) == 0) continue;
@@ -404,6 +432,14 @@ void MvExpr(*Checker c, *MoveCx x, u32 n, bool move) {
     if (n == 0) return;
     Node node = CNode(c, n);
     u16 k = node.Kind;
+    if (IsConverted(c, n)) {
+        // a `string` used as a `str` is borrowed, not taken; the `str` may not outlive a
+        // temporary `string` (it is dropped at the end of the statement)
+        move = false;
+        bool direct;
+        unsafe { direct = x.DirectArg == n; }
+        if (!direct && PlaceRoot(c, n) == 0) CFail(c, node.Tok, E_MOVED_WHILE_BORROWED, "this `str` would outlive the temporary `string` it borrows; store the `string` in a variable first");
+    }
     if (k == NK_NAME || k == NK_THIS) {
         u32 s = NSym(c, n);
         if (s != 0 && SymGet(c, s).Kind == SK_LOCAL) UseLocal(c, x, n, s, move);
@@ -441,6 +477,13 @@ void MvExpr(*Checker c, *MoveCx x, u32 n, bool move) {
         unsafe { direct = x.DirectArg == n; }
         if (r != 0 && !direct && !IsFrozen(x, r)) unsafe { MemStoreU32(VecPush(&x.Viewed), r); }
         return;
+    }
+    if (IsConverted(c, n)) {
+        // a kept `str` of a local `string` freezes it, like a view of a local array
+        u32 r = ViewOfLocal(c, x, n);
+        bool direct;
+        unsafe { direct = x.DirectArg == n; }
+        if (r != 0 && !direct && !IsFrozen(x, r)) unsafe { MemStoreU32(VecPush(&x.Viewed), r); }
     }
     if (k == NK_INDEX) {
         MvExpr(c, x, node.A, false);

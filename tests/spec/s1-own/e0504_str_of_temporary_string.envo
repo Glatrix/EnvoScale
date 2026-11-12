@@ -1,0 +1,3 @@
+// expect-error: E0504 @ 3:20
+// [s1.type.1] a `str` of a temporary `string` cannot outlive it
+str s = string.From("x");

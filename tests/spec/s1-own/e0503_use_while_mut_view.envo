@@ -1,0 +1,6 @@
+// expect-error: E0503 @ 5:1
+// [view.1] a kept `mut T[]` borrows its owner exclusively
+List<i64> l = List<i64>.New();
+mut i64[] v = l.AsMutSlice();
+l.Push(1);
+v[0] = 2;

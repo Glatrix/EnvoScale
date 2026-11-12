@@ -4,7 +4,22 @@
 // Checks node n against type t exactly (E0301).
 void ExpectType(*Checker c, u32 n, u32 t) {
     u32 got = CheckValue(c, n, t);
-    if (!Assignable(c, got, t)) Mismatch(c, t, NTok(c, n), got);
+    if (!Coerce(c, n, got, t)) Mismatch(c, t, NTok(c, n), got);
+}
+
+// May node n, of type got, be used as a want? Assignable, or a `string` used as a `str`
+// (envo-s1.md section 8), which is marked for lowering.
+bool Coerce(*Checker c, u32 n, u32 got, u32 want) {
+    if (Assignable(c, got, want)) return true;
+    u32 s;
+    unsafe { s = c.StringSym; }
+    if (want != T_STR || s == 0 || TyKind(c, got) != TYK_STRUCT || TypeGet(c, got).Sym != s) return false;
+    unsafe { *VecAt(&c.NConv, n as usize) = 1; }
+    return true;
+}
+
+bool IsConverted(*Checker c, u32 n) {
+    unsafe { return *VecAt(&c.NConv, n as usize) == 1; }
 }
 
 // CheckExpr, but a void value is E0322 ([core.expr.11]).
@@ -378,7 +393,7 @@ u32 CheckCallTo(*Checker c, u32 n, u32 fs, u32 ownerEnv, u32 typeArgs, u32 tok) 
         }
         u32 want = Subst(c, pt, env, ne);
         if (NType(c, a) != 0) {
-            if (!Assignable(c, NType(c, a), want)) Mismatch(c, want, NTok(c, a), NType(c, a));
+            if (!Coerce(c, a, NType(c, a), want)) Mismatch(c, want, NTok(c, a), NType(c, a));
         } else {
             ExpectType(c, a, want);
         }
@@ -490,7 +505,7 @@ u32 OwnerEnv(*Checker c, u32 t, u64 v) {
 // The type symbol named by tok, unless a local of that name hides it; 0 otherwise.
 u32 TypeNameSym(*Checker c, u32 tok) {
     if (LocalFind(c, tok) != 0) return 0;
-    u32 s = GFind(c, TokText(c, tok));
+    u32 s = GFindAt(c, tok);
     if (s == 0) return 0;
     u8 k = SymGet(c, s).Kind;
     if (k == SK_TYPE || k == SK_STRUCT || k == SK_ENUM) return s;

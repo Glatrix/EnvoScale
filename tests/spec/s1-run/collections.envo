@@ -1,0 +1,114 @@
+// The prelude's List<T> and string (envo-s1.md section 8): growth past the first
+// allocation, Push/Pop/Get/Set, views of a list, foreach over them, a list owning values
+// with a drop (dropped by Set, by Pop's caller and with the list), string building and
+// comparison, and a `string` used where a `str` is expected.
+// expect: 100 4950 99
+// expect: 3 2 1
+// expect: 10 20 30
+// expect: drop old
+// expect: popped c
+// expect: drop c
+// expect: hello, world 12
+// expect: true false
+// expect: bytes 5
+// expect: drop a
+// expect: drop new
+// expect: drop b
+// expect: end
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+struct Res { str Name; }
+impl IDrop for Res {
+    void Drop(ref this) {
+        write(1, "drop ");
+        print(this.Name);
+    }
+}
+
+i64 Total(i64[] xs) {
+    i64 s = 0;
+    foreach (var x in xs) s += x;
+    return s;
+}
+
+usize Count(str s) => s.Len;
+
+void Run() {
+    List<i64> nums = List<i64>.New();
+    for (i64 i = 0; i < 100; i++) nums.Push(i);
+    W(nums.Len() as i64);
+    W(Total(nums.AsSlice()));
+    print(Num(nums.Get(99)));
+
+    List<i64> small = List<i64>.New();
+    small.Push(1);
+    small.Push(2);
+    small.Push(3);
+    while (true) {
+        i64? top = small.Pop();
+        if (top.IsNone()) break;
+        if (small.Len() == 0) print(Num(top.Unwrap()));
+        else W(top.Unwrap());
+    }
+
+    List<i64> tens = List<i64>.New();
+    tens.Push(1);
+    tens.Push(2);
+    tens.Push(3);
+    mut i64[] view = tens.AsMutSlice();
+    for (usize i = 0; i < view.Len; i++) view[i] = view[i] * 10;
+    // `view` borrows `tens` exclusively, so the list is read through it
+    foreach (var t in view) {
+        if (t == 30) print(Num(t));
+        else W(t);
+    }
+
+    List<Res> owned = List<Res>.New();
+    owned.Push(new Res { Name = "a" });
+    owned.Push(new Res { Name = "old" });
+    owned.Push(new Res { Name = "b" });
+    owned.Push(new Res { Name = "c" });
+    owned.Set(1, new Res { Name = "new" });
+    Res? last = owned.Pop();
+    match last {
+        Some(r) => {
+            write(1, "popped ");
+            print(r.Name);
+        }
+        None => { }
+    }
+
+    string s = string.From("hello");
+    s.Append(", ");
+    s.Append("world");
+    write(1, s);
+    write(1, " ");
+    print(Num(s.Len() as i64));
+    write(1, s.Equals("hello, world") ? "true " : "false ");
+    print(s.Equals("hello") ? "true" : "false");
+    string b = string.New();
+    foreach (var ch in "bytes") b.AppendByte(ch);
+    write(1, b.AsStr());
+    write(1, " ");
+    print(Num(Count(b) as i64));
+}
+
+Run();
+print("end");

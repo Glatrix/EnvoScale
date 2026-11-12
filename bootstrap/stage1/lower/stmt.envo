@@ -173,6 +173,9 @@ u32 LocalSlotFor(*Lower l, u32 varNode, u32 t) {
 void LowerDropOld(*Lower l, u32 a, u32 t, u32 p) {
     *Checker c = LC(l);
     if (!NeedsDrop(c, t)) return;
+    // raw memory may hold nothing yet: a write through a pointer only stores
+    // ([own.unsafe.1]; envo-s1.md section 6)
+    if (ThroughPointer(c, a)) return;
     u16 k = NKind(c, a);
     if ((k == NK_NAME || k == NK_THIS) && DropFlag(l, NSym(c, a)) != 0) {
         DropLocal(l, NSym(c, a));
@@ -193,6 +196,20 @@ void LowerDropOld(*Lower l, u32 a, u32 t, u32 p) {
         return;
     }
     DropValue(l, t, p);
+}
+
+// Is place a reached through a raw pointer?
+bool ThroughPointer(*Checker c, u32 a) {
+    while (true) {
+        Node node = CNode(c, a);
+        if (node.Kind == NK_UNARY) return true;      // *p
+        if (node.Kind != NK_MEMBER && node.Kind != NK_INDEX) return false;
+        u8 k = TyKind(c, NType(c, node.A));
+        if (k == TYK_PTR) return true;
+        if (node.Kind == NK_INDEX && k == TYK_SLICE) return false;
+        a = node.A;
+    }
+    return false;
 }
 
 // The local symbol the checker declared for var node n.

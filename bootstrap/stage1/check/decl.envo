@@ -94,6 +94,7 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
             if (kind == SK_IFACE && StrEq(SymGet(c, s).Name, "IDrop")) c.DropSym = s;
             if (kind == SK_ENUM && StrEq(SymGet(c, s).Name, "Option")) c.OptionSym = s;
             if (kind == SK_ENUM && StrEq(SymGet(c, s).Name, "Result")) c.ResultSym = s;
+            if (kind == SK_STRUCT && StrEq(SymGet(c, s).Name, "string")) c.StringSym = s;
         }
     }
     u32 tps = CNode(c, n).E;
@@ -123,6 +124,7 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
         }
     }
     if (!hidden) GAdd(c, s);
+    if (prelude) unsafe { MapPut(&c.PreludeScope, SymGet(c, s).Name, s as u64); }
     if (kind == SK_IFACE) DeclareIfaceItem(c, s);
 }
 
@@ -187,7 +189,7 @@ u32 ResolveTypeName(*Checker c, u32 tok, u32 args, u32 quals) {
         if (have != 0) TypeArgCount(c, tok, 0, have);
         return SymGet(c, tp).Type;
     }
-    u32 s = GFind(c, TokText(c, tok));
+    u32 s = GFindAt(c, tok);
     if (s == 0) CFailName(c, tok, E_UNKNOWN_TYPE, "unknown type `", tok, "`");
     Sym sym = SymGet(c, s);
     u8 k = sym.Kind;

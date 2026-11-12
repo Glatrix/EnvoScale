@@ -3,8 +3,8 @@
 // the same name, so every Envo-Core program means what it did ([s1.subset.2]). `Copy` is
 // built into the checker: it is implemented automatically ([type.copy.1]).
 //
-// M2.10 brought the interfaces ownership needs and M2.11 Option and Result; M2.12 adds
-// List and string.
+// M2.10 brought the interfaces ownership needs, M2.11 Option and Result, and M2.12 List
+// and string.
 
 // Runs when a value is dropped: at the end of its owner's scope, unless it was moved
 // ([own.drop.1], [s1.own.2]).
@@ -71,5 +71,150 @@ impl<T, E> Result<T, E> {
             Ok(_) => { panic("called `UnwrapErr` on an `Ok`"); }
             Err(e) => { return e; }
         }
+    }
+}
+
+// A growable list on the heap (envo-s1.md section 8). It owns its items: dropping the
+// list drops them.
+struct List<T> {
+    *T Data;
+    usize Count;
+    usize Cap;
+
+    static List<T> New() {
+        unsafe { return new List<T> { Data = 0 as usize as *T, Count = 0, Cap = 0 }; }
+    }
+
+    usize Len() => this.Count;
+
+    void Push(ref this, T item) {
+        if (this.Count == this.Cap) this.Grow();
+        // writing through a raw pointer stores without dropping (the slot is empty)
+        unsafe { this.Data[this.Count] = item; }
+        this.Count++;
+    }
+
+    T? Pop(ref this) {
+        if (this.Count == 0) return null;
+        this.Count--;
+        unsafe {
+            // reading through a raw pointer takes the item
+            T item = this.Data[this.Count];
+            return Some(item);
+        }
+    }
+
+    // A copy of item i; panics if i is out of bounds. Borrow other items through AsSlice.
+    T Get(usize i) where T : Copy {
+        if (i >= this.Count) panic("index out of bounds");
+        unsafe { return this.Data[i]; }
+    }
+
+    void Set(ref this, usize i, T item) {
+        if (i >= this.Count) panic("index out of bounds");
+        unsafe {
+            T old = this.Data[i];       // dropped at the end of this block
+            this.Data[i] = item;
+        }
+    }
+
+    T[] AsSlice() {
+        unsafe { return slice_from(this.Data, this.Count); }
+    }
+
+    mut T[] AsMutSlice(ref this) {
+        unsafe { return slice_from_mut(this.Data, this.Count); }
+    }
+
+    void Grow(ref this) {
+        usize cap = this.Cap * 2;
+        if (cap == 0) cap = 4;
+        unsafe {
+            *T fresh = alloc(cap * sizeof(T)) as *T;
+            for (usize i = 0; i < this.Count; i++) fresh[i] = this.Data[i];
+            free(this.Data as *u8);
+            this.Data = fresh;
+        }
+        this.Cap = cap;
+    }
+}
+
+impl<T> IDrop for List<T> {
+    void Drop(ref this) {
+        unsafe {
+            for (usize i = 0; i < this.Count; i++) {
+                T item = this.Data[i];      // taken, then dropped at the end of the block
+            }
+            free(this.Data as *u8);
+        }
+    }
+}
+
+// Owned UTF-8 text (envo-s1.md section 8). A `string` converts to `str`, a shared borrow
+// of its bytes, wherever a `str` is expected.
+struct string {
+    *u8 Data;
+    usize Count;
+    usize Cap;
+
+    static string New() {
+        unsafe { return new string { Data = 0 as usize as *u8, Count = 0, Cap = 0 }; }
+    }
+
+    static string From(str s) {
+        string r = string.New();
+        r.Append(s);
+        return r;
+    }
+
+    usize Len() => this.Count;
+
+    void Append(ref this, str s) {
+        this.Reserve(s.Len);
+        unsafe {
+            for (usize i = 0; i < s.Len; i++) this.Data[this.Count + i] = s[i];
+        }
+        this.Count += s.Len;
+    }
+
+    void AppendByte(ref this, u8 b) {
+        this.Reserve(1);
+        unsafe { this.Data[this.Count] = b; }
+        this.Count++;
+    }
+
+    str AsStr() {
+        unsafe { return str_from(this.Data, this.Count); }
+    }
+
+    bool Equals(str other) {
+        if (other.Len != this.Count) return false;
+        unsafe {
+            for (usize i = 0; i < this.Count; i++) {
+                if (this.Data[i] != other[i]) return false;
+            }
+        }
+        return true;
+    }
+
+    // Room for n more bytes.
+    void Reserve(ref this, usize n) {
+        if (this.Count + n <= this.Cap) return;
+        usize cap = this.Cap * 2;
+        if (cap < this.Count + n) cap = this.Count + n;
+        if (cap < 16) cap = 16;
+        unsafe {
+            *u8 fresh = alloc(cap);
+            for (usize i = 0; i < this.Count; i++) fresh[i] = this.Data[i];
+            free(this.Data);
+            this.Data = fresh;
+        }
+        this.Cap = cap;
+    }
+}
+
+impl IDrop for string {
+    void Drop(ref this) {
+        unsafe { free(this.Data); }
     }
 }

@@ -192,7 +192,7 @@ u32 CheckVariantValue(*Checker c, u32 n, u32 s, u32 v, u32 t, u32 args, bool has
         if (NType(c, a) == 0 && Unbound(c, pt, env, ne)) Unify(c, pt, CheckValue(c, a, 0), env, ne);
         u32 want = Subst(c, pt, env, ne);
         if (NType(c, a) != 0) {
-            if (!Assignable(c, NType(c, a), want)) Mismatch(c, want, NTok(c, a), NType(c, a));
+            if (!Coerce(c, a, NType(c, a), want)) Mismatch(c, want, NTok(c, a), NType(c, a));
         } else {
             ExpectType(c, a, want);
         }

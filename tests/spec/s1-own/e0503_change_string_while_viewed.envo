@@ -1,0 +1,6 @@
+// expect-error: E0503 @ 5:1
+// [own.borrow.1] a `string` cannot change while a `str` of it is kept
+string s = string.From("a");
+str v = s;
+s.Append("b");
+print(v);

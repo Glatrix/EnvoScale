@@ -9,6 +9,7 @@ struct Checker {
     Vec NSym;           // u32 per node: the symbol a name resolved to; an item's symbol
     Vec NMatched;       // u8 per node: a match pattern whose value was recorded
     Vec NMove;          // u8 per node: 1 where a use moves a whole local (check/move.envo)
+    Vec NConv;          // u8 per node: 1 where a `string` is used as a `str`
     Vec Types;          // Type
     Vec Syms;           // Sym
     Map Global;         // program scope: name -> symbol
@@ -49,6 +50,8 @@ struct Checker {
     u32 DropSym;        // the prelude's `IDrop`
     u32 OptionSym;      // the prelude's `Option` (`T?`)
     u32 ResultSym;      // the prelude's `Result`
+    u32 StringSym;      // the prelude's `string`
+    Map PreludeScope;   // the prelude's items by name, hidden or not
 }
 
 // ------------------------------------------------------------------ side tables
@@ -306,6 +309,18 @@ void LocalPushSym(*Checker c, u32 s, u32 t) {
 u32 Lookup(*Checker c, u32 tok) {
     u32 s = LocalFind(c, tok);
     if (s != 0) return s;
+    return GFindAt(c, tok);
+}
+
+// The program-scope symbol token tok names. Inside the prelude, the prelude's own items
+// come first, so a program's items of the same names cannot change what it means.
+u32 GFindAt(*Checker c, u32 tok) {
+    unsafe {
+        if (c.PreludeFile != 0xFFFFFFFF && CTok(c, tok).File == c.PreludeFile) {
+            u64 s;
+            if (MapGet(&c.PreludeScope, TokText(c, tok), &s)) return s as u32;
+        }
+    }
     return GFind(c, TokText(c, tok));
 }
 
