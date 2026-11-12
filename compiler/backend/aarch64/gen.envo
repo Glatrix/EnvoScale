@@ -35,6 +35,7 @@ struct Gen {
     List<u32> Traps;        // per panic reason: the shared stub's label, 0 until used
     u32 FirstValue;
     u32 NParams;
+    bool MacOS;             // aarch64-macos: Mach-O, and BSD system calls
 
     // ------------------------------------------------------------------ helpers
 
@@ -539,14 +540,23 @@ struct Gen {
         this.A.Extend(X9, size, signed);
     }
 
-    // Target intrinsics: `syscall` (Linux: the number in x8, the arguments in x0-x5).
+    // Target intrinsics: `syscall`. Linux: the number in x8, the arguments in x0-x5,
+    // `svc #0`, a negative errno on failure. macOS: the number in x16, `svc #0x80`, and
+    // carry set with x0 the errno on failure, made negative here as on Linux.
     void Intrinsic(ref this, in Module m, EInst inst) {
         u32 f = inst.FirstOp;
         u32 n = inst.NOps;
         if (!TextIs(inst.Str, "syscall")) Bug("a64: only the syscall intrinsic is supported");
         for (u32 k = 1; k < n; k++) this.LoadOp(m, (k - 1) as u8, f + k);
-        this.LoadOp(m, X8, f);
-        this.A.Svc();
+        if (this.MacOS) {
+            this.LoadOp(m, X16, f);
+            this.A.W(0xD4001001);                   // svc #0x80
+            this.A.W(0x54000043);                   // b.cc +8
+            this.A.W(0xCB0003E0);                   // neg x0, x0
+        } else {
+            this.LoadOp(m, X8, f);
+            this.A.Svc();
+        }
         if (inst.Result != 0) this.StoreV(inst.Result, X0);
     }
 
@@ -653,13 +663,17 @@ void AppendHex(ref string b, u64 v) {
     }
 }
 
-// Generates module m (verified and laid out) into a complete AArch64 Linux executable.
-// map, if wanted, gets a link map: each function's address and name, one per line.
-public string GenModuleA64(ref Module m, bool wantMap, ref string map) {
+// Generates module m (verified and laid out) into a complete AArch64 executable: for
+// Linux (ELF), or for macOS (Mach-O) with macos. map, if wanted, gets a link map: each
+// function's address and name, one per line.
+public string GenModuleA64(ref Module m, bool macos, bool wantMap, ref string map) {
     Gen g = new Gen {
         A = Asm.New(), FuncLabels = List<u32>.New(), GlobalLabels = List<u32>.New(),
-        BlockLabels = List<u32>.New(), Traps = List<u32>.New(), FirstValue = 0, NParams = 0
+        BlockLabels = List<u32>.New(), Traps = List<u32>.New(), FirstValue = 0, NParams = 0,
+        MacOS = macos
     };
+    u64 headers = A64_HEADERS;
+    if (macos) headers = MACHO_HEADERS;
     for (usize i = 0; i < m.Funcs.Len(); i++) g.FuncLabels.Push(0);
     for (usize i = 0; i < m.Globals.Len(); i++) g.GlobalLabels.Push(0);
     for (usize i = 0; i < m.Blocks.Len(); i++) g.BlockLabels.Push(0);
@@ -670,11 +684,21 @@ public string GenModuleA64(ref Module m, bool wantMap, ref string map) {
     // the program is position-independent: it relocates itself first (PLAN D68)
     u32 data0 = g.A.NewLabel();
     u32 relocs = g.A.NewLabel();
-    g.A.RelocStub(data0, relocs, A64_HEADERS);
-    // the entry point: __rt_init(initial stack pointer), __main(), __rt_exit(code)
-    g.A.MovRR(X9, SP);
-    g.A.SpSub(16);
-    g.A.Store(SP, 0, X9, 8);
+    g.A.RelocStub(data0, relocs, headers);
+    // the entry point: __rt_init(initial stack pointer), __main(), __rt_exit(code). On
+    // macOS dyld calls it as main(argc, argv): __rt_init gets the address of a pair
+    // holding them instead.
+    if (macos) {
+        g.A.SpSub(32);
+        g.A.Store(SP, 16, X0, 8);
+        g.A.Store(SP, 24, X1, 8);
+        g.A.AddImm(X9, SP, 16);
+        g.A.Store(SP, 0, X9, 8);
+    } else {
+        g.A.MovRR(X9, SP);
+        g.A.SpSub(16);
+        g.A.Store(SP, 0, X9, 8);
+    }
     g.A.Bl(g.FuncLabels.Get(g.FuncNamed(m, "__rt_init") as usize));
     g.A.Bl(g.FuncLabels.Get(g.FuncNamed(m, "__main") as usize));
     g.A.Store(SP, 0, X0, 8);
@@ -704,11 +728,12 @@ public string GenModuleA64(ref Module m, bool wantMap, ref string map) {
     }
     if (wantMap) {
         for (u32 i = 1; i < m.Funcs.Len() as u32; i++) {
-            AppendHex(ref map, A64_HEADERS + g.A.LabelOffset(g.FuncLabels.Get(i as usize), 0));
+            AppendHex(ref map, headers + g.A.LabelOffset(g.FuncLabels.Get(i as usize), 0));
             map.AppendByte(' ');
             map.Append(TextStr(m.Func(i).Name));
             map.AppendByte(10);
         }
     }
+    if (macos) return WriteMachO(ref g.A, data0, relocs, "envo");
     return WriteImageA64(ref g.A, data0, relocs);
 }

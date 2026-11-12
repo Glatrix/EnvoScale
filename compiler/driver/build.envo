@@ -82,7 +82,7 @@ i32 WriteOut(str path, in string data, bool executable) {
 
 // The architecture of target, as module files name it (D69).
 str ArchOf(u32 target) {
-    if (target == TARGET_A64) return "aarch64";
+    if (target == TARGET_A64 || target == TARGET_MACOS) return "aarch64";
     if (target == TARGET_WASM) return "wasm32";
     return "x86_64";
 }
@@ -92,6 +92,7 @@ str PlatformOs(str os, u32 target) {
     if (os.Len == 0) {
         if (target == TARGET_WINDOWS) return "windows";
         if (target == TARGET_WASM) return "wasm";
+        if (target == TARGET_MACOS) ToolFail("aarch64-macos programs use the libraries with `--os none` for now: the macOS adapters are not written yet (M10)", EXIT_USAGE);
         return "linux";
     }
     bool linux = target == TARGET_LINUX || target == TARGET_A64;
@@ -111,6 +112,7 @@ Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool c
     if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
     else if (target == TARGET_WASM) src.Add("<runtime>/wasm.envo", string.From(RUNTIME_WASM));
     else if (target == TARGET_A64) src.Add("<runtime>/linux_aarch64.envo", string.From(RUNTIME_A64));
+    else if (target == TARGET_MACOS) src.Add("<runtime>/macos_aarch64.envo", string.From(RUNTIME_MACOS));
     else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
     u32 prelude = 0xFFFFFFFF;
     if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
@@ -139,7 +141,8 @@ Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool c
 // Module m's code for target: an executable, or a WebAssembly module (D48).
 string GenFor(ref Module m, u32 target, bool opt, bool wantMap, ref string map) {
     if (target == TARGET_WASM) return GenWasm(m);
-    if (target == TARGET_A64) return GenModuleA64(ref m, wantMap, ref map);
+    if (target == TARGET_A64) return GenModuleA64(ref m, false, wantMap, ref map);
+    if (target == TARGET_MACOS) return GenModuleA64(ref m, true, wantMap, ref map);
     return GenModule(ref m, target, opt, wantMap, ref map);
 }
 

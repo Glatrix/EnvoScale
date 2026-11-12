@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** none open: M0–M9 and M11–M13 are done (records in §4); M10 (AArch64 and macOS) is blocked on test machines, an owner decision (§5).
+- **Current milestone:** M10 (AArch64 and macOS, §5): AArch64 Linux is done (D69); macOS is next. M0–M9 and M11–M13 are done (records in §4).
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -104,6 +104,7 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D66 | **Packages have dependencies** by path or from a registry, compiled with the package's sources. `envo.lock.envon` records each registry archive's SHA-256; a canonical archive format (`.envopkg`) makes packing reproducible; Ed25519 signatures are checked against `trust` keys. Registries are an `IRegistry` port with a folder adapter; a network registry is the owner's decision. | `tools/pkg/README.md` |
 | D67 | **The hex seed is asm0**, an assembler for the Stage 0 subset written in that subset on Stage 0's own runtime block, recorded as commented hex (`seed-linux.hex`, `seed-windows.hex`) that `hex2bin.sh`/`hex2bin.ps1` turn into the program with OS tools alone. It assembles Stage 0 to NASM's exact bytes; the build uses it when NASM is missing. | `bootstrap/seed/README.md` |
 | D68 | **Stage 1 and Stage 2 executables are W^X and ASLR-enabled** (issue #80): code and data on separate pages with their own protections; Linux programs are `ET_DYN` and relocate their 8-byte absolute addresses with a stub at the entry (no dynamic loader needed); Windows programs carry `.reloc` and `DYNAMIC_BASE`/`HIGH_ENTROPY_VA`. Both stages write identical bytes, so the D17 comparisons hold. Stage 0's own executables keep D2's layout. | `docs/architecture/stage1.md` |
+| D69 | **AArch64 Linux, tested on an arm64 machine in CI** (M10): `--target aarch64-linux`; a backend that follows the x86-64 one at -O0 instruction for instruction (values in frame slots, arguments on the stack, the same checks and NaN rules), ELF `ET_DYN` with 64 KiB pages and the D68 self-relocation stub; the runtime's OS layer is `compiler/runtime/linux_aarch64.envo`. A library module may have a file per architecture, `<name>.<arch>.envo`, taken before `<name>.envo` (the Linux adapter's `os.linux.sys`). Programs are cross-built on x86-64 (`bootstrap.sh cross`) and run on GitHub's arm64 runner (`cross-run`), free since the repository is public. | `compiler/backend/aarch64/README.md` |
 
 ## 3. Open questions
 
@@ -228,14 +229,23 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   port (D66); the hex seed, asm0, which builds Stage 0 to NASM's exact bytes from
   commented hex and the OS alone (D67). Increments 13.1–13.6.
 
-## 5. M10 — AArch64 and macOS (blocked)
+## 5. M10 — AArch64 and macOS
 
 **DoD (brief §16):** AArch64 backend, Mach-O linker, macOS OS/window/Metal adapters.
 
-M10 needs machines to test on: an AArch64 Linux machine or runner for the backend, and a
-Mac for Mach-O and the macOS adapters. None is available here, and GitHub's arm64 and
-macOS runners are billed for private repositories, so how to test is the owner's decision
-(STATUS). Until then, work moves to what M11 and M12 need first:
+M10 was blocked on machines to test on. The repository is public now, so GitHub's arm64
+Linux and macOS runners are free, and CI tests on them:
+
+| # | Increment | Tested by | State |
+|---|---|---|---|
+| 10.1 | The AArch64 backend and ELF executables, `--target aarch64-linux` (D69) | the run tests at -O0 and -O2 on CI's arm64 runner | done |
+| 10.2 | The Linux adapter for AArch64 (`os.linux.sys` per architecture) | the library's tests on the arm64 runner | done |
+| 10.3 | Mach-O executables and the macOS OS layer (`--target aarch64-macos`) | the run tests on CI's macOS runner | next |
+| 10.4 | The macOS adapters: files, processes, network, terminal | the library's tests on the macOS runner | |
+| 10.5 | The macOS window and Metal adapters | the gallery's window programs on the macOS runner | |
+| 10.6 | Registers at -O2 for AArch64 | the same tests, smaller and faster code | |
+
+Before the runners were free, work moved to what M11 and M12 needed first:
 
 - **Floats in Envo-S1** (RFC 0006): done.
 - **M11 (3D)** goes ahead of it:

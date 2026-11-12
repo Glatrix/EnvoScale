@@ -480,6 +480,12 @@ do_test() {
     tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_A64 = /' > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
     else bad 'envoc embedded aarch64 runtime' 'compiler/driver/runtime_a64.envo is stale: regenerate it with envoc1 embed compiler/runtime/linux_aarch64.envo, renaming RUNTIME_0 to RUNTIME_A64'; fi
+    # and the macOS OS layer, as RUNTIME_MACOS (compiler/driver/runtime_macos.envo; M10)
+    run "$ROOT" embed compiler/runtime/macos_aarch64.envo
+    tr -d '\r' < "$ROOT/compiler/driver/runtime_macos.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_MACOS = /' > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc embedded macOS runtime' 'compiler/driver/runtime_macos.envo is stale: regenerate it with envoc1 embed compiler/runtime/macos_aarch64.envo, renaming RUNTIME_0 to RUNTIME_MACOS'; fi
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
@@ -1321,16 +1327,17 @@ do_dist() {
 }
 
 # ------------------------------------------------------------------- cross
-# cross (M10, PLAN D69): the run programs (tests/spec/core-run, s1-run, s2-run) and the
-# library's tests (lib/**/tests, with the standard platform: `// os: none` ones with the
-# reference adapters, the others with the Linux adapter) built for aarch64-linux at -O0 and
-# -O2, each with its expected stdout, exit code and panic message, in
-# build/cross/aarch64-linux. cross-run <dir> runs them on an AArch64 Linux machine (CI's
-# arm64 runner) in a checkout, which needs no compiler: the library's tests in
-# build/envo-test/run, as `envo test` runs them.
-do_cross() {
-    do_build
-    out="$ROOT/build/cross/aarch64-linux"
+# cross (M10, PLAN D69, D70): the run programs (tests/spec/core-run, s1-run, s2-run) and
+# the library's tests (lib/**/tests) built for aarch64-linux and aarch64-macos at -O0 and
+# -O2, each with its expected stdout, exit code and panic message, in build/cross/<target>.
+# On Linux the library's tests use the Linux adapter (`// os: none` ones the reference
+# adapters); on macOS only the `// os: none` ones are built until the macOS adapters exist.
+# cross-run <dir> runs them on such a machine (CI's arm64 Linux and macOS runners) in a
+# checkout, which needs no compiler: the library's tests in build/envo-test/run, as
+# `envo test` runs them.
+cross_target() {
+    target=$1
+    out="$ROOT/build/cross/$target"
     rm -rf "$out"
     mkdir -p "$out"
     n=0
@@ -1345,32 +1352,39 @@ do_cross() {
             printf '%s\n' "$code" > "$out/$base.exit"
             printf '%s' "$panic" > "$out/$base.panic"
             for o in O0 O2; do
-                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" "$f" -o "$out/$base-$o" --target aarch64-linux) \
-                    || fail "building $f for aarch64-linux (-$o) failed"
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" "$f" -o "$out/$base-$o" --target "$target") \
+                    || fail "building $f for $target (-$o) failed"
             done
             n=$((n + 1))
         done
     done
     for f in "$ROOT"/lib/*/tests/*.envo "$ROOT"/lib/*/*/tests/*.envo "$ROOT"/lib/*/*/*/tests/*.envo; do
         [ -f "$f" ] || continue
+        os=$(sed -n 's|^// os: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+        [ "$target" = aarch64-macos ] && [ "$os" != none ] && continue
         rel=${f#"$ROOT"/lib/}
         base="lib-$(printf '%s' "${rel%.envo}" | tr '/' '-')"
         sed -n -e 's|^// expect: \(.*\)$|\1|p' -e 's|^// expect:$||p' "$f" | tr -d '\r' > "$out/$base.expected"
         printf '0\n' > "$out/$base.exit"
         printf '' > "$out/$base.panic"
-        os=$(sed -n 's|^// os: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
         for o in O0 O2; do
             if [ -n "$os" ]; then
-                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" --os "$os" "$f" -o "$out/$base-$o" --target aarch64-linux) \
-                    || fail "building $f for aarch64-linux (-$o) failed"
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" --os "$os" "$f" -o "$out/$base-$o" --target "$target") \
+                    || fail "building $f for $target (-$o) failed"
             else
-                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" "$f" -o "$out/$base-$o" --target aarch64-linux) \
-                    || fail "building $f for aarch64-linux (-$o) failed"
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" "$f" -o "$out/$base-$o" --target "$target") \
+                    || fail "building $f for $target (-$o) failed"
             fi
         done
         n=$((n + 1))
     done
-    say "cross     $n programs, at -O0 and -O2, for aarch64-linux in build/cross/aarch64-linux"
+    say "cross     $n programs, at -O0 and -O2, for $target in build/cross/$target"
+}
+
+do_cross() {
+    do_build
+    cross_target aarch64-linux
+    cross_target aarch64-macos
 }
 
 do_cross_run() {
@@ -1426,8 +1440,8 @@ case "${1:-help}" in
         say 'usage: ./bootstrap.sh <build|test|fixedpoint|check|dist|clean|help>'
         say '  build   assemble Stage 0 (with NASM, or the hex seed in bootstrap/seed without it), then build Stages 1 and 2'
         say '  dist    build, then the release archive build/dist/envoscale-<version>.tar and SHA256SUMS'
-        say '  cross   build, then the run tests for aarch64-linux in build/cross/aarch64-linux'
-        say '  cross-run <dir>  run those on an AArch64 Linux machine'
+        say '  cross   build, then the run and library tests for aarch64-linux and aarch64-macos in build/cross'
+        say '  cross-run <dir>  run those on an AArch64 Linux or macOS machine'
         say '  test    build, then run the Stage 0 and Stage 1 tests'
         say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
         say '  fixedpoint  build, then Stage 2 by itself twice at -O2 (build/stage2b, build/stage2c); they must match'

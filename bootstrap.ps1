@@ -477,6 +477,12 @@ function Invoke-Test {
     $actual = (Normalize $r.Out) -replace '(?m)^const str RUNTIME_0 = ', 'const str RUNTIME_A64 = '
     if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass 'envoc embedded aarch64 runtime' }
     else { Bad 'envoc embedded aarch64 runtime' 'compiler/driver/runtime_a64.envo is stale: regenerate it with envoc1 embed compiler/runtime/linux_aarch64.envo, renaming RUNTIME_0 to RUNTIME_A64' }
+    # and the macOS OS layer, as RUNTIME_MACOS (compiler/driver/runtime_macos.envo; M10)
+    $r = Invoke-Tool $envoc1 @('embed', 'compiler/runtime/macos_aarch64.envo') $Root
+    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\runtime_macos.envo'), $Utf8))
+    $actual = (Normalize $r.Out) -replace '(?m)^const str RUNTIME_0 = ', 'const str RUNTIME_MACOS = '
+    if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass 'envoc embedded macOS runtime' }
+    else { Bad 'envoc embedded macOS runtime' 'compiler/driver/runtime_macos.envo is stale: regenerate it with envoc1 embed compiler/runtime/macos_aarch64.envo, renaming RUNTIME_0 to RUNTIME_MACOS' }
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     $t42 = Join-Path $tmp 't42.exe'

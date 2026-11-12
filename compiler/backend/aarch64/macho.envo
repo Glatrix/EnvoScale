@@ -1,0 +1,316 @@
+// macOS executables (M10, PLAN D70): Mach-O for arm64. The system loads only programs that
+// dyld starts and that carry a code signature, so the image is a position-independent
+// MH_EXECUTE with LC_MAIN, linked to libSystem (nothing is imported from it: the runtime
+// makes system calls), and an ad-hoc signature: a code directory holding the SHA-256 of
+// each 4 KiB page, as the linker writes for unsigned builds. Code and data are in separate
+// segments (W^X); the program relocates its few absolute addresses itself (RelocStub), and
+// dyld loads it at a random address (ASLR). Segments are 64 KiB aligned (macOS pages are
+// 16 KiB).
+namespace envoc.a64;
+
+use envoc.util;
+use envoc.diag;
+
+// The code's offset in the file: the header and load commands come first.
+public const u64 MACHO_HEADERS = 0x400;
+const u64 MACHO_BASE = 0x100000000;     // the __TEXT segment's address (after __PAGEZERO)
+
+// ------------------------------------------------------------------ SHA-256 (FIPS 180-4)
+
+u32 Rotr(u32 x, u32 n) => (x >> n) | (x << (32 - n));
+
+u32 ShaK(usize i) {
+    match i {
+        0 => { return 0x428a2f98; } 1 => { return 0x71374491; } 2 => { return 0xb5c0fbcf; } 3 => { return 0xe9b5dba5; }
+        4 => { return 0x3956c25b; } 5 => { return 0x59f111f1; } 6 => { return 0x923f82a4; } 7 => { return 0xab1c5ed5; }
+        8 => { return 0xd807aa98; } 9 => { return 0x12835b01; } 10 => { return 0x243185be; } 11 => { return 0x550c7dc3; }
+        12 => { return 0x72be5d74; } 13 => { return 0x80deb1fe; } 14 => { return 0x9bdc06a7; } 15 => { return 0xc19bf174; }
+        16 => { return 0xe49b69c1; } 17 => { return 0xefbe4786; } 18 => { return 0x0fc19dc6; } 19 => { return 0x240ca1cc; }
+        20 => { return 0x2de92c6f; } 21 => { return 0x4a7484aa; } 22 => { return 0x5cb0a9dc; } 23 => { return 0x76f988da; }
+        24 => { return 0x983e5152; } 25 => { return 0xa831c66d; } 26 => { return 0xb00327c8; } 27 => { return 0xbf597fc7; }
+        28 => { return 0xc6e00bf3; } 29 => { return 0xd5a79147; } 30 => { return 0x06ca6351; } 31 => { return 0x14292967; }
+        32 => { return 0x27b70a85; } 33 => { return 0x2e1b2138; } 34 => { return 0x4d2c6dfc; } 35 => { return 0x53380d13; }
+        36 => { return 0x650a7354; } 37 => { return 0x766a0abb; } 38 => { return 0x81c2c92e; } 39 => { return 0x92722c85; }
+        40 => { return 0xa2bfe8a1; } 41 => { return 0xa81a664b; } 42 => { return 0xc24b8b70; } 43 => { return 0xc76c51a3; }
+        44 => { return 0xd192e819; } 45 => { return 0xd6990624; } 46 => { return 0xf40e3585; } 47 => { return 0x106aa070; }
+        48 => { return 0x19a4c116; } 49 => { return 0x1e376c08; } 50 => { return 0x2748774c; } 51 => { return 0x34b0bcb5; }
+        52 => { return 0x391c0cb3; } 53 => { return 0x4ed8aa4a; } 54 => { return 0x5b9cca4f; } 55 => { return 0x682e6ff3; }
+        56 => { return 0x748f82ee; } 57 => { return 0x78a5636f; } 58 => { return 0x84c87814; } 59 => { return 0x8cc70208; }
+        60 => { return 0x90befffa; } 61 => { return 0xa4506ceb; } 62 => { return 0xbef9a3f7; }
+        _ => { return 0xc67178f2; }
+    }
+}
+
+// The SHA-256 of bytes [from, to) of s, appended to digest (32 bytes).
+void Sha256(in string s, usize from, usize to, ref string digest) {
+    u32[8] h;
+    h[0] = 0x6a09e667;
+    h[1] = 0xbb67ae85;
+    h[2] = 0x3c6ef372;
+    h[3] = 0xa54ff53a;
+    h[4] = 0x510e527f;
+    h[5] = 0x9b05688c;
+    h[6] = 0x1f83d9ab;
+    h[7] = 0x5be0cd19;
+    str b = s.AsStr();
+    usize n = to - from;
+    usize total = ((n + 9 + 63) / 64) * 64;     // the message, 0x80, zeros, the 64-bit length
+    u32[64] w;
+    usize block = 0;
+    while (block < total) {
+        for (usize i = 0; i < 16; i++) {
+            u32 word = 0;
+            for (usize k = 0; k < 4; k++) {
+                usize at = block + 4 * i + k;
+                u32 byte = 0;
+                if (at < n) byte = b[from + at] as u32;
+                else if (at == n) byte = 0x80;
+                else if (at >= total - 8) byte = (((n as u64 * 8) >> (8 * (total - 1 - at)) as u64) & 0xFF) as u32;
+                word = (word << 8) | byte;
+            }
+            w[i] = word;
+        }
+        for (usize i = 16; i < 64; i++) {
+            u32 s0 = Rotr(w[i - 15], 7) ^ Rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+            u32 s1 = Rotr(w[i - 2], 17) ^ Rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16] +% s0 +% w[i - 7] +% s1;
+        }
+        u32 a = h[0];
+        u32 bb = h[1];
+        u32 c = h[2];
+        u32 d = h[3];
+        u32 e = h[4];
+        u32 f = h[5];
+        u32 g = h[6];
+        u32 hh = h[7];
+        for (usize i = 0; i < 64; i++) {
+            u32 t1 = hh +% (Rotr(e, 6) ^ Rotr(e, 11) ^ Rotr(e, 25)) +% ((e & f) ^ (~e & g)) +% ShaK(i) +% w[i];
+            u32 t2 = (Rotr(a, 2) ^ Rotr(a, 13) ^ Rotr(a, 22)) +% ((a & bb) ^ (a & c) ^ (bb & c));
+            hh = g;
+            g = f;
+            f = e;
+            e = d +% t1;
+            d = c;
+            c = bb;
+            bb = a;
+            a = t1 +% t2;
+        }
+        h[0] = h[0] +% a;
+        h[1] = h[1] +% bb;
+        h[2] = h[2] +% c;
+        h[3] = h[3] +% d;
+        h[4] = h[4] +% e;
+        h[5] = h[5] +% f;
+        h[6] = h[6] +% g;
+        h[7] = h[7] +% hh;
+        block += 64;
+    }
+    for (usize i = 0; i < 8; i++) {
+        digest.AppendByte((h[i] >> 24) as u8);
+        digest.AppendByte((h[i] >> 16 & 0xFF) as u8);
+        digest.AppendByte((h[i] >> 8 & 0xFF) as u8);
+        digest.AppendByte((h[i] & 0xFF) as u8);
+    }
+}
+
+// ------------------------------------------------------------------ the image
+
+void PutBE32(ref string f, usize at, u64 v) {
+    unsafe {
+        f.Data[at] = ((v >> 24) & 0xFF) as u8;
+        f.Data[at + 1] = ((v >> 16) & 0xFF) as u8;
+        f.Data[at + 2] = ((v >> 8) & 0xFF) as u8;
+        f.Data[at + 3] = (v & 0xFF) as u8;
+    }
+}
+
+void AppendBE32(ref string f, u64 v) {
+    f.AppendByte(((v >> 24) & 0xFF) as u8);
+    f.AppendByte(((v >> 16) & 0xFF) as u8);
+    f.AppendByte(((v >> 8) & 0xFF) as u8);
+    f.AppendByte((v & 0xFF) as u8);
+}
+
+void AppendBE64(ref string f, u64 v) {
+    AppendBE32(ref f, v >> 32);
+    AppendBE32(ref f, v & 0xFFFFFFFF);
+}
+
+// A load command's name field: 16 bytes, NUL-padded.
+void PutName(ref string f, usize at, str name) {
+    unsafe {
+        for (usize i = 0; i < name.Len; i++) f.Data[at + i] = name[i];
+    }
+}
+
+// An LC_SEGMENT_64 at `at` with nsects sections (their headers follow it).
+void Segment(ref string f, usize at, str name, u64 vmaddr, u64 vmsize, u64 fileoff, u64 filesize, u64 prot, u64 nsects) {
+    Put32(ref f, at, 0x19);                         // LC_SEGMENT_64
+    Put32(ref f, at + 4, 72 + 80 * nsects);
+    PutName(ref f, at + 8, name);
+    Put64(ref f, at + 24, vmaddr);
+    Put64(ref f, at + 32, vmsize);
+    Put64(ref f, at + 40, fileoff);
+    Put64(ref f, at + 48, filesize);
+    Put32(ref f, at + 56, prot);                    // maxprot
+    Put32(ref f, at + 60, prot);                    // initprot
+    Put32(ref f, at + 64, nsects);
+}
+
+void SectionHeader(ref string f, usize at, str sect, str seg, u64 addr, u64 size, u64 offset, u64 align, u64 flags) {
+    PutName(ref f, at, sect);
+    PutName(ref f, at + 16, seg);
+    Put64(ref f, at + 32, addr);
+    Put64(ref f, at + 40, size);
+    Put32(ref f, at + 48, offset);
+    Put32(ref f, at + 52, align);
+    Put32(ref f, at + 64, flags);
+}
+
+// Links the code and data and returns a complete signed Mach-O executable named ident.
+// The code starts with the entry point. data0 and relocs are the labels of RelocStub.
+string WriteMachO(ref Asm a, u32 data0, u32 relocs, str ident) {
+    a.DataAlign(4);
+    a.BindData(relocs);
+    u32 count = 0;
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind == FX_ABS64 && x.InData) count++;
+    }
+    a.DataU32(count as u64);
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind == FX_ABS64 && x.InData) a.DataU32(x.At as u64);
+    }
+    a.BindDataStart(data0);
+    u64 dataStart = 0;
+    usize codeLen = a.Code.Len();
+    string section = a.Link(MACHO_HEADERS, ref dataStart);
+    u64 textSize = MACHO_HEADERS + dataStart;                   // 64 KiB aligned
+    u64 dataLen = section.Len() as u64 - dataStart;
+    u64 dataSize = (dataLen + PAGE - 1) & ~(PAGE - 1);
+    if (dataSize == 0) dataSize = PAGE;
+    u64 linkOff = textSize + dataSize;
+    string f = string.New();
+    for (u64 i = 0; i < MACHO_HEADERS; i++) f.AppendByte(0);
+    f.Append(section);
+    while (f.Len() < linkOff as usize) f.AppendByte(0);
+    // __LINKEDIT: an empty string table, then the signature (16-byte aligned)
+    u64 strOff = linkOff;
+    for (u32 i = 0; i < 16; i++) f.AppendByte(0);
+    u64 sigOff = f.Len() as u64;
+    u64 nPages = (sigOff + 4095) / 4096;
+    u64 identLen = ident.Len as u64 + 1;
+    u64 cdHeader = 88;
+    u64 hashOff = cdHeader + identLen;
+    u64 cdLen = hashOff + 32 * nPages;
+    u64 sigLen = 20 + cdLen;
+    u64 linkSize = (sigOff + sigLen) - linkOff;
+    // the header and load commands
+    usize at = 32;
+    u32 ncmds = 0;
+    Segment(ref f, at, "__PAGEZERO", 0, MACHO_BASE, 0, 0, 0, 0);
+    at += 72;
+    ncmds++;
+    Segment(ref f, at, "__TEXT", MACHO_BASE, textSize, 0, textSize, 5, 1);
+    SectionHeader(ref f, at + 72, "__text", "__TEXT", MACHO_BASE + MACHO_HEADERS, codeLen as u64, MACHO_HEADERS, 2, 0x80000400);
+    at += 152;
+    ncmds++;
+    Segment(ref f, at, "__DATA", MACHO_BASE + textSize, dataSize, textSize, dataSize, 3, 1);
+    SectionHeader(ref f, at + 72, "__data", "__DATA", MACHO_BASE + textSize, dataLen, textSize, 3, 0);
+    at += 152;
+    ncmds++;
+    Segment(ref f, at, "__LINKEDIT", MACHO_BASE + linkOff, (linkSize + 0x3FFF) & ~0x3FFF, linkOff, linkSize, 1, 0);
+    at += 72;
+    ncmds++;
+    Put32(ref f, at, 0x80000022);                   // LC_DYLD_INFO_ONLY: no rebases, binds or exports
+    Put32(ref f, at + 4, 48);
+    at += 48;
+    ncmds++;
+    Put32(ref f, at, 0x2);                          // LC_SYMTAB: no symbols
+    Put32(ref f, at + 4, 24);
+    Put32(ref f, at + 16, strOff);
+    Put32(ref f, at + 20, 16);
+    at += 24;
+    ncmds++;
+    Put32(ref f, at, 0xB);                          // LC_DYSYMTAB
+    Put32(ref f, at + 4, 80);
+    at += 80;
+    ncmds++;
+    Put32(ref f, at, 0xE);                          // LC_LOAD_DYLINKER
+    Put32(ref f, at + 4, 32);
+    Put32(ref f, at + 8, 12);
+    PutName(ref f, at + 12, "/usr/lib/dyld");
+    at += 32;
+    ncmds++;
+    Put32(ref f, at, 0x80000028);                   // LC_MAIN
+    Put32(ref f, at + 4, 24);
+    Put64(ref f, at + 8, MACHO_HEADERS);            // the entry point: the start of the code
+    at += 24;
+    ncmds++;
+    Put32(ref f, at, 0x32);                         // LC_BUILD_VERSION: macOS 11.0
+    Put32(ref f, at + 4, 24);
+    Put32(ref f, at + 8, 1);
+    Put32(ref f, at + 12, 0x000B0000);
+    Put32(ref f, at + 16, 0x000B0000);
+    at += 24;
+    ncmds++;
+    Put32(ref f, at, 0xC);                          // LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib
+    Put32(ref f, at + 4, 56);
+    Put32(ref f, at + 8, 24);
+    Put32(ref f, at + 12, 2);
+    Put32(ref f, at + 16, 0x05276403);
+    Put32(ref f, at + 20, 0x00010000);
+    PutName(ref f, at + 24, "/usr/lib/libSystem.B.dylib");
+    at += 56;
+    ncmds++;
+    Put32(ref f, at, 0x1D);                         // LC_CODE_SIGNATURE
+    Put32(ref f, at + 4, 16);
+    Put32(ref f, at + 8, sigOff);
+    Put32(ref f, at + 12, sigLen);
+    at += 16;
+    ncmds++;
+    if (at as u64 > MACHO_HEADERS) ToolFail("a64: the Mach-O load commands do not fit", EXIT_INTERNAL);
+    Put32(ref f, 0, 0xFEEDFACF);                    // MH_MAGIC_64
+    Put32(ref f, 4, 0x0100000C);                    // CPU_TYPE_ARM64
+    Put32(ref f, 8, 0);
+    Put32(ref f, 12, 2);                            // MH_EXECUTE
+    Put32(ref f, 16, ncmds as u64);
+    Put32(ref f, 20, (at - 32) as u64);
+    Put32(ref f, 24, 0x00200085);                   // NOUNDEFS | DYLDLINK | TWOLEVEL | PIE
+    // the signature: a superblob holding one code directory (big-endian)
+    AppendBE32(ref f, 0xFADE0CC0);
+    AppendBE32(ref f, sigLen);
+    AppendBE32(ref f, 1);
+    AppendBE32(ref f, 0);                           // CSSLOT_CODEDIRECTORY
+    AppendBE32(ref f, 20);
+    AppendBE32(ref f, 0xFADE0C02);
+    AppendBE32(ref f, cdLen);
+    AppendBE32(ref f, 0x20400);
+    AppendBE32(ref f, 0x20002);                     // ADHOC | LINKER_SIGNED
+    AppendBE32(ref f, hashOff);
+    AppendBE32(ref f, cdHeader);                    // the identifier follows the header
+    AppendBE32(ref f, 0);                           // no special slots
+    AppendBE32(ref f, nPages);
+    AppendBE32(ref f, sigOff);                      // codeLimit
+    f.AppendByte(32);                               // hashSize
+    f.AppendByte(2);                                // SHA-256
+    f.AppendByte(0);                                // platform
+    f.AppendByte(12);                               // 4 KiB pages
+    AppendBE32(ref f, 0);                           // spare2
+    AppendBE32(ref f, 0);                           // scatterOffset
+    AppendBE32(ref f, 0);                           // teamOffset
+    AppendBE32(ref f, 0);                           // spare3
+    AppendBE64(ref f, 0);                           // codeLimit64
+    AppendBE64(ref f, 0);                           // execSegBase
+    AppendBE64(ref f, textSize);                    // execSegLimit
+    AppendBE64(ref f, 1);                           // CS_EXECSEG_MAIN_BINARY
+    for (usize i = 0; i < ident.Len; i++) f.AppendByte(ident[i]);
+    f.AppendByte(0);
+    string hashes = string.New();
+    for (u64 p = 0; p < nPages; p++) {
+        u64 end = (p + 1) * 4096;
+        if (end > sigOff) end = sigOff;
+        Sha256(f, (p * 4096) as usize, end as usize, ref hashes);
+    }
+    f.Append(hashes);
+    return f;
+}
