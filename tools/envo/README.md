@@ -1,8 +1,8 @@
 # `tools/envo`
 
-> **Status:** Experimental (M5): `new`, `build`, `run`, `check`, `test`, `fmt`,
-> `explain`, `version`. `lsp` is planned for M5.7; the other commands in
-> [`tools/README.md`](../README.md) come later.
+> **Status:** Experimental (M5): `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`,
+> `explain`, `version`. The other commands in [`tools/README.md`](../README.md) come
+> later.
 
 The unified `envo` CLI. One binary that holds the compiler (PLAN D26): it is built from
 the files in `files.txt` plus `compiler/files.txt` without `driver/main.envo`, by Stage 2
@@ -21,6 +21,7 @@ in the shared format and ends `envo` with exit code 1.
 | `envo check [dir \| file.envo...]` | Checks names, types and ownership without building |
 | `envo test [path...] [-O0] [-v]` | Builds and runs test programs and compares their output with their `// expect:` lines |
 | `envo fmt [path...] [--check \| --stdout]` | Lays out `.envo` files in the canonical format (see `fmt.envo`); `--check` lists what would change and exits 1 |
+| `envo lsp` | A language server for editors: diagnostics over JSON-RPC ([`tools/lsp`](../lsp/README.md)) |
 | `envo explain <code>` | Prints a diagnostic code's entry from `docs/spec/errors.md` and the text of the rules it cites |
 | `envo version`, `envo help` | |
 

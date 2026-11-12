@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M5 (daily tooling). M0–M4 are done; their records are in §4.
+- **Current milestone:** M6 (script runtime). M0–M5 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -66,6 +66,12 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D28 | **Running programs** goes through a new port, `Process`: start a program with arguments, wait for it, get its exit code, with its output sent to a file when asked. `envo run`, `envo test` and the language server use it. Windows gets its functions in both stages' import tables (D25). | `docs/architecture/tooling.md` |
 | D29 | **The bootstrap scripts stay** for building and testing Stages 0–2: they must work without `envo`. CI calls `envo test` for what `envo` can run (the library, the conformance suites, the examples) in place of the scripts' library block (D8, read for a self-hosting toolchain). | `adapters/ci/github/README.md` |
 | D30 | The **language server** is basic in M5: diagnostics only (`textDocument/publishDiagnostics` on open, change and save), computed by running `envo check` on the document as a child process. Hover, completion and go-to-definition need the query-based compiler (brief §8) and come later. | `tools/lsp/README.md` |
+| D31 | **The script runtime is an EIR interpreter** in `runtime/vm/`, compiled into `envo`. It runs the module the compiler makes for the host target, with the runtime in it, on host memory: pointers are host addresses, slots and globals are host allocations. Layouts, wrapping, checks and panics are the AOT program's, so the two modes agree by construction. A tiered JIT reusing the backends comes later. | `runtime/vm/README.md` |
+| D32 | The VM **forwards the two target intrinsics** (`syscall`, `wincall`) to the host, through a `match` over the import slots for `wincall`. It starts a program by setting its arguments (`__rt_set_args`) and calling `__main`, so the script sees its own arguments, not `envo`'s. A function value is a tagged function index, not a code address. | `runtime/vm/README.md` |
+| D33 | **`envo run` runs in the VM**, sandboxed; `envo run --native` builds and runs native code as M5's `run` did; `envo build` is AOT. `envo <file.envo> [args]` is `envo run`, so `#!/usr/bin/env envo` works. | `tools/envo/README.md` |
+| D34 | **Permissions** follow the brief's Deno-like model (§2.5): a script has its console and nothing else until `--allow` grants `read[:path]`, `write[:path]`, `fs[:path]` (both), `env`, `run`, `net` (for M7) or `all`. The VM checks them where it forwards system calls; a denied call fails as the OS would with "access denied", so library code sees `IoError.Denied`, and `envo` prints one note per denied capability. | `docs/architecture/script-runtime.md` |
+| D35 | **Both modes in the tests**: the bootstrap scripts run every spec run test (`core-run`, `s1-run`, `s2-run`, the multi-file programs) through `envo run --allow all` as well as natively, requiring the same output and exit code; `envo test` runs each library test in the VM too. Error tests share the front end, so they agree by construction. | `tests/README.md` |
+| D36 | **`envo repl`** keeps a session of cells: declarations accumulate, and each statement cell runs the session's program again in the VM, showing only the output that is new. A resident VM state needs incremental compilation (the query-based compiler) and comes later. | `tools/envo/README.md` |
 
 ## 3. Open questions
 
@@ -144,24 +150,28 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   passing against all three on both hosts. Increments 4.1–4.7; design in
   [`architecture/library.md`](architecture/library.md).
 
-## 5. M5 — Daily tooling
+- **M5 — Daily tooling.** The `envo` binary, holding the compiler as a library (D26):
+  `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`; packages (D27); the
+  Process port and directory listing (D28); diagnostics with a source line and `help:`;
+  `envo.eon` and `envo.json`; CI testing the library through `envo test` (D29).
+  Increments 5.1–5.8; design in [`architecture/tooling.md`](architecture/tooling.md).
 
-**DoD (brief §16):** `envo` CLI with `new`, `build`, `run`, `test`, `fmt`; diagnostics
-with error codes; basic LSP. Read here as: one `envo` binary (D26), written in Envo-S1,
-that creates, builds, runs and tests packages (D27), formats Envo source canonically,
-explains error codes, prints errors with a labelled source line, and serves
-diagnostics to editors over LSP (D30); CI uses it for the package tests (D29).
+## 5. M6 — Script runtime
+
+**DoD (brief §16):** EIR VM, REPL, shebang, sandbox permissions. Every spec test passes
+in both modes. Read here as: `envo run` interprets the program's EIR (D31, D32) with
+permissions (D34); `envo repl` (D36); `#!/usr/bin/env envo` scripts (D33); every spec
+run test gives the same output and exit code in the VM as natively (D35).
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [5.1](https://github.com/envoscale/EnvoScale/issues/88) | `FileSystem.List` and the `Process` port (D28), with reference and native adapters and conformance suites | `tests/conformance/` | done |
-| [5.2](https://github.com/envoscale/EnvoScale/issues/89) | `envo.eon`: EON reader and writer for manifests | `lib/envo/eon/tests/` | done |
-| [5.3](https://github.com/envoscale/EnvoScale/issues/90) | The compiler as a library (`envoc.build`) and packages (D27) | `tests/envo/` | done |
-| [5.4](https://github.com/envoscale/EnvoScale/issues/91) | `envo`: `new`, `build`, `run`, `test`, `check`, `explain`, `version` | `tests/envo/` | done |
-| [5.5](https://github.com/envoscale/EnvoScale/issues/92) | Diagnostics with a labelled source line and `help:` notes; `envo explain` | `tests/envo/` | done |
-| [5.6](https://github.com/envoscale/EnvoScale/issues/93) | `envo fmt`: one canonical format, comments kept | `tests/golden/fmt/` | done |
-| [5.7](https://github.com/envoscale/EnvoScale/issues/94) | `envo lsp`: diagnostics over JSON-RPC (D30), with `envo.json` | `tests/lsp/` | |
-| [5.8](https://github.com/envoscale/EnvoScale/issues/95) | CI on `envo test` (D29); M5 complete | CI | |
+| 6.1 | The EIR interpreter: every instruction, calls, slots, globals, function values, panics | `tests/spec/*-run` in the VM | |
+| 6.2 | Forwarded `syscall`/`wincall`, arguments and exit codes; `envo run` in the VM, `--native` | the run tests and library tests in both modes | |
+| 6.3 | Shebang scripts and `envo <file>` | `tests/envo/` (Linux in CI) | |
+| 6.4 | Permissions: `--allow read, write, fs, env, run, net, all` | `tests/sandbox/` | |
+| 6.5 | `envo repl` | `tests/envo/` | |
+| 6.6 | Speed: the VM's own instruction form, measured on the test programs | `tests/bench/` | |
+| 6.7 | Docs and status; M6 complete | CI | |
 
 ## 6. Risks
 

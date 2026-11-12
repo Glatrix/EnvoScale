@@ -1,0 +1,531 @@
+// envo.json: a JSON reader and writer (RFC 8259). A document is read into a tree of
+// Values; Write gives compact text back. Object members keep their order; a key may
+// appear once. Numbers keep their text; AsInt gives the value of an integer that fits
+// in i64.
+namespace envo.json;
+
+use core.text as ct;
+use alloc.text;
+
+// What a Value holds.
+public enum JsonKind {
+    Null,
+    Bool,
+    Number,
+    Str,
+    Array,
+    Object,
+}
+
+// One JSON value.
+public struct Value {
+    JsonKind Kind;
+    bool Flag;              // a Bool's value
+    bool IsInt;             // a Number that is an integer and fits in i64
+    i64 Int;                // its value
+    string Text;            // a Str's value; a Number's text
+    List<Value> Items;      // an Array's elements; an Object's values
+    List<string> Keys;      // an Object's keys, one for each of Items
+
+    static Value Make(JsonKind k) {
+        return new Value {
+            Kind = k, Flag = false, IsInt = false, Int = 0, Text = string.New(),
+            Items = List<Value>.New(), Keys = List<string>.New(),
+        };
+    }
+
+    public static Value Null() => Value.Make(JsonKind.Null);
+
+    public static Value OfBool(bool b) {
+        Value v = Value.Make(JsonKind.Bool);
+        v.Flag = b;
+        return v;
+    }
+
+    public static Value OfInt(i64 n) {
+        Value v = Value.Make(JsonKind.Number);
+        v.IsInt = true;
+        v.Int = n;
+        v.Text = text.Int(n);
+        return v;
+    }
+
+    public static Value OfStr(str s) {
+        Value v = Value.Make(JsonKind.Str);
+        v.Text = string.From(s);
+        return v;
+    }
+
+    public static Value NewArray() => Value.Make(JsonKind.Array);
+    public static Value NewObject() => Value.Make(JsonKind.Object);
+
+    public JsonKind Type(in this) => this.Kind;
+    public bool IsNull(in this) => this.Kind == JsonKind.Null;
+    public bool AsBool(in this) => this.Flag;
+    // A Str's value, or a Number's text.
+    public str AsStr(in this) => this.Text.AsStr();
+    // Is this a Number that is an integer within i64?
+    public bool HasInt(in this) => this.Kind == JsonKind.Number && this.IsInt;
+    public i64 AsInt(in this) => this.Int;
+    public usize Len(in this) => this.Items.Len();
+    public Value[] Elements(in this) => this.Items.AsSlice();
+    public str KeyAt(in this, usize i) => this.Keys.AsSlice()[i].AsStr();
+
+    // An Object's member key: one element, or none.
+    public Value[] Field(in this, str key) {
+        string[] keys = this.Keys.AsSlice();
+        for (usize i = 0; i < keys.Len; i++) {
+            if (keys[i].Equals(key)) return this.Items.AsSlice()[i..i + 1];
+        }
+        return this.Items.AsSlice()[0..0];
+    }
+
+    public bool Has(in this, str key) => this.Field(key).Len == 1;
+
+    // The member key if it is a Str.
+    public str? GetStr(in this, str key) {
+        Value[] f = this.Field(key);
+        if (f.Len == 0 || f[0].Kind != JsonKind.Str) return null;
+        return Some(f[0].Text.AsStr());
+    }
+
+    // The member key if it is an integer.
+    public i64? GetInt(in this, str key) {
+        Value[] f = this.Field(key);
+        if (f.Len == 0 || !f[0].HasInt()) return null;
+        return Some(f[0].Int);
+    }
+
+    // Appends v to an Array.
+    public void Push(ref this, Value v) {
+        this.Items.Push(v);
+    }
+
+    // Sets an Object's member key to v: in its place if it is there, else at the end.
+    public void Set(ref this, str key, Value v) {
+        for (usize i = 0; i < this.Keys.Len(); i++) {
+            if (this.Keys.AsSlice()[i].Equals(key)) {
+                this.Items.Set(i, v);
+                return;
+            }
+        }
+        this.Keys.Push(string.From(key));
+        this.Items.Push(v);
+    }
+
+    // A copy of this value.
+    public Value Clone(in this) {
+        Value v = Value.Make(this.Kind);
+        v.Flag = this.Flag;
+        v.IsInt = this.IsInt;
+        v.Int = this.Int;
+        v.Text = string.From(this.Text.AsStr());
+        foreach (var k in this.Keys.AsSlice()) v.Keys.Push(string.From(k.AsStr()));
+        foreach (var item in this.Items.AsSlice()) v.Items.Push(item.Clone());
+        return v;
+    }
+}
+
+// Why a document could not be read: the byte offset and what was wrong.
+public struct JsonError {
+    usize At;
+    string Message;
+
+    public usize Offset(in this) => this.At;
+    public str What(in this) => this.Message.AsStr();
+}
+
+// ------------------------------------------------------------------ reading
+
+// Reads one JSON value, with only white space around it.
+public Result<Value, JsonError> Parse(str src) {
+    Reader r = new Reader { Src = src, At = 0, Failed = false, ErrAt = 0, Message = string.New(), Depth = 0 };
+    r.Space();
+    Value v = r.Value();
+    if (!r.Failed) {
+        r.Space();
+        if (r.At < src.Len) r.Fail("unexpected text after the value");
+    }
+    if (r.Failed) return Err(new JsonError { At = r.ErrAt, Message = string.From(r.Message.AsStr()) });
+    return Ok(v);
+}
+
+// How deep arrays and objects may nest.
+const u32 MAX_DEPTH = 512;
+
+struct Reader {
+    str Src;
+    usize At;
+    bool Failed;
+    usize ErrAt;
+    string Message;
+    u32 Depth;
+
+    void Fail(ref this, str msg) {
+        if (this.Failed) return;
+        this.Failed = true;
+        this.ErrAt = this.At;
+        this.Message = string.From(msg);
+    }
+
+    u8 Peek(in this) {
+        if (this.At >= this.Src.Len) return 0;
+        return this.Src[this.At];
+    }
+
+    void Space(ref this) {
+        while (this.At < this.Src.Len) {
+            u8 c = this.Src[this.At];
+            if (c != ' ' && c != 9 && c != 10 && c != 13) return;
+            this.At++;
+        }
+    }
+
+    bool Word(ref this, str w) {
+        if (!ct.MatchesAt(this.Src, this.At, w)) return false;
+        this.At += w.Len;
+        return true;
+    }
+
+    Value Value(ref this) {
+        if (this.At >= this.Src.Len) {
+            this.Fail("expected a value");
+            return Value.Null();
+        }
+        u8 c = this.Peek();
+        if (c == '{') return this.Object();
+        if (c == '[') return this.Array();
+        if (c == '"') {
+            Value v = Value.Make(JsonKind.Str);
+            v.Text = this.Str();
+            return v;
+        }
+        if (c == '-' || ct.IsDigit(c)) return this.Number();
+        if (this.Word("true")) return Value.OfBool(true);
+        if (this.Word("false")) return Value.OfBool(false);
+        if (this.Word("null")) return Value.Null();
+        this.Fail("expected a value");
+        return Value.Null();
+    }
+
+    Value Object(ref this) {
+        Value obj = Value.NewObject();
+        this.Depth++;
+        if (this.Depth > MAX_DEPTH) {
+            this.Fail("nested too deeply");
+            return obj;
+        }
+        this.At++;
+        this.Space();
+        if (this.Peek() == '}') {
+            this.At++;
+            this.Depth--;
+            return obj;
+        }
+        while (!this.Failed) {
+            this.Space();
+            if (this.Peek() != '"') {
+                this.Fail("expected a string key");
+                break;
+            }
+            usize keyAt = this.At;
+            string key = this.Str();
+            if (this.Failed) break;
+            if (obj.Has(key.AsStr())) {
+                this.At = keyAt;
+                this.Fail("a key appears twice in the same object");
+                break;
+            }
+            this.Space();
+            if (this.Peek() != ':') {
+                this.Fail("expected `:` after the key");
+                break;
+            }
+            this.At++;
+            this.Space();
+            Value v = this.Value();
+            if (this.Failed) break;
+            obj.Keys.Push(key);
+            obj.Items.Push(v);
+            this.Space();
+            if (this.Peek() == ',') {
+                this.At++;
+                continue;
+            }
+            if (this.Peek() == '}') {
+                this.At++;
+                break;
+            }
+            this.Fail("expected `,` or `}`");
+        }
+        this.Depth--;
+        return obj;
+    }
+
+    Value Array(ref this) {
+        Value arr = Value.NewArray();
+        this.Depth++;
+        if (this.Depth > MAX_DEPTH) {
+            this.Fail("nested too deeply");
+            return arr;
+        }
+        this.At++;
+        this.Space();
+        if (this.Peek() == ']') {
+            this.At++;
+            this.Depth--;
+            return arr;
+        }
+        while (!this.Failed) {
+            this.Space();
+            Value v = this.Value();
+            if (this.Failed) break;
+            arr.Items.Push(v);
+            this.Space();
+            if (this.Peek() == ',') {
+                this.At++;
+                continue;
+            }
+            if (this.Peek() == ']') {
+                this.At++;
+                break;
+            }
+            this.Fail("expected `,` or `]`");
+        }
+        this.Depth--;
+        return arr;
+    }
+
+    u32 Hex4(ref this) {
+        u32 v = 0;
+        for (usize k = 0; k < 4; k++) {
+            u8 c = this.Peek();
+            u32 d = 99;
+            if (ct.IsDigit(c)) d = (c - '0') as u32;
+            else if (c >= 'a' && c <= 'f') d = (c - 'a' + 10) as u32;
+            else if (c >= 'A' && c <= 'F') d = (c - 'A' + 10) as u32;
+            if (d > 15) {
+                this.Fail("`\\u` needs four hex digits");
+                return 0;
+            }
+            v = v * 16 + d;
+            this.At++;
+        }
+        return v;
+    }
+
+    // A string's value; the opening quote is next.
+    string Str(ref this) {
+        string s = string.New();
+        usize open = this.At;
+        this.At++;
+        while (true) {
+            if (this.At >= this.Src.Len) {
+                this.At = open;
+                this.Fail("unterminated string");
+                return s;
+            }
+            u8 c = this.Src[this.At];
+            if (c == '"') {
+                this.At++;
+                return s;
+            }
+            if (c < 0x20) {
+                this.Fail("a control character in a string must be escaped");
+                return s;
+            }
+            if (c != 0x5C) {
+                s.AppendByte(c);
+                this.At++;
+                continue;
+            }
+            usize escape = this.At;
+            u8 e = 0;
+            if (this.At + 1 < this.Src.Len) e = this.Src[this.At + 1];
+            this.At += 2;
+            if (e == '"' || e == 0x5C || e == '/') s.AppendByte(e);
+            else if (e == 'b') s.AppendByte(8);
+            else if (e == 'f') s.AppendByte(12);
+            else if (e == 'n') s.AppendByte(10);
+            else if (e == 'r') s.AppendByte(13);
+            else if (e == 't') s.AppendByte(9);
+            else if (e == 'u') {
+                u32 cp = this.Hex4();
+                if (this.Failed) return s;
+                if (cp >= 0xD800 && cp <= 0xDBFF) {
+                    // a surrogate pair
+                    if (!ct.MatchesAt(this.Src, this.At, "\\u")) {
+                        this.Fail("a high surrogate must be followed by a low one");
+                        return s;
+                    }
+                    this.At += 2;
+                    u32 lo = this.Hex4();
+                    if (this.Failed) return s;
+                    if (lo < 0xDC00 || lo > 0xDFFF) {
+                        this.Fail("a high surrogate must be followed by a low one");
+                        return s;
+                    }
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                    this.At = escape;
+                    this.Fail("a low surrogate without a high one");
+                    return s;
+                }
+                AppendUtf8(ref s, cp);
+            } else {
+                this.At = escape;
+                this.Fail("unknown escape");
+                return s;
+            }
+        }
+        return s;
+    }
+
+    Value Number(ref this) {
+        usize start = this.At;
+        bool neg = false;
+        if (this.Peek() == '-') {
+            neg = true;
+            this.At++;
+        }
+        if (!ct.IsDigit(this.Peek())) {
+            this.Fail("expected a digit");
+            return Value.Null();
+        }
+        bool integral = true;
+        bool fits = true;
+        u64 mag = 0;
+        if (this.Peek() == '0') {
+            this.At++;
+            if (ct.IsDigit(this.Peek())) {
+                this.At = start;
+                this.Fail("a number cannot start with 0");
+                return Value.Null();
+            }
+        } else {
+            while (ct.IsDigit(this.Peek())) {
+                u64 d = (this.Peek() - '0') as u64;
+                if (mag > (0xFFFFFFFFFFFFFFFF - d) / 10) fits = false;
+                if (fits) mag = mag * 10 + d;
+                this.At++;
+            }
+        }
+        if (this.Peek() == '.') {
+            integral = false;
+            this.At++;
+            if (!ct.IsDigit(this.Peek())) {
+                this.Fail("expected a digit after `.`");
+                return Value.Null();
+            }
+            while (ct.IsDigit(this.Peek())) this.At++;
+        }
+        if (this.Peek() == 'e' || this.Peek() == 'E') {
+            integral = false;
+            this.At++;
+            if (this.Peek() == '+' || this.Peek() == '-') this.At++;
+            if (!ct.IsDigit(this.Peek())) {
+                this.Fail("expected a digit in the exponent");
+                return Value.Null();
+            }
+            while (ct.IsDigit(this.Peek())) this.At++;
+        }
+        Value v = Value.Make(JsonKind.Number);
+        v.Text = string.From(this.Src[start..this.At]);
+        if (integral && fits) {
+            if (neg && mag <= 0x8000000000000000) {
+                v.IsInt = true;
+                v.Int = (0 -% mag) as i64;
+            } else if (!neg && mag <= 0x7FFFFFFFFFFFFFFF) {
+                v.IsInt = true;
+                v.Int = mag as i64;
+            }
+        }
+        return v;
+    }
+}
+
+void AppendUtf8(ref string s, u32 cp) {
+    if (cp < 0x80) {
+        s.AppendByte(cp as u8);
+    } else if (cp < 0x800) {
+        s.AppendByte((0xC0 | (cp >> 6)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    } else if (cp < 0x10000) {
+        s.AppendByte((0xE0 | (cp >> 12)) as u8);
+        s.AppendByte((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        s.AppendByte((0xF0 | (cp >> 18)) as u8);
+        s.AppendByte((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        s.AppendByte((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+// ------------------------------------------------------------------ writing
+
+// Appends v as a JSON string literal.
+public void Quote(ref string s, str v) {
+    s.AppendByte('"');
+    for (usize i = 0; i < v.Len; i++) {
+        u8 c = v[i];
+        if (c == '"') {
+            s.AppendByte(0x5C);
+            s.AppendByte('"');
+        } else if (c == 0x5C) {
+            s.AppendByte(0x5C);
+            s.AppendByte(0x5C);
+        } else if (c == 10) {
+            s.Append("\\n");
+        } else if (c == 13) {
+            s.Append("\\r");
+        } else if (c == 9) {
+            s.Append("\\t");
+        } else if (c < 0x20) {
+            s.Append("\\u");
+            s.Append(text.Hex(c as u64, 4).AsStr());
+        } else {
+            s.AppendByte(c);
+        }
+    }
+    s.AppendByte('"');
+}
+
+// v as compact JSON text.
+public string Write(in Value v) {
+    string s = string.New();
+    WriteTo(ref s, v);
+    return s;
+}
+
+public void WriteTo(ref string s, in Value v) {
+    if (v.Kind == JsonKind.Null) {
+        s.Append("null");
+    } else if (v.Kind == JsonKind.Bool) {
+        if (v.Flag) s.Append("true");
+        else s.Append("false");
+    } else if (v.Kind == JsonKind.Number) {
+        s.Append(v.Text.AsStr());
+    } else if (v.Kind == JsonKind.Str) {
+        Quote(ref s, v.Text.AsStr());
+    } else if (v.Kind == JsonKind.Array) {
+        s.AppendByte('[');
+        Value[] items = v.Items.AsSlice();
+        for (usize i = 0; i < items.Len; i++) {
+            if (i > 0) s.AppendByte(',');
+            WriteTo(ref s, items[i]);
+        }
+        s.AppendByte(']');
+    } else {
+        s.AppendByte('{');
+        Value[] items = v.Items.AsSlice();
+        string[] keys = v.Keys.AsSlice();
+        for (usize i = 0; i < items.Len; i++) {
+            if (i > 0) s.AppendByte(',');
+            Quote(ref s, keys[i].AsStr());
+            s.AppendByte(':');
+            WriteTo(ref s, items[i]);
+        }
+        s.AppendByte('}');
+    }
+}

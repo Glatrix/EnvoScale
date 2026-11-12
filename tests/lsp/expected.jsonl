@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}},"serverInfo":{"name":"envo","version":"0.5.0-dev"}}}
+{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"${URI}","diagnostics":[{"range":{"start":{"line":0,"character":8},"end":{"line":0,"character":9}},"severity":1,"code":"E0101","source":"envo","message":"expected an expression, found `;`"}]}}
+{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"${URI}","diagnostics":[]}}
+{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"${URI}","diagnostics":[{"range":{"start":{"line":1,"character":16},"end":{"line":1,"character":20}},"severity":1,"code":"E0203","source":"envo","message":"unknown name `nope`\nhelp: check the spelling, or add a `use` for the namespace that declares it"}]}}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"envo lsp does not handle this method yet"}}
+{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"${URI}","diagnostics":[]}}
+{"jsonrpc":"2.0","id":3,"result":null}

@@ -5,7 +5,7 @@ this file (brief §0.4, §14.5). Tiers (brief §14.4): **Experimental** may chan
 **Preview** needs an RFC for breaking changes, **Stable** follows SemVer and editions.
 "—" means the subsystem doesn't exist yet.
 
-_Last updated: 2026-11-11._ Work is tracked on the
+_Last updated: 2026-11-12._ Work is tracked on the
 [roadmap](https://github.com/orgs/envoscale/projects/3): one epic per milestone, increments
 as sub-issues, owner decisions marked **Needs Decision**.
 
@@ -18,8 +18,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M2 | Stage 1 | **Done**: `envoc1`, written in Envo-Core, compiles Envo-Core and Envo-S1 |
 | M3 | Self-hosting | **Done**: `envoc`, written in Envo-S1, compiles itself at `-O2` to a fixed point, checked in CI on both hosts; objects and linking; ownership beyond Stage 1 (3.1–3.10, `docs/PLAN.md` §5) |
 | M4 | Foundations | **Done**: `core`, `alloc`, `ports`, `std` in Envo-S1 through `envoc --lib`; reference, Windows and Linux adapters; conformance suites passing on both hosts (4.1–4.7) |
-| M5 | Daily tooling | **In progress**: the `envo` CLI, formatter, diagnostics and LSP (`docs/PLAN.md` §5) |
-| M6–M13 | | Not started |
+| M5 | Daily tooling | **Done**: the `envo` binary (the compiler as a library) with `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`; packages; rich diagnostics; `FileSystem.List` and the `Process` port; `envo.eon`, `envo.json` (5.1–5.8) |
+| M6 | Script runtime | **Next**: EIR VM, REPL, shebang, sandbox permissions (`docs/PLAN.md` §5) |
+| M7–M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -53,6 +54,17 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | Every Envo-S1 spec test passes | `s1-syntax`, `s1-types`, `s1-own`, `s1-run`, `s1-multi` | Done |
 | Windows and Linux in CI, reproducible | 739/739 on both; Linux and Windows builds byte-identical | Done |
 
+### M5 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| `envo` CLI with `new`, `build`, `run`, `test`, `fmt` | `tools/envo/` (plus `check`, `lsp`, `explain`, `version`); one binary holding the compiler (D26) | Done |
+| Packages | `envo.envon` with a `package` block (D27); `envo new` makes one | Done |
+| Diagnostics with error codes | the shared one-line format, plus a source line, caret and `help:` from `envo`; `envo explain` reads the registry | Done |
+| Basic LSP | `envo lsp`: diagnostics over JSON-RPC (D30); `tests/lsp` | Done |
+| Running programs | `ports.IProcess` with reference, Windows and Linux adapters; `FileSystem.List`, `Environment.Var`, `CurrentDir` | Done |
+| CI uses `envo test` | the bootstrap scripts build `envo` and run `envo test lib adapters tests/conformance examples` (D29); green on both hosts | Done |
+
 ## Subsystems
 
 | Subsystem | Tier | Works | Missing | Next |
@@ -62,15 +74,15 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **Seed** (`bootstrap/seed`) | — | — | Everything (Phase B, before 1.0) | After Stage 0's `.eas` subset is final |
 | **Stage 0** (`bootstrap/stage0`) | Experimental | `envoc0` in 15k lines of assembly: `lex`, `parse`, `check`, `build`; PE/ELF output, cross-compiles; hello world is 8 KB | Fixes only (line budget used up) | — |
 | **Stage 1** (`bootstrap/stage1`) | Experimental | `envoc1` in 17k lines of Envo-Core: front end, EIR v1 with verifier, x86-64 backend, PE/ELF, runtime in Envo. Compiles Envo-Core exactly like `envoc0`, and Envo-S1 (generics, interfaces, closures, ownership, enums, views, namespaces, prelude) | Speed (no optimizer, by design: D15) | Fixes found by Stage 2 |
-| **Stage 2** (`compiler/`) | Experimental | `envoc` in Envo-S1, built by `envoc1`: `lex`, `parse`, `check`, `eir` and `build`, matching `envoc1` byte for byte on the tests and on both compilers; binary EIR, `.eo` objects and `envoc link`; `-O2`; the fixed point (D18) in CI | Borrow checking beyond Stage 1 (M3.10) | M3.10 |
+| **Stage 2** (`compiler/`) | Experimental | `envoc` in Envo-S1, built by `envoc1`: `lex`, `parse`, `check`, `eir` and `build`, matching `envoc1` byte for byte on the tests and on both compilers; binary EIR, `.eo` objects and `envoc link`; `-O2`; the fixed point (D18) in CI; `--lib` for the standard platform; the driver as a library for `envo` | `once fn` inference, non-lexical borrows ([#79](https://github.com/envoscale/EnvoScale/issues/79)) | M6: an EIR interpreter |
 | **NASM adapter** (`adapters/bootstrap/nasm`) | Experimental | `assemble.ps1`, `assemble.sh` | — | — |
-| **Build scripts** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check`, `build`, `test` on PowerShell and Git Bash | — | — |
+| **Build scripts** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check`, `build`, `test`, `fixedpoint` on PowerShell and Git Bash; build `envo` after Stage 2 and test through it | — | — |
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
 | **Runtime** (`runtime/`) | — | — | Everything | M3 (startup, panics, ARC), M6 (VM) |
-| **Standard platform** (`lib/`) | Experimental | `core` (text, fmt, math, hash), `alloc` (Map, Set, Box, text), `ports`, `std` (io, fs, path, time, env, random), in Envo-S1 through `envoc --lib` | Domain modules (`envo.*`), threads and async, floats | M5 on |
-| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment; every conformance suite passes on both hosts | Window, GPU, audio, network, threads | M6 on |
-| **Tools** (`tools/`) | — | — | Everything | M5 |
+| **Standard platform** (`lib/`) | Experimental | `core` (text, fmt, math, hash), `alloc` (Map, Set, Box, text), `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M6 on |
+| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process; every conformance suite passes on both hosts | Window, GPU, audio, network, threads | M6 on |
+| **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`, `version` | `repl`, sandboxed `run` (M6); `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` (later) | M6 |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |
 
 ## Known limitations

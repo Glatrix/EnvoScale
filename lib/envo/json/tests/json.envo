@@ -1,0 +1,99 @@
+// envo.json: reading every kind of value, escapes and surrogate pairs, numbers, member
+// order, writing back, and errors with their offsets.
+// expect: kinds null bool number str array object
+// expect: obj a=1 b=[true,null] c={"d":"e"}
+// expect: ints 0 -42 9223372036854775807 -9223372036854775808 big float
+// expect: str [a"b\c/	é😀]
+// expect: write {"x":[1,2.5,"q\"\n\u0001"],"y":{},"z":[]}
+// expect: round trip same
+// expect: built {"name":"envo","n":7,"ok":false,"list":[null]}
+// expect: err 1: expected a value
+// expect: err 8: expected `,` or `}`
+// expect: err 7: a key appears twice in the same object
+// expect: err 1: a number cannot start with 0
+// expect: err 2: unknown escape
+// expect: err 2: a low surrogate without a high one
+// expect: err 3: unexpected text after the value
+// expect: err 1: unterminated string
+// expect: err 3: a control character in a string must be escaped
+use envo.json;
+use alloc.text;
+
+void Fails(str src) {
+    Result<json.Value, json.JsonError> r = json.Parse(src);
+    match r {
+        Ok(_) => { print("err none"); }
+        Err(e) => {
+            write(1, "err ");
+            write(1, text.Uint(e.Offset() as u64).AsStr());
+            write(1, ": ");
+            print(e.What());
+        }
+    }
+}
+
+json.Value kinds = json.Parse(" [null, true, 1.5, \"s\", [], {}] ").Unwrap();
+write(1, "kinds");
+foreach (var k in kinds.Elements()) {
+    json.JsonKind t = k.Type();
+    if (t == json.JsonKind.Null) write(1, " null");
+    if (t == json.JsonKind.Bool) write(1, " bool");
+    if (t == json.JsonKind.Number) write(1, " number");
+    if (t == json.JsonKind.Str) write(1, " str");
+    if (t == json.JsonKind.Array) write(1, " array");
+    if (t == json.JsonKind.Object) write(1, " object");
+}
+print("");
+
+json.Value obj = json.Parse("{\"a\": 1, \"b\": [true, null], \"c\": {\"d\": \"e\"}}").Unwrap();
+write(1, "obj");
+for (usize i = 0; i < obj.Len(); i++) {
+    write(1, " ");
+    write(1, obj.KeyAt(i));
+    write(1, "=");
+    write(1, json.Write(obj.Elements()[i]).AsStr());
+}
+print("");
+
+json.Value ints = json.Parse("[0, -42, 9223372036854775807, -9223372036854775808, 9223372036854775808, 1e3]").Unwrap();
+write(1, "ints");
+foreach (var n in ints.Elements()) {
+    write(1, " ");
+    if (n.HasInt()) write(1, text.Int(n.AsInt()).AsStr());
+    else if (n.AsStr().Len > 5) write(1, "big");
+    else write(1, "float");
+}
+print("");
+
+json.Value s = json.Parse("\"a\\\"b\\\\c\\/\\t\\u00e9\\ud83d\\ude00\"").Unwrap();
+write(1, "str [");
+write(1, s.AsStr());
+print("]");
+
+json.Value w = json.Parse("{\"x\":[1,2.5,\"q\\\"\\n\\u0001\"],\"y\":{},\"z\":[]}").Unwrap();
+string written = json.Write(w);
+write(1, "write ");
+print(written.AsStr());
+json.Value again = json.Parse(written.AsStr()).Unwrap();
+if (json.Write(again).Equals(written.AsStr())) print("round trip same");
+
+json.Value b = json.Value.NewObject();
+b.Set("name", json.Value.OfStr("envo"));
+b.Set("n", json.Value.OfInt(7));
+b.Set("ok", json.Value.OfBool(true));
+b.Set("ok", json.Value.OfBool(false));
+json.Value list = json.Value.NewArray();
+list.Push(json.Value.Null());
+b.Set("list", list);
+write(1, "built ");
+print(json.Write(b).AsStr());
+
+Fails(" ");
+Fails("{\"a\": 1 \"b\": 2}");
+Fails("{\"a\":1,\"a\":2}");
+Fails("[01]");
+Fails("[\"\\x\"]");
+Fails("[\"\\udc00\"]");
+Fails("{} x");
+Fails(" \"abc");
+Fails(" \"a\tb\"");

@@ -675,6 +675,29 @@ do_test() {
     rc=$?
     set -e
     if [ "$rc" -eq 0 ]; then pass; else bad 'envo fmt --check (run envo fmt on these files)' "$(cat "$TMP/out" "$TMP/err")"; fi
+    # envo lsp: tests/lsp/session.jsonl, framed, piped in; the bodies it writes back must
+    # be tests/lsp/expected.jsonl (tests/lsp/README.md)
+    say 'envo lsp: tests/lsp/session.jsonl'
+    lspdir="$ROOT/build/run-lsp"
+    mkdir -p "$lspdir"
+    # Git Bash on Windows: the URI needs the Windows form of the path (C:/...)
+    if command -v cygpath > /dev/null 2>&1; then uri="file:///$(cygpath -m "$lspdir")/doc.envo"
+    else uri="file://$lspdir/doc.envo"; fi
+    : > "$TMP/lsp-in"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(printf '%s' "$line" | tr -d '\r')
+        [ -n "$line" ] || continue
+        body=$(printf '%s' "$line" | sed "s|[\$]{URI}|$uri|g")
+        printf 'Content-Length: %d\r\n\r\n%s' "$(printf '%s' "$body" | wc -c | tr -d ' ')" "$body" >> "$TMP/lsp-in"
+    done < "$ROOT/tests/lsp/session.jsonl"
+    set +e
+    (cd "$lspdir" && "$envo" lsp) < "$TMP/lsp-in" > "$TMP/out" 2> "$TMP/err"
+    rc=$?
+    set -e
+    tr -d '\r' < "$TMP/out" | sed 's/Content-Length: [0-9]*$//' | sed 's/^Content-Length: [0-9]*$//' | grep -v '^$' | sed "s|$uri|\${URI}|g" > "$TMP/actual" || true
+    tr -d '\r' < "$ROOT/tests/lsp/expected.jsonl" | grep -v '^$' > "$TMP/expected"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envo lsp' "exit $rc: $(cat "$TMP/err")"; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
     # Library resolution errors (M4.1): `// lib: root` checks against tests/spec/lib/root
     # instead of the repository
     say 'stage 2 spec tests: tests/spec/lib'

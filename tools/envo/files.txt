@@ -3,3 +3,4 @@ tools/envo/package.envo
 tools/envo/test.envo
 tools/envo/explain.envo
 tools/envo/fmt.envo
+tools/envo/lsp.envo

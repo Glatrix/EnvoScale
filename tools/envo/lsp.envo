@@ -1,0 +1,502 @@
+// `envo lsp`: a language server for editors (PLAN D30), over JSON-RPC on standard input
+// and output (the Language Server Protocol's base protocol: a `Content-Length` header,
+// a blank line, then the JSON body). It gives diagnostics only: when a document is
+// opened, changed or saved, its text goes to a scratch file and a child `envo check`
+// checks it (with the rest of its package, if it is in one); the first error comes back
+// as the document's diagnostic, with its `help:` line. Hover, completion and
+// go-to-definition need the query-based compiler (brief section 8) and come later.
+use std.fs;
+use std.env;
+use std.path;
+use std.process;
+use core.text as ct;
+use alloc.text;
+use envo.json;
+use envo.eon;
+use ports.{IConsole, IoError};
+use platform;
+
+struct Server {
+    string Buf;                 // bytes read and not yet used
+    bool Ended;                 // standard input has ended
+    bool ShutDown;              // `shutdown` was received
+    List<string> Checked;       // documents whose check put up diagnostics
+    List<string> Shown;         // for each, the URI they are shown on
+    string Self;                // this program, to run `envo check`
+}
+
+// Where the next message is in b: 0 if b does not hold all of it yet, 1 if it does (its
+// body is length bytes at bodyAt), 2 if b starts with headers that have no length (to
+// drop, up to bodyAt).
+u32 Frame(str b, ref usize bodyAt, ref usize length) {
+    usize? head = ct.IndexOf(b, "\r\n\r\n");
+    if (head.IsNone()) return 0;
+    bodyAt = head.Unwrap() + 4;
+    length = 0;
+    bool found = false;
+    // the headers, one per line; only Content-Length matters
+    str headers = b[0..head.Unwrap()];
+    usize at = 0;
+    while (at <= headers.Len) {
+        usize end = at;
+        while (end < headers.Len && headers[end] != 13) end++;
+        str line = headers[at..end];
+        // a byte order mark some writers put first
+        if (line.Len >= 3 && line[0] == 0xEF && line[1] == 0xBB && line[2] == 0xBF) line = line[3..line.Len];
+        if (line.Len >= 15 && ct.EqualsIgnoreCase(line[0..15], "content-length:")) {
+            str num = ct.Trim(line[15..line.Len]);
+            for (usize i = 0; i < num.Len; i++) {
+                if (ct.IsDigit(num[i])) length = length * 10 + (num[i] - '0') as usize;
+            }
+            found = true;
+        }
+        at = end + 2;
+    }
+    if (!found) return 2;
+    if (b.Len >= bodyAt + length) return 1;
+    return 0;
+}
+
+// The next message's body, or "" at the end of the input.
+string ReadMessage(ref Server s) {
+    var con = platform.Console();
+    while (true) {
+        usize bodyAt = 0;
+        usize length = 0;
+        u32 state = Frame(s.Buf.AsStr(), ref bodyAt, ref length);
+        if (state == 2) {
+            // not a message: drop its headers
+            string rest = string.From(s.Buf.AsStr()[bodyAt..s.Buf.Len()]);
+            s.Buf = rest;
+            continue;
+        }
+        if (state == 1) {
+            string body = string.From(s.Buf.AsStr()[bodyAt..bodyAt + length]);
+            string rest = string.From(s.Buf.AsStr()[bodyAt + length..s.Buf.Len()]);
+            s.Buf = rest;
+            return body;
+        }
+        if (s.Ended) return string.New();
+        u8[4096] chunk;
+        usize n = con.Read(chunk[0..4096]);
+        if (n == 0) {
+            s.Ended = true;
+            continue;
+        }
+        for (usize i = 0; i < n; i++) s.Buf.AppendByte(chunk[i]);
+    }
+    return string.New();
+}
+
+usize Min(usize a, usize b) {
+    if (a < b) return a;
+    return b;
+}
+
+void Send(in json.Value msg) {
+    string body = json.Write(msg);
+    string framed = string.From("Content-Length: ");
+    framed.Append(text.Uint(body.Len() as u64).AsStr());
+    framed.Append("\r\n\r\n");
+    framed.Append(body.AsStr());
+    var con = platform.Console();
+    con.Out(framed.AsStr());
+}
+
+json.Value Envelope() {
+    json.Value m = json.Value.NewObject();
+    m.Set("jsonrpc", json.Value.OfStr("2.0"));
+    return m;
+}
+
+void Respond(in json.Value id, json.Value result) {
+    json.Value m = Envelope();
+    m.Set("id", id.Clone());
+    m.Set("result", result);
+    Send(m);
+}
+
+void RespondError(in json.Value id, i64 code, str message) {
+    json.Value m = Envelope();
+    m.Set("id", id.Clone());
+    json.Value e = json.Value.NewObject();
+    e.Set("code", json.Value.OfInt(code));
+    e.Set("message", json.Value.OfStr(message));
+    m.Set("error", e);
+    Send(m);
+}
+
+// ------------------------------------------------------------------ URIs
+
+u8 HexVal(u8 c) {
+    if (ct.IsDigit(c)) return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+
+// The path of a file: URI ("" for another scheme). `file:///C:/x` gives `C:/x`.
+string UriToPath(str uri) {
+    if (!ct.StartsWith(uri, "file://")) return string.New();
+    str rest = uri[7..uri.Len];
+    string p = string.New();
+    usize i = 0;
+    while (i < rest.Len) {
+        if (rest[i] == '%' && i + 2 < rest.Len) {
+            p.AppendByte(HexVal(rest[i + 1]) * 16 + HexVal(rest[i + 2]));
+            i += 3;
+        } else {
+            p.AppendByte(rest[i]);
+            i++;
+        }
+    }
+    str ps = p.AsStr();
+    // `/C:/x` is a Windows path
+    if (ps.Len >= 3 && ps[0] == '/' && ct.IsAlpha(ps[1]) && ps[2] == ':') return string.From(ps[1..ps.Len]);
+    return p;
+}
+
+// The file: URI of an absolute path.
+string PathToUri(str p) {
+    string u = string.From("file://");
+    if (p.Len >= 2 && ct.IsAlpha(p[0]) && p[1] == ':') u.AppendByte('/');
+    for (usize i = 0; i < p.Len; i++) {
+        u8 c = p[i];
+        if (c == 0x5C) {
+            u.AppendByte('/');
+        } else if (ct.IsAlnum(c) || c == '/' || c == '.' || c == '-' || c == '_' || c == '~' || c == ':' || c >= 0x80) {
+            u.AppendByte(c);
+        } else {
+            u.AppendByte('%');
+            u.Append(text.Hex(c as u64, 2).AsStr());
+        }
+    }
+    return u;
+}
+
+// Paths compared with `\` as `/`.
+bool SamePath(str a, str b) {
+    if (a.Len != b.Len) return false;
+    for (usize i = 0; i < a.Len; i++) {
+        u8 x = a[i];
+        u8 y = b[i];
+        if (x == 0x5C) x = '/';
+        if (y == 0x5C) y = '/';
+        if (x != y) return false;
+    }
+    return true;
+}
+
+// ------------------------------------------------------------------ diagnostics
+
+// The package folder that holds dir, or "".
+string PackageAbove(str dir) {
+    string d = string.From(dir);
+    for (usize i = 0; i < 16 && d.Len() > 0; i++) {
+        string m = path.Join(d.AsStr(), "envo.envon");
+        if (fs.IsFile(m.AsStr())) {
+            Result<eon.Value, eon.ParseError> r = eon.Load(m.AsStr());
+            match r {
+                Ok(doc) => {
+                    if (doc.Has("package")) return d;
+                }
+                Err(_) => {}
+            }
+            return string.New();
+        }
+        str up = path.Parent(d.AsStr());
+        if (up.Len == 0 || up.Len == d.Len()) break;
+        string next = string.From(up);
+        d = next;
+    }
+    return string.New();
+}
+
+// The UTF-16 offset of character column col (from 1) in line (from 1) of text, as LSP
+// positions count; and in end, the offset after the word there.
+usize Utf16Col(str t, u32 line, u32 col, ref usize end) {
+    usize at = 0;
+    for (u32 l = 1; l < line && at < t.Len; l++) {
+        while (at < t.Len && t[at] != 10) at++;
+        at++;
+    }
+    usize units = 0;
+    u32 c = 1;
+    while (at < t.Len && t[at] != 10 && c < col) {
+        u8 b = t[at];
+        if (b & 0xC0 != 0x80) {
+            c++;
+            if (b >= 0xF0) units += 2;
+            else units++;
+        }
+        at++;
+    }
+    end = units + 1;
+    usize k = at;
+    if (k < t.Len && (ct.IsAlnum(t[k]) || t[k] == '_')) {
+        end = units;
+        while (k < t.Len && (ct.IsAlnum(t[k]) || t[k] == '_')) {
+            end++;
+            k++;
+        }
+    }
+    return units;
+}
+
+json.Value Position(usize line, usize ch) {
+    json.Value p = json.Value.NewObject();
+    p.Set("line", json.Value.OfInt(line as i64));
+    p.Set("character", json.Value.OfInt(ch as i64));
+    return p;
+}
+
+void Publish(str uri, json.Value diagnostics) {
+    json.Value m = Envelope();
+    m.Set("method", json.Value.OfStr("textDocument/publishDiagnostics"));
+    json.Value p = json.Value.NewObject();
+    p.Set("uri", json.Value.OfStr(uri));
+    p.Set("diagnostics", diagnostics);
+    m.Set("params", p);
+    Send(m);
+}
+
+// Forgets what checking doc put up: clears it, unless keep is that URI or another
+// document's check shows something there.
+void Forget(ref Server s, str doc, str keep) {
+    List<string> checked = List<string>.New();
+    List<string> shown = List<string>.New();
+    string old = string.New();
+    for (usize i = 0; i < s.Checked.Len(); i++) {
+        str c = s.Checked.AsSlice()[i].AsStr();
+        str u = s.Shown.AsSlice()[i].AsStr();
+        if (ct.Compare(c, doc) == 0) {
+            old = string.From(u);
+        } else {
+            checked.Push(string.From(c));
+            shown.Push(string.From(u));
+        }
+    }
+    s.Checked = checked;
+    s.Shown = shown;
+    if (old.Len() == 0 || ct.Compare(old.AsStr(), keep) == 0) return;
+    foreach (var u in s.Shown.AsSlice()) {
+        if (u.Equals(old.AsStr())) return;
+    }
+    Publish(old.AsStr(), json.Value.NewArray());
+}
+
+// Checks the document at uri, whose text is t, and publishes what is wrong with it.
+void Diagnose(ref Server s, str uri, str t) {
+    string file = UriToPath(uri);
+    if (file.Len() == 0) return;
+    str dir = path.Parent(file.AsStr());
+    string work = path.Join(dir, "build/envo-lsp");
+    if (fs.CreateDirAll(work.AsStr()).IsErr()) return;
+    string scratch = path.Join(work.AsStr(), path.FileName(file.AsStr()));
+    if (fs.WriteText(scratch.AsStr(), t).IsErr()) return;
+    // the files to check: the package's, with the scratch copy for this document
+    List<string> files = List<string>.New();
+    files.Push(string.From(scratch.AsStr()));
+    string root = PackageAbove(dir);
+    if (root.Len() > 0) {
+        List<string> found = List<string>.New();
+        Walk(root.AsStr(), ref found, false, false);
+        string mainFile = path.Join(root.AsStr(), "main.envo");
+        bool inSources = false;
+        foreach (var f in found.AsSlice()) {
+            if (SamePath(f.AsStr(), file.AsStr())) inSources = true;
+        }
+        // a program file goes with main.envo; a test goes with the sources except main.envo
+        if (inSources && fs.IsFile(mainFile.AsStr()) && !SamePath(file.AsStr(), mainFile.AsStr())) {
+            List<string> withMain = List<string>.New();
+            withMain.Push(string.From(mainFile.AsStr()));
+            withMain.Push(string.From(scratch.AsStr()));
+            files = withMain;
+        }
+        foreach (var f in found.AsSlice()) {
+            if (SamePath(f.AsStr(), file.AsStr()) || SamePath(f.AsStr(), mainFile.AsStr())) continue;
+            files.Push(string.From(f.AsStr()));
+        }
+    }
+    string log = path.Join(work.AsStr(), "check.txt");
+    List<str> args = List<str>.New();
+    args.Push("check");
+    foreach (var f in files.AsSlice()) args.Push(f.AsStr());
+    Result<i32, IoError> r = process.RunIn(s.Self.AsStr(), args.AsSlice(), "", log.AsStr(), log.AsStr());
+    json.Value diags = json.Value.NewArray();
+    string target = string.From(uri);
+    if (r.IsOk() && r.Unwrap() != 0) {
+        Result<string, IoError> lr = fs.ReadText(log.AsStr());
+        string logText = string.New();
+        if (lr.IsOk()) logText = lr.Unwrap();
+        str o = logText.AsStr();
+        usize end = 0;
+        while (end < o.Len && o[end] != 10 && o[end] != 13) end++;
+        str first = o[0..end];
+        string help = string.New();
+        usize? h = ct.IndexOf(o, "\nhelp: ");
+        if (h.IsSome()) {
+            usize hs = h.Unwrap() + 1;
+            usize he = hs;
+            while (he < o.Len && o[he] != 10 && o[he] != 13) he++;
+            help = string.From(o[hs..he]);
+        }
+        // path:line:col: error[E####]: message
+        usize? e = ct.IndexOf(first, ": error[");
+        u32 line = 1;
+        u32 col = 1;
+        string code = string.New();
+        string message = string.From(first);
+        string errPath = string.New();
+        if (e.IsSome()) {
+            str loc = first[0..e.Unwrap()];
+            str rest = first[e.Unwrap() + 8..first.Len];
+            usize? close = ct.IndexOf(rest, "]: ");
+            if (close.IsSome()) {
+                code = string.From(rest[0..close.Unwrap()]);
+                message = string.From(rest[close.Unwrap() + 3..rest.Len]);
+            }
+            usize? c2 = ct.LastIndexOf(loc, ":");
+            if (c2.IsSome()) {
+                str colText = loc[c2.Unwrap() + 1..loc.Len];
+                str before = loc[0..c2.Unwrap()];
+                usize? c1 = ct.LastIndexOf(before, ":");
+                if (c1.IsSome()) {
+                    str lineText = before[c1.Unwrap() + 1..before.Len];
+                    errPath = string.From(before[0..c1.Unwrap()]);
+                    line = 0;
+                    col = 0;
+                    for (usize i = 0; i < lineText.Len; i++) line = line * 10 + (lineText[i] - '0') as u32;
+                    for (usize i = 0; i < colText.Len; i++) col = col * 10 + (colText[i] - '0') as u32;
+                }
+            }
+        }
+        if (help.Len() > 0) {
+            message.AppendByte(10);
+            message.Append(help.AsStr());
+        }
+        // the error is in this document, or in another file of its package
+        str docText = t;
+        string other = string.New();
+        if (errPath.Len() > 0 && !SamePath(errPath.AsStr(), scratch.AsStr())) {
+            target = PathToUri(errPath.AsStr());
+            Result<string, IoError> ot = fs.ReadText(errPath.AsStr());
+            if (ot.IsOk()) other = ot.Unwrap();
+            docText = other.AsStr();
+        }
+        if (line == 0) line = 1;
+        if (col == 0) col = 1;
+        usize endCh = 0;
+        usize ch = Utf16Col(docText, line, col, ref endCh);
+        json.Value range = json.Value.NewObject();
+        range.Set("start", Position((line - 1) as usize, ch));
+        range.Set("end", Position((line - 1) as usize, endCh));
+        json.Value d = json.Value.NewObject();
+        d.Set("range", range);
+        d.Set("severity", json.Value.OfInt(1));
+        if (code.Len() > 0) d.Set("code", json.Value.OfStr(code.AsStr()));
+        d.Set("source", json.Value.OfStr("envo"));
+        d.Set("message", json.Value.OfStr(message.AsStr()));
+        diags.Push(d);
+    }
+    // what this document's last check showed elsewhere goes; the new result replaces it
+    Forget(ref s, uri, target.AsStr());
+    bool some = diags.Len() > 0;
+    Publish(target.AsStr(), diags);
+    if (some) {
+        s.Checked.Push(string.From(uri));
+        s.Shown.Push(string.From(target.AsStr()));
+    }
+}
+
+// The text a didChange carries: the last full-text change.
+string ChangedText(in json.Value params) {
+    json.Value[] changes = params.Field("contentChanges");
+    if (changes.Len == 0 || changes[0].Len() == 0) return string.New();
+    json.Value[] all = changes[0].Elements();
+    str? t = all[all.Len - 1].GetStr("text");
+    if (t.IsNone()) return string.New();
+    return string.From(t.Unwrap());
+}
+
+json.Value Capabilities() {
+    json.Value sync = json.Value.NewObject();
+    sync.Set("openClose", json.Value.OfBool(true));
+    sync.Set("change", json.Value.OfInt(1));       // full text
+    json.Value save = json.Value.NewObject();
+    save.Set("includeText", json.Value.OfBool(false));
+    sync.Set("save", save);
+    json.Value caps = json.Value.NewObject();
+    caps.Set("textDocumentSync", sync);
+    json.Value info = json.Value.NewObject();
+    info.Set("name", json.Value.OfStr("envo"));
+    info.Set("version", json.Value.OfStr(ENVO_VERSION));
+    json.Value result = json.Value.NewObject();
+    result.Set("capabilities", caps);
+    result.Set("serverInfo", info);
+    return result;
+}
+
+// `envo lsp`: serves until `exit`; exit code 0 if `shutdown` came first.
+i32 CmdEnvoLsp(usize from) {
+    if (env.ArgCount() != from) EnvoFail("envo lsp takes no arguments; editors start it and talk over standard input and output", 2);
+    // the child `envo check` needs the library
+    EnvoHome();
+    Server s = new Server {
+        Buf = string.New(), Ended = false, ShutDown = false, Checked = List<string>.New(),
+        Shown = List<string>.New(),
+        Self = string.From(env.Arg(0)),
+    };
+    while (true) {
+        string body = ReadMessage(ref s);
+        if (body.Len() == 0) return 1;      // the input ended without `exit`
+        Result<json.Value, json.JsonError> pr = json.Parse(body.AsStr());
+        if (pr.IsErr()) {
+            RespondError(json.Value.Null(), -32700, "the message is not valid JSON");
+            continue;
+        }
+        json.Value msg = pr.Unwrap();
+        str? method = msg.GetStr("method");
+        json.Value[] id = msg.Field("id");
+        json.Value[] params = msg.Field("params");
+        if (method.IsNone()) continue;      // a response to us: nothing is asked
+        str m = method.Unwrap();
+        if (ct.Compare(m, "initialize") == 0 && id.Len == 1) {
+            Respond(id[0], Capabilities());
+        } else if (ct.Compare(m, "shutdown") == 0 && id.Len == 1) {
+            s.ShutDown = true;
+            Respond(id[0], json.Value.Null());
+        } else if (ct.Compare(m, "exit") == 0) {
+            if (s.ShutDown) return 0;
+            return 1;
+        } else if (ct.Compare(m, "textDocument/didOpen") == 0 && params.Len == 1) {
+            json.Value[] doc = params[0].Field("textDocument");
+            if (doc.Len == 1 && doc[0].GetStr("uri").IsSome() && doc[0].GetStr("text").IsSome()) {
+                Diagnose(ref s, doc[0].GetStr("uri").Unwrap(), doc[0].GetStr("text").Unwrap());
+            }
+        } else if (ct.Compare(m, "textDocument/didChange") == 0 && params.Len == 1) {
+            json.Value[] doc = params[0].Field("textDocument");
+            string changed = ChangedText(params[0]);
+            if (doc.Len == 1 && doc[0].GetStr("uri").IsSome()) Diagnose(ref s, doc[0].GetStr("uri").Unwrap(), changed.AsStr());
+        } else if (ct.Compare(m, "textDocument/didSave") == 0 && params.Len == 1) {
+            json.Value[] doc = params[0].Field("textDocument");
+            if (doc.Len == 1 && doc[0].GetStr("uri").IsSome()) {
+                str uri = doc[0].GetStr("uri").Unwrap();
+                string file = UriToPath(uri);
+                Result<string, IoError> t = fs.ReadText(file.AsStr());
+                if (t.IsOk()) Diagnose(ref s, uri, t.Unwrap().AsStr());
+            }
+        } else if (ct.Compare(m, "textDocument/didClose") == 0 && params.Len == 1) {
+            json.Value[] doc = params[0].Field("textDocument");
+            if (doc.Len == 1 && doc[0].GetStr("uri").IsSome()) {
+                // a closed document shows nothing, and what its check showed goes
+                str uri = doc[0].GetStr("uri").Unwrap();
+                Forget(ref s, uri, uri);
+                Publish(uri, json.Value.NewArray());
+            }
+        } else if (id.Len == 1) {
+            RespondError(id[0], -32601, "envo lsp does not handle this method yet");
+        }
+    }
+    return 0;
+}

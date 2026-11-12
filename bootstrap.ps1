@@ -662,6 +662,38 @@ function Invoke-Test {
     }
     $r = Invoke-Tool $envo @('fmt', '--check', 'lib', 'adapters', 'tools', 'tests/conformance', 'compiler', 'bootstrap/stage1', 'examples') $Root
     if ($r.Code -eq 0) { Pass 'envo fmt --check' } else { Bad 'envo fmt --check (run envo fmt on these files)' "$($r.Out.Trim()) $($r.Err.Trim())" }
+    # envo lsp: tests\lsp\session.jsonl, framed, piped in; the bodies it writes back must
+    # be tests\lsp\expected.jsonl (tests/lsp/README.md)
+    Say 'envo lsp: tests/lsp/session.jsonl'
+    $lspDir = Join-Path $Root 'build\run-lsp'
+    New-Item -ItemType Directory -Force $lspDir | Out-Null
+    $uri = 'file:///' + ((Join-Path $lspDir 'doc.envo') -replace '\\', '/')
+    $framed = New-Object System.Text.StringBuilder
+    foreach ($line in [IO.File]::ReadAllLines((Join-Path $Root 'tests\lsp\session.jsonl'), $Utf8)) {
+        if ($line.Trim() -eq '') { continue }
+        $body = $line.Replace('${URI}', $uri)
+        [void]$framed.Append("Content-Length: $($Utf8.GetByteCount($body))`r`n`r`n$body")
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $envo
+    $psi.Arguments = 'lsp'
+    $psi.WorkingDirectory = $lspDir
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $Utf8
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $bytes = $Utf8.GetBytes($framed.ToString())
+    $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    # the raw stream: closing the StreamWriter would add a byte order mark
+    $p.StandardInput.BaseStream.Close()
+    $p.WaitForExit()
+    $got = (($outTask.Result -replace "Content-Length: \d+\r\n\r\n", "`n").Trim()).Replace($uri, '${URI}')
+    $want = (Normalize ([IO.File]::ReadAllText((Join-Path $Root 'tests\lsp\expected.jsonl'), $Utf8))).Trim()
+    if ($p.ExitCode -eq 0 -and $got -eq $want) { Pass 'envo lsp' } else { Bad 'envo lsp' "exit $($p.ExitCode): $($errTask.Result.Trim())"; Show-Diff "$want`n" "$got`n" }
     # Library resolution errors (M4.1): `// lib: root` checks against tests\spec\lib\root
     # instead of the repository
     Say 'stage 2 spec tests: tests/spec/lib'

@@ -33,6 +33,7 @@ void EnvoUsage(i32 fd) {
     write(fd, "                          (default: the current directory)\n");
     write(fd, "  fmt [path...] [--check | --stdout]\n");
     write(fd, "                          lay out .envo files in the canonical format\n");
+    write(fd, "  lsp                     serve diagnostics to an editor (Language Server Protocol)\n");
     write(fd, "  explain <code>          explain a diagnostic code, such as E0214\n");
     write(fd, "  version                 print the version\n");
     write(fd, "  help                    print this message\n");
@@ -349,6 +350,7 @@ if (Eq(command, "check")) return CmdEnvoCheck(2);
 if (Eq(command, "test")) return CmdEnvoTest(2);
 if (Eq(command, "explain")) return CmdEnvoExplain(2);
 if (Eq(command, "fmt")) return CmdEnvoFmt(2);
+if (Eq(command, "lsp")) return CmdEnvoLsp(2);
 string msg = string.From("unknown command '");
 msg.Append(command);
 msg.Append("'; run `envo help` for the list");

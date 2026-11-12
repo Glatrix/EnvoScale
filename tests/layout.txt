@@ -128,6 +128,7 @@ tests/diff
 tests/envo
 tests/fuzz
 tests/golden
+tests/lsp
 tests/spec
 tests/vectors
 tools

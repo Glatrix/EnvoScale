@@ -1,8 +1,8 @@
 # `tools/` — the `envo` toolchain
 
 > **Status:** Experimental (M5). `envo` has `new`, `build`, `run`, `check`, `test`,
-> `explain` and `version` ([`envo/README.md`](envo/README.md)); `fmt` and a basic LSP
-> follow in M5. The bootstrap scripts still build and test Stages 0–2 (PLAN D29).
+> `fmt`, `lsp`, `explain` and `version` ([`envo/README.md`](envo/README.md)). The
+> bootstrap scripts still build and test Stages 0–2 (PLAN D29).
 
 Every tool is written in Envo and ships inside the single `envo` binary.
 
