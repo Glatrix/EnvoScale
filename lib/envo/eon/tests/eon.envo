@@ -1,0 +1,194 @@
+// envo.eon: reading the root manifest's shape, every kind of value, canonical writing,
+// a round trip, and errors with their positions.
+// os: none
+// expect: workspace envoscale 0.0.1 members 6 [compiler] [examples/*]
+// expect: targets native wasm
+// expect: kinds null bool int float str array block
+// expect: ints -5 255 18446744073709551615 -128 16 5 1000000
+// expect: str [tab	quote" back\ é 😀 nl
+// expect: ]
+// expect: built #eon 1
+// expect: a = "x"
+// expect: b = false
+// expect: c = [null]
+// expect: --- written
+// expect: #eon 1
+// expect: name    = "hello"
+// expect: count   = 3u8
+// expect: on      = true
+// expect: nothing = null
+// expect: list    = [1, 2.5, "x"]
+// expect: "a key" = "v\n"
+// expect: nested {
+// expect:     deep {
+// expect:         x = -1
+// expect:     }
+// expect:     arr = [
+// expect:         {
+// expect:             k = 1
+// expect:         }
+// expect:     ]
+// expect: }
+// expect: empty {
+// expect: }
+// expect: --- round trip same
+// expect: err 2:5: expected `=` or `{` after the key
+// expect: err 1:5: unterminated string
+// expect: err 2:1: a key appears twice in the same block
+// expect: err 1:5: the number does not fit its type
+// expect: err 1:5: an unsigned number cannot be negative
+// expect: err 1:6: this EON version is not supported (this reader knows version 1)
+// expect: err 1:10: expected `]` to close the array
+// expect: err 1:1: unterminated block comment
+// expect: err 1:7: unknown escape
+// expect: err 1:5: raw strings are not allowed in EON
+// expect: err 1:7: expected a line break, `,` or `;` after the entry
+// expect: err 1:5: expected a value: a string, number, `true`, `false`, `null`, `[` or `{`
+// expect: err 1:5: not a valid number suffix
+// expect: load x missing cannot read the file
+// expect: err 2:6: the text is not valid UTF-8
+// expect: err 1:6: the text is not valid UTF-8
+// expect: bom ok
+use envo.eon;
+use std.fs;
+use alloc.text;
+
+string manifest = string.New();
+manifest.Append("#eon 1\n");
+manifest.Append("// a comment\n");
+manifest.Append("workspace {\n");
+manifest.Append("    name    = \"envoscale\"\n");
+manifest.Append("    version = \"0.0.1\"   /* a /* nested */ comment */\n");
+manifest.Append("    members = [\n");
+manifest.Append("        \"compiler\",\n");
+manifest.Append("        \"runtime\",\n");
+manifest.Append("        \"lib\",\n");
+manifest.Append("        \"tools\",\n");
+manifest.Append("        \"adapters\",\n");
+manifest.Append("        \"examples/*\",\n");
+manifest.Append("    ]\n");
+manifest.Append("}\n");
+manifest.Append("dependencies {\n");
+manifest.Append("}\n");
+manifest.Append("targets { default = [\"native\", \"wasm\"] }\n");
+
+void Fails(str src) {
+    Result<eon.Value, eon.ParseError> r = eon.Parse(src);
+    match r {
+        Ok(_) => { print("err none"); }
+        Err(e) => {
+            write(1, "err ");
+            print(e.Describe().AsStr());
+        }
+    }
+}
+
+eon.Value doc = eon.Parse(manifest.AsStr()).Unwrap();
+eon.Value[] ws = doc.Field("workspace");
+write(1, "workspace ");
+write(1, ws[0].GetStr("name").Unwrap());
+write(1, " ");
+write(1, ws[0].GetStr("version").Unwrap());
+eon.Value[] members = ws[0].Field("members");
+write(1, " members ");
+write(1, text.Uint(members[0].Len() as u64).AsStr());
+write(1, " [");
+write(1, members[0].Elements()[0].AsStr());
+write(1, "] [");
+write(1, members[0].Elements()[5].AsStr());
+print("]");
+eon.Value[] def = doc.Field("targets")[0].Field("default");
+write(1, "targets ");
+write(1, def[0].Elements()[0].AsStr());
+write(1, " ");
+print(def[0].Elements()[1].AsStr());
+
+eon.Value kinds = eon.Parse("a = null; b = false; c = 1, d = 1.5e3, e = \"s\"\nf = []\ng {}").Unwrap();
+write(1, "kinds");
+for (usize i = 0; i < kinds.Len(); i++) {
+    eon.ValueKind k = kinds.Elements()[i].Type();
+    if (k == eon.ValueKind.Null) write(1, " null");
+    if (k == eon.ValueKind.Bool) write(1, " bool");
+    if (k == eon.ValueKind.Int) write(1, " int");
+    if (k == eon.ValueKind.Float) write(1, " float");
+    if (k == eon.ValueKind.Str) write(1, " str");
+    if (k == eon.ValueKind.Array) write(1, " array");
+    if (k == eon.ValueKind.Block) write(1, " block");
+}
+print("");
+
+eon.Value ints = eon.Parse("a = -5\nb = 0xFF\nc = 0xFFFF_FFFF_FFFF_FFFFu64\nd = -128i8\ne = 0b1_0000\nf = 0o5\ng = 1_000_000").Unwrap();
+write(1, "ints");
+for (usize i = 0; i < ints.Len(); i++) {
+    eon.Value[] v = ints.Elements()[i..i + 1];
+    write(1, " ");
+    if (v[0].NumberSuffix().Len > 0 && v[0].NumberSuffix()[0] == 'u') write(1, text.Uint(v[0].AsInt() as u64).AsStr());
+    else write(1, text.Int(v[0].AsInt()).AsStr());
+}
+print("");
+
+eon.Value strs = eon.Parse("s = \"tab\\tquote\\\" back\\\\ \\u{e9} \\u{1F600} nl\\n\"").Unwrap();
+write(1, "str [");
+write(1, strs.GetStr("s").Unwrap());
+print("]");
+
+// building
+eon.Value built = eon.Value.NewBlock();
+built.Set("a", eon.Value.OfInt(1));
+built.Set("b", eon.Value.OfBool(false));
+built.Set("a", eon.Value.OfStr("x"));
+eon.Value arr = eon.Value.NewArray();
+arr.Push(eon.Value.OfNull());
+built.Set("c", arr);
+write(1, "built ");
+write(1, eon.Write(built).AsStr());
+eon.Value whole = eon.Parse("name = \"hello\"\ncount = 3u8\non = true\nnothing = null\nlist = [1, 2.5, \"x\"]\n\"a key\" = \"v\\n\"\nnested { deep { x = -1 }\narr = [{ k = 1 }] }\nempty {}").Unwrap();
+string written = eon.Write(whole);
+print("--- written");
+write(1, written.AsStr());
+eon.Value again = eon.Parse(written.AsStr()).Unwrap();
+string rewritten = eon.Write(again);
+if (rewritten.Equals(written.AsStr())) print("--- round trip same");
+else print("--- round trip differs");
+
+Fails("a = 1\nb   2");
+Fails("a = \"abc");
+Fails("a = 1\na = 2");
+Fails("a = 300u8");
+Fails("a = -1u32");
+Fails("#eon 2\na = 1");
+Fails("a = [1, 2");
+Fails("/* open");
+Fails("a = \"x\\q\"");
+Fails("a = \"\"\"raw\"\"\"");
+Fails("a = 1 b = 2");
+Fails("a = nope");
+Fails("a = 10u7");
+
+fs.WriteText("pkg.envon", "#eon 1\npackage {\n    name = \"x\"\n}\n").Unwrap();
+eon.Value loaded = eon.Load("pkg.envon").Unwrap();
+write(1, "load ");
+write(1, loaded.Field("package")[0].GetStr("name").Unwrap());
+write(1, " missing ");
+Result<eon.Value, eon.ParseError> gone = eon.Load("nope.envon");
+match gone {
+    Ok(_) => { print("?"); }
+    Err(e) => { print(e.Describe().AsStr()); }
+}
+string bad = string.From("a = 1\nb = \"");
+bad.AppendByte(0xC0);
+bad.AppendByte(0x80);
+bad.Append("\"");
+Fails(bad.AsStr());
+string sur = string.From("a = \"");
+sur.AppendByte(0xED);
+sur.AppendByte(0xA0);
+sur.AppendByte(0x80);
+sur.Append("\"");
+Fails(sur.AsStr());
+string bom = string.New();
+bom.AppendByte(0xEF);
+bom.AppendByte(0xBB);
+bom.AppendByte(0xBF);
+bom.Append("#eon 1\nk = 1\n");
+if (eon.Parse(bom.AsStr()).IsOk()) print("bom ok");

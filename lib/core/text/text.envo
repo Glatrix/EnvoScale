@@ -143,6 +143,44 @@ public i32 Compare(str a, str b) {
     return 0;
 }
 
+// The length of the longest prefix of s that is valid UTF-8 (RFC 3629: no overlong
+// forms, no surrogates, nothing above U+10FFFF); s.Len if all of it is.
+public usize Utf8ValidUpTo(str s) {
+    usize i = 0;
+    while (i < s.Len) {
+        u8 c = s[i];
+        if (c < 0x80) {
+            i++;
+            continue;
+        }
+        usize n = 0;
+        u32 cp = 0;
+        u32 min = 0;
+        if (c >= 0xC2 && c <= 0xDF) {
+            n = 1;
+            cp = (c & 0x1F) as u32;
+            min = 0x80;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            n = 2;
+            cp = (c & 0x0F) as u32;
+            min = 0x800;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            n = 3;
+            cp = (c & 0x07) as u32;
+            min = 0x10000;
+        } else {
+            return i;
+        }
+        for (usize k = 1; k <= n; k++) {
+            if (i + k >= s.Len || s[i + k] & 0xC0 != 0x80) return i;
+            cp = (cp << 6) | (s[i + k] & 0x3F) as u32;
+        }
+        if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return i;
+        i += n + 1;
+    }
+    return s.Len;
+}
+
 // The number of characters (Unicode code points) in s.
 public usize CharCount(str s) {
     usize n = 0;

@@ -1,0 +1,845 @@
+// envo.eon: the reader and writer for EON, Envo Object Notation (docs/spec/eon.md). A
+// document is read into a tree of Values; Write gives it back in canonical form (eon.md
+// section 5). Comments are not kept: a tool that must keep them edits the text.
+namespace envo.eon;
+
+use core.text as ct;
+use alloc.text;
+use std.fs;
+use ports.{IoError};
+
+// What a Value holds.
+public enum ValueKind {
+    Null,
+    Bool,
+    Int,
+    Float,
+    Str,
+    Array,
+    Block,
+}
+
+// One EON value. A block keeps its entries in the order they were written.
+public struct Value {
+    ValueKind Kind;
+    bool Flag;              // a Bool's value
+    i64 Number;             // an Int's value (an unsigned one's bits)
+    string Text;            // a Str's value; a Float's literal as written
+    string Suffix;          // an Int's or Float's type suffix ("u64", "f32"), or ""
+    List<Value> Items;      // an Array's elements; a Block's values
+    List<string> Keys;      // a Block's keys, one for each of Items
+
+    static Value Make(ValueKind k) {
+        return new Value {
+            Kind = k, Flag = false, Number = 0, Text = string.New(), Suffix = string.New(),
+            Items = List<Value>.New(), Keys = List<string>.New(),
+        };
+    }
+
+    public static Value OfNull() => Value.Make(ValueKind.Null);
+
+    public static Value OfBool(bool b) {
+        Value v = Value.Make(ValueKind.Bool);
+        v.Flag = b;
+        return v;
+    }
+
+    public static Value OfInt(i64 n) {
+        Value v = Value.Make(ValueKind.Int);
+        v.Number = n;
+        return v;
+    }
+
+    public static Value OfStr(str s) {
+        Value v = Value.Make(ValueKind.Str);
+        v.Text = string.From(s);
+        return v;
+    }
+
+    public static Value NewArray() => Value.Make(ValueKind.Array);
+    public static Value NewBlock() => Value.Make(ValueKind.Block);
+
+    public ValueKind Type(in this) => this.Kind;
+    public bool IsNull(in this) => this.Kind == ValueKind.Null;
+    public bool IsBlock(in this) => this.Kind == ValueKind.Block;
+    public bool IsArray(in this) => this.Kind == ValueKind.Array;
+
+    // A Bool's value.
+    public bool AsBool(in this) => this.Flag;
+    // An Int's value.
+    public i64 AsInt(in this) => this.Number;
+    // A Str's value, or a Float's literal.
+    public str AsStr(in this) => this.Text.AsStr();
+    // An Int's or Float's type suffix, or "".
+    public str NumberSuffix(in this) => this.Suffix.AsStr();
+
+    // The number of an Array's elements or a Block's entries.
+    public usize Len(in this) => this.Items.Len();
+    // An Array's elements, or a Block's values.
+    public Value[] Elements(in this) => this.Items.AsSlice();
+    // A Block's key i.
+    public str KeyAt(in this, usize i) => this.Keys.AsSlice()[i].AsStr();
+
+    // A Block's value for key: one element, or none if there is no such entry.
+    public Value[] Field(in this, str key) {
+        string[] keys = this.Keys.AsSlice();
+        for (usize i = 0; i < keys.Len; i++) {
+            if (keys[i].Equals(key)) return this.Items.AsSlice()[i..i + 1];
+        }
+        return this.Items.AsSlice()[0..0];
+    }
+
+    public bool Has(in this, str key) => this.Field(key).Len == 1;
+
+    // The value for key if it is a Str.
+    public str? GetStr(in this, str key) {
+        Value[] f = this.Field(key);
+        if (f.Len == 0 || f[0].Kind != ValueKind.Str) return null;
+        return Some(f[0].Text.AsStr());
+    }
+
+    // The value for key if it is an Int.
+    public i64? GetInt(in this, str key) {
+        Value[] f = this.Field(key);
+        if (f.Len == 0 || f[0].Kind != ValueKind.Int) return null;
+        return Some(f[0].Number);
+    }
+
+    // The value for key if it is a Bool.
+    public bool? GetBool(in this, str key) {
+        Value[] f = this.Field(key);
+        if (f.Len == 0 || f[0].Kind != ValueKind.Bool) return null;
+        return Some(f[0].Flag);
+    }
+
+    // Appends v to an Array.
+    public void Push(ref this, Value v) {
+        this.Items.Push(v);
+    }
+
+    // Sets a Block's entry for key to v: in its place if there is one, else at the end.
+    public void Set(ref this, str key, Value v) {
+        for (usize i = 0; i < this.Keys.Len(); i++) {
+            if (this.Keys.AsSlice()[i].Equals(key)) {
+                this.Items.Set(i, v);
+                return;
+            }
+        }
+        this.Keys.Push(string.From(key));
+        this.Items.Push(v);
+    }
+}
+
+// Why a document could not be read: where, and what was wrong.
+public struct ParseError {
+    u32 Line;           // from 1; 0 when the file could not be read
+    u32 Col;            // from 1, counting characters
+    string Message;
+
+    public u32 LineNo(in this) => this.Line;
+    public u32 ColNo(in this) => this.Col;
+    public str What(in this) => this.Message.AsStr();
+
+    // "line:col: message".
+    public string Describe(in this) {
+        string s = string.New();
+        if (this.Line > 0) {
+            s.Append(text.Uint(this.Line as u64).AsStr());
+            s.AppendByte(':');
+            s.Append(text.Uint(this.Col as u64).AsStr());
+            s.Append(": ");
+        }
+        s.Append(this.Message.AsStr());
+        return s;
+    }
+}
+
+// The EON version this reader knows (eon.md section 3).
+public const i64 VERSION = 1;
+
+// ------------------------------------------------------------------ reading
+
+// Reads an EON document: its entries, as a Block.
+public Result<Value, ParseError> Parse(str src) {
+    Parser p = new Parser {
+        Src = src, At = 0, Line = 1, LineStart = 0,
+        Failed = false, ErrLine = 0, ErrCol = 0, Message = string.New(),
+    };
+    usize valid = ct.Utf8ValidUpTo(src);
+    if (valid < src.Len) {
+        // report where the bad byte is
+        while (p.At < valid) {
+            if (src[p.At] == 10) p.NewLine();
+            else p.At++;
+        }
+        p.Fail("the text is not valid UTF-8");
+    }
+    if (src.Len >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) {
+        p.At = 3;               // a byte order mark is not part of the first line
+        p.LineStart = 3;
+    }
+    if (!p.Failed) p.VersionLine();
+    Value doc = Value.NewBlock();
+    if (!p.Failed) p.Entries(ref doc, false);
+    if (p.Failed) return Err(new ParseError { Line = p.ErrLine, Col = p.ErrCol, Message = string.From(p.Message.AsStr()) });
+    return Ok(doc);
+}
+
+// Reads the EON file at path.
+public Result<Value, ParseError> Load(str path) {
+    Result<string, IoError> r = fs.ReadText(path);
+    match r {
+        Ok(src) => { return Parse(src.AsStr()); }
+        Err(_) => { return Err(new ParseError { Line = 0, Col = 0, Message = string.From("cannot read the file") }); }
+    }
+}
+
+bool IsIdentStart(u8 c) => ct.IsAlpha(c) || c == '_' || c >= 0x80;
+bool IsIdentPart(u8 c) => IsIdentStart(c) || ct.IsDigit(c);
+
+u32 HexValue(u8 c) {
+    if (ct.IsDigit(c)) return (c - '0') as u32;
+    if (c >= 'a' && c <= 'f') return (c - 'a' + 10) as u32;
+    if (c >= 'A' && c <= 'F') return (c - 'A' + 10) as u32;
+    return 99;
+}
+
+// Appends code point cp to s as UTF-8.
+void AppendUtf8(ref string s, u32 cp) {
+    if (cp < 0x80) {
+        s.AppendByte(cp as u8);
+    } else if (cp < 0x800) {
+        s.AppendByte((0xC0 | (cp >> 6)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    } else if (cp < 0x10000) {
+        s.AppendByte((0xE0 | (cp >> 12)) as u8);
+        s.AppendByte((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    } else {
+        s.AppendByte((0xF0 | (cp >> 18)) as u8);
+        s.AppendByte((0x80 | ((cp >> 12) & 0x3F)) as u8);
+        s.AppendByte((0x80 | ((cp >> 6) & 0x3F)) as u8);
+        s.AppendByte((0x80 | (cp & 0x3F)) as u8);
+    }
+}
+
+// The error for a number outside its type, or "" if it fits. mag is its magnitude.
+str RangeError(u64 mag, bool neg, str suffix) {
+    u64 bits = 64;
+    if (suffix.Len >= 2 && suffix[1] == '8') bits = 8;
+    if (suffix.Len >= 3 && suffix[1] == '1' && suffix[2] == '6') bits = 16;
+    if (suffix.Len >= 3 && suffix[1] == '3') bits = 32;
+    bool signed = suffix.Len == 0 || suffix[0] == 'i';
+    if (signed) {
+        u64 limit = ((1 as u64) << (bits - 1)) - 1;
+        if (neg) limit = limit + 1;
+        if (mag > limit) return "the number does not fit its type";
+        return "";
+    }
+    if (neg && mag != 0) return "an unsigned number cannot be negative";
+    if (bits < 64 && mag > ((1 as u64) << bits) - 1) return "the number does not fit its type";
+    return "";
+}
+
+bool IsIntSuffix(str s) {
+    return ct.Compare(s, "i8") == 0 || ct.Compare(s, "i16") == 0 || ct.Compare(s, "i32") == 0
+        || ct.Compare(s, "i64") == 0 || ct.Compare(s, "i128") == 0 || ct.Compare(s, "isize") == 0
+        || ct.Compare(s, "u8") == 0 || ct.Compare(s, "u16") == 0 || ct.Compare(s, "u32") == 0
+        || ct.Compare(s, "u64") == 0 || ct.Compare(s, "u128") == 0 || ct.Compare(s, "usize") == 0;
+}
+
+bool IsFloatSuffix(str s) => ct.Compare(s, "f32") == 0 || ct.Compare(s, "f64") == 0;
+
+struct Parser {
+    str Src;
+    usize At;
+    u32 Line;
+    usize LineStart;
+    bool Failed;
+    u32 ErrLine;
+    u32 ErrCol;
+    string Message;
+
+    bool AtEnd(in this) => this.At >= this.Src.Len;
+
+    u8 Peek(in this) {
+        if (this.At >= this.Src.Len) return 0;
+        return this.Src[this.At];
+    }
+
+    u8 PeekAt(in this, usize k) {
+        if (this.At + k >= this.Src.Len) return 0;
+        return this.Src[this.At + k];
+    }
+
+    // The column of the next byte: characters since the line's start, from 1.
+    u32 Col(in this) {
+        u32 c = 1;
+        for (usize i = this.LineStart; i < this.At && i < this.Src.Len; i++) {
+            if (this.Src[i] & 0xC0 != 0x80) c++;
+        }
+        return c;
+    }
+
+    void FailAt(ref this, u32 line, u32 col, str msg) {
+        if (this.Failed) return;
+        this.Failed = true;
+        this.ErrLine = line;
+        this.ErrCol = col;
+        this.Message = string.From(msg);
+    }
+
+    void Fail(ref this, str msg) {
+        u32 col = this.Col();
+        this.FailAt(this.Line, col, msg);
+    }
+
+    // Moves past a line break.
+    void NewLine(ref this) {
+        this.At++;
+        this.Line++;
+        this.LineStart = this.At;
+    }
+
+    // Skips spaces, tabs, carriage returns and comments, not line breaks.
+    void SkipSpace(ref this) {
+        while (!this.AtEnd() && !this.Failed) {
+            u8 c = this.Peek();
+            if (c == ' ' || c == 9 || c == 13) {
+                this.At++;
+            } else if (c == '/' && this.PeekAt(1) == '/') {
+                while (!this.AtEnd() && this.Peek() != 10) this.At++;
+            } else if (c == '/' && this.PeekAt(1) == '*') {
+                u32 line = this.Line;
+                u32 col = this.Col();
+                this.At += 2;
+                u32 depth = 1;
+                while (depth > 0) {
+                    if (this.AtEnd()) {
+                        this.FailAt(line, col, "unterminated block comment");
+                        return;
+                    }
+                    if (this.Peek() == '/' && this.PeekAt(1) == '*') {
+                        depth++;
+                        this.At += 2;
+                    } else if (this.Peek() == '*' && this.PeekAt(1) == '/') {
+                        depth--;
+                        this.At += 2;
+                    } else if (this.Peek() == 10) {
+                        this.NewLine();
+                    } else {
+                        this.At++;
+                    }
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    // Skips space, comments and line breaks.
+    void SkipLines(ref this) {
+        while (!this.Failed) {
+            this.SkipSpace();
+            if (this.Peek() == 10) this.NewLine();
+            else return;
+        }
+    }
+
+    // `#eon <n>` on the first line, if it is there.
+    void VersionLine(ref this) {
+        if (this.Peek() != '#') return;
+        if (!ct.MatchesAt(this.Src, this.At, "#eon") || (this.PeekAt(4) != ' ' && this.PeekAt(4) != 9)) {
+            this.Fail("`#` starts only the version line, `#eon <n>`, on the first line");
+            return;
+        }
+        this.At += 4;
+        this.SkipSpace();
+        u32 col = this.Col();
+        i64 n = 0;
+        usize digits = 0;
+        while (ct.IsDigit(this.Peek())) {
+            if (n < 1000000) n = n * 10 + (this.Peek() - '0') as i64;
+            this.At++;
+            digits++;
+        }
+        if (digits == 0) {
+            this.Fail("expected the EON version after `#eon`");
+            return;
+        }
+        this.SkipSpace();
+        if (!this.AtEnd() && this.Peek() != 10) {
+            this.Fail("expected a line break after the version");
+            return;
+        }
+        if (n != VERSION) this.FailAt(this.Line, col, "this EON version is not supported (this reader knows version 1)");
+    }
+
+    // The entries of a block, up to its `}` (braced) or the end of the document.
+    void Entries(ref this, ref Value block, bool braced) {
+        while (!this.Failed) {
+            this.SkipLines();
+            if (this.Failed) return;
+            if (this.AtEnd()) {
+                if (braced) this.Fail("expected `}` to close the block");
+                return;
+            }
+            if (this.Peek() == '}') {
+                if (braced) {
+                    this.At++;
+                    return;
+                }
+                this.Fail("unexpected `}`");
+                return;
+            }
+            u32 line = this.Line;
+            u32 col = this.Col();
+            string key = this.Key();
+            if (this.Failed) return;
+            if (block.Has(key.AsStr())) {
+                this.FailAt(line, col, "a key appears twice in the same block");
+                return;
+            }
+            this.SkipSpace();
+            if (this.Peek() == '=') {
+                this.At++;
+                this.SkipLines();
+                Value v = this.Value();
+                if (this.Failed) return;
+                block.Keys.Push(key);
+                block.Items.Push(v);
+            } else if (this.Peek() == '{') {
+                this.At++;
+                Value v = Value.NewBlock();
+                this.Entries(ref v, true);
+                if (this.Failed) return;
+                block.Keys.Push(key);
+                block.Items.Push(v);
+            } else {
+                this.Fail("expected `=` or `{` after the key");
+                return;
+            }
+            this.SkipSpace();
+            if (this.Failed || this.AtEnd()) continue;
+            u8 c = this.Peek();
+            if (c == ',' || c == ';') {
+                this.At++;
+            } else if (c != 10 && c != '}') {
+                this.Fail("expected a line break, `,` or `;` after the entry");
+            }
+        }
+    }
+
+    // A key: an identifier (keywords too) or a string.
+    string Key(ref this) {
+        u8 c = this.Peek();
+        if (c == '"') return this.Str();
+        if (!IsIdentStart(c)) {
+            this.Fail("expected a key");
+            return string.New();
+        }
+        return this.Word();
+    }
+
+    string Word(ref this) {
+        usize start = this.At;
+        while (IsIdentPart(this.Peek())) this.At++;
+        return string.From(this.Src[start..this.At]);
+    }
+
+    Value Value(ref this) {
+        if (this.AtEnd()) {
+            this.Fail("expected a value");
+            return Value.OfNull();
+        }
+        u8 c = this.Peek();
+        if (c == '"') {
+            if (this.PeekAt(1) == '"' && this.PeekAt(2) == '"') {
+                this.Fail("raw strings are not allowed in EON");
+                return Value.OfNull();
+            }
+            Value v = Value.Make(ValueKind.Str);
+            v.Text = this.Str();
+            return v;
+        }
+        if (c == '$' && this.PeekAt(1) == '"') {
+            this.Fail("interpolated strings are not allowed in EON");
+            return Value.OfNull();
+        }
+        if (c == '[') return this.Array();
+        if (c == '{') {
+            this.At++;
+            Value v = Value.NewBlock();
+            this.Entries(ref v, true);
+            return v;
+        }
+        if (c == '-' || ct.IsDigit(c)) return this.Number();
+        if (IsIdentStart(c)) {
+            u32 col = this.Col();
+            string w = this.Word();
+            if (w.Equals("true")) return Value.OfBool(true);
+            if (w.Equals("false")) return Value.OfBool(false);
+            if (w.Equals("null")) return Value.OfNull();
+            this.FailAt(this.Line, col, "expected a value: a string, number, `true`, `false`, `null`, `[` or `{`");
+            return Value.OfNull();
+        }
+        this.Fail("expected a value: a string, number, `true`, `false`, `null`, `[` or `{`");
+        return Value.OfNull();
+    }
+
+    Value Array(ref this) {
+        this.At++;
+        Value arr = Value.NewArray();
+        while (!this.Failed) {
+            this.SkipLines();
+            if (this.Failed) break;
+            if (this.AtEnd()) {
+                this.Fail("expected `]` to close the array");
+                break;
+            }
+            if (this.Peek() == ']') {
+                this.At++;
+                break;
+            }
+            Value v = this.Value();
+            if (this.Failed) break;
+            arr.Items.Push(v);
+            this.SkipSpace();
+            if (this.Failed || this.AtEnd()) continue;
+            u8 c = this.Peek();
+            if (c == ',' || c == ';') {
+                this.At++;
+            } else if (c != 10 && c != ']') {
+                this.Fail("expected `,`, a line break or `]` after the element");
+            }
+        }
+        return arr;
+    }
+
+    // A string literal's value; the opening quote is next.
+    string Str(ref this) {
+        u32 line = this.Line;
+        u32 col = this.Col();
+        string s = string.New();
+        this.At++;
+        while (true) {
+            if (this.AtEnd() || this.Peek() == 10 || this.Peek() == 13) {
+                this.FailAt(line, col, "unterminated string");
+                return s;
+            }
+            u8 c = this.Peek();
+            if (c == '"') {
+                this.At++;
+                return s;
+            }
+            if (c == 0x5C) {
+                this.Escape(ref s);
+                if (this.Failed) return s;
+                continue;
+            }
+            if ((c < 0x20 && c != 9) || c == 0x7F) {
+                this.Fail("a control character in a string must be written as an escape");
+                return s;
+            }
+            s.AppendByte(c);
+            this.At++;
+        }
+        return s;
+    }
+
+    // An escape; the backslash is next.
+    void Escape(ref this, ref string s) {
+        u32 col = this.Col();
+        u8 e = this.PeekAt(1);
+        this.At += 2;
+        if (e == 'n') { s.AppendByte(10); return; }
+        if (e == 'r') { s.AppendByte(13); return; }
+        if (e == 't') { s.AppendByte(9); return; }
+        if (e == '0') { s.AppendByte(0); return; }
+        if (e == 0x5C || e == '"' || e == 0x27) { s.AppendByte(e); return; }
+        if (e == 'x') {
+            u32 hi = HexValue(this.Peek());
+            u32 lo = HexValue(this.PeekAt(1));
+            if (hi > 7 || lo > 15) {
+                this.FailAt(this.Line, col, "`\\x` needs two hex digits, at most 7F");
+                return;
+            }
+            this.At += 2;
+            s.AppendByte((hi * 16 + lo) as u8);
+            return;
+        }
+        if (e == 'u') {
+            if (this.Peek() != '{') {
+                this.FailAt(this.Line, col, "`\\u` needs braces: `\\u{1F600}`");
+                return;
+            }
+            this.At++;
+            u32 cp = 0;
+            u32 digits = 0;
+            while (HexValue(this.Peek()) < 16) {
+                cp = cp * 16 + HexValue(this.Peek());
+                digits++;
+                this.At++;
+                if (digits > 6) break;
+            }
+            if (this.Peek() != '}' || digits == 0 || digits > 6 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+                this.FailAt(this.Line, col, "`\\u{…}` needs 1 to 6 hex digits naming a Unicode scalar value");
+                return;
+            }
+            this.At++;
+            AppendUtf8(ref s, cp);
+            return;
+        }
+        this.FailAt(this.Line, col, "unknown escape");
+    }
+
+    Value Number(ref this) {
+        usize start = this.At;
+        u32 col = this.Col();
+        bool neg = false;
+        if (this.Peek() == '-') {
+            neg = true;
+            this.At++;
+            if (!ct.IsDigit(this.Peek())) {
+                this.Fail("expected a digit after `-`");
+                return Value.OfNull();
+            }
+        }
+        u64 radix = 10;
+        if (this.Peek() == '0' && (this.PeekAt(1) == 'x' || this.PeekAt(1) == 'o' || this.PeekAt(1) == 'b')) {
+            u8 p = this.PeekAt(1);
+            if (p == 'x') radix = 16;
+            if (p == 'o') radix = 8;
+            if (p == 'b') radix = 2;
+            this.At += 2;
+        }
+        u64 mag = 0;
+        bool overflow = false;
+        usize digits = 0;
+        while (true) {
+            u8 c = this.Peek();
+            if (c == '_') {
+                this.At++;
+                continue;
+            }
+            u32 d = HexValue(c);
+            if (radix == 16 && d < 16) {
+                // hex digits
+            } else if (ct.IsDigit(c)) {
+                if (d as u64 >= radix) {
+                    this.Fail("this digit is not valid in the number's radix");
+                    return Value.OfNull();
+                }
+            } else {
+                break;
+            }
+            if (mag > (0xFFFFFFFFFFFFFFFF - d as u64) / radix) overflow = true;
+            mag = mag *% radix +% d as u64;
+            digits++;
+            this.At++;
+        }
+        if (digits == 0) {
+            this.Fail("expected digits after the radix prefix");
+            return Value.OfNull();
+        }
+        // a float: a fraction, an exponent or a float suffix (decimal only)
+        bool isFloat = false;
+        if (radix == 10 && this.Peek() == '.' && ct.IsDigit(this.PeekAt(1))) {
+            isFloat = true;
+            this.At++;
+            while (ct.IsDigit(this.Peek()) || this.Peek() == '_') this.At++;
+        }
+        if (radix == 10 && (this.Peek() == 'e' || this.Peek() == 'E')) {
+            isFloat = true;
+            this.At++;
+            if (this.Peek() == '+' || this.Peek() == '-') this.At++;
+            usize exp = 0;
+            while (ct.IsDigit(this.Peek()) || this.Peek() == '_') {
+                if (this.Peek() != '_') exp++;
+                this.At++;
+            }
+            if (exp == 0) {
+                this.Fail("expected digits in the exponent");
+                return Value.OfNull();
+            }
+        }
+        // the suffix, directly or after `_`
+        usize numEnd = this.At;
+        if (this.Peek() == '_' && IsIdentStart(this.PeekAt(1))) this.At++;
+        usize sufStart = this.At;
+        while (IsIdentPart(this.Peek())) this.At++;
+        str suffix = this.Src[sufStart..this.At];
+        if (suffix.Len > 0 && IsFloatSuffix(suffix) && radix == 10) {
+            isFloat = true;
+        } else if (suffix.Len > 0 && (!IsIntSuffix(suffix) || isFloat)) {
+            this.FailAt(this.Line, col, "not a valid number suffix");
+            return Value.OfNull();
+        }
+        if (isFloat) {
+            Value v = Value.Make(ValueKind.Float);
+            v.Text = string.From(this.Src[start..numEnd]);
+            v.Suffix = string.From(suffix);
+            return v;
+        }
+        if (overflow) {
+            this.FailAt(this.Line, col, "the number does not fit in 64 bits");
+            return Value.OfNull();
+        }
+        str range = RangeError(mag, neg, suffix);
+        if (range.Len > 0) {
+            this.FailAt(this.Line, col, range);
+            return Value.OfNull();
+        }
+        Value v = Value.Make(ValueKind.Int);
+        if (neg) v.Number = (0 -% mag) as i64;
+        else v.Number = mag as i64;
+        v.Suffix = string.From(suffix);
+        return v;
+    }
+}
+
+// ------------------------------------------------------------------ writing
+
+// doc (a Block) as an EON document in canonical form: the version line, 4-space
+// indentation, one entry per line, `=` aligned within a block, a final line break.
+public string Write(in Value doc) {
+    string s = string.From("#eon 1\n");
+    WriteEntries(ref s, doc, 0);
+    return s;
+}
+
+void Indent(ref string s, usize depth) {
+    for (usize i = 0; i < depth * 4; i++) s.AppendByte(' ');
+}
+
+bool IsIdentifier(str k) {
+    if (k.Len == 0 || !IsIdentStart(k[0])) return false;
+    for (usize i = 1; i < k.Len; i++) {
+        if (!IsIdentPart(k[i])) return false;
+    }
+    return true;
+}
+
+// A key as written: bare if it is an identifier, else quoted.
+string KeyText(str k) {
+    if (IsIdentifier(k)) return string.From(k);
+    string s = string.New();
+    Quote(ref s, k);
+    return s;
+}
+
+// Appends v as a string literal.
+void Quote(ref string s, str v) {
+    s.AppendByte('"');
+    for (usize i = 0; i < v.Len; i++) {
+        u8 c = v[i];
+        if (c == '"') {
+            s.AppendByte(0x5C);
+            s.AppendByte('"');
+        } else if (c == 0x5C) {
+            s.AppendByte(0x5C);
+            s.AppendByte(0x5C);
+        } else if (c == 10) {
+            s.Append("\\n");
+        } else if (c == 13) {
+            s.Append("\\r");
+        } else if (c == 9) {
+            s.Append("\\t");
+        } else if (c < 0x20 || c == 0x7F) {
+            s.Append("\\u{");
+            s.Append(text.Hex(c as u64, 1).AsStr());
+            s.AppendByte('}');
+        } else {
+            s.AppendByte(c);
+        }
+    }
+    s.AppendByte('"');
+}
+
+void WriteEntries(ref string s, in Value block, usize depth) {
+    Value[] items = block.Items.AsSlice();
+    string[] keys = block.Keys.AsSlice();
+    usize width = 0;
+    for (usize i = 0; i < items.Len; i++) {
+        if (items[i].Kind == ValueKind.Block) continue;
+        string k = KeyText(keys[i].AsStr());
+        usize w = ct.CharCount(k.AsStr());
+        if (w > width) width = w;
+    }
+    for (usize i = 0; i < items.Len; i++) {
+        Indent(ref s, depth);
+        string k = KeyText(keys[i].AsStr());
+        s.Append(k.AsStr());
+        if (items[i].Kind == ValueKind.Block) {
+            s.Append(" {\n");
+            WriteEntries(ref s, items[i], depth + 1);
+            Indent(ref s, depth);
+            s.Append("}\n");
+        } else {
+            for (usize p = ct.CharCount(k.AsStr()); p < width; p++) s.AppendByte(' ');
+            s.Append(" = ");
+            WriteValue(ref s, items[i], depth);
+            s.AppendByte(10);
+        }
+    }
+}
+
+bool IsScalar(in Value v) => v.Kind != ValueKind.Array && v.Kind != ValueKind.Block;
+
+void WriteValue(ref string s, in Value v, usize depth) {
+    if (v.Kind == ValueKind.Null) {
+        s.Append("null");
+    } else if (v.Kind == ValueKind.Bool) {
+        if (v.Flag) s.Append("true");
+        else s.Append("false");
+    } else if (v.Kind == ValueKind.Int) {
+        if (v.Suffix.Len() > 0 && v.Suffix.AsStr()[0] == 'u') s.Append(text.Uint(v.Number as u64).AsStr());
+        else s.Append(text.Int(v.Number).AsStr());
+        s.Append(v.Suffix.AsStr());
+    } else if (v.Kind == ValueKind.Float) {
+        s.Append(v.Text.AsStr());
+        s.Append(v.Suffix.AsStr());
+    } else if (v.Kind == ValueKind.Str) {
+        Quote(ref s, v.Text.AsStr());
+    } else if (v.Kind == ValueKind.Array) {
+        Value[] items = v.Items.AsSlice();
+        if (items.Len == 0) {
+            s.Append("[]");
+            return;
+        }
+        // on one line when every element is a scalar and it fits in 80 columns
+        bool flat = true;
+        for (usize i = 0; i < items.Len; i++) {
+            if (!IsScalar(items[i])) flat = false;
+        }
+        if (flat) {
+            string line = string.From("[");
+            for (usize i = 0; i < items.Len; i++) {
+                if (i > 0) line.Append(", ");
+                WriteValue(ref line, items[i], depth);
+            }
+            line.AppendByte(']');
+            if (depth * 4 + ct.CharCount(line.AsStr()) <= 80) {
+                s.Append(line.AsStr());
+                return;
+            }
+        }
+        s.Append("[\n");
+        for (usize i = 0; i < items.Len; i++) {
+            Indent(ref s, depth + 1);
+            WriteValue(ref s, items[i], depth + 1);
+            s.AppendByte(10);
+        }
+        Indent(ref s, depth);
+        s.AppendByte(']');
+    } else {
+        if (v.Items.Len() == 0) {
+            s.Append("{}");
+            return;
+        }
+        s.Append("{\n");
+        WriteEntries(ref s, v, depth + 1);
+        Indent(ref s, depth);
+        s.AppendByte('}');
+    }
+}

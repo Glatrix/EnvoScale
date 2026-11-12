@@ -1,7 +1,7 @@
 # EON — Envo Object Notation (`.envon`)
 
-> **Status:** Draft. The first reader arrives with the `envo.eon` library (M5). The root
-> `envo.envon` is kept valid against this draft.
+> **Status:** Draft. Read and written by the `envo.eon` library (`lib/envo/eon`, M5). The
+> root `envo.envon` is kept valid against this draft.
 >
 > EON files use the extension `.envon`. It was `.eon` until it turned out several formats
 > already use that one, among them another configuration language.
