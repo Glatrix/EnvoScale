@@ -101,6 +101,7 @@ lib/envo/http
 lib/envo/image
 lib/envo/json
 lib/envo/log
+lib/envo/markdown
 lib/envo/lumen
 lib/envo/math
 lib/envo/net

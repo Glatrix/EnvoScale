@@ -756,6 +756,20 @@ function Invoke-Test {
     } else {
         Say 'wasm: skipped (no Node.js on this machine)'
     }
+    # The website, written in Envo (website\README.md): it builds, and its pages are there.
+    # Keep in step with bootstrap.sh.
+    Say 'website: website/site.envo builds the site'
+    $siteTool = Join-Path $Root 'build\site-tool.exe'
+    $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, (Join-Path $Root 'website\site.envo'), '-o', $siteTool) $Root
+    if ($r.Code -ne 0) { Bad 'website build' $r.Err.Trim() }
+    else {
+        $siteDir = Join-Path $Root 'build\site'
+        if (Test-Path -LiteralPath $siteDir) { Remove-Item -Recurse -Force $siteDir }
+        $r = Invoke-Tool $siteTool @('build', 'build/site') $Root
+        $eir = Join-Path $siteDir 'docs\spec\eir.html'
+        $ok = $r.Code -eq 0 -and (Test-Path -LiteralPath $eir) -and ([IO.File]::ReadAllText($eir).Contains('aria-current="page"')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'lumen.css')).Contains('--accent:')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'index.html')).Contains('<h1>'))
+        if ($ok) { Pass 'website pages' } else { Bad 'website pages' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     Say 'envo commands: new, run, test, check, explain, version'
     $envoRun = Join-Path $Root 'build\run-envo'

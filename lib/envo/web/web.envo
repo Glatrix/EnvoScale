@@ -1,0 +1,427 @@
+// envo.web: websites (PLAN D50, D51). On envo.http: an HTML builder that escapes by
+// default, a router with path parameters, static files from a folder with confined
+// paths, a server, and static site generation from the same pages (SSR and SSG are one
+// code path: a page is a function from a request to a response, rendered per request or
+// once per path into files). Lumen supplies the look: CSS generated from its tokens, and
+// the Landing and Docs page templates.
+namespace envo.web;
+
+use envo.http;
+use envo.markdown;
+use envo.lumen;
+use ports.{IFileSystem, INet, IoError};
+use std.fs;
+use alloc.text;
+use platform;
+
+// ------------------------------------------------------------------ HTML
+
+// Text for HTML: &, <, > and " escaped.
+public string Escape(str s) {
+    string h = string.New();
+    markdown.Escape(ref h, s);
+    return h;
+}
+
+// Builds HTML. Text and attribute values are escaped; Raw is for HTML already made.
+public struct Html {
+    string B;
+    bool Pending;       // a start tag waits for its `>`
+
+    public static Html New() => new Html { B = string.New(), Pending = false };
+
+    void Finish(ref this) {
+        if (this.Pending) {
+            this.B.AppendByte('>');
+            this.Pending = false;
+        }
+    }
+
+    // Starts element tag; attributes may follow.
+    public void Open(ref this, str tag) {
+        this.Finish();
+        this.B.AppendByte('<');
+        this.B.Append(tag);
+        this.Pending = true;
+    }
+
+    // An attribute of the element just opened.
+    public void Attr(ref this, str name, str value) {
+        this.B.AppendByte(' ');
+        this.B.Append(name);
+        this.B.Append("=\"");
+        markdown.Escape(ref this.B, value);
+        this.B.AppendByte('"');
+    }
+
+    public void Text(ref this, str t) {
+        this.Finish();
+        markdown.Escape(ref this.B, t);
+    }
+
+    public void Raw(ref this, str html) {
+        this.Finish();
+        this.B.Append(html);
+    }
+
+    public void Close(ref this, str tag) {
+        this.Finish();
+        this.B.Append("</");
+        this.B.Append(tag);
+        this.B.AppendByte('>');
+    }
+
+    // <tag>text</tag>
+    public void Element(ref this, str tag, str t) {
+        this.Open(tag);
+        this.Text(t);
+        this.Close(tag);
+    }
+
+    // <a href="href">text</a>
+    public void Link(ref this, str href, str t) {
+        this.Open("a");
+        this.Attr("href", href);
+        this.Text(t);
+        this.Close("a");
+    }
+
+    public void Line(ref this) {
+        this.Finish();
+        this.B.AppendByte(10);
+    }
+
+    public string Done(ref this) {
+        this.Finish();
+        string s = string.From(this.B.AsStr());
+        return s;
+    }
+}
+
+// ------------------------------------------------------------------ routing
+
+// A route's captured path parts: `:name` takes one part, `*name` the rest.
+public struct Params {
+    List<string> Names;
+    List<string> Values;
+
+    public static Params New() => new Params { Names = List<string>.New(), Values = List<string>.New() };
+
+    // The part captured as name, or "".
+    public str Get(in this, str name) {
+        string[] ns = this.Names.AsSlice();
+        string[] vs = this.Values.AsSlice();
+        for (usize i = 0; i < ns.Len; i++) {
+            if (ns[i].Equals(name)) return vs[i].AsStr();
+        }
+        return "";
+    }
+}
+
+// A page: the response to a request with its route's parameters.
+public struct Page {
+    fn(in http.Request, in Params) -> http.Response Fn;
+}
+
+struct Route {
+    string Method;
+    List<string> Parts;
+    Page P;
+}
+
+struct Mount {
+    string Prefix;      // "/assets"
+    string Dir;         // the folder it serves
+}
+
+// A web application: pages by method and path pattern, and folders of static files.
+public struct App {
+    List<Route> Routes;
+    List<Mount> Mounts;
+
+    public static App New() => new App { Routes = List<Route>.New(), Mounts = List<Mount>.New() };
+
+    // A page for method and pattern: "/", "/docs/:page", "/files/*rest".
+    public void Add(ref this, str method, str pattern, Page p) {
+        this.Routes.Push(new Route { Method = string.From(method), Parts = Split(pattern), P = p });
+    }
+
+    public void Get(ref this, str pattern, Page p) {
+        this.Add("GET", pattern, p);
+    }
+
+    public void Post(ref this, str pattern, Page p) {
+        this.Add("POST", pattern, p);
+    }
+
+    // Serves the files under dir at prefix: GET prefix/a/b.css is dir/a/b.css. Paths with
+    // `..`, backslashes or NUL bytes are refused; a folder serves its index.html.
+    public void Static(ref this, str prefix, str dir) {
+        this.Mounts.Push(new Mount { Prefix = string.From(Trim(prefix)), Dir = string.From(dir) });
+    }
+
+    // The response to req, reading static files through the platform's file system.
+    public http.Response Handle(in this, in http.Request req) {
+        var files = platform.FileSystem();
+        return this.HandleWith(ref files, req);
+    }
+
+    public http.Response HandleWith<F>(in this, ref F files, in http.Request req) where F : IFileSystem {
+        str path = req.Path();
+        str method = req.MethodOf();
+        bool head = Same(method, "HEAD");
+        List<string> parts = Split(path);
+        bool known = false;
+        Route[] rs = this.Routes.AsSlice();
+        for (usize i = 0; i < rs.Len; i++) {
+            Params ps = Params.New();
+            if (!Match(rs[i].Parts, parts, ref ps)) continue;
+            known = true;
+            if (rs[i].Method.Equals(method) || (head && rs[i].Method.Equals("GET"))) return rs[i].P.Fn(req, ps);
+        }
+        if (known) return http.Response.Text(405, "method not allowed\n");
+        if (Same(method, "GET") || head) {
+            Mount[] ms = this.Mounts.AsSlice();
+            for (usize i = 0; i < ms.Len; i++) {
+                str prefix = ms[i].Prefix.AsStr();
+                str rest = "";
+                if (prefix.Len == 0) {
+                    rest = path;
+                } else if (StartsWith(path, prefix) && (path.Len == prefix.Len || path[prefix.Len] == '/')) {
+                    rest = path[prefix.Len..path.Len];
+                } else {
+                    continue;
+                }
+                http.Response? r = ServeFile(ref files, ms[i].Dir.AsStr(), rest);
+                if (r.IsSome()) return r.Unwrap();
+            }
+        }
+        return NotFound();
+    }
+}
+
+// The pages and files of an app, rendered once into folder out: each path's response is
+// written to out + path (a path ending in "/" gets index.html), and each static folder
+// is copied. This is static site generation from the pages the server renders.
+public Result<usize, IoError> Build<F>(ref F files, in App app, str[] paths, str out0) where F : IFileSystem {
+    bool madeOut = fs.CreateDirAllWith(ref files, out0)?;
+    usize written = 0;
+    for (usize i = 0; i < paths.Len; i++) {
+        http.Request req = http.Request.New("GET", paths[i]);
+        http.Response resp = app.HandleWith(ref files, req);
+        if (resp.StatusCode() != 200) return Err(IoError.NotFound);
+        string file = string.From(out0);
+        file.Append(paths[i]);
+        if (paths[i].Len == 0 || paths[i][paths[i].Len - 1] == '/') file.Append("index.html");
+        string dir = string.From(Parent(file.AsStr()));
+        bool madeDir = fs.CreateDirAllWith(ref files, dir.AsStr())?;
+        usize n = files.Write(file.AsStr(), resp.BodyText())?;
+        written++;
+    }
+    Mount[] ms = app.Mounts.AsSlice();
+    for (usize i = 0; i < ms.Len; i++) {
+        string dest = string.From(out0);
+        dest.Append(ms[i].Prefix.AsStr());
+        written += CopyTree(ref files, ms[i].Dir.AsStr(), dest.AsStr())?;
+    }
+    return Ok(written);
+}
+
+Result<usize, IoError> CopyTree<F>(ref F files, str from, str to) where F : IFileSystem {
+    bool madeTo = fs.CreateDirAllWith(ref files, to)?;
+    List<string> names = files.List(from)?;
+    usize n = 0;
+    string[] ns = names.AsSlice();
+    for (usize i = 0; i < ns.Len; i++) {
+        string src = string.From(from);
+        src.AppendByte('/');
+        src.Append(ns[i].AsStr());
+        string dst = string.From(to);
+        dst.AppendByte('/');
+        dst.Append(ns[i].AsStr());
+        if (files.IsDir(src.AsStr())) {
+            n += CopyTree(ref files, src.AsStr(), dst.AsStr())?;
+        } else {
+            string data = files.Read(src.AsStr())?;
+            usize w = files.Write(dst.AsStr(), data.AsStr())?;
+            n++;
+        }
+    }
+    return Ok(n);
+}
+
+http.Response NotFound() => http.Response.Html(404, "<!doctype html>\n<title>Not found</title>\n<h1>Not found</h1>\n");
+
+// dir/rest, if rest is a safe relative path to a file (or a folder with index.html).
+http.Response? ServeFile<F>(ref F files, str dir, str rest) where F : IFileSystem {
+    string rel = string.New();
+    List<string> parts = Split(rest);
+    string[] ps = parts.AsSlice();
+    for (usize i = 0; i < ps.Len; i++) {
+        str p = ps[i].AsStr();
+        if (Same(p, "..") || Same(p, ".")) return null;
+        for (usize k = 0; k < p.Len; k++) {
+            if (p[k] == 92 || p[k] == 0 || p[k] == ':') return null;
+        }
+        rel.AppendByte('/');
+        rel.Append(p);
+    }
+    string file = string.From(dir);
+    file.Append(rel.AsStr());
+    if (files.IsDir(file.AsStr())) file.Append("/index.html");
+    if (!files.IsFile(file.AsStr())) return null;
+    Result<string, IoError> data = files.Read(file.AsStr());
+    if (data.IsErr()) return null;
+    string body = data.Unwrap();
+    http.Response r = http.Response.Text(200, body.AsStr());
+    r.SetHeader("Content-Type", TypeOf(file.AsStr()));
+    return Some(r);
+}
+
+// The media type for a file's extension.
+public str TypeOf(str path) {
+    usize dot = path.Len;
+    for (usize i = 0; i < path.Len; i++) {
+        if (path[i] == '.') dot = i;
+        if (path[i] == '/') dot = path.Len;
+    }
+    if (dot == path.Len) return "application/octet-stream";
+    str e = path[dot + 1..path.Len];
+    if (Same(e, "html") || Same(e, "htm")) return "text/html; charset=utf-8";
+    if (Same(e, "css")) return "text/css; charset=utf-8";
+    if (Same(e, "js") || Same(e, "mjs")) return "text/javascript; charset=utf-8";
+    if (Same(e, "json")) return "application/json";
+    if (Same(e, "svg")) return "image/svg+xml";
+    if (Same(e, "png")) return "image/png";
+    if (Same(e, "jpg") || Same(e, "jpeg")) return "image/jpeg";
+    if (Same(e, "gif")) return "image/gif";
+    if (Same(e, "webp")) return "image/webp";
+    if (Same(e, "ico")) return "image/x-icon";
+    if (Same(e, "wasm")) return "application/wasm";
+    if (Same(e, "txt") || Same(e, "md")) return "text/plain; charset=utf-8";
+    if (Same(e, "woff2")) return "font/woff2";
+    if (Same(e, "xml")) return "application/xml";
+    return "application/octet-stream";
+}
+
+// ------------------------------------------------------------------ serving
+
+// Serves app on host and port until the program ends, one connection at a time.
+public IoError Serve(ref App app, str host, u16 port) {
+    var net = platform.Net();
+    var files = platform.FileSystem();
+    Result<i64, IoError> l = net.Listen(host, port);
+    if (l.IsErr()) return l.UnwrapErr();
+    i64 listener = l.Unwrap();
+    while (true) ServeOneWith(ref net, ref files, ref app, listener);
+    return IoError.Other;
+}
+
+// Accepts one connection, answers its request through app, and closes it.
+public Result<bool, IoError> ServeOneWith<N, F>(ref N net, ref F files, ref App app, i64 listener) where N : INet, F : IFileSystem {
+    i64 conn = net.Accept(listener)?;
+    string raw = string.New();
+    u8[4096] buf;
+    http.Response resp = http.Response.Text(400, "bad request\n");
+    while (true) {
+        http.Request req = http.Request.New("", "");
+        bool bad = false;
+        if (http.ParseRequest(raw.AsStr(), ref req, ref bad)) {
+            resp = app.HandleWith(ref files, req);
+            if (Same(req.MethodOf(), "HEAD")) resp = Headless(resp);
+            break;
+        }
+        if (bad || raw.Len() > 1 << 20) break;
+        Result<usize, IoError> got = net.Recv(conn, buf[0..4096]);
+        if (got.IsErr() || got.Unwrap() == 0) break;
+        usize n = got.Unwrap();
+        for (usize i = 0; i < n; i++) raw.AppendByte(buf[i]);
+    }
+    string wire = http.WriteResponse(resp);
+    List<u8> bytes = List<u8>.New();
+    str w = wire.AsStr();
+    for (usize i = 0; i < w.Len; i++) bytes.Push(w[i]);
+    net.Send(conn, bytes.AsSlice());
+    net.Close(conn);
+    return Ok(true);
+}
+
+http.Response Headless(http.Response r) {
+    http.Response h = http.Response.Text(r.StatusCode(), "");
+    h.SetHeader("Content-Type", r.HeaderValue("Content-Type"));
+    return h;
+}
+
+// ------------------------------------------------------------------ helpers
+
+List<string> Split(str path) {
+    List<string> parts = List<string>.New();
+    string cur = string.New();
+    for (usize i = 0; i < path.Len; i++) {
+        if (path[i] == '/') {
+            if (cur.Len() > 0) parts.Push(cur);
+            cur = string.New();
+        } else {
+            cur.AppendByte(path[i]);
+        }
+    }
+    if (cur.Len() > 0) parts.Push(cur);
+    return parts;
+}
+
+bool Match(in List<string> pattern, in List<string> path, ref Params ps) {
+    string[] pp = pattern.AsSlice();
+    string[] xs = path.AsSlice();
+    usize i = 0;
+    while (i < pp.Len) {
+        str p = pp[i].AsStr();
+        if (p.Len > 0 && p[0] == '*') {
+            string rest = string.New();
+            for (usize k = i; k < xs.Len; k++) {
+                if (k > i) rest.AppendByte('/');
+                rest.Append(xs[k].AsStr());
+            }
+            ps.Names.Push(string.From(p[1..p.Len]));
+            ps.Values.Push(rest);
+            return true;
+        }
+        if (i >= xs.Len) return false;
+        if (p.Len > 0 && p[0] == ':') {
+            ps.Names.Push(string.From(p[1..p.Len]));
+            ps.Values.Push(string.From(xs[i].AsStr()));
+        } else if (!pp[i].Equals(xs[i].AsStr())) {
+            return false;
+        }
+        i++;
+    }
+    return i == xs.Len;
+}
+
+str Trim(str prefix) {
+    usize b = prefix.Len;
+    while (b > 0 && prefix[b - 1] == '/') b--;
+    return prefix[0..b];
+}
+
+str Parent(str p) {
+    usize k = p.Len;
+    while (k > 0 && p[k - 1] != '/') k--;
+    if (k == 0) return ".";
+    return p[0..k - 1];
+}
+
+bool StartsWith(str s, str p) {
+    if (s.Len < p.Len) return false;
+    for (usize i = 0; i < p.Len; i++) {
+        if (s[i] != p[i]) return false;
+    }
+    return true;
+}
+
+bool Same(str a, str b) {
+    if (a.Len != b.Len) return false;
+    for (usize i = 0; i < a.Len; i++) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}

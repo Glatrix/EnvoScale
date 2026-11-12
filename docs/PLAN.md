@@ -201,10 +201,10 @@ with EnvoScale.
 |---|---|---|---|
 | [9.1](https://github.com/envoscale/EnvoScale/issues/120) | The WebAssembly backend (D48) | spec run programs under Node.js, -O0 and -O2 || done |
 | [9.2](https://github.com/envoscale/EnvoScale/issues/121) | The host (`envo.js`) and the `os.wasm` adapters (D49) | library tests and conformance suites under Node.js || done |
-| [9.3](https://github.com/envoscale/EnvoScale/issues/122) | `envo.web`: router, static files, HTML building (D50) | `lib/envo/web/tests/` | |
-| [9.4](https://github.com/envoscale/EnvoScale/issues/123) | `envo.markdown` and Lumen templates (D51) | `lib/envo/markdown/tests/`, golden pages | |
-| [9.5](https://github.com/envoscale/EnvoScale/issues/124) | SSG and SSR from the same pages (D50) | golden sites | |
-| [9.6](https://github.com/envoscale/EnvoScale/issues/126) | The website and docs site built with Envo (D52) | `website/`, CI builds it | |
+| [9.3](https://github.com/envoscale/EnvoScale/issues/122) | `envo.web`: router, static files, HTML building (D50) | `lib/envo/web/tests/` || done |
+| [9.4](https://github.com/envoscale/EnvoScale/issues/123) | `envo.markdown` and Lumen templates (D51) | `lib/envo/markdown/tests/`, golden pages || done |
+| [9.5](https://github.com/envoscale/EnvoScale/issues/124) | SSG and SSR from the same pages (D50) | golden sites || done |
+| [9.6](https://github.com/envoscale/EnvoScale/issues/126) | The website and docs site built with Envo (D52) | `website/`, CI builds it || done |
 | [9.7](https://github.com/envoscale/EnvoScale/issues/125) | The sandbox: `envoc` in the browser (D52) | `envoc` built for `wasm32-web` compiles and runs a program under Node.js | |
 | [9.8](https://github.com/envoscale/EnvoScale/issues/127) | Docs and status; M9 complete | CI | |
 

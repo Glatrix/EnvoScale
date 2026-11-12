@@ -1,0 +1,87 @@
+// envo.web.templates: Lumen's CSS from the tokens (both schemes), and the Docs and
+// Landing pages' structure: the skip link, landmarks, the current page, the page's
+// contents, and escaping of every text.
+// expect: css: light accent yes, dark accent yes, focus ring yes, reduced motion yes
+// expect: docs: skip yes, main yes, current yes, toc yes, title escaped yes, content yes
+// expect: landing: hero yes, primary yes, cards 2, body yes
+use envo.web;
+use envo.web.templates;
+use envo.markdown;
+use envo.lumen;
+
+bool Has(str s, str t) {
+    for (usize i = 0; i + t.Len <= s.Len; i++) {
+        bool all = true;
+        for (usize k = 0; k < t.Len; k++) {
+            if (s[i + k] != t[k]) {
+                all = false;
+                break;
+            }
+        }
+        if (all) return true;
+    }
+    return false;
+}
+
+usize Count(str s, str t) {
+    usize n = 0;
+    for (usize i = 0; i + t.Len <= s.Len; i++) {
+        bool all = true;
+        for (usize k = 0; k < t.Len; k++) {
+            if (s[i + k] != t[k]) {
+                all = false;
+                break;
+            }
+        }
+        if (all) n++;
+    }
+    return n;
+}
+
+void Yes(str label, bool v) {
+    write(1, label);
+    if (v) write(1, " yes");
+    else write(1, " no");
+}
+
+string css = templates.Css(lumen.Light(), lumen.Dark());
+write(1, "css:");
+Yes(" light accent", Has(css.AsStr(), "--accent: #0a66d8;"));
+Yes(", dark accent", Has(css.AsStr(), "--accent: #4c9bff;"));
+Yes(", focus ring", Has(css.AsStr(), ":focus-visible"));
+Yes(", reduced motion", Has(css.AsStr(), "prefers-reduced-motion"));
+print("");
+
+templates.Frame f = templates.Frame.New("Site <&>", "../index.html", "../lumen.css");
+List<templates.NavItem> nav = List<templates.NavItem>.New();
+nav.Push(templates.NavItem.Heading("Start"));
+nav.Push(templates.NavItem.Link("Intro", "intro.html", 0));
+nav.Push(templates.NavItem.Link("Other", "other.html", 1));
+markdown.Doc d = markdown.Render("# Intro\n\n## First\n\nText.\n\n### Deeper\n", markdown.Options.Site());
+string page = templates.Docs(f, "Intro <x>", "", nav, "intro.html", d);
+str p = page.AsStr();
+write(1, "docs:");
+Yes(" skip", Has(p, "<a class=\"skip\" href=\"#main\">"));
+Yes(", main", Has(p, "<main id=\"main\""));
+Yes(", current", Has(p, "<a href=\"intro.html\" aria-current=\"page\">Intro</a>"));
+Yes(", toc", Has(p, "<a href=\"#first\">First</a>") && Has(p, "class=\"l3\""));
+Yes(", title escaped", Has(p, "<title>Intro &lt;x&gt; · Site &lt;&amp;&gt;</title>"));
+Yes(", content", Has(p, "<h2 id=\"first\">First</h2>"));
+print("");
+
+templates.Landing l = templates.Landing.New("Hello", "A lead.");
+l.PrimaryText = string.From("Start");
+l.PrimaryHref = string.From("start.html");
+l.Features.Push(templates.Feature.Of("One", "First.", ""));
+l.Features.Push(templates.Feature.Of("Two", "Second.", "two.html"));
+l.Body = string.From("<p>More.</p>");
+string home = templates.LandingPage(f, l);
+str hp = home.AsStr();
+write(1, "landing:");
+Yes(" hero", Has(hp, "<h1>Hello</h1>"));
+Yes(", primary", Has(hp, "<a class=\"button primary\" href=\"start.html\">Start</a>"));
+write(1, ", cards ");
+if (Count(hp, "<div class=\"card\">") == 2) write(1, "2");
+else write(1, "?");
+Yes(", body", Has(hp, "<p>More.</p>"));
+print("");

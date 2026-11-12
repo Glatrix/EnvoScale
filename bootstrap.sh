@@ -781,6 +781,18 @@ EOF_ERR
     else
         say 'wasm: skipped (no Node.js on this machine)'
     fi
+    # The website, written in Envo (website/README.md): it builds, and its pages are there
+    say 'website: website/site.envo builds the site'
+    run "$ROOT" build -O2 --lib "$ROOT" "$ROOT/website/site.envo" -o "$ROOT/build/site-tool$(host_suffix)"
+    if [ "$rc" -ne 0 ]; then bad 'website build' "$(cat "$TMP/err")"; else
+        rm -rf "$ROOT/build/site"
+        set +e
+        (cd "$ROOT" && "$ROOT/build/site-tool$(host_suffix)" build build/site) > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ] && grep -q 'aria-current="page"' "$ROOT/build/site/docs/spec/eir.html" && grep -q -- '--accent:' "$ROOT/build/site/lumen.css" && grep -q '<h1>' "$ROOT/build/site/index.html"; then pass
+        else bad 'website pages' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     say 'envo commands: new, run, test, check, explain, version'
     erun="$ROOT/build/run-envo"
