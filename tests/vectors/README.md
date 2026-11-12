@@ -17,6 +17,8 @@ below; nothing else from those documents is copied.
 | AES-GCM | The Galois/Counter Mode of Operation (McGrew, Viega), submitted to NIST | test cases 1 to 3 | `aes.envo` |
 | X25519 | RFC 7748 | section 5.2 (tests 1, 2; one iteration), section 6.1 | `curve25519.envo`, `x25519_vm.envo` |
 | Ed25519 | RFC 8032 | section 7.1, tests 1 to 3 | `curve25519.envo` |
+| SHA-384 | NIST FIPS 180-4 examples | "abc" | `hashes.envo` |
+| RSA (PKCS #1 v1.5, PSS), ECDSA P-256 and P-384 | Made with OpenSSL 1.1.1 for these tests, from throwaway keys (the public keys and signatures only) | one signature each | `signatures.envo` |
 
 Larger suites (Wycheproof, NIST CAVP) arrive as data files with a `SOURCE.md` each when
 the library can read them in its tests.

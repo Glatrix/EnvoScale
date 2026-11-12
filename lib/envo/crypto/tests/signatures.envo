@@ -1,0 +1,56 @@
+// envo.crypto.rsa and ecdsa: signatures made by OpenSSL 1.1.1 with throwaway test keys
+// (tests/vectors/README.md): RSA-2048 with PKCS #1 v1.5 and PSS (SHA-256), ECDSA on P-256
+// (SHA-256) and P-384 (SHA-384). Each must verify, and fail for a changed message.
+// expect: pkcs1 ok
+// expect: pss ok
+// expect: rsa tampered rejected
+// expect: prime256v1 ok, tampered rejected
+// expect: secp384r1 ok, tampered rejected
+// vm: skip (about a minute in the script runtime: big-number arithmetic)
+use envo.crypto.rsa;
+use envo.crypto.ecdsa;
+
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> FromHex(str h) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i + 1 < h.Len; i += 2) b.Push(Nib(h[i]) * 16 + Nib(h[i + 1]));
+    return b;
+}
+
+List<u8> n = FromHex("c2a5afa0334e9799811a6179d2020100b4ed81a8189330a539fa9cd5c89bb27f1b303785cd39c5f006f000ea0c7aff158bdf21faef1eebb5ec0466b84a803d363117f2ab3d7d12103ca8ae1641e585c4fdb5f81360a507d03749fc4f24778bfb6bac42df7e6ffaa0794d560db6418c53cffa7dbf0e5a08bba7ead0f886b7439ae6cf8d5b297060c6acdbfa16095f7e45061d2febf4e1b58e691cd1e1f61d84380c2750b22281b85539058b3b5847476ff6899b9280753f5c87cdfaf4d7bf85d78d1ec3878c01381b3dc125e32cba819fee6be72525f4c75fced431e239fba4d937a79234ef5430859291d7f7c60c27cc490fbbdae4739da3c1eca1d821f2c493");
+List<u8> s1 = FromHex("99c097bd1f1161d0bb8705a96fde24d25dd88557af52db68bcf3beea0de3fe38eb850d904b505dac0506e22aa4a9505087c35c03960b736aff8edccdbe74037f8add5f5cb331d4ec27d259b37905e7b1f94bea1cc3eaa3eee58260c6b169506b9292594ad6a7b64c7892589d92093215a0be526b608d3a087c9e5e0d196e8b8ffb0965350bc072b3586444a2f662d69915240e39f9ad2c09ec097db9c406a8cc4d0d39fc978b283539e69bcd17d4e00fa51c2bb3356a3caf70fcd4a1369feeec22e923278144b54a0c43318a425ccee314297b21e5934b34fab588a199b122994a20334f785cb00789a934d2c5c78a308bea712812ad6aa1208810d6c1004be9");
+List<u8> sp = FromHex("6d1952cd163471c7e487f76354c949246dee6fb890a2936ef60e38ac73429169b1bedf43750e486b5b50dbb6591d860792cae570ee934ca2fd3306245c0c5f5e31410d6bc2a521d35fc84f17bf65fc89427f8be9671981ca83a4a0dbb5ca2946e47694ec27457b67dbb23d0193a615ed9f1a26719a50fe1b54bfcbffb367d0a129f699e99de8d79e5cb83719004418eecb98b8f1e6ef21655a11159cb3894adb892baae45cecdcb9b8a20b089ea6c1a6ff4d3ea2a99cb4b8348aae9a1e1702f37b4ee695dca63b3cc3cf5b9928b7597fe931003c98ba264cc3e0de153b21ec1384bb6181ba646a6311970b445b42cef5cdc02c81de52e99ae9a3e6bb1412451d");
+str msg = "envo signs this";
+List<u8> m = List<u8>.New();
+for (usize i = 0; i < msg.Len; i++) m.Push(msg[i]);
+rsa.PublicKey key = rsa.PublicKey.New(n.AsSlice(), 65537);
+if (rsa.VerifyPkcs1Sha256(key, m.AsSlice(), s1.AsSlice())) print("pkcs1 ok");
+if (rsa.VerifyPssSha256(key, m.AsSlice(), sp.AsSlice())) print("pss ok");
+m.Set(0, 'E');
+if (!rsa.VerifyPkcs1Sha256(key, m.AsSlice(), s1.AsSlice()) && !rsa.VerifyPssSha256(key, m.AsSlice(), sp.AsSlice())) print("rsa tampered rejected");
+
+void Check(in ecdsa.Curve c, str name, str qx, str qy, str dig, str sig) {
+    List<u8> x = FromHex(qx);
+    List<u8> y = FromHex(qy);
+    List<u8> d = FromHex(dig);
+    List<u8> der = FromHex(sig);
+    List<u8> r = List<u8>.New();
+    List<u8> s = List<u8>.New();
+    if (!ecdsa.SplitDer(der.AsSlice(), ref r, ref s)) {
+        print("bad der");
+        return;
+    }
+    write(1, name);
+    if (ecdsa.Verify(c, x.AsSlice(), y.AsSlice(), d.AsSlice(), r.AsSlice(), s.AsSlice())) write(1, " ok");
+    else write(1, " FAILED");
+    d.Set(0, d.Get(0) ^ 1);
+    if (!ecdsa.Verify(c, x.AsSlice(), y.AsSlice(), d.AsSlice(), r.AsSlice(), s.AsSlice())) print(", tampered rejected");
+    else print(", tampered ACCEPTED");
+}
+
+Check(ecdsa.Curve.P256(), "prime256v1", "ecd9f28479d2ecf6815cb9811dbfb4e13d7f7a0d31278184a7c43679f034994c", "d720dd17d5f41d9dfa6a8645bea1dc0a37f1ce5c8325bfb5bc4219781709727c", "a6a6d5b58f5146c7074f7700a3818f8ed5f92ccfc2aef02bc9234d6bff7f44f6", "3044022053c4d1b4d0445e5a447a3a882aa6b497b49dd6a60191e31ea148b69e904a0dae02207bb977e983dbc8ca177b3e8079844e237702180690ad1d2bcdc0486f831111d0");
+Check(ecdsa.Curve.P384(), "secp384r1", "1bb07031a295967dfaa4ddfa62bf41117fae274af8c98a52ac6388dcb5bb8795203e6148d5a4f80fe5fd8a6f70fb8684", "e2684ecb0957824c4b948e308075ec9f30450b0e1b21e66680090d081950af16b912f37e3b516eb285d8bdb9c4d82299", "bab7524d003fa26981916ef9af92b0282d5560cacddfbf28548c4f5ced76326434fe766fd1bfbdffa78ea06cc3349f9c", "3066023100a750196fbd150068ce359d54593efff329d9b9d794f8b0e28e8fdb87570f78ee5eb10faaf42d903cd92acc5ea71357ee023100c7c3321f19bdf0ad5be62801931da222ca1038c0a5852e707c97cead309745e23f2ca204a11a9b5e317e66be084605af");

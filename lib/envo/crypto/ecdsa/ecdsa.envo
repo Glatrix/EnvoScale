@@ -1,0 +1,218 @@
+// envo.crypto.ecdsa: ECDSA signature verification (FIPS 186-5) on P-256 and P-384, for
+// certificates and TLS. Verification only: public values, not constant time.
+namespace envo.crypto.ecdsa;
+
+use envo.crypto.bigint;
+use envo.crypto.sha2;
+
+u8 HexDigit(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> HexBytes(str h) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i + 1 < h.Len; i += 2) b.Push(HexDigit(h[i]) * 16 + HexDigit(h[i + 1]));
+    return b;
+}
+
+// A curve y^2 = x^3 - 3x + b over the field mod p, with a base point of prime order n.
+public struct Curve {
+    bigint.Mont F;      // the field
+    bigint.Mont N;      // scalars mod the order
+    bigint.Nat B;       // b, in Montgomery form
+    bigint.Nat Gx;      // the base point, in Montgomery form
+    bigint.Nat Gy;
+    usize Bytes;        // the size of a coordinate
+
+    static Curve Make(str p, str n, str b, str gx, str gy, usize bytes) {
+        List<u8> pb = HexBytes(p);
+        List<u8> nb = HexBytes(n);
+        bigint.Mont f = bigint.Mont.New(bigint.Nat.FromBytes(pb.AsSlice(), 0));
+        bigint.Mont order = bigint.Mont.New(bigint.Nat.FromBytes(nb.AsSlice(), 0));
+        usize k = f.Limbs();
+        List<u8> bb = HexBytes(b);
+        List<u8> xb = HexBytes(gx);
+        List<u8> yb = HexBytes(gy);
+        bigint.Nat bm = f.To(bigint.Nat.FromBytes(bb.AsSlice(), k));
+        bigint.Nat xm = f.To(bigint.Nat.FromBytes(xb.AsSlice(), k));
+        bigint.Nat ym = f.To(bigint.Nat.FromBytes(yb.AsSlice(), k));
+        return new Curve { F = f, N = order, B = bm, Gx = xm, Gy = ym, Bytes = bytes };
+    }
+
+    // NIST P-256 (secp256r1).
+    public static Curve P256() {
+        return Curve.Make(
+            "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff",
+            "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",
+            "5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b",
+            "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+            "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5", 32);
+    }
+
+    // NIST P-384 (secp384r1).
+    public static Curve P384() {
+        return Curve.Make(
+            "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973",
+            "b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef",
+            "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7",
+            "3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f", 48);
+    }
+
+    public usize CoordinateBytes(in this) => this.Bytes;
+}
+
+// A point in Jacobian coordinates (x = X/Z^2, y = Y/Z^3), Montgomery form; Z = 0 is the
+// point at infinity.
+struct Jac {
+    bigint.Nat X;
+    bigint.Nat Y;
+    bigint.Nat Z;
+}
+
+Jac Infinity(in Curve c) {
+    usize k = c.F.Limbs();
+    return new Jac { X = c.F.One(), Y = c.F.One(), Z = bigint.Nat.Zero(k) };
+}
+
+Jac Double(in Curve c, in Jac p) {
+    if (p.Z.IsZero() || p.Y.IsZero()) return Infinity(c);
+    var f = c.F;
+    bigint.Nat delta = f.Mul(p.Z, p.Z);
+    bigint.Nat gamma = f.Mul(p.Y, p.Y);
+    bigint.Nat beta = f.Mul(p.X, gamma);
+    bigint.Nat t = f.Mul(f.Sub(p.X, delta), f.Add(p.X, delta));
+    bigint.Nat alpha = f.Add(f.Add(t, t), t);
+    bigint.Nat b2 = f.Add(beta, beta);
+    bigint.Nat b4 = f.Add(b2, b2);
+    bigint.Nat b8 = f.Add(b4, b4);
+    bigint.Nat x3 = f.Sub(f.Mul(alpha, alpha), b8);
+    bigint.Nat yz = f.Add(p.Y, p.Z);
+    bigint.Nat z3 = f.Sub(f.Sub(f.Mul(yz, yz), gamma), delta);
+    bigint.Nat g2 = f.Mul(gamma, gamma);
+    bigint.Nat g4 = f.Add(g2, g2);
+    bigint.Nat g8 = f.Add(g4, g4);
+    bigint.Nat g16 = f.Add(g8, g8);
+    bigint.Nat y3 = f.Sub(f.Mul(alpha, f.Sub(b4, x3)), g16);
+    return new Jac { X = x3, Y = y3, Z = z3 };
+}
+
+Jac AddPoints(in Curve c, in Jac p, in Jac q) {
+    if (p.Z.IsZero()) return new Jac { X = q.X.Copy(), Y = q.Y.Copy(), Z = q.Z.Copy() };
+    if (q.Z.IsZero()) return new Jac { X = p.X.Copy(), Y = p.Y.Copy(), Z = p.Z.Copy() };
+    var f = c.F;
+    bigint.Nat z1z1 = f.Mul(p.Z, p.Z);
+    bigint.Nat z2z2 = f.Mul(q.Z, q.Z);
+    bigint.Nat u1 = f.Mul(p.X, z2z2);
+    bigint.Nat u2 = f.Mul(q.X, z1z1);
+    bigint.Nat s1 = f.Mul(f.Mul(p.Y, q.Z), z2z2);
+    bigint.Nat s2 = f.Mul(f.Mul(q.Y, p.Z), z1z1);
+    bigint.Nat h = f.Sub(u2, u1);
+    bigint.Nat rr = f.Sub(s2, s1);
+    if (h.IsZero()) {
+        if (rr.IsZero()) return Double(c, p);
+        return Infinity(c);
+    }
+    bigint.Nat h2 = f.Add(h, h);
+    bigint.Nat i = f.Mul(h2, h2);
+    bigint.Nat j = f.Mul(h, i);
+    bigint.Nat r = f.Add(rr, rr);
+    bigint.Nat v = f.Mul(u1, i);
+    bigint.Nat x3 = f.Sub(f.Sub(f.Mul(r, r), j), f.Add(v, v));
+    bigint.Nat s1j = f.Mul(s1, j);
+    bigint.Nat y3 = f.Sub(f.Mul(r, f.Sub(v, x3)), f.Add(s1j, s1j));
+    bigint.Nat zz = f.Add(p.Z, q.Z);
+    bigint.Nat z3 = f.Mul(f.Sub(f.Sub(f.Mul(zz, zz), z1z1), z2z2), h);
+    return new Jac { X = x3, Y = y3, Z = z3 };
+}
+
+// k times p (k an ordinary number), by double and add.
+Jac Times(in Curve c, in Jac p, in bigint.Nat k) {
+    Jac acc = Infinity(c);
+    usize bit = k.Bits();
+    while (bit > 0) {
+        bit--;
+        acc = Double(c, acc);
+        if (k.Bit(bit)) acc = AddPoints(c, acc, p);
+    }
+    return acc;
+}
+
+// Checks signature (r, s), big-endian, over a digest, under the public key (x, y) on
+// curve c. The digest is cut to the order's length (FIPS 186-5 section 6.4.2).
+public bool Verify(in Curve c, u8[] qx, u8[] qy, u8[] digest, u8[] r, u8[] s) {
+    var f = c.F;
+    var n = c.N;
+    usize k = f.Limbs();
+    usize kn = n.Limbs();
+    bigint.Nat p = f.Modulus();
+    bigint.Nat order = n.Modulus();
+    if (qx.Len > c.Bytes || qy.Len > c.Bytes || r.Len > c.Bytes + 1 || s.Len > c.Bytes + 1) return false;
+    bigint.Nat x = bigint.Nat.FromBytes(qx, k);
+    bigint.Nat y = bigint.Nat.FromBytes(qy, k);
+    if (bigint.Ge(x.L.AsSlice(), p.L.AsSlice()) || bigint.Ge(y.L.AsSlice(), p.L.AsSlice())) return false;
+    bigint.Nat rn = bigint.Nat.FromBytes(r, kn);
+    bigint.Nat sn = bigint.Nat.FromBytes(s, kn);
+    if (rn.IsZero() || sn.IsZero() || bigint.Ge(rn.L.AsSlice(), order.L.AsSlice()) || bigint.Ge(sn.L.AsSlice(), order.L.AsSlice())) return false;
+    // the key must be on the curve: y^2 = x^3 - 3x + b
+    bigint.Nat xm = f.To(x);
+    bigint.Nat ym = f.To(y);
+    bigint.Nat x3 = f.Mul(f.Mul(xm, xm), xm);
+    bigint.Nat three = f.Add(f.Add(xm, xm), xm);
+    bigint.Nat rhs = f.Add(f.Sub(x3, three), c.B);
+    if (!bigint.Equal(f.Mul(ym, ym).L.AsSlice(), rhs.L.AsSlice())) return false;
+    // e: the digest's leftmost bits, as many as the order has
+    usize nBits = order.Bits();
+    bigint.Nat e = bigint.Nat.FromBytes(digest, 0);
+    usize dBits = digest.Len * 8;
+    if (dBits > nBits) {
+        // shift right by dBits - nBits
+        usize shift = dBits - nBits;
+        bigint.Nat t = bigint.Nat.Zero(e.L.Len());
+        for (usize i = 0; i + shift < dBits; i++) {
+            if (e.Bit(i + shift)) t.L.Set(i / 32, t.L.Get(i / 32) | (1 << (i % 32) as u32));
+        }
+        e = t;
+    }
+    bigint.Nat em = n.To(n.Reduce(e));
+    bigint.Nat w = n.Inv(n.To(sn));
+    bigint.Nat u1 = n.From(n.Mul(em, w));
+    bigint.Nat u2 = n.From(n.Mul(n.To(rn), w));
+    Jac g = new Jac { X = c.Gx.Copy(), Y = c.Gy.Copy(), Z = f.One() };
+    Jac q = new Jac { X = xm, Y = ym, Z = f.One() };
+    Jac sum = AddPoints(c, Times(c, g, u1), Times(c, q, u2));
+    if (sum.Z.IsZero()) return false;
+    // x = X / Z^2, back to an ordinary number, mod n
+    bigint.Nat zi = f.Inv(sum.Z);
+    bigint.Nat ax = f.From(f.Mul(sum.X, f.Mul(zi, zi)));
+    bigint.Nat v = n.Reduce(ax);
+    return bigint.Equal(v.L.AsSlice(), rn.L.AsSlice());
+}
+
+// Reads a DER signature, SEQUENCE { INTEGER r, INTEGER s }, into r and s (without leading
+// zero bytes); false if it is not one.
+public bool SplitDer(u8[] der, ref List<u8> r, ref List<u8> s) {
+    if (der.Len < 8 || der[0] != 0x30) return false;
+    usize at = 2;
+    usize total = der[1] as usize;
+    if (der[1] == 0x81) {
+        total = der[2] as usize;
+        at = 3;
+    }
+    if (at + total != der.Len) return false;
+    for (usize which = 0; which < 2; which++) {
+        if (at + 2 > der.Len || der[at] != 0x02) return false;
+        usize len = der[at + 1] as usize;
+        at += 2;
+        if (at + len > der.Len || len == 0) return false;
+        List<u8> v = List<u8>.New();
+        usize start = at;
+        while (start < at + len - 1 && der[start] == 0) start++;
+        for (usize i = start; i < at + len; i++) v.Push(der[i]);
+        if (which == 0) r = v;
+        else s = v;
+        at += len;
+    }
+    return at == der.Len;
+}

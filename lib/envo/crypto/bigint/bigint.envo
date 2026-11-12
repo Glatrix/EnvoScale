@@ -1,0 +1,255 @@
+// envo.crypto.bigint: arithmetic on large numbers modulo an odd number, in Montgomery
+// form, for public-key verification (RSA, ECDSA). It works on public values, so it is not
+// constant time: do not use it with secrets.
+namespace envo.crypto.bigint;
+
+// A number: 32-bit limbs, least significant first, a fixed count for its modulus.
+public struct Nat {
+    List<u32> L;
+
+    public static Nat Zero(usize limbs) {
+        Nat n = new Nat { L = List<u32>.New() };
+        for (usize i = 0; i < limbs; i++) n.L.Push(0);
+        return n;
+    }
+
+    // Big-endian bytes, in limbs limbs (0: as many as the bytes need).
+    public static Nat FromBytes(u8[] b, usize limbs) {
+        usize k = limbs;
+        if (k == 0) k = (b.Len + 3) / 4;
+        Nat x = Nat.Zero(k);
+        for (usize i = 0; i < b.Len; i++) {
+            usize pos = b.Len - 1 - i;
+            if (i / 4 >= k) {
+                if (b[pos] != 0) x.L.Set(0, 0xffffffff);    // too big: callers check bounds
+                continue;
+            }
+            u32 limb = x.L.Get(i / 4);
+            x.L.Set(i / 4, limb | ((b[pos] as u32) << (8 * (i % 4)) as u32));
+        }
+        return x;
+    }
+
+    public Nat Copy(in this) {
+        Nat c = Nat.Zero(0);
+        foreach (var v in this.L.AsSlice()) c.L.Push(v);
+        return c;
+    }
+
+    // As big-endian bytes into into.
+    public void ToBytes(in this, mut u8[] into) {
+        for (usize i = 0; i < into.Len; i++) {
+            usize pos = into.Len - 1 - i;
+            u8 v = 0;
+            if (i / 4 < this.L.Len()) v = (this.L.Get(i / 4) >> (8 * (i % 4)) as u32) as u8;
+            into[pos] = v;
+        }
+    }
+
+    public usize Bits(in this) {
+        usize k = this.L.Len();
+        while (k > 0 && this.L.Get(k - 1) == 0) k--;
+        if (k == 0) return 0;
+        u32 top = this.L.Get(k - 1);
+        usize b = 0;
+        while (top != 0) {
+            b++;
+            top = top >> 1;
+        }
+        return (k - 1) * 32 + b;
+    }
+
+    public bool IsZero(in this) => this.Bits() == 0;
+
+    // Bit i.
+    public bool Bit(in this, usize i) {
+        if (i / 32 >= this.L.Len()) return false;
+        return (this.L.Get(i / 32) >> (i % 32) as u32) & 1 != 0;
+    }
+}
+
+// Is a >= b (the same number of limbs)?
+public bool Ge(u32[] a, u32[] b) {
+    usize k = a.Len;
+    while (k > 0) {
+        k--;
+        if (a[k] > b[k]) return true;
+        if (a[k] < b[k]) return false;
+    }
+    return true;
+}
+
+public bool Equal(u32[] a, u32[] b) {
+    if (a.Len != b.Len) return false;
+    for (usize i = 0; i < a.Len; i++) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+// a - b into a, giving the borrow.
+u32 SubInPlace(mut u32[] a, u32[] b) {
+    u64 borrow = 0;
+    for (usize i = 0; i < a.Len; i++) {
+        u64 d = a[i] as u64 -% b[i] as u64 -% borrow;
+        a[i] = d as u32;
+        borrow = (d >> 63) & 1;
+    }
+    return borrow as u32;
+}
+
+// a + b into a, giving the carry.
+u32 AddInPlace(mut u32[] a, u32[] b) {
+    u64 carry = 0;
+    for (usize i = 0; i < a.Len; i++) {
+        u64 s = a[i] as u64 + b[i] as u64 + carry;
+        a[i] = s as u32;
+        carry = s >> 32;
+    }
+    return carry as u32;
+}
+
+// Arithmetic modulo an odd M of k limbs, values in Montgomery form (x R mod M, R = 2^32k).
+public struct Mont {
+    Nat M;
+    u32 MInv;           // -M^-1 mod 2^32
+    Nat R2;             // R^2 mod M
+    usize K;
+
+    public static Mont New(in Nat m) {
+        usize k = m.L.Len();
+        while (k > 0 && m.L.Get(k - 1) == 0) k--;
+        Nat mm = Nat.Zero(k);
+        for (usize i = 0; i < k; i++) mm.L.Set(i, m.L.Get(i));
+        u32 m0 = mm.L.Get(0);
+        u32 inv = 1;
+        for (usize i = 0; i < 5; i++) inv = inv *% (2 -% m0 *% inv);
+        Nat r = Nat.Zero(k);
+        r.L.Set(0, 1);
+        for (usize step = 0; step < 64 * k; step++) {
+            u32 carry = 0;
+            for (usize i = 0; i < k; i++) {
+                u32 v = r.L.Get(i);
+                r.L.Set(i, (v << 1) | carry);
+                carry = v >> 31;
+            }
+            if (carry != 0 || Ge(r.L.AsSlice(), mm.L.AsSlice())) SubInPlace(r.L.AsMutSlice(), mm.L.AsSlice());
+        }
+        return new Mont { M = mm, MInv = 0 -% inv, R2 = r, K = k };
+    }
+
+    public usize Limbs(in this) => this.K;
+    public Nat Modulus(in this) => this.M.Copy();
+
+    // a b R^-1 mod M (CIOS).
+    public Nat Mul(in this, in Nat a, in Nat b) {
+        usize k = this.K;
+        Nat t = Nat.Zero(k + 2);
+        unsafe {
+            *u32 tp = t.L.Data;
+            *u32 ap = a.L.Data;
+            *u32 bp = b.L.Data;
+            *u32 np = this.M.L.Data;
+            for (usize i = 0; i < k; i++) {
+                u64 carry = 0;
+                u64 bi = bp[i] as u64;
+                for (usize j = 0; j < k; j++) {
+                    u64 v = tp[j] as u64 + ap[j] as u64 * bi + carry;
+                    tp[j] = v as u32;
+                    carry = v >> 32;
+                }
+                u64 v = tp[k] as u64 + carry;
+                tp[k] = v as u32;
+                tp[k + 1] = (v >> 32) as u32;
+                u64 m = (tp[0] *% this.MInv) as u64;
+                v = tp[0] as u64 + m * np[0] as u64;
+                carry = v >> 32;
+                for (usize j = 1; j < k; j++) {
+                    v = tp[j] as u64 + m * np[j] as u64 + carry;
+                    tp[j - 1] = v as u32;
+                    carry = v >> 32;
+                }
+                v = tp[k] as u64 + carry;
+                tp[k - 1] = v as u32;
+                tp[k] = tp[k + 1] + (v >> 32) as u32;
+                tp[k + 1] = 0;
+            }
+        }
+        Nat r = Nat.Zero(k);
+        for (usize i = 0; i < k; i++) r.L.Set(i, t.L.Get(i));
+        if (t.L.Get(k) != 0 || Ge(r.L.AsSlice(), this.M.L.AsSlice())) SubInPlace(r.L.AsMutSlice(), this.M.L.AsSlice());
+        return r;
+    }
+
+    // x (below M, k limbs) into Montgomery form, and back.
+    public Nat To(in this, in Nat x) => this.Mul(x, this.R2);
+
+    public Nat From(in this, in Nat x) {
+        Nat one = Nat.Zero(this.K);
+        one.L.Set(0, 1);
+        return this.Mul(x, one);
+    }
+
+    public Nat One(in this) {
+        Nat one = Nat.Zero(this.K);
+        one.L.Set(0, 1);
+        return this.To(one);
+    }
+
+    public Nat Add(in this, in Nat a, in Nat b) {
+        Nat r = a.Copy();
+        u32 carry = AddInPlace(r.L.AsMutSlice(), b.L.AsSlice());
+        if (carry != 0 || Ge(r.L.AsSlice(), this.M.L.AsSlice())) SubInPlace(r.L.AsMutSlice(), this.M.L.AsSlice());
+        return r;
+    }
+
+    public Nat Sub(in this, in Nat a, in Nat b) {
+        Nat r = a.Copy();
+        u32 borrow = SubInPlace(r.L.AsMutSlice(), b.L.AsSlice());
+        if (borrow != 0) AddInPlace(r.L.AsMutSlice(), this.M.L.AsSlice());
+        return r;
+    }
+
+    // a^e (a and the result in Montgomery form; e an ordinary number).
+    public Nat Pow(in this, in Nat a, in Nat e) {
+        Nat acc = this.One();
+        usize bit = e.Bits();
+        while (bit > 0) {
+            bit--;
+            acc = this.Mul(acc, acc);
+            if (e.Bit(bit)) acc = this.Mul(acc, a);
+        }
+        return acc;
+    }
+
+    // a^-1 for a prime M (Fermat: a^(M-2)), in Montgomery form.
+    public Nat Inv(in this, in Nat a) {
+        Nat e = this.M.Copy();
+        Nat two = Nat.Zero(this.K);
+        two.L.Set(0, 2);
+        SubInPlace(e.L.AsMutSlice(), two.L.AsSlice());
+        return this.Pow(a, e);
+    }
+
+    // x mod M for an x of any length (shift in one bit at a time).
+    public Nat Reduce(in this, in Nat x) {
+        Nat r = Nat.Zero(this.K + 1);
+        Nat m = Nat.Zero(this.K + 1);
+        for (usize i = 0; i < this.K; i++) m.L.Set(i, this.M.L.Get(i));
+        usize bit = x.Bits();
+        while (bit > 0) {
+            bit--;
+            u32 carry = 0;
+            if (x.Bit(bit)) carry = 1;
+            for (usize i = 0; i < this.K + 1; i++) {
+                u32 v = r.L.Get(i);
+                r.L.Set(i, (v << 1) | carry);
+                carry = v >> 31;
+            }
+            if (Ge(r.L.AsSlice(), m.L.AsSlice())) SubInPlace(r.L.AsMutSlice(), m.L.AsSlice());
+        }
+        Nat res = Nat.Zero(this.K);
+        for (usize i = 0; i < this.K; i++) res.L.Set(i, r.L.Get(i));
+        return res;
+    }
+}

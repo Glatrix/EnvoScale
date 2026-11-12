@@ -1,0 +1,149 @@
+// envo.crypto.rsa: RSA signature verification (RFC 8017): RSASSA-PKCS1-v1_5 and RSASSA-PSS
+// with SHA-256, for certificates and TLS. Verification only: it works on public values,
+// so it need not be constant time (envo.crypto.bigint). Moduli of 1024 to 8192 bits.
+namespace envo.crypto.rsa;
+
+use envo.crypto.sha2;
+use envo.crypto.bigint;
+
+// A public key: modulus and exponent, big-endian bytes.
+public struct PublicKey {
+    List<u8> N;
+    u64 E;
+
+    public static PublicKey New(u8[] modulus, u64 exponent) {
+        List<u8> n = List<u8>.New();
+        usize start = 0;
+        while (start < modulus.Len && modulus[start] == 0) start++;
+        for (usize i = start; i < modulus.Len; i++) n.Push(modulus[i]);
+        return new PublicKey { N = n, E = exponent };
+    }
+
+    public usize ModulusBits(in this) {
+        bigint.Nat n = bigint.Nat.FromBytes(this.N.AsSlice(), 0);
+        return n.Bits();
+    }
+}
+
+// sig^e mod n as k bytes (the encoded message), or false if sig is not below n.
+bool Recover(in PublicKey key, u8[] sig, ref List<u8> em, usize k) {
+    if (sig.Len != key.N.Len() || key.N.Len() < 128 || key.N.Len() > 1024 || key.E < 3 || key.E % 2 == 0) return false;
+    bigint.Nat n = bigint.Nat.FromBytes(key.N.AsSlice(), 0);
+    bigint.Mont m = bigint.Mont.New(n);
+    bigint.Nat s = bigint.Nat.FromBytes(sig, m.Limbs());
+    bigint.Nat nn = m.Modulus();
+    if (bigint.Ge(s.L.AsSlice(), nn.L.AsSlice())) return false;
+    bigint.Nat e = bigint.Nat.Zero(2);
+    e.L.Set(0, key.E as u32);
+    e.L.Set(1, (key.E >> 32) as u32);
+    bigint.Nat x = m.From(m.Pow(m.To(s), e));
+    List<u8> res = List<u8>.New();
+    for (usize i = 0; i < k; i++) res.Push(0);
+    x.ToBytes(res.AsMutSlice());
+    em = res;
+    return true;
+}
+
+// The DER prefix of a SHA-256 DigestInfo (RFC 8017 section 9.2, note 1).
+void Sha256Prefix(ref List<u8> b) {
+    u8[19] p;
+    p[0] = 0x30; p[1] = 0x31; p[2] = 0x30; p[3] = 0x0d; p[4] = 0x06; p[5] = 0x09; p[6] = 0x60;
+    p[7] = 0x86; p[8] = 0x48; p[9] = 0x01; p[10] = 0x65; p[11] = 0x03; p[12] = 0x04; p[13] = 0x02;
+    p[14] = 0x01; p[15] = 0x05; p[16] = 0x00; p[17] = 0x04; p[18] = 0x20;
+    for (usize i = 0; i < 19; i++) b.Push(p[i]);
+}
+
+// Checks an RSASSA-PKCS1-v1_5 signature with SHA-256 of msg.
+public bool VerifyPkcs1Sha256(in PublicKey key, u8[] msg, u8[] sig) {
+    usize k = key.N.Len();
+    List<u8> em = List<u8>.New();
+    if (!Recover(key, sig, ref em, k)) return false;
+    u8[32] h;
+    sha2.Sha256 d = sha2.Sha256.New();
+    d.Update(msg);
+    d.Finish(h[0..32]);
+    // 00 01 FF..FF 00 DigestInfo
+    List<u8> want = List<u8>.New();
+    want.Push(0);
+    want.Push(1);
+    usize t = 19 + 32;
+    if (k < t + 11) return false;
+    for (usize i = 0; i < k - t - 3; i++) want.Push(0xff);
+    want.Push(0);
+    Sha256Prefix(ref want);
+    for (usize i = 0; i < 32; i++) want.Push(h[i]);
+    u8 diff = 0;
+    for (usize i = 0; i < k; i++) diff = diff | (want.AsSlice()[i] ^ em.AsSlice()[i]);
+    return diff == 0;
+}
+
+// MGF1 with SHA-256 (RFC 8017 appendix B.2.1): mask.Len bytes from seed.
+void Mgf1(u8[] seed, mut u8[] mask) {
+    usize at = 0;
+    u32 counter = 0;
+    while (at < mask.Len) {
+        sha2.Sha256 h = sha2.Sha256.New();
+        h.Update(seed);
+        u8[4] c;
+        c[0] = (counter >> 24) as u8;
+        c[1] = (counter >> 16) as u8;
+        c[2] = (counter >> 8) as u8;
+        c[3] = counter as u8;
+        h.Update(c[0..4]);
+        u8[32] d;
+        h.Finish(d[0..32]);
+        for (usize i = 0; i < 32 && at < mask.Len; i++) {
+            mask[at] = d[i];
+            at++;
+        }
+        counter++;
+    }
+}
+
+// Checks an RSASSA-PSS signature with SHA-256, MGF1 with SHA-256 and a 32-byte salt (as
+// TLS 1.3 and most certificates use; RFC 8017 section 9.1.2).
+public bool VerifyPssSha256(in PublicKey key, u8[] msg, u8[] sig) {
+    usize modBits = key.ModulusBits();
+    usize emBits = modBits - 1;
+    usize emLen = (emBits + 7) / 8;
+    List<u8> full = List<u8>.New();
+    if (!Recover(key, sig, ref full, key.N.Len())) return false;
+    // EM is the last emLen bytes; anything before it must be zero
+    usize skip = key.N.Len() - emLen;
+    for (usize i = 0; i < skip; i++) {
+        if (full.AsSlice()[i] != 0) return false;
+    }
+    u8[] em = full.AsSlice()[skip..full.Len()];
+    usize hLen = 32;
+    usize sLen = 32;
+    if (emLen < hLen + sLen + 2 || em[emLen - 1] != 0xbc) return false;
+    usize dbLen = emLen - hLen - 1;
+    u8[] maskedDb = em[0..dbLen];
+    u8[] h = em[dbLen..dbLen + hLen];
+    u8 topMask = (0xff >> (8 * emLen - emBits) as u8) as u8;
+    if (maskedDb[0] & ~topMask != 0) return false;
+    List<u8> db = List<u8>.New();
+    for (usize i = 0; i < dbLen; i++) db.Push(0);
+    Mgf1(h, db.AsMutSlice());
+    for (usize i = 0; i < dbLen; i++) db.Set(i, db.Get(i) ^ maskedDb[i]);
+    db.Set(0, db.Get(0) & topMask);
+    usize psLen = emLen - hLen - sLen - 2;
+    for (usize i = 0; i < psLen; i++) {
+        if (db.Get(i) != 0) return false;
+    }
+    if (db.Get(psLen) != 1) return false;
+    u8[32] mHash;
+    sha2.Sha256 d = sha2.Sha256.New();
+    d.Update(msg);
+    d.Finish(mHash[0..32]);
+    sha2.Sha256 d2 = sha2.Sha256.New();
+    u8[8] zeros;
+    d2.Update(zeros[0..8]);
+    d2.Update(mHash[0..32]);
+    d2.Update(db.AsSlice()[dbLen - sLen..dbLen]);
+    u8[32] h2;
+    d2.Finish(h2[0..32]);
+    u8 diff = 0;
+    for (usize i = 0; i < 32; i++) diff = diff | (h2[i] ^ h[i]);
+    return diff == 0;
+}

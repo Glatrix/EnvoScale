@@ -32,6 +32,7 @@ anything that matters.
 | `envo.crypto.aes` | none | AES-128/256, AES-GCM; FIPS 197 and GCM vectors pass; no tables (computed S-box) |
 | `envo.crypto.curve25519` | none | X25519, Ed25519; RFC 7748 and RFC 8032 vectors pass |
 | `envo.crypto.random` | none | ChaCha20 from the Entropy port, fast key erasure |
+| `envo.crypto.rsa`, `ecdsa`, `bigint` | none | signature verification only (public values; not constant time) |
 
 The code is written to be constant time (no branch, loop bound or memory index depends
 on a secret), but this has not been measured yet: timing-variance tests and a lint come

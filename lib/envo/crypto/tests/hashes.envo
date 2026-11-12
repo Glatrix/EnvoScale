@@ -4,8 +4,8 @@
 // expect: sha256 empty ok
 // expect: sha256 two blocks ok
 // expect: sha512 abc ok
-// expect: sha512 empty ok
 // expect: sha384 abc ok
+// expect: sha512 empty ok
 // expect: hmac256 tc1 ok
 // expect: hmac512 tc1 ok
 // expect: hmac256 tc2 ok
