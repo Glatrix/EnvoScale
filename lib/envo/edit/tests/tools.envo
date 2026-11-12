@@ -1,0 +1,113 @@
+// envo.edit: search (wrapping, ignoring case), replace all as one step, select every
+// match, cut and paste (one line to each cursor), indent, dedent, comments, and a new edit
+// dropping what could be redone.
+// expect: find: 1:4 0:0 none
+// expect: select all: 3 cursors
+// expect: replace: 3 [let X = 1;|let y = X;|X + y] undo [
+// expect: let x = 1;|let y = x;|x + y]
+// expect: cut: [let] [ x = 1;|let y = x;|x + y]
+// expect: paste each: [a x = 1;|b y = x;|x + y]
+// expect: indent: [    one||    two] dedent: [one||two]
+// expect: tab: [ab  c]
+// expect: comment: [// one|  // two] uncomment: [one|  two]
+// expect: redo dropped: false
+// expect: word: [world] selected
+use envo.edit;
+use alloc.text;
+
+void Say(str a, str b, str c) {
+    write(1, a);
+    write(1, b);
+    print(c);
+}
+
+string Bars(in edit.Buffer b) => text.Replace(b.Text().AsStr(), "\n", "|");
+
+string At(edit.Pos p) {
+    string s = text.Uint(p.Line as u64);
+    s.Append(":");
+    s.Append(text.Uint(p.Col as u64).AsStr());
+    return s;
+}
+
+string src = string.From("let x = 1;\nlet y = x;\nx + y");
+
+// search
+edit.Buffer b = edit.Buffer.Of(src.AsStr());
+string found = string.New();
+edit.Selection? s = b.Find("Y", edit.Pos.At(0, 3), false);
+found.Append(At(s.Unwrap().Anchor).AsStr());
+s = b.Find("let", edit.Pos.At(1, 1), true);           // wraps round to line 0
+found.Append(" ");
+found.Append(At(s.Unwrap().Anchor).AsStr());
+s = b.Find("zz", edit.Pos.At(0, 0), true);
+if (s.IsNone()) found.Append(" none");
+Say("find: ", found.AsStr(), "");
+
+// every match
+b.SelectAllMatches("x", true);
+Say("select all: ", text.Uint(b.SelectionCount() as u64).AsStr(), " cursors");
+
+// replace all: one step
+edit.Buffer r = edit.Buffer.Of(src.AsStr());
+usize n = r.ReplaceAll("x", "X", true);
+string after = Bars(r);
+r.Undo();
+write(1, "replace: ");
+write(1, text.Uint(n as u64).AsStr());
+Say(" [", after.AsStr(), "] undo [");
+Say("", Bars(r).AsStr(), "]");
+
+// cut, then one line pasted to each cursor
+edit.Buffer c = edit.Buffer.Of(src.AsStr());
+c.Select(edit.Pos.At(0, 0), edit.Pos.At(0, 3));
+string cut = c.Cut();
+write(1, "cut: [");
+write(1, cut.AsStr());
+Say("] [", Bars(c).AsStr(), "]");
+c.Undo();
+c.Select(edit.Pos.At(0, 0), edit.Pos.At(0, 3));
+c.AddSelection(edit.Pos.At(1, 0), edit.Pos.At(1, 3));
+c.Paste("a\nb");
+Say("paste each: [", Bars(c).AsStr(), "]");
+
+// indent and dedent the lines a selection touches (blank lines stay blank)
+edit.Buffer d = edit.Buffer.Of("one\n\ntwo");
+d.SelectAll();
+d.Indent();
+string ind = Bars(d);
+d.Dedent();
+write(1, "indent: [");
+write(1, ind.AsStr());
+Say("] dedent: [", Bars(d).AsStr(), "]");
+
+// Tab at a cursor reaches the next tab stop
+edit.Buffer t = edit.Buffer.Of("abc");
+t.SetCursor(edit.Pos.At(0, 2));
+t.Indent();
+Say("tab: [", Bars(t).AsStr(), "]");
+
+// comments
+edit.Buffer m = edit.Buffer.Of("one\n  two");
+m.SelectAll();
+m.ToggleComment("// ");
+string com = Bars(m);
+m.ToggleComment("// ");
+write(1, "comment: [");
+write(1, com.AsStr());
+Say("] uncomment: [", Bars(m).AsStr(), "]");
+
+// a new edit after an undo drops the redo
+edit.Buffer u = edit.Buffer.Of("x");
+u.SetCursor(edit.Pos.At(0, 1));
+u.Insert("y");
+u.Undo();
+u.Insert("z");
+if (u.CanRedo()) print("redo dropped: true");
+else print("redo dropped: false");
+
+// the word at the cursor
+edit.Buffer w = edit.Buffer.Of("hello world!");
+w.SetCursor(edit.Pos.At(0, 8));
+w.SelectWord();
+Say("word: [", w.Selected().AsStr(), "] selected");

@@ -1,0 +1,804 @@
+// envo.edit: the editor core (PLAN D74, M14.5). A text buffer of lines, any number of
+// selections, editing, movement, undo and redo, and search, with no UI: envo.ui's code
+// editor draws and drives it, and tests drive it directly.
+//
+// A position is a line (from 0) and a byte column in that line, always on a character
+// boundary. Lines are kept without their endings; the buffer remembers whether the text
+// used CRLF and writes it back the same way.
+namespace envo.edit;
+
+use core.text as ct;
+use alloc.text;
+
+// Motions for Move.
+public const u32 MOVE_LEFT = 1;
+public const u32 MOVE_RIGHT = 2;
+public const u32 MOVE_UP = 3;
+public const u32 MOVE_DOWN = 4;
+public const u32 MOVE_WORD_LEFT = 5;
+public const u32 MOVE_WORD_RIGHT = 6;
+public const u32 MOVE_HOME = 7;         // to the indentation, then to the line's start
+public const u32 MOVE_END = 8;
+public const u32 MOVE_TOP = 9;
+public const u32 MOVE_BOTTOM = 10;
+public const u32 MOVE_PAGE_UP = 11;
+public const u32 MOVE_PAGE_DOWN = 12;
+
+// What an edit does at each selection.
+const u32 EDIT_PUT = 0;                 // replace the selection with the text
+const u32 EDIT_BACK = 1;                // an empty selection loses the character before it
+const u32 EDIT_FORWARD = 2;             // ... the character after it
+const u32 EDIT_NEWLINE = 3;             // a line break, indented as the line it leaves
+
+// A place in the text.
+public struct Pos {
+    usize Line;
+    usize Col;
+
+    public static Pos At(usize line, usize col) => new Pos { Line = line, Col = col };
+
+    public bool Before(in this, Pos other) => this.Line < other.Line || (this.Line == other.Line && this.Col < other.Col);
+    public bool Same(in this, Pos other) => this.Line == other.Line && this.Col == other.Col;
+}
+
+// A selection from Anchor (where it started) to Head (the cursor); empty where they meet.
+public struct Selection {
+    Pos Anchor;
+    Pos Head;
+    usize Goal;             // 1 + the column up and down aim for (0: none yet)
+
+    public static Selection Cursor(Pos p) => new Selection { Anchor = p, Head = p, Goal = 0 };
+    public static Selection Span(Pos anchor, Pos head) => new Selection { Anchor = anchor, Head = head, Goal = 0 };
+
+    public bool IsEmpty(in this) => this.Anchor.Same(this.Head);
+    public Pos Start(in this) {
+        if (this.Head.Before(this.Anchor)) return this.Head;
+        return this.Anchor;
+    }
+    public Pos End(in this) {
+        if (this.Head.Before(this.Anchor)) return this.Anchor;
+        return this.Head;
+    }
+}
+
+// One replacement: at From, Removed gave way to Inserted. From holds in the text as it
+// was just before.
+struct Splice {
+    Pos From;
+    string Removed;
+    string Inserted;
+}
+
+// One step of the history: its replacements in the order they were made, and the
+// selections before and after.
+struct Change {
+    List<Splice> Parts;
+    List<Selection> Before;
+    List<Selection> After;
+    bool Typing;            // one character typed: the next one typed after it joins it
+}
+
+// A text being edited.
+public struct Buffer {
+    List<string> Lines;
+    bool Crlf;
+    List<Selection> Sels;
+    List<Change> Undos;
+    List<Change> Redos;
+    u64 Version;            // counts changes, for views that cache what they drew
+    usize TabWidth;
+
+    // An empty buffer, one cursor at the start.
+    public static Buffer New() {
+        Buffer b = new Buffer {
+            Lines = List<string>.New(), Crlf = false, Sels = List<Selection>.New(),
+            Undos = List<Change>.New(), Redos = List<Change>.New(), Version = 0, TabWidth = 4
+        };
+        b.Lines.Push(string.New());
+        b.Sels.Push(Selection.Cursor(Pos.At(0, 0)));
+        return b;
+    }
+
+    // A buffer holding t (LF or CRLF line endings), the cursor at the start.
+    public static Buffer Of(str t) {
+        Buffer b = Buffer.New();
+        b.Load(t);
+        return b;
+    }
+
+    // Replaces everything with t and forgets the history.
+    public void Load(ref this, str t) {
+        this.Lines = List<string>.New();
+        this.Crlf = ct.Contains(t, "\r\n");
+        usize start = 0;
+        for (usize i = 0; i <= t.Len; i++) {
+            if (i == t.Len || t[i] == 10) {
+                usize end = i;
+                if (end > start && t[end - 1] == 13) end--;
+                this.Lines.Push(string.From(t[start..end]));
+                start = i + 1;
+            }
+        }
+        this.Sels = List<Selection>.New();
+        this.Sels.Push(Selection.Cursor(Pos.At(0, 0)));
+        this.Undos = List<Change>.New();
+        this.Redos = List<Change>.New();
+        this.Version++;
+    }
+
+    // ---------------------------------------------------------------- reading
+
+    public usize LineCount(in this) => this.Lines.Len();
+    public str Line(in this, usize i) => this.Lines.AsSlice()[i].AsStr();
+    public u64 Changes(in this) => this.Version;
+    public bool UsesCrlf(in this) => this.Crlf;
+    public void SetTabWidth(ref this, usize w) {
+        if (w > 0) this.TabWidth = w;
+    }
+
+    // The whole text, with the buffer's line endings.
+    public string Text(in this) {
+        string s = string.New();
+        for (usize i = 0; i < this.Lines.Len(); i++) {
+            if (i > 0) {
+                if (this.Crlf) s.AppendByte(13);
+                s.AppendByte(10);
+            }
+            s.Append(this.Line(i));
+        }
+        return s;
+    }
+
+    // The text from a to b (a first), its lines joined by "\n".
+    public string Between(in this, Pos a, Pos b) {
+        string s = string.New();
+        str first = this.Line(a.Line);
+        if (a.Line == b.Line) {
+            s.Append(first[a.Col..b.Col]);
+            return s;
+        }
+        s.Append(first[a.Col..first.Len]);
+        for (usize l = a.Line + 1; l < b.Line; l++) {
+            s.AppendByte(10);
+            s.Append(this.Line(l));
+        }
+        s.AppendByte(10);
+        s.Append(this.Line(b.Line)[0..b.Col]);
+        return s;
+    }
+
+    // The column p is drawn at: characters, a tab reaching the next tab stop.
+    public usize VisualCol(in this, Pos p) {
+        str t = this.Line(p.Line);
+        usize v = 0;
+        for (usize i = 0; i < p.Col && i < t.Len; i++) {
+            if (t[i] == 9) v += this.TabWidth - v % this.TabWidth;
+            else if ((t[i] & 0xC0) != 0x80) v++;
+        }
+        return v;
+    }
+
+    // ---------------------------------------------------------------- selections
+
+    public usize SelectionCount(in this) => this.Sels.Len();
+    public Selection SelectionAt(in this, usize i) => this.Sels.AsSlice()[i];
+    public Pos Cursor(in this) => this.Sels.AsSlice()[0].Head;
+
+    // The selected text of every selection, one per line.
+    public string Selected(in this) {
+        string s = string.New();
+        for (usize i = 0; i < this.Sels.Len(); i++) {
+            Selection sel = this.Sels.AsSlice()[i];
+            if (i > 0) s.AppendByte(10);
+            string part = this.Between(sel.Start(), sel.End());
+            s.Append(part.AsStr());
+        }
+        return s;
+    }
+
+    // One cursor at p.
+    public void SetCursor(ref this, Pos p) {
+        this.Sels = List<Selection>.New();
+        this.Sels.Push(Selection.Cursor(this.Clamp(p)));
+    }
+
+    // One selection from anchor to head.
+    public void Select(ref this, Pos anchor, Pos head) {
+        this.Sels = List<Selection>.New();
+        this.Sels.Push(Selection.Span(this.Clamp(anchor), this.Clamp(head)));
+    }
+
+    // Another cursor at p; where a selection already is, it joins it.
+    public void AddCursor(ref this, Pos p) {
+        this.Sels.Push(Selection.Cursor(this.Clamp(p)));
+        this.Normalize();
+    }
+
+    // Another selection, from anchor to head.
+    public void AddSelection(ref this, Pos anchor, Pos head) {
+        this.Sels.Push(Selection.Span(this.Clamp(anchor), this.Clamp(head)));
+        this.Normalize();
+    }
+
+    public void SelectAll(ref this) => this.Select(Pos.At(0, 0), this.EndPos());
+
+    // Back to one cursor, where the first selection's cursor is.
+    public void SingleCursor(ref this) => this.SetCursor(this.Cursor());
+
+    // Every empty selection grows to the word its cursor is in.
+    public void SelectWord(ref this) {
+        mut Selection[] ss = this.Sels.AsMutSlice();
+        for (usize i = 0; i < ss.Len; i++) {
+            if (!ss[i].IsEmpty()) continue;
+            Pos h = ss[i].Head;
+            str t = this.Line(h.Line);
+            usize a = h.Col;
+            usize b = h.Col;
+            while (a > 0 && IsWord(t[a - 1])) a--;
+            while (b < t.Len && IsWord(t[b])) b++;
+            ss[i] = Selection.Span(Pos.At(h.Line, a), Pos.At(h.Line, b));
+        }
+        this.Normalize();
+    }
+
+    // The last place in the text.
+    public Pos EndPos(in this) {
+        usize last = this.Lines.Len() - 1;
+        return Pos.At(last, this.Line(last).Len);
+    }
+
+    // p moved into the text and back onto a character boundary.
+    public Pos Clamp(in this, Pos p) {
+        usize line = p.Line;
+        if (line >= this.Lines.Len()) line = this.Lines.Len() - 1;
+        str t = this.Line(line);
+        usize col = p.Col;
+        if (col > t.Len) col = t.Len;
+        while (col > 0 && col < t.Len && (t[col] & 0xC0) == 0x80) col--;
+        return Pos.At(line, col);
+    }
+
+    // Selections in the order they start, those that touch merged.
+    void Normalize(ref this) {
+        mut Selection[] m = this.Sels.AsMutSlice();
+        for (usize i = 1; i < m.Len; i++) {
+            usize j = i;
+            while (j > 0 && m[j].Start().Before(m[j - 1].Start())) {
+                Selection t = m[j];
+                m[j] = m[j - 1];
+                m[j - 1] = t;
+                j--;
+            }
+        }
+        List<Selection> merged = List<Selection>.New();
+        foreach (var s in this.Sels.AsSlice()) {
+            usize n = merged.Len();
+            if (n > 0) {
+                Selection last = merged.AsSlice()[n - 1];
+                if (!last.End().Before(s.Start())) {
+                    Pos end = last.End();
+                    if (end.Before(s.End())) end = s.End();
+                    if (last.IsEmpty() && s.IsEmpty()) merged.Set(n - 1, s);
+                    else merged.Set(n - 1, Selection.Span(last.Start(), end));
+                    continue;
+                }
+            }
+            merged.Push(s);
+        }
+        this.Sels = merged;
+    }
+
+    // ---------------------------------------------------------------- the one edit
+
+    // Replaces the text from a to b (a first) with t (dropping any "\r" in it); returns
+    // where t ends. Every change comes down to this; it records nothing.
+    Pos Replace(ref this, Pos a, Pos b, str t) {
+        // what stays of the first and last lines
+        string cur = string.From(this.Line(a.Line)[0..a.Col]);
+        str lastLine = this.Line(b.Line);
+        string tail = string.From(lastLine[b.Col..lastLine.Len]);
+        // the lines after b, taken off the end (so in reverse)
+        List<string> after = List<string>.New();
+        while (this.Lines.Len() > b.Line + 1) after.Push(this.Lines.Pop().Unwrap());
+        // lines a to b go
+        while (this.Lines.Len() > a.Line) {
+            string gone = this.Lines.Pop().Unwrap();
+        }
+        // the new ones: the head, t's lines, the tail
+        for (usize i = 0; i < t.Len; i++) {
+            if (t[i] == 10) {
+                this.Lines.Push(cur);
+                cur = string.New();
+            } else if (t[i] != 13) {
+                cur.AppendByte(t[i]);
+            }
+        }
+        Pos end = Pos.At(this.Lines.Len(), cur.Len());
+        cur.Append(tail.AsStr());
+        this.Lines.Push(cur);
+        while (after.Len() > 0) this.Lines.Push(after.Pop().Unwrap());
+        this.Version++;
+        return end;
+    }
+
+    // ---------------------------------------------------------------- editing
+
+    // Types t at every selection, replacing what is selected. Characters typed one at a
+    // time, one after another, undo together.
+    public void Insert(ref this, str t) {
+        bool typing = ct.CharCount(t) == 1 && t[0] != 10 && t[0] != ' ';
+        this.Edit(t, EDIT_PUT, typing);
+    }
+
+    // A line break at every cursor, the new line indented as the one it leaves.
+    public void Newline(ref this) => this.Edit("\n", EDIT_NEWLINE, false);
+
+    // Deletes the selections, or the character before each cursor.
+    public void Backspace(ref this) => this.Edit("", EDIT_BACK, false);
+
+    // Deletes the selections, or the character after each cursor.
+    public void Delete(ref this) => this.Edit("", EDIT_FORWARD, false);
+
+    // The selected text, for a clipboard; Cut also deletes it.
+    public string Copy(in this) => this.Selected();
+    public string Cut(ref this) {
+        string s = this.Selected();
+        this.Edit("", EDIT_PUT, false);
+        return s;
+    }
+
+    // Puts t in place of the selections; when there are several and t has one line for
+    // each, each gets its own line.
+    public void Paste(ref this, str t) {
+        usize n = this.Sels.Len();
+        if (n > 1) {
+            List<str> parts = text.Lines(t);
+            if (parts.Len() == n) {
+                this.EditEach(parts.AsSlice(), EDIT_PUT, false);
+                return;
+            }
+        }
+        this.Edit(t, EDIT_PUT, false);
+    }
+
+    // At a cursor, spaces to the next tab stop; with a selection, every line it touches
+    // moves right by one step.
+    public void Indent(ref this) {
+        bool lines = false;
+        foreach (var s in this.Sels.AsSlice()) {
+            if (!s.IsEmpty()) lines = true;
+        }
+        if (!lines) {
+            usize v = this.VisualCol(this.Cursor());
+            string pad = text.Repeat(" ", this.TabWidth - v % this.TabWidth);
+            this.Edit(pad.AsStr(), EDIT_PUT, false);
+            return;
+        }
+        this.ShiftLines(true);
+    }
+
+    // Every line a selection touches moves left by up to one step.
+    public void Dedent(ref this) => this.ShiftLines(false);
+
+    // Comments out the lines the selections touch with prefix (such as "// "), or, when
+    // all of them already are, takes it off.
+    public void ToggleComment(ref this, str prefix) {
+        Change ch = this.Begin();
+        str bare = ct.TrimEnd(prefix);
+        Pos first = this.Sels.AsSlice()[0].Start();
+        Pos last = this.Sels.AsSlice()[this.Sels.Len() - 1].End();
+        bool all = true;
+        for (usize l = first.Line; l <= last.Line; l++) {
+            str t = ct.TrimStart(this.Line(l));
+            if (t.Len > 0 && !ct.StartsWith(t, bare)) all = false;
+        }
+        for (usize l = first.Line; l <= last.Line; l++) {
+            str t = this.Line(l);
+            usize w = Indentation(t);
+            if (w == t.Len) continue;
+            if (all) {
+                usize n = bare.Len;
+                if (ct.StartsWith(t[w..t.Len], prefix)) n = prefix.Len;
+                this.Record(ref ch, Pos.At(l, w), Pos.At(l, w + n), "");
+            } else {
+                this.Record(ref ch, Pos.At(l, w), Pos.At(l, w), prefix);
+            }
+        }
+        this.Select(Pos.At(first.Line, 0), Pos.At(last.Line, this.Line(last.Line).Len));
+        this.Commit(ch);
+    }
+
+    void ShiftLines(ref this, bool right) {
+        Change ch = this.Begin();
+        Pos first = this.Sels.AsSlice()[0].Start();
+        Pos last = this.Sels.AsSlice()[this.Sels.Len() - 1].End();
+        string step = text.Repeat(" ", this.TabWidth);
+        for (usize l = first.Line; l <= last.Line; l++) {
+            str t = this.Line(l);
+            if (right) {
+                if (t.Len > 0) this.Record(ref ch, Pos.At(l, 0), Pos.At(l, 0), step.AsStr());
+            } else {
+                usize w = 0;
+                if (t.Len > 0 && t[0] == 9) w = 1;
+                else {
+                    while (w < t.Len && w < this.TabWidth && t[w] == ' ') w++;
+                }
+                if (w > 0) this.Record(ref ch, Pos.At(l, 0), Pos.At(l, w), "");
+            }
+        }
+        this.Select(Pos.At(first.Line, 0), Pos.At(last.Line, this.Line(last.Line).Len));
+        this.Commit(ch);
+    }
+
+    void Edit(ref this, str t, u32 mode, bool typing) {
+        List<str> one = List<str>.New();
+        one.Push(t);
+        this.EditEach(one.AsSlice(), mode, typing);
+    }
+
+    // The edit at every selection, the last first so the positions of those before it
+    // hold; each has one text for all of them or one for each.
+    void EditEach(ref this, str[] each, u32 mode, bool typing) {
+        Change ch = this.Begin();
+        usize n = this.Sels.Len();
+        ch.Typing = typing && n == 1;
+        List<Pos> ends = List<Pos>.New();
+        for (usize k = 0; k < n; k++) ends.Push(Pos.At(0, 0));
+        usize i = n;
+        while (i > 0) {
+            i--;
+            Selection s = this.Sels.AsSlice()[i];
+            Pos a = s.Start();
+            Pos b = s.End();
+            if (s.IsEmpty() && mode == EDIT_BACK) a = this.BackTarget(a);
+            if (s.IsEmpty() && mode == EDIT_FORWARD) b = this.Right(b);
+            str t = each[0];
+            if (each.Len == n) t = each[i];
+            string put = string.From(t);
+            if (mode == EDIT_NEWLINE) {
+                str line = this.Line(a.Line);
+                put.Append(line[0..Indentation(line[0..a.Col])]);
+            }
+            Pos end = a;
+            if (a.Before(b) || put.Len() > 0) end = this.Record(ref ch, a, b, put.AsStr());
+            // the selections after this one (already done) move with the text before them
+            mut Pos[] es = ends.AsMutSlice();
+            for (usize j = i + 1; j < n; j++) es[j] = Moved(es[j], b, end);
+            es[i] = end;
+        }
+        List<Selection> sels = List<Selection>.New();
+        foreach (var p in ends.AsSlice()) sels.Push(Selection.Cursor(p));
+        this.Sels = sels;
+        this.Normalize();
+        this.Commit(ch);
+    }
+
+    // Where backspace at p deletes from: one character back, or, inside the indentation,
+    // back to the tab stop before.
+    Pos BackTarget(in this, Pos p) {
+        str t = this.Line(p.Line);
+        if (p.Col > 0 && Indentation(t) >= p.Col && t[p.Col - 1] == ' ') {
+            usize v = this.VisualCol(p);
+            usize to = v - 1 - (v - 1) % this.TabWidth;
+            usize c = p.Col;
+            while (c > 0 && t[c - 1] == ' ' && this.VisualCol(Pos.At(p.Line, c)) > to) c--;
+            return Pos.At(p.Line, c);
+        }
+        return this.Left(p);
+    }
+
+    // ---------------------------------------------------------------- history
+
+    Change Begin(in this) => new Change {
+        Parts = List<Splice>.New(), Before = CopyOf(this.Sels.AsSlice()), After = List<Selection>.New(), Typing = false
+    };
+
+    // Replaces a to b with t and remembers it in ch.
+    Pos Record(ref this, ref Change ch, Pos a, Pos b, str t) {
+        string removed = this.Between(a, b);
+        Pos end = this.Replace(a, b, t);
+        ch.Parts.Push(new Splice { From = a, Removed = removed, Inserted = string.From(t) });
+        return end;
+    }
+
+    // Puts ch on the history unless it changed nothing; typing right after typing joins
+    // the step before.
+    void Commit(ref this, Change ch) {
+        if (ch.Parts.Len() == 0) return;
+        ch.After = CopyOf(this.Sels.AsSlice());
+        this.Redos = List<Change>.New();
+        if (ch.Typing && this.Undos.Len() > 0) {
+            Change last = this.Undos.Pop().Unwrap();
+            if (last.Typing && Follows(last.Parts.AsSlice()[0], ch.Parts.AsSlice()[0])) {
+                mut Splice[] ps = last.Parts.AsMutSlice();
+                ps[0].Inserted.Append(ch.Parts.AsSlice()[0].Inserted.AsStr());
+                last.After = CopyOf(ch.After.AsSlice());
+                this.Undos.Push(last);
+                return;
+            }
+            this.Undos.Push(last);
+        }
+        this.Undos.Push(ch);
+    }
+
+    public bool CanUndo(in this) => this.Undos.Len() > 0;
+    public bool CanRedo(in this) => this.Redos.Len() > 0;
+
+    // Takes back the last step; false if there is none.
+    public bool Undo(ref this) {
+        Change? c = this.Undos.Pop();
+        if (c.IsNone()) return false;
+        Change ch = c.Unwrap();
+        usize i = ch.Parts.Len();
+        while (i > 0) {
+            i--;
+            this.TakeBack(ch.Parts.AsSlice()[i]);
+        }
+        this.Sels = CopyOf(ch.Before.AsSlice());
+        this.Redos.Push(ch);
+        return true;
+    }
+
+    void TakeBack(ref this, in Splice p) {
+        this.Replace(p.From, EndOf(p.From, p.Inserted.AsStr()), p.Removed.AsStr());
+    }
+
+    // Does again the last step Undo took back; false if there is none.
+    public bool Redo(ref this) {
+        Change? c = this.Redos.Pop();
+        if (c.IsNone()) return false;
+        Change ch = c.Unwrap();
+        foreach (var p in ch.Parts.AsSlice()) {
+            this.Replace(p.From, EndOf(p.From, p.Removed.AsStr()), p.Inserted.AsStr());
+        }
+        this.Sels = CopyOf(ch.After.AsSlice());
+        this.Undos.Push(ch);
+        return true;
+    }
+
+    // ---------------------------------------------------------------- movement
+
+    // One character before p (the end of the line above at a line's start).
+    public Pos Left(in this, Pos p) {
+        if (p.Col == 0) {
+            if (p.Line == 0) return p;
+            return Pos.At(p.Line - 1, this.Line(p.Line - 1).Len);
+        }
+        str t = this.Line(p.Line);
+        usize c = p.Col - 1;
+        while (c > 0 && (t[c] & 0xC0) == 0x80) c--;
+        return Pos.At(p.Line, c);
+    }
+
+    // One character after p (the start of the line below at a line's end).
+    public Pos Right(in this, Pos p) {
+        str t = this.Line(p.Line);
+        if (p.Col >= t.Len) {
+            if (p.Line + 1 >= this.Lines.Len()) return p;
+            return Pos.At(p.Line + 1, 0);
+        }
+        usize c = p.Col + 1;
+        while (c < t.Len && (t[c] & 0xC0) == 0x80) c++;
+        return Pos.At(p.Line, c);
+    }
+
+    // The start of the word before p.
+    public Pos WordLeft(in this, Pos p) {
+        if (p.Col == 0) return this.Left(p);
+        str t = this.Line(p.Line);
+        usize c = p.Col;
+        while (c > 0 && !IsWord(t[c - 1])) c--;
+        while (c > 0 && IsWord(t[c - 1])) c--;
+        return Pos.At(p.Line, c);
+    }
+
+    // The end of the word after p.
+    public Pos WordRight(in this, Pos p) {
+        str t = this.Line(p.Line);
+        if (p.Col >= t.Len) return this.Right(p);
+        usize c = p.Col;
+        while (c < t.Len && !IsWord(t[c])) c++;
+        while (c < t.Len && IsWord(t[c])) c++;
+        return Pos.At(p.Line, c);
+    }
+
+    // Moves every cursor by motion (MOVE_*); with extend its selection grows instead.
+    // page is how many lines MOVE_PAGE_UP and MOVE_PAGE_DOWN go.
+    public void Move(ref this, u32 motion, bool extend, usize page) {
+        mut Selection[] ss = this.Sels.AsMutSlice();
+        for (usize i = 0; i < ss.Len; i++) {
+            Selection s = ss[i];
+            Pos h = s.Head;
+            usize goal = 0;
+            bool collapse = !extend && !s.IsEmpty();
+            if (motion == MOVE_LEFT) {
+                if (collapse) h = s.Start();
+                else h = this.Left(h);
+            } else if (motion == MOVE_RIGHT) {
+                if (collapse) h = s.End();
+                else h = this.Right(h);
+            } else if (motion == MOVE_WORD_LEFT) h = this.WordLeft(h);
+            else if (motion == MOVE_WORD_RIGHT) h = this.WordRight(h);
+            else if (motion == MOVE_HOME) {
+                usize w = Indentation(this.Line(h.Line));
+                if (h.Col == w) h = Pos.At(h.Line, 0);
+                else h = Pos.At(h.Line, w);
+            } else if (motion == MOVE_END) h = Pos.At(h.Line, this.Line(h.Line).Len);
+            else if (motion == MOVE_TOP) h = Pos.At(0, 0);
+            else if (motion == MOVE_BOTTOM) h = this.EndPos();
+            else {
+                goal = s.Goal;
+                if (goal == 0) goal = this.VisualCol(h) + 1;
+                usize by = 1;
+                if (motion == MOVE_PAGE_UP || motion == MOVE_PAGE_DOWN) by = page;
+                if (motion == MOVE_UP || motion == MOVE_PAGE_UP) {
+                    if (h.Line == 0) h = Pos.At(0, 0);
+                    else if (by > h.Line) h = this.AtVisual(0, goal - 1);
+                    else h = this.AtVisual(h.Line - by, goal - 1);
+                } else {
+                    usize last = this.Lines.Len() - 1;
+                    if (h.Line == last) h = this.EndPos();
+                    else if (h.Line + by > last) h = this.AtVisual(last, goal - 1);
+                    else h = this.AtVisual(h.Line + by, goal - 1);
+                }
+            }
+            Pos anchor = h;
+            if (extend) anchor = s.Anchor;
+            ss[i] = new Selection { Anchor = anchor, Head = h, Goal = goal };
+        }
+        this.Normalize();
+    }
+
+    // The place on line l drawn at column v, or the line's end if it is shorter.
+    Pos AtVisual(in this, usize l, usize v) {
+        str t = this.Line(l);
+        usize c = 0;
+        while (c < t.Len) {
+            usize next = this.Right(Pos.At(l, c)).Col;
+            if (this.VisualCol(Pos.At(l, next)) > v) break;
+            c = next;
+        }
+        return Pos.At(l, c);
+    }
+
+    // ---------------------------------------------------------------- search
+
+    // The first match of query (one line) at or after from, wrapping round to the start.
+    public Selection? Find(in this, str query, Pos from, bool matchCase) {
+        if (query.Len == 0 || ct.Contains(query, "\n")) return null;
+        usize n = this.Lines.Len();
+        for (usize k = 0; k <= n; k++) {
+            usize l = (from.Line + k) % n;
+            str line = this.Line(l);
+            usize start = 0;
+            usize stop = line.Len;
+            if (k == 0) start = from.Col;
+            if (k == n) stop = from.Col + query.Len - 1;    // back where it began
+            if (stop > line.Len) stop = line.Len;
+            usize? hit = FindIn(line, start, stop, query, matchCase);
+            if (hit.IsSome()) {
+                usize c = hit.Unwrap();
+                return Some(Selection.Span(Pos.At(l, c), Pos.At(l, c + query.Len)));
+            }
+        }
+        return null;
+    }
+
+    // Every match of query, in order.
+    public List<Selection> FindAll(in this, str query, bool matchCase) {
+        List<Selection> all = List<Selection>.New();
+        if (query.Len == 0 || ct.Contains(query, "\n")) return all;
+        for (usize l = 0; l < this.Lines.Len(); l++) {
+            str line = this.Line(l);
+            usize at = 0;
+            while (true) {
+                usize? hit = FindIn(line, at, line.Len, query, matchCase);
+                if (hit.IsNone()) break;
+                usize c = hit.Unwrap();
+                all.Push(Selection.Span(Pos.At(l, c), Pos.At(l, c + query.Len)));
+                at = c + query.Len;
+            }
+        }
+        return all;
+    }
+
+    // Selects the next match after the first selection; false if there is none.
+    public bool FindNext(ref this, str query, bool matchCase) {
+        Selection? s = this.Find(query, this.Sels.AsSlice()[0].End(), matchCase);
+        if (s.IsNone()) return false;
+        Selection found = s.Unwrap();
+        this.Select(found.Anchor, found.Head);
+        return true;
+    }
+
+    // Selects every match; false if there is none.
+    public bool SelectAllMatches(ref this, str query, bool matchCase) {
+        List<Selection> all = this.FindAll(query, matchCase);
+        if (all.Len() == 0) return false;
+        this.Sels = all;
+        return true;
+    }
+
+    // Replaces every match of query with with, as one step; how many there were.
+    public usize ReplaceAll(ref this, str query, str with, bool matchCase) {
+        List<Selection> all = this.FindAll(query, matchCase);
+        if (all.Len() == 0) return 0;
+        Change ch = this.Begin();
+        usize i = all.Len();
+        while (i > 0) {
+            i--;
+            Selection s = all.AsSlice()[i];
+            this.Record(ref ch, s.Anchor, s.Head, with);
+        }
+        this.SetCursor(this.Cursor());
+        this.Commit(ch);
+        return all.Len();
+    }
+}
+
+// ------------------------------------------------------------------ helpers
+
+bool IsWord(u8 c) => ct.IsAlnum(c) || c == '_' || c >= 0x80;
+
+List<Selection> CopyOf(Selection[] s) {
+    List<Selection> c = List<Selection>.New();
+    foreach (var x in s) c.Push(x);
+    return c;
+}
+
+// The bytes of t's leading spaces and tabs.
+usize Indentation(str t) {
+    usize w = 0;
+    while (w < t.Len && (t[w] == ' ' || t[w] == 9)) w++;
+    return w;
+}
+
+// Where query first lies wholly between start and stop in line.
+usize? FindIn(str line, usize start, usize stop, str query, bool matchCase) {
+    if (start > stop || stop - start < query.Len) return null;
+    for (usize c = start; c + query.Len <= stop; c++) {
+        bool same = true;
+        for (usize k = 0; k < query.Len; k++) {
+            u8 x = line[c + k];
+            u8 y = query[k];
+            if (!matchCase) {
+                x = ct.ToLower(x);
+                y = ct.ToLower(y);
+            }
+            if (x != y) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return Some(c);
+    }
+    return null;
+}
+
+// Where t ends when it starts at from ("\r" does not count: Replace drops it).
+Pos EndOf(Pos from, str t) {
+    usize line = from.Line;
+    usize col = from.Col;
+    for (usize i = 0; i < t.Len; i++) {
+        if (t[i] == 10) {
+            line++;
+            col = 0;
+        } else if (t[i] != 13) {
+            col++;
+        }
+    }
+    return Pos.At(line, col);
+}
+
+// p (at or after b) once the text up to b was replaced by text ending at end.
+Pos Moved(Pos p, Pos b, Pos end) {
+    if (p.Line == b.Line) return Pos.At(end.Line, end.Col + (p.Col - b.Col));
+    return Pos.At(p.Line + end.Line - b.Line, p.Col);
+}
+
+// Whether typing step next comes right after step last, neither removing anything.
+bool Follows(in Splice last, in Splice next) {
+    if (last.Removed.Len() > 0 || next.Removed.Len() > 0) return false;
+    Pos end = EndOf(last.From, last.Inserted.AsStr());
+    return end.Same(next.From);
+}
