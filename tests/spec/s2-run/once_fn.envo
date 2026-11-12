@@ -1,0 +1,23 @@
+// [fn.type.2] A lambda whose type is `once fn` may move out a value it captured: it owns
+// its captures, and calling it uses it up. Stage 1 does not infer `once fn` and rejects
+// the move (M3.10).
+// stage1-error: E0502
+// expect: hello
+// expect: hello again
+void Hello() => print("hello");
+void Again() => print("hello again");
+void Run(once fn() f) { f(); }
+
+fn() h = Hello;
+once fn() first = () => {
+    fn() g = h;
+    g();
+};
+first();
+
+fn() a = Again;
+once fn() second = () => {
+    fn() g = a;
+    g();
+};
+Run(second);

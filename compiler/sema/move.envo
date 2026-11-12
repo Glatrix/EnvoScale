@@ -83,13 +83,14 @@ struct MoveCx {
     List<LoopFrame> Loops;
     u32 Caps;               // in a lambda body: its captures (in Checker.Captures)
     u32 NCaps;
+    bool CapsOnce;          // the lambda is a `once fn` that owns its captures: it may move them
     List<u32> Frozen;       // locals that a match arm's bindings borrow: no changes or moves
     List<u32> ViewLocals;   // pairs (a local in scope, the local whose storage it views)
     u32 DirectArg;          // the argument node being checked as a call's direct argument
 
     static MoveCx New() => new MoveCx {
         Places = List<u32>.New(), St = MoveSnap.New(), Loops = List<LoopFrame>.New(),
-        Caps = 0, NCaps = 0, Frozen = List<u32>.New(), ViewLocals = List<u32>.New(), DirectArg = 0
+        Caps = 0, NCaps = 0, CapsOnce = false, Frozen = List<u32>.New(), ViewLocals = List<u32>.New(), DirectArg = 0
     };
 
     bool IsFrozen(in this, u32 s) {
@@ -421,7 +422,7 @@ impl Checker {
         if (!move || this.IsCopy(sym.Type)) return;
         if (x.IsFrozen(s)) this.BorrowError(tok, s, E_MOVED_WHILE_BORROWED, "` is moved while it is borrowed (by a view, a `foreach` element or a `match` binding)");
         if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "", s, ", which is borrowed; borrow it or clone it instead");
-        if (this.IsCapture(x, s)) this.MoveOutOfBorrow(tok, "", s, ", which this lambda captures");
+        if (this.IsCapture(x, s) && !x.CapsOnce) this.MoveOutOfBorrow(tok, "", s, ", which this lambda captures");
         x.PlaceSet(s, 0, PS_MOVED);
         this.NMove.Set(n as usize, 1);
     }
@@ -437,7 +438,7 @@ impl Checker {
         if (st != PS_OWNED) this.UsedAfterMove(tok, s, st, true);
         if (!move || this.IsCopy(this.NType(top))) return;
         if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "a field of ", s, ", which is borrowed");
-        if (this.IsCapture(x, s)) this.MoveOutOfBorrow(tok, "a field of ", s, ", which this lambda captures");
+        if (this.IsCapture(x, s) && !x.CapsOnce) this.MoveOutOfBorrow(tok, "a field of ", s, ", which this lambda captures");
         // the rest of a partly moved value is dropped field by field, with a drop flag per
         // field (M3.10; Stage 1 has one flag per local and rejects this). A type with its
         // own `Drop` needs all of itself, and flags go one level deep only.
@@ -621,8 +622,9 @@ impl Checker {
         }
         u32 ft = this.NType(node.A);
         if (this.TyKind(ft) == TYK_FN) {
-            this.MvExpr(ref x, node.A, false);
             Type f = this.TypeAt(ft);
+            // [fn.type.3] calling a `once fn` uses it up
+            this.MvExpr(ref x, node.A, f.Count == FK_ONCE);
             u32 i = 0;
             while (a != 0) {
                 this.MvExpr(ref x, a, this.EnvGet(f.Sym, i) == 0);
@@ -655,6 +657,8 @@ impl Checker {
         MoveCx inner = MoveCx.New();
         inner.Caps = first;
         inner.NCaps = count;
+        // a `once fn` that took its captures may give them away (M3.10; Stage 1: E0502)
+        inner.CapsOnce = copies && this.TypeAt(this.NType(n)).Count == FK_ONCE;
         if (this.NKind(lam.B) == NK_BLOCK) this.MvStmt(ref inner, lam.B);
         else this.MvExpr(ref inner, lam.B, true);
     }

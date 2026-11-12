@@ -655,8 +655,9 @@ void MvCall(*Checker c, *MoveCx x, u32 n) {
     }
     u32 ft = NType(c, node.A);
     if (TyKind(c, ft) == TYK_FN) {
-        MvExpr(c, x, node.A, false);
         Type f = TypeGet(c, ft);
+        // [fn.type.3] calling a `once fn` uses it up (found by Stage 2, M3.10)
+        MvExpr(c, x, node.A, f.Count == FK_ONCE);
         u32 i = 0;
         while (a != 0) {
             MvExpr(c, x, a, EnvGet(c, f.Sym, i) == 0);

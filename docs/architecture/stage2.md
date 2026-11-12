@@ -91,8 +91,13 @@ still gives:
   local is dropped field by field. Flags go one level deep, so moving `o.I.A` is still
   E0502.
 
-Still to come: borrows held in locals across statements ([own.borrow.4]) and `once fn`
-inference ([fn.type.2]).
+- **`once fn` lambdas** (`once_fn.envo`). A lambda whose type is `once fn` and that
+  owns its captures may move them out. Calling a `once fn` uses it up. The kind is not
+  inferred yet: a lambda without a `once fn` type that moves a capture is still E0502,
+  as is a borrowing lambda (one passed to a function-typed parameter without `move`).
+
+Still to come: borrows held in locals across statements ([own.borrow.4]) and inferring
+`once fn` from the body ([fn.type.2]).
 
 ## EIR (M3.6)
 
@@ -190,3 +195,4 @@ Stage 1 with a test before Stage 2 moves on (PLAN §6).
 | M3.1 | Views: method results were assumed to borrow the receiver, and a view made from a local pointer was treated as a view of the pointer. Stage 1 now works out which storage each function's result views | `s1-run/views.envo`, `s1-own/` |
 | M3.3 | Backtracking after a type didn't undo a `>>` split into two `>`, so `List<List<u32>> F()` at top level failed to parse | `s1-run/nested_generics.envo` |
 | M3.4 | Any read of a variable in an argument conflicted with the same call's `ref` borrow of it, so `list.Push(list.Len())` was E0503. Arguments are evaluated before the call takes its borrows, so a read that yields a value holding no borrow is now fine; lending a view or a `string`-as-`str` still conflicts. Chapter 5 now says so ([own.borrow.2]) | `s1-run/two_phase_args.envo`, `s1-own/e0503_ref_and_read.envo`, `s1-own/e0503_ref_and_string_view.envo` |
+| M3.10 | Calling a `once fn` did not use it up, so it could be called twice ([fn.type.3]) | `s1-own/e0501_once_fn_twice.envo` |

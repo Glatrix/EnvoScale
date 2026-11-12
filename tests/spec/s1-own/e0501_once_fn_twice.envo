@@ -1,0 +1,6 @@
+// expect-error: E0501 @ 6:1
+// [fn.type.3] a `once fn` is used up by calling it
+void Hello() => print("hello");
+once fn() f = Hello;
+f();
+f();
