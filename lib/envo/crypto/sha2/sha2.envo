@@ -1,4 +1,4 @@
-// envo.crypto.sha2: SHA-256 and SHA-512 (FIPS 180-4). Constant time: the work depends
+// envo.crypto.sha2: SHA-256, SHA-384 and SHA-512 (FIPS 180-4). Constant time: the work depends
 // only on the input's length, never on its bytes.
 namespace envo.crypto.sha2;
 
@@ -291,5 +291,38 @@ public struct Sha512 {
         for (usize i = 0; i < 8; i++) {
             for (usize k = 0; k < 8; k++) out64[8 * i + k] = (this.H[i] >> (56 - 8 * k as u64)) as u8;
         }
+    }
+}
+
+// SHA-384: SHA-512 with its own starting values, cut to 48 bytes.
+public struct Sha384 {
+    Sha512 Inner;
+
+    public static Sha384 New() {
+        Sha512 s = Sha512.New();
+        s.H[0] = 0xcbbb9d5dc1059ed8;
+        s.H[1] = 0x629a292a367cd507;
+        s.H[2] = 0x9159015a3070dd17;
+        s.H[3] = 0x152fecd8f70e5939;
+        s.H[4] = 0x67332667ffc00b31;
+        s.H[5] = 0x8eb44a8768581511;
+        s.H[6] = 0xdb0c2e0d64f98fa7;
+        s.H[7] = 0x47b5481dbefa4fa4;
+        return new Sha384 { Inner = s };
+    }
+
+    public void Update(ref this, u8[] data) {
+        this.Inner.Update(data);
+    }
+
+    public void UpdateText(ref this, str text) {
+        this.Inner.UpdateText(text);
+    }
+
+    // The digest: 48 bytes into out48.
+    public void Finish(ref this, mut u8[] out48) {
+        u8[64] full;
+        this.Inner.Finish(full[0..64]);
+        for (usize i = 0; i < 48; i++) out48[i] = full[i];
     }
 }

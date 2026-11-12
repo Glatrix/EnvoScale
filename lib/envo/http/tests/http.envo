@@ -1,0 +1,95 @@
+// envo.http: a server and a client in one program over the in-memory network (os.none):
+// the client's request waits in the connection until the server takes it, and the
+// response waits until the client reads it. Plus the wire format on its own: chunked
+// bodies, headers by any case, 404 and 405.
+// os: none
+// expect: GET / -> 200 [hello, envo]
+// expect: POST /echo -> 200 [echo: data]
+// expect: GET /missing -> 404
+// expect: POST / -> 405
+// expect: HEAD / -> 200 []
+// expect: type text/plain; charset=utf-8
+// expect: chunked [Wikipedia]
+// expect: url example.com 8080 /a?b
+use envo.http;
+use ports.{INet, IoError};
+use alloc.text;
+use os.none;
+
+http.Response Hello(in http.Request req) => http.Response.Text(200, "hello, envo");
+
+http.Response Echo(in http.Request req) {
+    string s = string.From("echo: ");
+    s.Append(req.BodyText());
+    return http.Response.Text(200, s.AsStr());
+}
+
+http.Router app = http.Router.New();
+app.Get("/", new http.Handler { Fn = Hello });
+app.Post("/echo", new http.Handler { Fn = Echo });
+
+none.Net net = none.Net.New();
+i64 listener = net.Listen("127.0.0.1", 8080).Unwrap();
+
+// one exchange: the client sends, the server answers, the client reads
+http.Response Exchange(ref none.Net net, ref http.Router app, i64 listener, str method, str path, str body) {
+    i64 conn = net.Connect("localhost", 8080).Unwrap();
+    http.Request r = http.Request.New(method, path);
+    r.Body = string.From(body);
+    string wire = http.WriteRequest(r, "localhost");
+    List<u8> bytes = List<u8>.New();
+    for (usize i = 0; i < wire.Len(); i++) bytes.Push(wire.AsStr()[i]);
+    net.Send(conn, bytes.AsSlice());
+    http.ServeOneWith(ref net, ref app, listener);
+    string raw = string.New();
+    u8[256] buf;
+    while (true) {
+        Result<usize, IoError> got = net.Recv(conn, buf[0..256]);
+        if (got.IsErr() || got.Unwrap() == 0) break;
+        for (usize i = 0; i < got.Unwrap(); i++) raw.AppendByte(buf[i]);
+    }
+    net.Close(conn);
+    return http.ParseResponse(raw.AsStr()).Unwrap();
+}
+
+void Show(str label, in http.Response r, bool body) {
+    write(1, label);
+    write(1, " -> ");
+    write(1, text.Uint(r.StatusCode() as u64).AsStr());
+    if (body) {
+        write(1, " [");
+        write(1, r.BodyText());
+        write(1, "]");
+    }
+    print("");
+}
+
+http.Response a = Exchange(ref net, ref app, listener, "GET", "/", "");
+Show("GET /", a, true);
+http.Response b = Exchange(ref net, ref app, listener, "POST", "/echo", "data");
+Show("POST /echo", b, true);
+http.Response c = Exchange(ref net, ref app, listener, "GET", "/missing", "");
+Show("GET /missing", c, false);
+http.Response d = Exchange(ref net, ref app, listener, "POST", "/", "");
+Show("POST /", d, false);
+http.Response e = Exchange(ref net, ref app, listener, "HEAD", "/", "");
+Show("HEAD /", e, true);
+write(1, "type ");
+print(a.HeaderValue("CONTENT-TYPE"));
+
+http.Response chunked = http.ParseResponse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n").Unwrap();
+write(1, "chunked [");
+write(1, chunked.BodyText());
+print("]");
+
+string host = string.New();
+u16 port = 0;
+string target = string.New();
+if (http.SplitUrl("http://example.com:8080/a?b", ref host, ref port, ref target)) {
+    write(1, "url ");
+    write(1, host.AsStr());
+    write(1, " ");
+    write(1, text.Uint(port as u64).AsStr());
+    write(1, " ");
+    print(target.AsStr());
+}

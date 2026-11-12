@@ -1,0 +1,84 @@
+// Net conformance: what every INet adapter promises (lib/ports), over the loopback address
+// only, so it needs no network. One program plays both ends: a connection completes
+// before Accept takes it, and data waits in the connection until it is received.
+// expect: net: done
+use ports.{INet, IoError};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+bool IsErr<T>(Result<T, IoError> r, IoError e) {
+    match r {
+        Ok(_) => { return false; }
+        Err(x) => { return x == e; }
+    }
+}
+
+// Receives exactly want's length and compares.
+bool Receives<N>(ref N net, i64 conn, str want) where N : INet {
+    string got = string.New();
+    u8[64] buf;
+    while (got.Len() < want.Len) {
+        Result<usize, IoError> r = net.Recv(conn, buf[0..64]);
+        if (r.IsErr()) return false;
+        usize n = r.Unwrap();
+        if (n == 0) return false;
+        for (usize i = 0; i < n; i++) got.AppendByte(buf[i]);
+    }
+    return got.Equals(want);
+}
+
+List<u8> Bytes(str s) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i < s.Len; i++) b.Push(s[i]);
+    return b;
+}
+
+void Run<N>(ref N net) where N : INet {
+    Result<List<string>, IoError> local = net.Resolve("localhost");
+    Check(local.IsOk() && local.Unwrap().AsSlice()[0].Equals("127.0.0.1"), "localhost is 127.0.0.1");
+    Result<List<string>, IoError> numeric = net.Resolve("127.0.0.1");
+    Check(numeric.IsOk() && numeric.Unwrap().Len() == 1, "a numeric address resolves to itself");
+
+    Result<i64, IoError> lr = net.Listen("127.0.0.1", 0);
+    Check(lr.IsOk(), "Listen on port 0");
+    if (lr.IsErr()) return;
+    i64 listener = lr.Unwrap();
+    u16 port = net.LocalPort(listener);
+    Check(port != 0, "the system picks a port");
+
+    Result<i64, IoError> cr = net.Connect("localhost", port);
+    Check(cr.IsOk(), "Connect to the listening port");
+    if (cr.IsErr()) return;
+    i64 client = cr.Unwrap();
+    Result<i64, IoError> ar = net.Accept(listener);
+    Check(ar.IsOk(), "Accept the connection");
+    if (ar.IsErr()) return;
+    i64 server = ar.Unwrap();
+
+    List<u8> hello = Bytes("hello, server");
+    Check(net.Send(client, hello.AsSlice()).IsOk(), "Send from the client");
+    Check(Receives(ref net, server, "hello, server"), "the server receives it");
+    List<u8> reply = Bytes("and back \u{e9}");
+    Check(net.Send(server, reply.AsSlice()).IsOk(), "Send from the server");
+    Check(Receives(ref net, client, "and back \u{e9}"), "the client receives it");
+
+    net.Close(client);
+    u8[8] buf;
+    Result<usize, IoError> end = net.Recv(server, buf[0..8]);
+    Check(end.IsOk() && end.Unwrap() == 0, "Recv gives 0 after the other side closes");
+    net.Close(server);
+    net.Close(listener);
+
+    // nothing listens on the port now
+    Check(IsErr(net.Connect("127.0.0.1", port), IoError.Refused), "Connect where nothing listens is Refused");
+}
+
+var net = platform.Net();
+Run(ref net);
+print("net: done");

@@ -3,7 +3,7 @@
 // holding a NUL byte is refused.
 namespace os.linux;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -459,3 +459,294 @@ impl IProcess for Process {
 // Makes system call n with the arguments: what a program's own `__syscall(n, …)` does.
 // The script runtime forwards its programs' calls here (PLAN D32).
 public i64 SysCall(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __syscall(n, a, b, c, d, e, f);
+
+// ------------------------------------------------------------------ network
+
+const i64 SYS_SOCKET = 41;
+const i64 SYS_CONNECT = 42;
+const i64 SYS_ACCEPT = 43;
+const i64 SYS_SENDTO = 44;
+const i64 SYS_RECVFROM = 45;
+const i64 SYS_BIND = 49;
+const i64 SYS_LISTEN = 50;
+const i64 SYS_GETSOCKNAME = 51;
+const i64 SYS_SETSOCKOPT = 54;
+
+// The IoError for a negative errno from a socket call.
+IoError NetErrorOf(i64 r) {
+    if (r == -111) return IoError.Refused;                  // ECONNREFUSED
+    if (r == -13 || r == -1) return IoError.Denied;         // EACCES, EPERM
+    if (r == -98) return IoError.Exists;                    // EADDRINUSE
+    if (r == -99 || r == -22) return IoError.Invalid;       // EADDRNOTAVAIL, EINVAL
+    if (r == -101 || r == -113) return IoError.NotFound;    // ENETUNREACH, EHOSTUNREACH
+    return IoError.Other;
+}
+
+// "a.b.c.d" as its four bytes; false if s is not one.
+bool ParseIpv4(str s, mut u8[] addr4) {
+    usize part = 0;
+    u32 value = 0;
+    usize digits = 0;
+    for (usize i = 0; i <= s.Len; i++) {
+        if (i == s.Len || s[i] == '.') {
+            if (digits == 0 || value > 255 || part > 3) return false;
+            addr4[part] = value as u8;
+            part++;
+            value = 0;
+            digits = 0;
+        } else if (s[i] >= '0' && s[i] <= '9') {
+            value = value * 10 + (s[i] - '0') as u32;
+            digits++;
+            if (digits > 3) return false;
+        } else {
+            return false;
+        }
+    }
+    return part == 4;
+}
+
+string Ipv4Text(u8[] a) {
+    string s = string.New();
+    for (usize i = 0; i < 4; i++) {
+        if (i > 0) s.AppendByte('.');
+        s.Append(text.Uint(a[i] as u64).AsStr());
+    }
+    return s;
+}
+
+// A sockaddr_in for addr4 and port, in 16 bytes.
+*u8 SockAddr(u8[] addr4, u16 port) {
+    unsafe {
+        *u8 sa = alloc(16);
+        for (usize i = 0; i < 16; i++) sa[i] = 0;
+        sa[0] = 2;                      // AF_INET
+        sa[2] = (port >> 8) as u8;      // the port, big-endian
+        sa[3] = port as u8;
+        for (usize i = 0; i < 4; i++) sa[4 + i] = addr4[i];
+        return sa;
+    }
+}
+
+i64 Sys6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __syscall(n, a, b, c, d, e, f);
+
+// The addresses /etc/hosts gives host.
+void FromHosts(str host, ref List<string> found) {
+    FileSystem fs = FileSystem.New();
+    Result<string, IoError> r = fs.Read("/etc/hosts");
+    if (r.IsErr()) return;
+    string all = r.Unwrap();
+    List<str> lines = text.Lines(all.AsStr());
+    foreach (var line in lines.AsSlice()) {
+        str l = line;
+        usize? hash = ct.IndexOfByte(l, '#');
+        if (hash.IsSome()) l = l[0..hash.Unwrap()];
+        List<str> words = text.Split(ct.Trim(l), " ");
+        // fields may be separated by tabs or several spaces
+        List<str> fields = List<str>.New();
+        foreach (var w in words.AsSlice()) {
+            List<str> parts = text.Split(w, "\t");
+            foreach (var p in parts.AsSlice()) {
+                if (p.Len > 0) fields.Push(p);
+            }
+        }
+        if (fields.Len() < 2) continue;
+        u8[4] a;
+        if (!ParseIpv4(fields.AsSlice()[0], a[0..4])) continue;
+        for (usize i = 1; i < fields.Len(); i++) {
+            if (text.Lower(fields.AsSlice()[i]).Equals(text.Lower(host).AsStr())) found.Push(string.From(fields.AsSlice()[0]));
+        }
+    }
+}
+
+// The first nameserver in /etc/resolv.conf, or "".
+string Nameserver() {
+    FileSystem fs = FileSystem.New();
+    Result<string, IoError> r = fs.Read("/etc/resolv.conf");
+    if (r.IsErr()) return string.New();
+    string all = r.Unwrap();
+    List<str> lines = text.Lines(all.AsStr());
+    foreach (var line in lines.AsSlice()) {
+        str l = ct.Trim(line);
+        if (!ct.StartsWith(l, "nameserver")) continue;
+        str rest = ct.Trim(l[10..l.Len]);
+        u8[4] a;
+        if (ParseIpv4(rest, a[0..4])) return string.From(rest);
+    }
+    return string.New();
+}
+
+// Asks the nameserver for host's A records (RFC 1035), over UDP, waiting up to 5 seconds.
+void FromDns(str host, ref List<string> found) {
+    string server = Nameserver();
+    u8[4] ns;
+    if (server.Len() == 0 || !ParseIpv4(server.AsStr(), ns[0..4])) return;
+    // the query: header (id, recursion desired, one question), the name, type A, class IN
+    List<u8> q = List<u8>.New();
+    q.Push(0x45);
+    q.Push(0x6e);
+    q.Push(1);
+    q.Push(0);
+    q.Push(0);
+    q.Push(1);
+    for (usize i = 0; i < 6; i++) q.Push(0);
+    List<str> labels = text.Split(host, ".");
+    foreach (var label in labels.AsSlice()) {
+        if (label.Len == 0 || label.Len > 63) return;
+        q.Push(label.Len as u8);
+        for (usize i = 0; i < label.Len; i++) q.Push(label[i]);
+    }
+    q.Push(0);
+    q.Push(0);
+    q.Push(1);
+    q.Push(0);
+    q.Push(1);
+    i64 fd = Sys(SYS_SOCKET, 2, 2 | 0x80000, 0, 0);        // AF_INET, SOCK_DGRAM | SOCK_CLOEXEC
+    if (fd < 0) return;
+    unsafe {
+        i64[2] timeout;
+        timeout[0] = 5;
+        Sys6(SYS_SETSOCKOPT, fd, 1, 20, &timeout[0] as isize as i64, 16, 0);      // SO_RCVTIMEO
+        *u8 sa = SockAddr(ns[0..4], 53);
+        Sys6(SYS_SENDTO, fd, Ptr(&q.AsSlice()[0]), q.Len() as i64, 0, Ptr(sa), 16);
+        *u8 buf = alloc(1500);
+        i64 n = Sys6(SYS_RECVFROM, fd, Ptr(buf), 1500, 0, 0, 0);
+        Sys(SYS_CLOSE, fd, 0, 0, 0);
+        if (n < 12 || buf[0] != 0x45 || buf[1] != 0x6e) return;
+        usize count = ((buf[6] as usize) << 8) | buf[7] as usize;
+        usize at = 12;
+        // skip the question: its name, type and class
+        while (at < n as usize && buf[at] != 0) {
+            if (buf[at] & 0xC0 == 0xC0) {
+                at += 1;
+                break;
+            }
+            at += buf[at] as usize + 1;
+        }
+        at += 5;
+        for (usize k = 0; k < count && at + 10 <= n as usize; k++) {
+            // the answer's name: labels, or a pointer
+            while (at < n as usize && buf[at] != 0) {
+                if (buf[at] & 0xC0 == 0xC0) {
+                    at += 1;
+                    break;
+                }
+                at += buf[at] as usize + 1;
+            }
+            at += 1;
+            if (at + 10 > n as usize) return;
+            usize rtype = ((buf[at] as usize) << 8) | buf[at + 1] as usize;
+            usize length = ((buf[at + 8] as usize) << 8) | buf[at + 9] as usize;
+            at += 10;
+            if (at + length > n as usize) return;
+            if (rtype == 1 && length == 4) found.Push(Ipv4Text(slice_from(&buf[at], 4)));
+            at += length;
+        }
+    }
+}
+
+// TCP through system calls, and name lookup through /etc/hosts and DNS.
+public struct Net {
+    u8 Unused;
+
+    public static Net New() => new Net { Unused = 0 };
+}
+
+impl INet for Net {
+    Result<List<string>, IoError> Resolve(ref this, str host) {
+        List<string> all = List<string>.New();
+        u8[4] a;
+        if (ParseIpv4(host, a[0..4])) {
+            all.Push(string.From(host));
+            return Ok(all);
+        }
+        if (text.Lower(host).Equals("localhost")) {
+            all.Push(string.From("127.0.0.1"));
+            return Ok(all);
+        }
+        FromHosts(host, ref all);
+        if (all.Len() == 0) FromDns(host, ref all);
+        if (all.Len() == 0) return Err(IoError.NotFound);
+        return Ok(all);
+    }
+
+    Result<i64, IoError> Connect(ref this, str host, u16 port) {
+        List<string> addrs = this.Resolve(host)?;
+        IoError last = IoError.NotFound;
+        foreach (var t in addrs.AsSlice()) {
+            u8[4] a;
+            if (!ParseIpv4(t.AsStr(), a[0..4])) continue;
+            i64 fd = Sys(SYS_SOCKET, 2, 1 | 0x80000, 0, 0);    // AF_INET, SOCK_STREAM | SOCK_CLOEXEC
+            if (fd < 0) return Err(NetErrorOf(fd));
+            *u8 sa = SockAddr(a[0..4], port);
+            i64 r = Sys(SYS_CONNECT, fd, Ptr(sa), 16, 0);
+            while (r == -4) r = Sys(SYS_CONNECT, fd, Ptr(sa), 16, 0);
+            if (r == 0) return Ok(fd);
+            last = NetErrorOf(r);
+            Sys(SYS_CLOSE, fd, 0, 0, 0);
+        }
+        return Err(last);
+    }
+
+    Result<i64, IoError> Listen(ref this, str host, u16 port) {
+        List<string> addrs = this.Resolve(host)?;
+        u8[4] a;
+        if (!ParseIpv4(addrs.AsSlice()[0].AsStr(), a[0..4])) return Err(IoError.Invalid);
+        i64 fd = Sys(SYS_SOCKET, 2, 1 | 0x80000, 0, 0);
+        if (fd < 0) return Err(NetErrorOf(fd));
+        u32 one = 1;
+        unsafe { Sys6(SYS_SETSOCKOPT, fd, 1, 2, &one as isize as i64, 4, 0); }   // SO_REUSEADDR
+        *u8 sa = SockAddr(a[0..4], port);
+        i64 r = Sys(SYS_BIND, fd, Ptr(sa), 16, 0);
+        if (r == 0) r = Sys(SYS_LISTEN, fd, 128, 0, 0);
+        if (r != 0) {
+            Sys(SYS_CLOSE, fd, 0, 0, 0);
+            return Err(NetErrorOf(r));
+        }
+        return Ok(fd);
+    }
+
+    u16 LocalPort(ref this, i64 listener) {
+        unsafe {
+            *u8 sa = alloc(16);
+            u32 len = 16;
+            if (Sys(SYS_GETSOCKNAME, listener, Ptr(sa), &len as isize as i64, 0) != 0) return 0;
+            return ((sa[2] as u16) << 8) | sa[3] as u16;
+        }
+    }
+
+    Result<i64, IoError> Accept(ref this, i64 listener) {
+        i64 fd = Sys(SYS_ACCEPT, listener, 0, 0, 0);
+        while (fd == -4) fd = Sys(SYS_ACCEPT, listener, 0, 0, 0);
+        if (fd < 0) return Err(NetErrorOf(fd));
+        return Ok(fd);
+    }
+
+    Result<usize, IoError> Send(ref this, i64 conn, u8[] data) {
+        usize at = 0;
+        while (at < data.Len) {
+            i64 r = 0;
+            // MSG_NOSIGNAL: a closed peer is an error, not a signal that ends the program
+            unsafe { r = Sys6(SYS_SENDTO, conn, &data[at] as isize as i64, (data.Len - at) as i64, 0x4000, 0, 0); }
+            if (r == -4) continue;
+            if (r < 0) return Err(NetErrorOf(r));
+            at += r as usize;
+        }
+        return Ok(data.Len);
+    }
+
+    Result<usize, IoError> Recv(ref this, i64 conn, mut u8[] into) {
+        if (into.Len == 0) return Ok(0);
+        while (true) {
+            i64 r = 0;
+            unsafe { r = Sys6(SYS_RECVFROM, conn, &into[0] as isize as i64, into.Len as i64, 0, 0, 0); }
+            if (r == -4) continue;
+            if (r < 0) return Err(NetErrorOf(r));
+            return Ok(r as usize);
+        }
+        return Ok(0);
+    }
+
+    void Close(ref this, i64 handle) {
+        Sys(SYS_CLOSE, handle, 0, 0, 0);
+    }
+}

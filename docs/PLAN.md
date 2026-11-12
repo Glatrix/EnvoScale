@@ -181,8 +181,8 @@ Net port with native adapters (D40); a verifying TLS 1.3 client (D41); `envo.htt
 | [7.2](https://github.com/envoscale/EnvoScale/issues/104) | AEADs: ChaCha20-Poly1305, AES-128/256-GCM | `lib/envo/crypto/tests/` || done |
 | [7.3](https://github.com/envoscale/EnvoScale/issues/105) | X25519 and Ed25519 | `lib/envo/crypto/tests/` || done |
 | [7.4](https://github.com/envoscale/EnvoScale/issues/106) | The CSPRNG and the `envo.crypto` simple door | `lib/envo/crypto/tests/` || done |
-| [7.5](https://github.com/envoscale/EnvoScale/issues/107) | The Net port: TCP and name lookup, reference and native adapters | `tests/conformance/net/` | |
-| [7.6](https://github.com/envoscale/EnvoScale/issues/108) | `envo.http`: HTTP/1.1 client and server | `lib/envo/http/tests/` | |
+| [7.5](https://github.com/envoscale/EnvoScale/issues/107) | The Net port: TCP and name lookup, reference and native adapters | `tests/conformance/net/` || done |
+| [7.6](https://github.com/envoscale/EnvoScale/issues/108) | `envo.http`: HTTP/1.1 client and server | `lib/envo/http/tests/` || done |
 | [7.7](https://github.com/envoscale/EnvoScale/issues/109) | TLS 1.3 client with certificate verification | `lib/envo/tls/tests/` | |
 | [7.8](https://github.com/envoscale/EnvoScale/issues/110) | Docs and status; M7 complete | CI | |
 

@@ -4,7 +4,7 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -536,6 +536,229 @@ public i64 WinCall(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h
         26 => { return __wincall(26, a, b, c, d, e, f, g, h, i, j); }
         27 => { return __wincall(27, a, b, c, d, e, f, g, h, i, j); }
         29 => { return __wincall(29, a, b, c, d, e, f, g, h, i, j); }
+        31 => { return __wincall(31, a, b, c, d, e, f, g, h, i, j); }
+        32 => { return __wincall(32, a, b, c, d, e, f, g, h, i, j); }
+        33 => { return __wincall(33, a, b, c, d, e, f, g, h, i, j); }
+        34 => { return __wincall(34, a, b, c, d, e, f, g, h, i, j); }
+        35 => { return __wincall(35, a, b, c, d, e, f, g, h, i, j); }
+        36 => { return __wincall(36, a, b, c, d, e, f, g, h, i, j); }
+        37 => { return __wincall(37, a, b, c, d, e, f, g, h, i, j); }
+        38 => { return __wincall(38, a, b, c, d, e, f, g, h, i, j); }
+        39 => { return __wincall(39, a, b, c, d, e, f, g, h, i, j); }
+        40 => { return __wincall(40, a, b, c, d, e, f, g, h, i, j); }
+        41 => { return __wincall(41, a, b, c, d, e, f, g, h, i, j); }
+        42 => { return __wincall(42, a, b, c, d, e, f, g, h, i, j); }
+        43 => { return __wincall(43, a, b, c, d, e, f, g, h, i, j); }
+        44 => { return __wincall(44, a, b, c, d, e, f, g, h, i, j); }
+        45 => { return __wincall(45, a, b, c, d, e, f, g, h, i, j); }
         _ => { return -1; }
+    }
+}
+
+// ------------------------------------------------------------------ network
+
+const i64 W_WSASTARTUP = 31;
+const i64 W_SOCKET = 32;
+const i64 W_CONNECT = 33;
+const i64 W_BIND = 34;
+const i64 W_LISTEN = 35;
+const i64 W_ACCEPT = 36;
+const i64 W_SEND = 37;
+const i64 W_RECV = 38;
+const i64 W_CLOSESOCKET = 39;
+const i64 W_GETADDRINFO = 40;
+const i64 W_FREEADDRINFO = 41;
+const i64 W_WSAGETLASTERROR = 42;
+const i64 W_GETSOCKNAME = 45;
+
+// The IoError for a Winsock error code.
+IoError NetErrorOf(u32 code) {
+    if (code == 10061) return IoError.Refused;              // WSAECONNREFUSED
+    if (code == 10013) return IoError.Denied;               // WSAEACCES
+    if (code == 10048) return IoError.Exists;               // WSAEADDRINUSE
+    if (code == 10049 || code == 10022) return IoError.Invalid;    // WSAEADDRNOTAVAIL, WSAEINVAL
+    if (code == 11001 || code == 11004) return IoError.NotFound;   // WSAHOST_NOT_FOUND, WSANO_DATA
+    return IoError.Other;
+}
+
+u32 WsaError() => Call(W_WSAGETLASTERROR, 0, 0, 0, 0, 0, 0) as u32;
+
+// "a.b.c.d" as its four bytes; false if s is not one.
+bool ParseIpv4(str s, mut u8[] addr4) {
+    usize part = 0;
+    u32 value = 0;
+    usize digits = 0;
+    for (usize i = 0; i <= s.Len; i++) {
+        if (i == s.Len || s[i] == '.') {
+            if (digits == 0 || value > 255 || part > 3) return false;
+            addr4[part] = value as u8;
+            part++;
+            value = 0;
+            digits = 0;
+        } else if (s[i] >= '0' && s[i] <= '9') {
+            value = value * 10 + (s[i] - '0') as u32;
+            digits++;
+            if (digits > 3) return false;
+        } else {
+            return false;
+        }
+    }
+    return part == 4;
+}
+
+string Ipv4Text(u8[] a) {
+    string s = string.New();
+    for (usize i = 0; i < 4; i++) {
+        if (i > 0) s.AppendByte('.');
+        s.Append(text.Uint(a[i] as u64).AsStr());
+    }
+    return s;
+}
+
+// A sockaddr_in for addr4 and port, in 16 bytes.
+*u8 SockAddr(u8[] addr4, u16 port) {
+    unsafe {
+        *u8 sa = alloc(16);
+        for (usize i = 0; i < 16; i++) sa[i] = 0;
+        sa[0] = 2;                      // AF_INET
+        sa[2] = (port >> 8) as u8;      // the port, big-endian
+        sa[3] = port as u8;
+        for (usize i = 0; i < 4; i++) sa[4 + i] = addr4[i];
+        return sa;
+    }
+}
+
+// TCP and name lookup through Winsock (WS2_32.dll).
+public struct Net {
+    u8 Unused;
+
+    public static Net New() {
+        unsafe {
+            *u8 data = alloc(512);      // WSADATA
+            Call(W_WSASTARTUP, 0x202, Ptr(data), 0, 0, 0, 0);
+        }
+        return new Net { Unused = 0 };
+    }
+}
+
+impl INet for Net {
+    Result<List<string>, IoError> Resolve(ref this, str host) {
+        List<string> all = List<string>.New();
+        u8[4] a;
+        if (ParseIpv4(host, a[0..4])) {
+            all.Push(string.From(host));
+            return Ok(all);
+        }
+        if (host.Len == 9 && text.Lower(host).Equals("localhost")) {
+            all.Push(string.From("127.0.0.1"));
+            return Ok(all);
+        }
+        unsafe {
+            *u8 node = alloc(host.Len + 1);
+            for (usize i = 0; i < host.Len; i++) {
+                if (host[i] == 0) return Err(IoError.Invalid);
+                node[i] = host[i];
+            }
+            node[host.Len] = 0;
+            *u8 hints = alloc(48);      // ADDRINFOA: family at 4, socktype at 8
+            for (usize i = 0; i < 48; i++) hints[i] = 0;
+            hints[4] = 2;
+            hints[8] = 1;
+            u64 res = 0;
+            i64 r = Call(W_GETADDRINFO, Ptr(node), 0, Ptr(hints), &res as isize as i64, 0, 0) as i32 as i64;
+            if (r != 0) return Err(NetErrorOf(r as u32));
+            // the list: ai_addr at 32, ai_next at 40; the address at sin_addr (4)
+            u64 at = res;
+            while (at != 0) {
+                *u8 ai = at as usize as *u8;
+                *u64 fields = ai as *u64;
+                *u8 sa = fields[4] as usize as *u8;
+                if (sa as usize != 0 && sa[0] == 2) {
+                    string t = Ipv4Text(slice_from(&sa[4], 4));
+                    bool seen = false;
+                    foreach (var x in all.AsSlice()) {
+                        if (x.Equals(t.AsStr())) seen = true;
+                    }
+                    if (!seen) all.Push(t);
+                }
+                at = fields[5];
+            }
+            Call(W_FREEADDRINFO, res as i64, 0, 0, 0, 0, 0);
+        }
+        if (all.Len() == 0) return Err(IoError.NotFound);
+        return Ok(all);
+    }
+
+    Result<i64, IoError> Connect(ref this, str host, u16 port) {
+        List<string> addrs = this.Resolve(host)?;
+        IoError last = IoError.NotFound;
+        foreach (var t in addrs.AsSlice()) {
+            u8[4] a;
+            if (!ParseIpv4(t.AsStr(), a[0..4])) continue;
+            i64 s = Call(W_SOCKET, 2, 1, 6, 0, 0, 0);       // AF_INET, SOCK_STREAM, TCP
+            if (s == -1) return Err(NetErrorOf(WsaError()));
+            *u8 sa = SockAddr(a[0..4], port);
+            if (Call(W_CONNECT, s, Ptr(sa), 16, 0, 0, 0) as i32 == 0) return Ok(s);
+            last = NetErrorOf(WsaError());
+            Call(W_CLOSESOCKET, s, 0, 0, 0, 0, 0);
+        }
+        return Err(last);
+    }
+
+    Result<i64, IoError> Listen(ref this, str host, u16 port) {
+        List<string> addrs = this.Resolve(host)?;
+        u8[4] a;
+        if (!ParseIpv4(addrs.AsSlice()[0].AsStr(), a[0..4])) return Err(IoError.Invalid);
+        i64 s = Call(W_SOCKET, 2, 1, 6, 0, 0, 0);
+        if (s == -1) return Err(NetErrorOf(WsaError()));
+        *u8 sa = SockAddr(a[0..4], port);
+        if (Call(W_BIND, s, Ptr(sa), 16, 0, 0, 0) as i32 != 0 || Call(W_LISTEN, s, 128, 0, 0, 0, 0) as i32 != 0) {
+            IoError e = NetErrorOf(WsaError());
+            Call(W_CLOSESOCKET, s, 0, 0, 0, 0, 0);
+            return Err(e);
+        }
+        return Ok(s);
+    }
+
+    u16 LocalPort(ref this, i64 listener) {
+        unsafe {
+            *u8 sa = alloc(16);
+            i32 len = 16;
+            if (Call(W_GETSOCKNAME, listener, Ptr(sa), &len as isize as i64, 0, 0, 0) as i32 != 0) return 0;
+            return ((sa[2] as u16) << 8) | sa[3] as u16;
+        }
+    }
+
+    Result<i64, IoError> Accept(ref this, i64 listener) {
+        i64 s = Call(W_ACCEPT, listener, 0, 0, 0, 0, 0);
+        if (s == -1) return Err(NetErrorOf(WsaError()));
+        return Ok(s);
+    }
+
+    Result<usize, IoError> Send(ref this, i64 conn, u8[] data) {
+        usize at = 0;
+        while (at < data.Len) {
+            usize n = data.Len - at;
+            if (n > 0x40000000) n = 0x40000000;
+            i64 r = 0;
+            unsafe { r = Call(W_SEND, conn, &data[at] as isize as i64, n as i64, 0, 0, 0) as i32 as i64; }
+            if (r < 0) return Err(NetErrorOf(WsaError()));
+            at += r as usize;
+        }
+        return Ok(data.Len);
+    }
+
+    Result<usize, IoError> Recv(ref this, i64 conn, mut u8[] into) {
+        if (into.Len == 0) return Ok(0);
+        usize n = into.Len;
+        if (n > 0x40000000) n = 0x40000000;
+        i64 r = 0;
+        unsafe { r = Call(W_RECV, conn, &into[0] as isize as i64, n as i64, 0, 0, 0) as i32 as i64; }
+        if (r < 0) return Err(NetErrorOf(WsaError()));
+        return Ok(r as usize);
+    }
+
+    void Close(ref this, i64 handle) {
+        Call(W_CLOSESOCKET, handle, 0, 0, 0, 0, 0);
     }
 }

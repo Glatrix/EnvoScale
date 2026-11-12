@@ -5,6 +5,7 @@
 // expect: sha256 two blocks ok
 // expect: sha512 abc ok
 // expect: sha512 empty ok
+// expect: sha384 abc ok
 // expect: hmac256 tc1 ok
 // expect: hmac512 tc1 ok
 // expect: hmac256 tc2 ok
@@ -61,6 +62,11 @@ Sha256Of("sha256 abc", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb
 Sha256Of("sha256 empty", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 Sha256Of("sha256 two blocks", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
 Sha512Of("sha512 abc", "abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+sha2.Sha384 h384 = sha2.Sha384.New();
+h384.UpdateText("abc");
+u8[48] d384;
+h384.Finish(d384[0..48]);
+Check("sha384 abc", d384[0..48], "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
 Sha512Of("sha512 empty", "", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
 List<u8> k1 = FromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
 List<u8> d1 = FromHex("4869205468657265");

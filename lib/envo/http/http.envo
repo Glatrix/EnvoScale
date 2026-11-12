@@ -1,0 +1,411 @@
+// envo.http: HTTP/1.1 (RFC 9110, RFC 9112) messages, a client and a server over the Net
+// port (PLAN D42). One request per connection (`Connection: close`); bodies by
+// Content-Length, chunked transfer coding when reading, or until the connection closes.
+// https:// arrives with the TLS client (M7.7).
+//
+//   http.Router app = http.Router.New();
+//   app.Get("/", new http.Handler { Fn = Hello });     // Hello(in http.Request) -> http.Response
+//   http.Serve(ref app, "127.0.0.1", 8080);
+//
+// A handler is wrapped in a Handler because Envo-S1 stores a function only from a field
+// initializer (RFC 0003 [fn.pos.1]: a function parameter may borrow its caller's
+// variables); `app.Get("/", Hello)` follows when the language can take an owned function
+// value as a parameter.
+namespace envo.http;
+
+use ports.{INet, IoError};
+use core.text as ct;
+use alloc.text;
+use platform;
+
+// A header: its name as sent, and its value.
+public struct Header {
+    string Name;
+    string Value;
+}
+
+public struct Request {
+    string Method;
+    string Target;      // the path and query, as sent
+    List<Header> Headers;
+    string Body;
+
+    public static Request New(str method, str target) {
+        return new Request { Method = string.From(method), Target = string.From(target), Headers = List<Header>.New(), Body = string.New() };
+    }
+
+    public str MethodOf(in this) => this.Method.AsStr();
+    // The path, without the query.
+    public str Path(in this) {
+        usize? q = ct.IndexOfByte(this.Target.AsStr(), '?');
+        if (q.IsSome()) return this.Target.AsStr()[0..q.Unwrap()];
+        return this.Target.AsStr();
+    }
+    public str BodyText(in this) => this.Body.AsStr();
+    // The first header named name (case does not matter), or "".
+    public str HeaderValue(in this, str name) => Find(this.Headers, name);
+    public void SetHeader(ref this, str name, str value) => Put(ref this.Headers, name, value);
+}
+
+public struct Response {
+    u32 Status;
+    string Reason;
+    List<Header> Headers;
+    string Body;
+
+    // A response with a status and a text body.
+    public static Response Text(u32 status, str body) {
+        Response r = new Response { Status = status, Reason = string.From(ReasonFor(status)), Headers = List<Header>.New(), Body = string.From(body) };
+        r.SetHeader("Content-Type", "text/plain; charset=utf-8");
+        return r;
+    }
+
+    public static Response Html(u32 status, str body) {
+        Response r = Response.Text(status, body);
+        r.SetHeader("Content-Type", "text/html; charset=utf-8");
+        return r;
+    }
+
+    public u32 StatusCode(in this) => this.Status;
+    public str BodyText(in this) => this.Body.AsStr();
+    public str HeaderValue(in this, str name) => Find(this.Headers, name);
+    public void SetHeader(ref this, str name, str value) => Put(ref this.Headers, name, value);
+}
+
+str ReasonFor(u32 status) {
+    if (status == 200) return "OK";
+    if (status == 201) return "Created";
+    if (status == 204) return "No Content";
+    if (status == 301) return "Moved Permanently";
+    if (status == 302) return "Found";
+    if (status == 304) return "Not Modified";
+    if (status == 400) return "Bad Request";
+    if (status == 403) return "Forbidden";
+    if (status == 404) return "Not Found";
+    if (status == 405) return "Method Not Allowed";
+    if (status == 413) return "Content Too Large";
+    if (status == 500) return "Internal Server Error";
+    if (status == 501) return "Not Implemented";
+    return "Status";
+}
+
+str Find(in List<Header> headers, str name) {
+    foreach (var h in headers.AsSlice()) {
+        if (ct.EqualsIgnoreCase(h.Name.AsStr(), name)) return h.Value.AsStr();
+    }
+    return "";
+}
+
+void Put(ref List<Header> headers, str name, str value) {
+    for (usize i = 0; i < headers.Len(); i++) {
+        if (ct.EqualsIgnoreCase(headers.AsSlice()[i].Name.AsStr(), name)) {
+            headers.Set(i, new Header { Name = string.From(name), Value = string.From(value) });
+            return;
+        }
+    }
+    headers.Push(new Header { Name = string.From(name), Value = string.From(value) });
+}
+
+// ------------------------------------------------------------------ the wire format
+
+void AppendHeaders(ref string s, in List<Header> headers, usize bodyLen) {
+    bool length = false;
+    foreach (var h in headers.AsSlice()) {
+        if (ct.EqualsIgnoreCase(h.Name.AsStr(), "Content-Length")) length = true;
+        s.Append(h.Name.AsStr());
+        s.Append(": ");
+        s.Append(h.Value.AsStr());
+        s.Append("\r\n");
+    }
+    if (!length) {
+        s.Append("Content-Length: ");
+        s.Append(text.Uint(bodyLen as u64).AsStr());
+        s.Append("\r\n");
+    }
+    s.Append("Connection: close\r\n\r\n");
+}
+
+// The request as sent on the wire, to host.
+public string WriteRequest(in Request r, str host) {
+    string s = string.From(r.Method.AsStr());
+    s.AppendByte(' ');
+    s.Append(r.Target.AsStr());
+    s.Append(" HTTP/1.1\r\nHost: ");
+    s.Append(host);
+    s.Append("\r\n");
+    AppendHeaders(ref s, r.Headers, r.Body.Len());
+    s.Append(r.Body.AsStr());
+    return s;
+}
+
+// The response as sent on the wire.
+public string WriteResponse(in Response r) {
+    string s = string.From("HTTP/1.1 ");
+    s.Append(text.Uint(r.Status as u64).AsStr());
+    s.AppendByte(' ');
+    s.Append(r.Reason.AsStr());
+    s.Append("\r\n");
+    AppendHeaders(ref s, r.Headers, r.Body.Len());
+    s.Append(r.Body.AsStr());
+    return s;
+}
+
+// Splits a message's head (start line and headers) from raw; false if it is not
+// complete. headEnd is where the body starts.
+bool SplitHead(str raw, ref List<Header> headers, ref str startLine, ref usize headEnd) {
+    usize? end = ct.IndexOf(raw, "\r\n\r\n");
+    if (end.IsNone()) return false;
+    headEnd = end.Unwrap() + 4;
+    List<str> lines = text.Split(raw[0..end.Unwrap()], "\r\n");
+    if (lines.Len() == 0) return false;
+    startLine = lines.AsSlice()[0];
+    for (usize i = 1; i < lines.Len(); i++) {
+        str line = lines.AsSlice()[i];
+        usize? colon = ct.IndexOfByte(line, ':');
+        if (colon.IsNone()) continue;
+        headers.Push(new Header { Name = string.From(ct.Trim(line[0..colon.Unwrap()])), Value = string.From(ct.Trim(line[colon.Unwrap() + 1..line.Len])) });
+    }
+    return true;
+}
+
+u64 ParseUint(str s) {
+    u64 v = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] < '0' || s[i] > '9') return v;
+        v = v * 10 + (s[i] - '0') as u64;
+    }
+    return v;
+}
+
+// The body that starts at raw[from]: chunked, by Content-Length, or the rest. complete
+// says whether it has all arrived.
+string BodyOf(str raw, usize from, in List<Header> headers, bool untilClose, ref bool complete) {
+    str rest = raw[from..raw.Len];
+    complete = true;
+    if (ct.EqualsIgnoreCase(Find(headers, "Transfer-Encoding"), "chunked")) {
+        string b = string.New();
+        usize at = 0;
+        while (true) {
+            usize? eol = ct.IndexOf(rest[at..rest.Len], "\r\n");
+            if (eol.IsNone()) {
+                complete = false;
+                return b;
+            }
+            str sizeText = rest[at..at + eol.Unwrap()];
+            u64 size = 0;
+            for (usize i = 0; i < sizeText.Len; i++) {
+                u8 c = sizeText[i];
+                u64 d = 99;
+                if (c >= '0' && c <= '9') d = (c - '0') as u64;
+                else if (c >= 'a' && c <= 'f') d = (c - 'a' + 10) as u64;
+                else if (c >= 'A' && c <= 'F') d = (c - 'A' + 10) as u64;
+                if (d == 99) break;
+                size = size * 16 + d;
+            }
+            at += eol.Unwrap() + 2;
+            if (size == 0) return b;
+            if (at + size as usize + 2 > rest.Len) {
+                complete = false;
+                return b;
+            }
+            b.Append(rest[at..at + size as usize]);
+            at += size as usize + 2;
+        }
+    }
+    str length = Find(headers, "Content-Length");
+    if (length.Len > 0) {
+        usize n = ParseUint(length) as usize;
+        if (rest.Len < n) {
+            complete = false;
+            return string.From(rest);
+        }
+        return string.From(rest[0..n]);
+    }
+    complete = !untilClose;
+    return string.From(rest);
+}
+
+// Reads a request from raw bytes; false if it is incomplete or malformed (bad says which).
+public bool ParseRequest(str raw, ref Request req, ref bool bad) {
+    bad = false;
+    List<Header> headers = List<Header>.New();
+    str start = "";
+    usize headEnd = 0;
+    if (!SplitHead(raw, ref headers, ref start, ref headEnd)) return false;
+    List<str> parts = text.Split(start, " ");
+    if (parts.Len() != 3 || !ct.StartsWith(parts.AsSlice()[2], "HTTP/1.")) {
+        bad = true;
+        return false;
+    }
+    bool complete = false;
+    string body = BodyOf(raw, headEnd, headers, false, ref complete);
+    if (!complete) return false;
+    req = new Request { Method = string.From(parts.AsSlice()[0]), Target = string.From(parts.AsSlice()[1]), Headers = headers, Body = body };
+    return true;
+}
+
+// Reads a response from all of a connection's bytes (it has closed).
+public Result<Response, IoError> ParseResponse(str raw) {
+    List<Header> headers = List<Header>.New();
+    str start = "";
+    usize headEnd = 0;
+    if (!SplitHead(raw, ref headers, ref start, ref headEnd)) return Err(IoError.Invalid);
+    if (!ct.StartsWith(start, "HTTP/1.") || start.Len < 12) return Err(IoError.Invalid);
+    u32 status = ParseUint(start[9..12]) as u32;
+    str reason = "";
+    if (start.Len > 13) reason = start[13..start.Len];
+    bool complete = false;
+    string body = BodyOf(raw, headEnd, headers, true, ref complete);
+    return Ok(new Response { Status = status, Reason = string.From(reason), Headers = headers, Body = body });
+}
+
+// ------------------------------------------------------------------ the client
+
+// A URL's parts: http://host[:port]/path.
+public bool SplitUrl(str url, ref string host, ref u16 port, ref string target) {
+    if (!ct.StartsWith(url, "http://")) return false;
+    str rest = url[7..url.Len];
+    usize slash = rest.Len;
+    usize? s = ct.IndexOfByte(rest, '/');
+    if (s.IsSome()) slash = s.Unwrap();
+    str authority = rest[0..slash];
+    port = 80;
+    usize? colon = ct.IndexOfByte(authority, ':');
+    if (colon.IsSome()) {
+        port = ParseUint(authority[colon.Unwrap() + 1..authority.Len]) as u16;
+        authority = authority[0..colon.Unwrap()];
+    }
+    if (authority.Len == 0) return false;
+    host = string.From(authority);
+    if (slash < rest.Len) target = string.From(rest[slash..rest.Len]);
+    else target = string.From("/");
+    return true;
+}
+
+// Sends request to an http:// URL and reads the whole response, over net.
+public Result<Response, IoError> SendWith<N>(ref N net, str url, in Request request) where N : INet {
+    string host = string.New();
+    u16 port = 0;
+    string target = string.New();
+    if (!SplitUrl(url, ref host, ref port, ref target)) return Err(IoError.Invalid);
+    i64 conn = net.Connect(host.AsStr(), port)?;
+    Request r = new Request {
+        Method = string.From(request.Method.AsStr()), Target = target, Headers = List<Header>.New(), Body = string.From(request.Body.AsStr()),
+    };
+    foreach (var h in request.Headers.AsSlice()) r.SetHeader(h.Name.AsStr(), h.Value.AsStr());
+    string wire = WriteRequest(r, host.AsStr());
+    List<u8> bytes = List<u8>.New();
+    for (usize i = 0; i < wire.Len(); i++) bytes.Push(wire.AsStr()[i]);
+    Result<usize, IoError> sent = net.Send(conn, bytes.AsSlice());
+    if (sent.IsErr()) {
+        net.Close(conn);
+        return Err(sent.UnwrapErr());
+    }
+    string raw = string.New();
+    u8[4096] buf;
+    while (true) {
+        Result<usize, IoError> got = net.Recv(conn, buf[0..4096]);
+        if (got.IsErr()) break;
+        usize n = got.Unwrap();
+        if (n == 0) break;
+        for (usize i = 0; i < n; i++) raw.AppendByte(buf[i]);
+    }
+    net.Close(conn);
+    return ParseResponse(raw.AsStr());
+}
+
+// GET an http:// URL.
+public Result<Response, IoError> Get(str url) {
+    var net = platform.Net();
+    Request r = Request.New("GET", "/");
+    return SendWith(ref net, url, r);
+}
+
+// ------------------------------------------------------------------ the server
+
+// A handler: the response to a request.
+public struct Handler {
+    fn(in Request) -> Response Fn;
+}
+
+struct Route {
+    string Method;
+    string Path;
+    Handler Handler;
+}
+
+// Routes by method and exact path; anything else is 404 (or 405 for a known path).
+public struct Router {
+    List<Route> Routes;
+
+    public static Router New() => new Router { Routes = List<Route>.New() };
+
+    public void Add(ref this, str method, str path, Handler handler) {
+        this.Routes.Push(new Route { Method = string.From(method), Path = string.From(path), Handler = handler });
+    }
+
+    public void Get(ref this, str path, Handler handler) {
+        this.Add("GET", path, handler);
+    }
+
+    public void Post(ref this, str path, Handler handler) {
+        this.Add("POST", path, handler);
+    }
+
+    // The response to req.
+    public Response Handle(in this, in Request req) {
+        bool pathKnown = false;
+        foreach (var r in this.Routes.AsSlice()) {
+            if (!r.Path.Equals(req.Path())) continue;
+            pathKnown = true;
+            if (r.Method.Equals(req.Method.AsStr()) || (r.Method.Equals("GET") && req.Method.Equals("HEAD"))) return r.Handler.Fn(req);
+        }
+        if (pathKnown) return Response.Text(405, "method not allowed\n");
+        return Response.Text(404, "not found\n");
+    }
+}
+
+// The most a request may hold before the server answers 413.
+const usize MAX_REQUEST = 1 << 20;
+
+// Accepts one connection on listener, answers its request through router, and closes it.
+public Result<bool, IoError> ServeOneWith<N>(ref N net, ref Router router, i64 listener) where N : INet {
+    i64 conn = net.Accept(listener)?;
+    string raw = string.New();
+    u8[4096] buf;
+    Response resp = Response.Text(400, "bad request\n");
+    while (true) {
+        Request req = Request.New("", "");
+        bool bad = false;
+        if (ParseRequest(raw.AsStr(), ref req, ref bad)) {
+            resp = router.Handle(req);
+            if (req.Method.Equals("HEAD")) resp.Body = string.New();
+            break;
+        }
+        if (bad) break;
+        if (raw.Len() > MAX_REQUEST) {
+            resp = Response.Text(413, "request too large\n");
+            break;
+        }
+        Result<usize, IoError> got = net.Recv(conn, buf[0..4096]);
+        if (got.IsErr() || got.Unwrap() == 0) break;
+        usize n = got.Unwrap();
+        for (usize i = 0; i < n; i++) raw.AppendByte(buf[i]);
+    }
+    string wire = WriteResponse(resp);
+    List<u8> bytes = List<u8>.New();
+    for (usize i = 0; i < wire.Len(); i++) bytes.Push(wire.AsStr()[i]);
+    net.Send(conn, bytes.AsSlice());
+    net.Close(conn);
+    return Ok(true);
+}
+
+// Serves router on host and port until the program ends, one connection at a time.
+public IoError Serve(ref Router router, str host, u16 port) {
+    var net = platform.Net();
+    Result<i64, IoError> l = net.Listen(host, port);
+    if (l.IsErr()) return l.UnwrapErr();
+    i64 listener = l.Unwrap();
+    while (true) ServeOneWith(ref net, ref router, listener);
+    return IoError.Other;
+}

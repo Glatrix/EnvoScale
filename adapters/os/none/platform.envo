@@ -13,6 +13,7 @@ public none.Clock Clock() => none.SharedClock();
 public none.Entropy Entropy() => none.SharedEntropy();
 public none.Environment Environment() => none.SharedEnvironment();
 public none.Process Process() => none.SharedProcess();
+public none.Net Net() => none.SharedNet();
 
 // The reference adapters have no system to call: the script runtime runs only on a
 // native platform.

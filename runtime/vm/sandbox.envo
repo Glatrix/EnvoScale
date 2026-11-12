@@ -158,12 +158,15 @@ public struct Sandbox {
         if (n == 87 || n == 83 || n == 84) return this.May(CAP_WRITE, CString(a1).AsStr());    // unlink, mkdir, rmdir
         if (n == 262) return this.MayStat(CString(a2).AsStr());         // newfstatat
         if (n == 59) return this.May(CAP_RUN, "");                      // execve
+        if (n == 41) return this.May(CAP_NET, "");                      // socket
         return true;
     }
 
     bool MayOpen(ref this, in string path, i64 flags) {
         // the environment comes from /proc/self/environ
         if (Same(path.AsStr(), "/proc/self/environ")) return this.May(CAP_ENV, "");
+        // name lookup reads these: it comes with the network
+        if ((Same(path.AsStr(), "/etc/hosts") || Same(path.AsStr(), "/etc/resolv.conf")) && this.Quietly(CAP_NET, "")) return true;
         bool writes = flags & 3 != 0 || flags & 0x40 != 0 || flags & 0x200 != 0;    // O_WRONLY/O_RDWR, O_CREAT, O_TRUNC
         if (writes && !this.May(CAP_WRITE, path.AsStr())) return false;
         if (flags & 3 != 1 && !this.May(CAP_READ, path.AsStr())) return false;
@@ -201,6 +204,8 @@ public struct Sandbox {
             ok = this.May(CAP_RUN, "");                              // CreateProcessW
         } else if (k == 26) {
             ok = this.May(CAP_ENV, "");                              // GetEnvironmentVariableW
+        } else if (k == 32 || k == 40) {
+            ok = this.May(CAP_NET, "");                              // socket, getaddrinfo
         }
         if (!ok) this.LastDenied = true;
         return ok;

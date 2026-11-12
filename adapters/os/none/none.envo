@@ -7,7 +7,7 @@
 // share it (the heap never frees in Envo-S1, so nothing is lost).
 namespace os.none;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, IoError};
 use alloc.map.{Map};
 use alloc.set.{Set};
 use alloc.text;
@@ -564,5 +564,211 @@ public Process SharedProcess() {
             SharedProcState = p.State as usize;
         }
         return new Process { State = SharedProcState as *ProcState };
+    }
+}
+
+// ------------------------------------------------------------------ network
+
+// One end of an in-memory connection: what the other end has sent, not yet received.
+struct Pipe {
+    string Data;
+    usize At;           // bytes of Data already received
+    bool PeerClosed;
+    i64 Peer;           // the other end's handle
+}
+
+struct NetState {
+    List<string> Names;         // resolvable names
+    List<string> Addresses;     // and their addresses
+    List<u16> ListenPorts;      // a listening socket per entry, by handle
+    List<i64> ListenHandles;
+    List<i64> Pending;          // connections waiting for Accept: the server ends
+    List<i64> PendingPort;
+    List<Pipe> Ends;            // handle h is Ends[h - 1]
+    u16 NextPort;
+}
+
+// A network in memory: listening sockets, connections between them, and names given
+// with AddName. Only 127.0.0.1 (and "localhost") is reachable. Receiving from a
+// connection with nothing to read and an open peer is an error (a single program
+// cannot wait for itself).
+public struct Net {
+    *NetState State;
+
+    public static Net New() {
+        unsafe {
+            *NetState p = alloc(sizeof(NetState)) as *NetState;
+            p[0] = new NetState {
+                Names = List<string>.New(), Addresses = List<string>.New(), ListenPorts = List<u16>.New(),
+                ListenHandles = List<i64>.New(), Pending = List<i64>.New(), PendingPort = List<i64>.New(),
+                Ends = List<Pipe>.New(), NextPort = 40000,
+            };
+            return new Net { State = p };
+        }
+    }
+
+    // Makes name resolve to address.
+    public void AddName(ref this, str name, str address) {
+        unsafe {
+            this.State[0].Names.Push(string.From(name));
+            this.State[0].Addresses.Push(string.From(address));
+        }
+    }
+
+    i64 NewEnd(ref this) {
+        unsafe {
+            this.State[0].Ends.Push(new Pipe { Data = string.New(), At = 0, PeerClosed = false, Peer = 0 });
+            return this.State[0].Ends.Len() as i64;
+        }
+    }
+}
+
+bool IsLoopback(str a) => a.Len == 9 && a[0] == '1' && a[1] == '2' && a[2] == '7' && a[3] == '.' && a[4] == '0' && a[5] == '.' && a[6] == '0' && a[7] == '.' && a[8] == '1';
+
+impl INet for Net {
+    Result<List<string>, IoError> Resolve(ref this, str host) {
+        List<string> all = List<string>.New();
+        if (IsLoopback(host) || text.Lower(host).Equals("localhost")) {
+            all.Push(string.From("127.0.0.1"));
+            return Ok(all);
+        }
+        unsafe {
+            for (usize i = 0; i < this.State[0].Names.Len(); i++) {
+                if (this.State[0].Names.AsSlice()[i].Equals(host)) all.Push(string.From(this.State[0].Addresses.AsSlice()[i].AsStr()));
+            }
+        }
+        if (all.Len() == 0) return Err(IoError.NotFound);
+        return Ok(all);
+    }
+
+    Result<i64, IoError> Connect(ref this, str host, u16 port) {
+        List<string> addrs = this.Resolve(host)?;
+        if (!IsLoopback(addrs.AsSlice()[0].AsStr())) return Err(IoError.Refused);
+        bool listening = false;
+        unsafe {
+            foreach (var p in this.State[0].ListenPorts.AsSlice()) {
+                if (p == port) listening = true;
+            }
+        }
+        if (!listening) return Err(IoError.Refused);
+        i64 client = this.NewEnd();
+        i64 server = this.NewEnd();
+        unsafe {
+            this.State[0].Ends.AsMutSlice()[(client - 1) as usize].Peer = server;
+            this.State[0].Ends.AsMutSlice()[(server - 1) as usize].Peer = client;
+            this.State[0].Pending.Push(server);
+            this.State[0].PendingPort.Push(port as i64);
+        }
+        return Ok(client);
+    }
+
+    Result<i64, IoError> Listen(ref this, str host, u16 port) {
+        List<string> addrs = this.Resolve(host)?;
+        if (!IsLoopback(addrs.AsSlice()[0].AsStr())) return Err(IoError.Invalid);
+        u16 p = port;
+        unsafe {
+            if (p == 0) {
+                p = this.State[0].NextPort;
+                this.State[0].NextPort = p + 1;
+            }
+            foreach (var used in this.State[0].ListenPorts.AsSlice()) {
+                if (used == p) return Err(IoError.Exists);
+            }
+            i64 h = 0 - (this.State[0].ListenPorts.Len() as i64 + 1);
+            this.State[0].ListenPorts.Push(p);
+            this.State[0].ListenHandles.Push(h);
+            return Ok(h);
+        }
+    }
+
+    u16 LocalPort(ref this, i64 listener) {
+        unsafe {
+            for (usize i = 0; i < this.State[0].ListenHandles.Len(); i++) {
+                if (this.State[0].ListenHandles.AsSlice()[i] == listener) return this.State[0].ListenPorts.AsSlice()[i];
+            }
+        }
+        return 0;
+    }
+
+    Result<i64, IoError> Accept(ref this, i64 listener) {
+        u16 port = this.LocalPort(listener);
+        unsafe {
+            for (usize i = 0; i < this.State[0].Pending.Len(); i++) {
+                if (this.State[0].PendingPort.AsSlice()[i] == port as i64) {
+                    i64 h = this.State[0].Pending.AsSlice()[i];
+                    // take it out of the queue
+                    List<i64> pending = List<i64>.New();
+                    List<i64> ports = List<i64>.New();
+                    for (usize k = 0; k < this.State[0].Pending.Len(); k++) {
+                        if (k == i) continue;
+                        pending.Push(this.State[0].Pending.AsSlice()[k]);
+                        ports.Push(this.State[0].PendingPort.AsSlice()[k]);
+                    }
+                    this.State[0].Pending = pending;
+                    this.State[0].PendingPort = ports;
+                    return Ok(h);
+                }
+            }
+        }
+        return Err(IoError.Other);
+    }
+
+    Result<usize, IoError> Send(ref this, i64 conn, u8[] data) {
+        unsafe {
+            if (conn <= 0 || conn as usize > this.State[0].Ends.Len()) return Err(IoError.Invalid);
+            i64 peer = this.State[0].Ends.AsSlice()[(conn - 1) as usize].Peer;
+            if (peer == 0) return Err(IoError.Other);
+            for (usize i = 0; i < data.Len; i++) this.State[0].Ends.AsMutSlice()[(peer - 1) as usize].Data.AppendByte(data[i]);
+        }
+        return Ok(data.Len);
+    }
+
+    Result<usize, IoError> Recv(ref this, i64 conn, mut u8[] into) {
+        unsafe {
+            if (conn <= 0 || conn as usize > this.State[0].Ends.Len()) return Err(IoError.Invalid);
+            usize at = this.State[0].Ends.AsSlice()[(conn - 1) as usize].At;
+            str d = this.State[0].Ends.AsSlice()[(conn - 1) as usize].Data.AsStr();
+            if (at >= d.Len) {
+                if (this.State[0].Ends.AsSlice()[(conn - 1) as usize].PeerClosed) return Ok(0);
+                return Err(IoError.Other);
+            }
+            usize n = 0;
+            while (n < into.Len && at + n < d.Len) {
+                into[n] = d[at + n];
+                n++;
+            }
+            this.State[0].Ends.AsMutSlice()[(conn - 1) as usize].At = at + n;
+            return Ok(n);
+        }
+    }
+
+    void Close(ref this, i64 handle) {
+        unsafe {
+            if (handle <= 0 || handle as usize > this.State[0].Ends.Len()) {
+                // a listening socket: it stops listening
+                for (usize i = 0; i < this.State[0].ListenHandles.Len(); i++) {
+                    if (this.State[0].ListenHandles.AsSlice()[i] == handle) this.State[0].ListenPorts.AsMutSlice()[i] = 0;
+                }
+                return;
+            }
+            i64 peer = this.State[0].Ends.AsSlice()[(handle - 1) as usize].Peer;
+            if (peer > 0) {
+                this.State[0].Ends.AsMutSlice()[(peer - 1) as usize].PeerClosed = true;
+                this.State[0].Ends.AsMutSlice()[(peer - 1) as usize].Peer = 0;
+            }
+            this.State[0].Ends.AsMutSlice()[(handle - 1) as usize].Peer = 0;
+        }
+    }
+}
+
+static usize SharedNetState = 0;
+
+public Net SharedNet() {
+    unsafe {
+        if (SharedNetState == 0) {
+            Net n = Net.New();
+            SharedNetState = n.State as usize;
+        }
+        return new Net { State = SharedNetState as *NetState };
     }
 }

@@ -1,7 +1,7 @@
 # `lib/ports` — all port interfaces
 
 > **Status:** Experimental (M4, M5): `IConsole`, `IFileSystem`, `IClock`, `IEntropy`,
-> `IEnvironment`, `IProcess` and `IoError`, in `ports.envo`.
+> `IEnvironment`, `IProcess`, `INet` and `IoError`, in `ports.envo`.
 
 Every port interface lives here and nowhere else. Each one has a reference adapter in
 `adapters/os/none`, native adapters for Windows and Linux, and a conformance suite in

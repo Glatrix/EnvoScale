@@ -599,6 +599,7 @@ public struct Vm {
         }
         if (Same(name, "wincall")) {
             if (a[0] == 8 && this.Box.PendingDenied()) return 5;       // GetLastError after a denial: ACCESS_DENIED
+            if (a[0] == 42 && this.Box.PendingDenied()) return 10013;  // WSAGetLastError: WSAEACCES
             if (!this.Box.AllowWincall(a[0] as i64, a[1] as i64, a[2] as i64, a[5] as i64)) return DeniedWin(a[0]);
             return platform.RawCall(2, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, a[7] as i64, a[8] as i64, a[9] as i64, a[10] as i64) as u64;
         }
@@ -619,6 +620,8 @@ u64 Denied(u32 kind) => (0 -% 13) as u64;
 u64 DeniedWin(u64 k) {
     if (k == 2 || k == 22) return 0xFFFFFFFFFFFFFFFF;
     if (k == 18) return 0xFFFFFFFF;
+    if (k == 32) return 0xFFFFFFFFFFFFFFFF;      // INVALID_SOCKET
+    if (k == 40) return 10013;                   // getaddrinfo: WSAEACCES
     return 0;
 }
 

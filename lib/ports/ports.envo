@@ -16,6 +16,7 @@ public enum IoError {
     Denied,         // not allowed
     Invalid,        // a path or argument the adapter cannot accept
     Other,          // anything else the system reported
+    Refused,        // a connection was refused: nothing listens there
 }
 
 // Standard output, standard error and standard input.
@@ -90,4 +91,27 @@ public interface IProcess {
     // NotFound if there is no such program, no directory workDir, or a file's directory
     // does not exist.
     Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath);
+}
+
+// TCP over IPv4 and name lookup (PLAN D40). Handles are opaque numbers the adapter gives.
+// IPv6 and UDP come later.
+public interface INet {
+    // The IPv4 addresses of host, as text ("127.0.0.1"): a numeric address is itself,
+    // "localhost" is 127.0.0.1, and other names are looked up as the system does.
+    // NotFound if there is none.
+    Result<List<string>, IoError> Resolve(ref this, str host);
+    // A TCP connection to host and port. Refused if nothing listens there.
+    Result<i64, IoError> Connect(ref this, str host, u16 port);
+    // A listening socket on host's address and port (port 0: the system picks one).
+    Result<i64, IoError> Listen(ref this, str host, u16 port);
+    // The port a listening socket is bound to.
+    u16 LocalPort(ref this, i64 listener);
+    // The next connection to a listening socket, waiting for one.
+    Result<i64, IoError> Accept(ref this, i64 listener);
+    // Sends all of data.
+    Result<usize, IoError> Send(ref this, i64 conn, u8[] data);
+    // Receives up to into.Len bytes, waiting for some; 0 when the other side has closed.
+    Result<usize, IoError> Recv(ref this, i64 conn, mut u8[] into);
+    // Closes a connection or listening socket.
+    void Close(ref this, i64 handle);
 }

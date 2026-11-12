@@ -1,8 +1,9 @@
 // Executable images: one read-write-execute section at IMAGE_BASE. Follows Stage 1's
 // bootstrap/stage1/x64/image.envo. Windows images import from KERNEL32.dll and
 // ADVAPI32.dll; import k is the k-th slot of the address table, reached through `wincall`:
-// KERNEL32's functions are 0-27, slot 28 ends them, and ADVAPI32's SystemFunction036
-// (RtlGenRandom) is slot 29 (PLAN D25, D28).
+// KERNEL32's functions are 0-27, slot 28 ends them, ADVAPI32's SystemFunction036
+// (RtlGenRandom) is slot 29 and slot 30 ends it, and WS2_32's are slots 31-45, ended by
+// slot 46 (PLAN D25, D28, D40).
 namespace envoc.x64;
 
 use envoc.util;
@@ -16,6 +17,7 @@ const u32 TARGET_LINUX = 1;
 const u32 TARGET_WINDOWS = 2;
 
 const u32 WIN_IMPORTS = 28;        // from KERNEL32.dll; then ADVAPI32's one, at slot 29
+const u32 WS_IMPORTS = 15;         // from WS2_32.dll, at slots 31-45
 
 // The KERNEL32.dll functions, by wincall index.
 str WinImport(u32 k) {
@@ -51,8 +53,29 @@ str WinImport(u32 k) {
     }
 }
 
+// The WS2_32.dll functions (D40), by their index after ADVAPI32's: import slot 31 + k.
+str WsImport(u32 k) {
+    match k {
+        0 => { return "WSAStartup"; }
+        1 => { return "socket"; }
+        2 => { return "connect"; }
+        3 => { return "bind"; }
+        4 => { return "listen"; }
+        5 => { return "accept"; }
+        6 => { return "send"; }
+        7 => { return "recv"; }
+        8 => { return "closesocket"; }
+        9 => { return "getaddrinfo"; }
+        10 => { return "freeaddrinfo"; }
+        11 => { return "WSAGetLastError"; }
+        12 => { return "setsockopt"; }
+        13 => { return "shutdown"; }
+        _ => { return "getsockname"; }
+    }
+}
+
 struct WinImports {
-    u32 Dir;        // the import directory (three descriptors, 60 bytes)
+    u32 Dir;        // the import directory (four descriptors, 80 bytes)
     u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
 }
 
@@ -60,6 +83,10 @@ struct WinImports {
 // data. Returns the labels the PE header and wincall need.
 WinImports EmitImports(ref Asm a) {
     u32[28] names;
+    u32[15] wsNames;
+    u32 ilt3 = a.NewLabel();
+    u32 dll3 = a.NewLabel();
+    u32 iat3 = a.NewLabel();
     u32 ilt = a.NewLabel();
     u32 dll = a.NewLabel();
     u32 ilt2 = a.NewLabel();
@@ -69,6 +96,7 @@ WinImports EmitImports(ref Asm a) {
     u32 dir = a.NewLabel();
     u32 iat = a.NewLabel();
     for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = a.NewLabel();
+    for (u32 k = 0; k < WS_IMPORTS; k++) wsNames[k] = a.NewLabel();
     a.DataAlign(8);
     a.BindData(dir);
     a.DataRva(ilt, 4);          // OriginalFirstThunk
@@ -81,6 +109,11 @@ WinImports EmitImports(ref Asm a) {
     a.DataU32(0);
     a.DataRva(dll2, 4);
     a.DataRva(iat2, 4);
+    a.DataRva(ilt3, 4);         // WS2_32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll3, 4);
+    a.DataRva(iat3, 4);
     a.DataZeros(20);            // the null descriptor
     a.DataAlign(8);
     a.BindData(ilt);
@@ -89,12 +122,18 @@ WinImports EmitImports(ref Asm a) {
     a.BindData(ilt2);
     a.DataRva(name2, 8);
     a.DataZeros(8);
+    a.BindData(ilt3);
+    for (u32 k = 0; k < WS_IMPORTS; k++) a.DataRva(wsNames[k], 8);
+    a.DataZeros(8);
     a.BindData(iat);
     for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
     a.DataZeros(8);             // slot 28 ends KERNEL32's
     a.BindData(iat2);           // slot 29
     a.DataRva(name2, 8);
-    a.DataZeros(8);
+    a.DataZeros(8);             // slot 30 ends ADVAPI32's
+    a.BindData(iat3);           // slots 31-45
+    for (u32 k = 0; k < WS_IMPORTS; k++) a.DataRva(wsNames[k], 8);
+    a.DataZeros(8);             // slot 46 ends WS2_32's
     for (u32 k = 0; k < WIN_IMPORTS; k++) {
         a.DataAlign(2);
         a.BindData(names[k]);
@@ -109,6 +148,14 @@ WinImports EmitImports(ref Asm a) {
     str random = "SystemFunction036";
     for (usize i = 0; i < random.Len; i++) a.DataByte(random[i]);
     a.DataByte(0);
+    for (u32 k = 0; k < WS_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(wsNames[k]);
+        a.DataZeros(2);         // hint
+        str wname = WsImport(k);
+        for (usize i = 0; i < wname.Len; i++) a.DataByte(wname[i]);
+        a.DataByte(0);
+    }
     a.BindData(dll);
     str kernel = "KERNEL32.dll";
     for (usize i = 0; i < kernel.Len; i++) a.DataByte(kernel[i]);
@@ -116,6 +163,10 @@ WinImports EmitImports(ref Asm a) {
     a.BindData(dll2);
     str advapi = "ADVAPI32.dll";
     for (usize i = 0; i < advapi.Len; i++) a.DataByte(advapi[i]);
+    a.DataByte(0);
+    a.BindData(dll3);
+    str ws2 = "WS2_32.dll";
+    for (usize i = 0; i < ws2.Len; i++) a.DataByte(ws2[i]);
     a.DataByte(0);
     return new WinImports { Dir = dir, Iat = iat };
 }
@@ -169,7 +220,7 @@ string WriteImage(ref Asm a, u32 target, WinImports imports) {
         Put64(ref f, 0xB8, 0x1000);                 // heap commit
         Put32(ref f, 0xC4, 16);                     // NumberOfRvaAndSizes
         Put32(ref f, 0xD0, PE_SECTION_RVA + a.LabelOffset(imports.Dir, dataStart));
-        Put32(ref f, 0xD4, 60);
+        Put32(ref f, 0xD4, 80);
         Put32(ref f, 0x148, 0x7865742E);            // ".tex"
         Put16(ref f, 0x14C, 0x74);                  // "t"
         Put32(ref f, 0x150, size);                  // VirtualSize

@@ -2,8 +2,9 @@
 // (docs/architecture/bootstrap.md, "Executable layout"). Windows images import from
 // KERNEL32.dll and ADVAPI32.dll; the runtime and the native adapters reach import k
 // through `wincall`, where k is the import's slot in the address table: KERNEL32's
-// functions are 0-27, slot 28 ends them, and ADVAPI32's SystemFunction036 (RtlGenRandom)
-// is slot 29 (PLAN D25, D28). Stage 2 writes the same tables.
+// functions are 0-27, slot 28 ends them, ADVAPI32's SystemFunction036 (RtlGenRandom) is
+// slot 29 and slot 30 ends it, and WS2_32's are slots 31-45, ended by slot 46 (PLAN D25,
+// D28, D40). Stage 2 writes the same tables.
 
 const u64 IMAGE_BASE = 0x400000;
 const u64 ELF_HEADERS = 176;        // ELF header (64) + 2 program headers (56 each)
@@ -13,6 +14,7 @@ const u32 TARGET_LINUX = 1;
 const u32 TARGET_WINDOWS = 2;
 
 const u32 WIN_IMPORTS = 28;        // from KERNEL32.dll; then ADVAPI32's one, at slot 29
+const u32 WS_IMPORTS = 15;         // from WS2_32.dll, at slots 31-45
 
 // The KERNEL32.dll functions, by wincall index.
 str WinImport(u32 k) {
@@ -48,8 +50,29 @@ str WinImport(u32 k) {
     }
 }
 
+// The WS2_32.dll functions (D40), by their index after ADVAPI32's: import slot 31 + k.
+str WsImport(u32 k) {
+    match k {
+        0 => { return "WSAStartup"; }
+        1 => { return "socket"; }
+        2 => { return "connect"; }
+        3 => { return "bind"; }
+        4 => { return "listen"; }
+        5 => { return "accept"; }
+        6 => { return "send"; }
+        7 => { return "recv"; }
+        8 => { return "closesocket"; }
+        9 => { return "getaddrinfo"; }
+        10 => { return "freeaddrinfo"; }
+        11 => { return "WSAGetLastError"; }
+        12 => { return "setsockopt"; }
+        13 => { return "shutdown"; }
+        _ => { return "getsockname"; }
+    }
+}
+
 struct WinImports {
-    u32 Dir;        // the import directory (three descriptors, 60 bytes)
+    u32 Dir;        // the import directory (four descriptors, 80 bytes)
     u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
 }
 
@@ -58,6 +81,10 @@ struct WinImports {
 WinImports EmitImports(*Asm a) {
     WinImports w;
     u32[28] names;
+    u32[15] wsNames;
+    u32 ilt3 = NewLabel(a);
+    u32 dll3 = NewLabel(a);
+    u32 iat3 = NewLabel(a);
     u32 ilt = NewLabel(a);
     u32 dll = NewLabel(a);
     u32 ilt2 = NewLabel(a);
@@ -67,6 +94,7 @@ WinImports EmitImports(*Asm a) {
     w.Dir = NewLabel(a);
     w.Iat = NewLabel(a);
     for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = NewLabel(a);
+    for (u32 k = 0; k < WS_IMPORTS; k++) wsNames[k] = NewLabel(a);
     unsafe {
         DataAlign(a, 8);
         BindData(a, w.Dir);
@@ -80,6 +108,11 @@ WinImports EmitImports(*Asm a) {
         DataU32(a, 0);
         DataRva(a, dll2, 4);
         DataRva(a, iat2, 4);
+        DataRva(a, ilt3, 4);        // WS2_32.dll
+        DataU32(a, 0);
+        DataU32(a, 0);
+        DataRva(a, dll3, 4);
+        DataRva(a, iat3, 4);
         BufRepeat(&a.Data, 0, 20);  // the null descriptor
         DataAlign(a, 8);
         BindData(a, ilt);
@@ -88,12 +121,18 @@ WinImports EmitImports(*Asm a) {
         BindData(a, ilt2);
         DataRva(a, name2, 8);
         BufRepeat(&a.Data, 0, 8);
+        BindData(a, ilt3);
+        for (u32 k = 0; k < WS_IMPORTS; k++) DataRva(a, wsNames[k], 8);
+        BufRepeat(&a.Data, 0, 8);
         BindData(a, w.Iat);
         for (u32 k = 0; k < WIN_IMPORTS; k++) DataRva(a, names[k], 8);
         BufRepeat(&a.Data, 0, 8);   // slot 28 ends KERNEL32's
         BindData(a, iat2);          // slot 29
         DataRva(a, name2, 8);
-        BufRepeat(&a.Data, 0, 8);
+        BufRepeat(&a.Data, 0, 8);   // slot 30 ends ADVAPI32's
+        BindData(a, iat3);          // slots 31-45
+        for (u32 k = 0; k < WS_IMPORTS; k++) DataRva(a, wsNames[k], 8);
+        BufRepeat(&a.Data, 0, 8);   // slot 46 ends WS2_32's
         for (u32 k = 0; k < WIN_IMPORTS; k++) {
             DataAlign(a, 2);
             BindData(a, names[k]);
@@ -106,11 +145,21 @@ WinImports EmitImports(*Asm a) {
         BufRepeat(&a.Data, 0, 2);
         BufStr(&a.Data, "SystemFunction036");
         BufByte(&a.Data, 0);
+        for (u32 k = 0; k < WS_IMPORTS; k++) {
+            DataAlign(a, 2);
+            BindData(a, wsNames[k]);
+            BufRepeat(&a.Data, 0, 2);       // hint
+            BufStr(&a.Data, WsImport(k));
+            BufByte(&a.Data, 0);
+        }
         BindData(a, dll);
         BufStr(&a.Data, "KERNEL32.dll");
         BufByte(&a.Data, 0);
         BindData(a, dll2);
         BufStr(&a.Data, "ADVAPI32.dll");
+        BufByte(&a.Data, 0);
+        BindData(a, dll3);
+        BufStr(&a.Data, "WS2_32.dll");
         BufByte(&a.Data, 0);
     }
     return w;
@@ -170,7 +219,7 @@ str WriteImage(*Asm a, u32 target, WinImports imports) {
         PutU64(f, 0xB8, 0x1000);                // heap commit
         PutU32(f, 0xC4, 16);                    // NumberOfRvaAndSizes
         PutU32(f, 0xD0, PE_SECTION_RVA + LabelOffset(a, imports.Dir, dataStart));
-        PutU32(f, 0xD4, 60);
+        PutU32(f, 0xD4, 80);
         PutU32(f, 0x148, 0x7865742E);           // ".tex"
         PutU16(f, 0x14C, 0x74);                 // "t"
         PutU32(f, 0x150, size);                 // VirtualSize

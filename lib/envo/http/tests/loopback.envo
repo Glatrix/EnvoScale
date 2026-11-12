@@ -1,0 +1,37 @@
+// envo.http over the platform's own network (loopback): one exchange through real
+// sockets, the server and the client in one program.
+// expect: GET / -> 200 [hello over loopback]
+use envo.http;
+use ports.{INet, IoError};
+use alloc.text;
+use platform;
+
+http.Response Hello(in http.Request req) => http.Response.Text(200, "hello over loopback");
+
+http.Router app = http.Router.New();
+app.Get("/", new http.Handler { Fn = Hello });
+var net = platform.Net();
+i64 listener = net.Listen("127.0.0.1", 0).Unwrap();
+u16 port = net.LocalPort(listener);
+i64 conn = net.Connect("127.0.0.1", port).Unwrap();
+http.Request r = http.Request.New("GET", "/");
+string wire = http.WriteRequest(r, "localhost");
+List<u8> bytes = List<u8>.New();
+for (usize i = 0; i < wire.Len(); i++) bytes.Push(wire.AsStr()[i]);
+net.Send(conn, bytes.AsSlice());
+http.ServeOneWith(ref net, ref app, listener);
+string raw = string.New();
+u8[256] buf;
+while (true) {
+    Result<usize, IoError> got = net.Recv(conn, buf[0..256]);
+    if (got.IsErr() || got.Unwrap() == 0) break;
+    for (usize i = 0; i < got.Unwrap(); i++) raw.AppendByte(buf[i]);
+}
+net.Close(conn);
+net.Close(listener);
+http.Response a = http.ParseResponse(raw.AsStr()).Unwrap();
+write(1, "GET / -> ");
+write(1, text.Uint(a.StatusCode() as u64).AsStr());
+write(1, " [");
+write(1, a.BodyText());
+print("]");

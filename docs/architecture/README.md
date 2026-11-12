@@ -12,3 +12,4 @@ One document per subsystem describing how it is built and why:
   resolution, the `platform` binding, adapters, conformance).
 - [`tooling.md`](tooling.md): the `envo` tool, packages and the Process port (M5).
 - [`script-runtime.md`](script-runtime.md): `envo run`, the EIR interpreter and permissions (M6).
+- [`network.md`](network.md): the Net port, HTTP and TLS (M7).
