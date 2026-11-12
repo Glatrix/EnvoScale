@@ -1,0 +1,70 @@
+// envo.crypto.x509: a test CA (P-256, made with OpenSSL for this test) and a server
+// certificate it signed (RSA-2048, for localhost, *.envo.test and 127.0.0.1): fields, host
+// names, and chain verification against the CA, a wrong host, an untrusted chain and a
+// time outside the validity.
+// expect: leaf localhost by Envo Test CA, ca false
+// expect: names localhost *.envo.test
+// expect: ca Envo Test CA, ca true
+// expect: hosts ok
+// expect: chain ok
+// expect: wrong host: the certificate is for localhost, not example.com
+// expect: untrusted: the certificate does not chain to a trusted root
+// expect: expired: a certificate in the chain has expired or is not valid yet
+// expect: pem 1
+// vm: skip (about a minute in the script runtime: big-number arithmetic)
+use envo.crypto.x509;
+
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> FromHex(str h) {
+    List<u8> b = List<u8>.New();
+    for (usize i = 0; i + 1 < h.Len; i += 2) b.Push(Nib(h[i]) * 16 + Nib(h[i + 1]));
+    return b;
+}
+
+List<u8> leafDer = FromHex("3082022e308201d4a003020102021411e410bf5bf0146059c96eaa372a61707ffa0c02300a06082a8648ce3d04030230173115301306035504030c0c456e766f2054657374204341301e170d3236313131323037353930365a170d3336313130393037353930365a30143112301006035504030c096c6f63616c686f737430820122300d06092a864886f70d01010105000382010f003082010a0282010100c14e2c2f66a5959e0a03b2edbb59b2b185b317210049857a1664b6a082780c2e46615c3564ee4427f0136a6d4f1b8339471416f197204b00c92789f82133f86fd37e4f7011ed974b4bb49f74d0f09b780f1ccfa312d66623b10088c527a97ae26884a3d6ba4d9119b4edb6197bcba94c3b0d00a1799493cd277754531165f297f091495186ab03c1e91a99b69c48d7e6018ce4b02c2c4f56cbdc605536f51ac6e043e2cdba6b637cea5412b11f29d8fd480e96de0d9596a7dfc1ff02e482abee7e60dc813486232b01404619feb8252efca56bb8782e493184414ddcda01ecd7b488cb6cb6cb2ab123c1bac647c7bf1a98e61b19b0a8809ae8cc303b29c700ef0203010001a336303430270603551d110420301e82096c6f63616c686f7374820b2a2e656e766f2e7465737487047f00000130090603551d1304023000300a06082a8648ce3d0403020348003045022015245b086a98b12359882477f134eec9d36ab379f952236f97aac4adf399fdf3022100a317e003de3899cd05ddb3ceaf75e4fa1f500c83ed06b4c588553fd8359bc1b5");
+List<u8> caDer = FromHex("308201a33082014aa003020102021417eea49ffeac19aed94cfea0a25cbfc284768faa300a06082a8648ce3d04030230173115301306035504030c0c456e766f2054657374204341301e170d3236313131323037353930365a170d3336313130393037353930365a30173115301306035504030c0c456e766f20546573742043413059301306072a8648ce3d020106082a8648ce3d030107034200047a3c1deb56db99b7a828ddcae43a158a2ac7f9b331d4ac85ec47906f9d3b7e2592dd889ab4fca1ad0bff5023174160ab4cdafe68eb3a579cfd330f5e30a7a47ea3743072301d0603551d0e04160414f654af5dd077d2b7b9cf8d212c553e9d9d3a50b6301f0603551d23041830168014f654af5dd077d2b7b9cf8d212c553e9d9d3a50b6300f0603551d130101ff040530030101ff300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020204300a06082a8648ce3d0403020347003044022020dabd15ba57b0a0c12ca79b1a778e89bbffcc96811f92578f6f274076810c9f022074ff66bd299ff559adf024966f68f640beb4b073236811f9de969772c4d22daf");
+x509.Certificate leaf;
+x509.Certificate ca;
+if (!x509.Parse(leafDer.AsSlice(), ref leaf) || !x509.Parse(caDer.AsSlice(), ref ca)) print("parse failed");
+write(1, "leaf ");
+write(1, leaf.Name());
+write(1, " by ");
+write(1, ca.Name());
+if (leaf.Authority()) print(", ca true");
+else print(", ca false");
+write(1, "names ");
+write(1, leaf.DnsName(0));
+write(1, " ");
+print(leaf.DnsName(1));
+write(1, "ca ");
+write(1, ca.Name());
+if (ca.Authority()) print(", ca true");
+else print(", ca false");
+if (x509.MatchesHost(leaf, "LocalHost") && x509.MatchesHost(leaf, "a.envo.test") && !x509.MatchesHost(leaf, "a.b.envo.test") && x509.MatchesHost(leaf, "127.0.0.1") && !x509.MatchesHost(leaf, "envo.test")) print("hosts ok");
+List<x509.Certificate> chain = List<x509.Certificate>.New();
+chain.Push(leaf);
+List<x509.Certificate> trust = List<x509.Certificate>.New();
+trust.Push(ca);
+string why = x509.VerifyChain(chain, trust, "localhost", "20300101000000");
+if (why.Len() == 0) print("chain ok");
+else print(why.AsStr());
+write(1, "wrong host: ");
+print(x509.VerifyChain(chain, trust, "example.com", "20300101000000").AsStr());
+List<x509.Certificate> none = List<x509.Certificate>.New();
+write(1, "untrusted: ");
+print(x509.VerifyChain(chain, none, "localhost", "20300101000000").AsStr());
+write(1, "expired: ");
+print(x509.VerifyChain(chain, trust, "localhost", "20500101000000").AsStr());
+string pem = string.From("-----BEGIN CERTIFICATE-----");
+pem.AppendByte(10);
+pem.Append("MAA=");
+pem.AppendByte(10);
+pem.Append("-----END CERTIFICATE-----");
+pem.AppendByte(10);
+List<List<u8>> blocks = x509.FromPem(pem.AsStr());
+write(1, "pem ");
+if (blocks.Len() == 1 && blocks.AsSlice()[0].Len() == 2) print("1");

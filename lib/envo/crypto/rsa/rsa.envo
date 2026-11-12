@@ -44,38 +44,83 @@ bool Recover(in PublicKey key, u8[] sig, ref List<u8> em, usize k) {
     return true;
 }
 
-// The DER prefix of a SHA-256 DigestInfo (RFC 8017 section 9.2, note 1).
-void Sha256Prefix(ref List<u8> b) {
-    u8[19] p;
-    p[0] = 0x30; p[1] = 0x31; p[2] = 0x30; p[3] = 0x0d; p[4] = 0x06; p[5] = 0x09; p[6] = 0x60;
-    p[7] = 0x86; p[8] = 0x48; p[9] = 0x01; p[10] = 0x65; p[11] = 0x03; p[12] = 0x04; p[13] = 0x02;
-    p[14] = 0x01; p[15] = 0x05; p[16] = 0x00; p[17] = 0x04; p[18] = 0x20;
-    for (usize i = 0; i < 19; i++) b.Push(p[i]);
+// The DER prefix of a DigestInfo for SHA-256, SHA-384 or SHA-512 (RFC 8017 section 9.2,
+// note 1): SEQUENCE { SEQUENCE { the hash's OID, NULL }, OCTET STRING of hLen bytes }.
+void DigestPrefix(ref List<u8> b, u32 bits) {
+    u8 id = 1;
+    if (bits == 384) id = 2;
+    if (bits == 512) id = 3;
+    u8 hLen = (bits / 8) as u8;
+    b.Push(0x30);
+    b.Push(0x11 + hLen);
+    b.Push(0x30);
+    b.Push(0x0d);
+    b.Push(0x06);
+    b.Push(0x09);
+    b.Push(0x60);
+    b.Push(0x86);
+    b.Push(0x48);
+    b.Push(0x01);
+    b.Push(0x65);
+    b.Push(0x03);
+    b.Push(0x04);
+    b.Push(0x02);
+    b.Push(id);
+    b.Push(0x05);
+    b.Push(0x00);
+    b.Push(0x04);
+    b.Push(hLen);
 }
 
-// Checks an RSASSA-PKCS1-v1_5 signature with SHA-256 of msg.
-public bool VerifyPkcs1Sha256(in PublicKey key, u8[] msg, u8[] sig) {
+// The SHA-2 digest (bits: 256, 384 or 512) of msg.
+List<u8> Digest(u32 bits, u8[] msg) {
+    List<u8> d = List<u8>.New();
+    if (bits == 384) {
+        u8[48] h;
+        sha2.Sha384 s = sha2.Sha384.New();
+        s.Update(msg);
+        s.Finish(h[0..48]);
+        for (usize i = 0; i < 48; i++) d.Push(h[i]);
+    } else if (bits == 512) {
+        u8[64] h;
+        sha2.Sha512 s = sha2.Sha512.New();
+        s.Update(msg);
+        s.Finish(h[0..64]);
+        for (usize i = 0; i < 64; i++) d.Push(h[i]);
+    } else {
+        u8[32] h;
+        sha2.Sha256 s = sha2.Sha256.New();
+        s.Update(msg);
+        s.Finish(h[0..32]);
+        for (usize i = 0; i < 32; i++) d.Push(h[i]);
+    }
+    return d;
+}
+
+// Checks an RSASSA-PKCS1-v1_5 signature of msg with SHA-256, SHA-384 or SHA-512 (bits).
+public bool VerifyPkcs1(in PublicKey key, u32 bits, u8[] msg, u8[] sig) {
     usize k = key.N.Len();
     List<u8> em = List<u8>.New();
     if (!Recover(key, sig, ref em, k)) return false;
-    u8[32] h;
-    sha2.Sha256 d = sha2.Sha256.New();
-    d.Update(msg);
-    d.Finish(h[0..32]);
+    List<u8> h = Digest(bits, msg);
     // 00 01 FF..FF 00 DigestInfo
+    List<u8> tail = List<u8>.New();
+    DigestPrefix(ref tail, bits);
+    foreach (var x in h.AsSlice()) tail.Push(x);
+    if (k < tail.Len() + 11) return false;
     List<u8> want = List<u8>.New();
     want.Push(0);
     want.Push(1);
-    usize t = 19 + 32;
-    if (k < t + 11) return false;
-    for (usize i = 0; i < k - t - 3; i++) want.Push(0xff);
+    for (usize i = 0; i < k - tail.Len() - 3; i++) want.Push(0xff);
     want.Push(0);
-    Sha256Prefix(ref want);
-    for (usize i = 0; i < 32; i++) want.Push(h[i]);
+    foreach (var x in tail.AsSlice()) want.Push(x);
     u8 diff = 0;
     for (usize i = 0; i < k; i++) diff = diff | (want.AsSlice()[i] ^ em.AsSlice()[i]);
     return diff == 0;
 }
+
+// Checks an RSASSA-PKCS1-v1_5 signature with SHA-256 of msg.
+public bool VerifyPkcs1Sha256(in PublicKey key, u8[] msg, u8[] sig) => VerifyPkcs1(key, 256, msg, sig);
 
 // MGF1 with SHA-256 (RFC 8017 appendix B.2.1): mask.Len bytes from seed.
 void Mgf1(u8[] seed, mut u8[] mask) {

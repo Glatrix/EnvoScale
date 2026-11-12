@@ -1,0 +1,416 @@
+// envo.crypto.x509: X.509 certificates (RFC 5280) for TLS: a DER reader, the fields a
+// client needs (issuer and subject, validity, the public key, subject alternative names,
+// the CA flag), host name matching (RFC 6125) and chain verification to trust anchors
+// with RSA (PKCS #1 v1.5 with SHA-256/384/512, PSS with SHA-256) and ECDSA (P-256 with
+// SHA-256, P-384 with SHA-384) signatures. Certificates are public: none of this is
+// constant time.
+namespace envo.crypto.x509;
+
+use envo.crypto.sha2;
+use envo.crypto.rsa;
+use envo.crypto.ecdsa;
+use core.text as ct;
+use alloc.text;
+
+// ------------------------------------------------------------------ DER
+
+// One DER element: its tag, and where its content is in the bytes it was read from.
+public struct Tlv {
+    u8 Tag;
+    usize Start;        // the content
+    usize Len;
+    usize End;          // after the content: the next element
+    usize Header;       // where the element (tag) starts
+}
+
+// Reads the element at at; false if the bytes are not DER.
+public bool ReadTlv(u8[] b, usize at, usize limit, ref Tlv t) {
+    if (at + 2 > limit || limit > b.Len) return false;
+    t.Header = at;
+    t.Tag = b[at];
+    usize len = b[at + 1] as usize;
+    usize p = at + 2;
+    if (len >= 0x80) {
+        usize count = len & 0x7f;
+        if (count == 0 || count > 4 || p + count > limit) return false;
+        len = 0;
+        for (usize i = 0; i < count; i++) len = (len << 8) | b[p + i] as usize;
+        p += count;
+    }
+    if (p + len > limit) return false;
+    t.Start = p;
+    t.Len = len;
+    t.End = p + len;
+    return true;
+}
+
+// The DER of an object identifier (without tag and length) as dotted text.
+public string OidText(u8[] b) {
+    string s = string.New();
+    if (b.Len == 0) return s;
+    s.Append(text.Uint((b[0] / 40) as u64).AsStr());
+    s.AppendByte('.');
+    s.Append(text.Uint((b[0] % 40) as u64).AsStr());
+    u64 v = 0;
+    for (usize i = 1; i < b.Len; i++) {
+        v = (v << 7) | (b[i] & 0x7f) as u64;
+        if (b[i] & 0x80 == 0) {
+            s.AppendByte('.');
+            s.Append(text.Uint(v).AsStr());
+            v = 0;
+        }
+    }
+    return s;
+}
+
+// ------------------------------------------------------------------ certificates
+
+public struct Certificate {
+    List<u8> Der;           // the whole certificate
+    usize TbsStart;         // the signed part
+    usize TbsEnd;
+    string SigAlg;          // the signature algorithm's OID
+    List<u8> Signature;
+    List<u8> Issuer;        // DER of the issuer and subject names, compared as bytes
+    List<u8> Subject;
+    string CommonName;
+    string NotBefore;       // as YYYYMMDDHHMMSS (UTC)
+    string NotAfter;
+    string KeyAlg;          // the public key's algorithm OID
+    string KeyCurve;        // for EC keys, the curve's OID
+    List<u8> Key;           // the key: RSAPublicKey DER, or the EC point
+    List<string> DnsNames;
+    List<string> IpAddresses;   // as dotted text (IPv4)
+    bool IsCa;
+
+    public str Name(in this) => this.CommonName.AsStr();
+    public str ValidFrom(in this) => this.NotBefore.AsStr();
+    public str ValidUntil(in this) => this.NotAfter.AsStr();
+    public bool Authority(in this) => this.IsCa;
+    public usize DnsCount(in this) => this.DnsNames.Len();
+    public str DnsName(in this, usize i) => this.DnsNames.AsSlice()[i].AsStr();
+}
+
+List<u8> Bytes(u8[] b, usize from, usize to) {
+    List<u8> r = List<u8>.New();
+    for (usize i = from; i < to; i++) r.Push(b[i]);
+    return r;
+}
+
+// UTCTime (YYMMDDHHMMSSZ) or GeneralizedTime (YYYYMMDDHHMMSSZ) as YYYYMMDDHHMMSS.
+string TimeText(u8[] b, in Tlv t) {
+    string s = string.New();
+    str v = "";
+    unsafe { v = str_from(&b[t.Start], t.Len); }
+    if (t.Tag == 0x17 && v.Len >= 12) {
+        if (v[0] < '5') s.Append("20");
+        else s.Append("19");
+        s.Append(v[0..12]);
+    } else if (t.Tag == 0x18 && v.Len >= 14) {
+        s.Append(v[0..14]);
+    }
+    return s;
+}
+
+// The common name in a Name, if it has one.
+string FindCommonName(u8[] b, in Tlv name) {
+    usize at = name.Start;
+    while (at < name.End) {
+        Tlv set;
+        if (!ReadTlv(b, at, name.End, ref set)) break;
+        usize a2 = set.Start;
+        while (a2 < set.End) {
+            Tlv seq;
+            if (!ReadTlv(b, a2, set.End, ref seq)) break;
+            Tlv oid;
+            Tlv value;
+            if (ReadTlv(b, seq.Start, seq.End, ref oid) && ReadTlv(b, oid.End, seq.End, ref value)) {
+                string o = OidText(b[oid.Start..oid.End]);
+                if (o.Equals("2.5.4.3")) {
+                    string cn = string.New();
+                    for (usize i = value.Start; i < value.End; i++) cn.AppendByte(b[i]);
+                    return cn;
+                }
+            }
+            a2 = seq.End;
+        }
+        at = set.End;
+    }
+    return string.New();
+}
+
+// Reads a certificate from DER; false if it is not one.
+public bool Parse(u8[] der, ref Certificate c) {
+    Tlv cert;
+    if (!ReadTlv(der, 0, der.Len, ref cert) || cert.Tag != 0x30 || cert.End != der.Len) return false;
+    Tlv tbs;
+    Tlv sigAlg;
+    Tlv sig;
+    if (!ReadTlv(der, cert.Start, cert.End, ref tbs) || tbs.Tag != 0x30) return false;
+    if (!ReadTlv(der, tbs.End, cert.End, ref sigAlg) || sigAlg.Tag != 0x30) return false;
+    if (!ReadTlv(der, sigAlg.End, cert.End, ref sig) || sig.Tag != 0x03 || sig.Len < 1) return false;
+    Tlv algOid;
+    if (!ReadTlv(der, sigAlg.Start, sigAlg.End, ref algOid) || algOid.Tag != 0x06) return false;
+    c = new Certificate {
+        Der = Bytes(der, 0, der.Len), TbsStart = tbs.Header, TbsEnd = tbs.End, SigAlg = OidText(der[algOid.Start..algOid.End]),
+        Signature = Bytes(der, sig.Start + 1, sig.End), Issuer = List<u8>.New(), Subject = List<u8>.New(), CommonName = string.New(),
+        NotBefore = string.New(), NotAfter = string.New(), KeyAlg = string.New(), KeyCurve = string.New(), Key = List<u8>.New(),
+        DnsNames = List<string>.New(), IpAddresses = List<string>.New(), IsCa = false,
+    };
+    // tbsCertificate: [0] version, serial, signature, issuer, validity, subject, spki, ...
+    usize at = tbs.Start;
+    Tlv t;
+    if (!ReadTlv(der, at, tbs.End, ref t)) return false;
+    if (t.Tag == 0xa0) {
+        at = t.End;
+        if (!ReadTlv(der, at, tbs.End, ref t)) return false;
+    }
+    at = t.End;                                         // serial
+    if (!ReadTlv(der, at, tbs.End, ref t)) return false;
+    at = t.End;                                         // signature algorithm
+    Tlv issuer;
+    if (!ReadTlv(der, at, tbs.End, ref issuer) || issuer.Tag != 0x30) return false;
+    c.Issuer = Bytes(der, issuer.Header, issuer.End);
+    Tlv validity;
+    if (!ReadTlv(der, issuer.End, tbs.End, ref validity) || validity.Tag != 0x30) return false;
+    Tlv nb;
+    Tlv na;
+    if (!ReadTlv(der, validity.Start, validity.End, ref nb) || !ReadTlv(der, nb.End, validity.End, ref na)) return false;
+    c.NotBefore = TimeText(der, nb);
+    c.NotAfter = TimeText(der, na);
+    Tlv subject;
+    if (!ReadTlv(der, validity.End, tbs.End, ref subject) || subject.Tag != 0x30) return false;
+    c.Subject = Bytes(der, subject.Header, subject.End);
+    c.CommonName = FindCommonName(der, subject);
+    Tlv spki;
+    if (!ReadTlv(der, subject.End, tbs.End, ref spki) || spki.Tag != 0x30) return false;
+    Tlv kalg;
+    Tlv kbits;
+    if (!ReadTlv(der, spki.Start, spki.End, ref kalg) || !ReadTlv(der, kalg.End, spki.End, ref kbits) || kbits.Tag != 0x03 || kbits.Len < 1) return false;
+    Tlv koid;
+    if (!ReadTlv(der, kalg.Start, kalg.End, ref koid)) return false;
+    c.KeyAlg = OidText(der[koid.Start..koid.End]);
+    Tlv kparam;
+    if (koid.End < kalg.End && ReadTlv(der, koid.End, kalg.End, ref kparam) && kparam.Tag == 0x06) c.KeyCurve = OidText(der[kparam.Start..kparam.End]);
+    c.Key = Bytes(der, kbits.Start + 1, kbits.End);
+    // extensions: [3] { SEQUENCE OF Extension }
+    at = spki.End;
+    while (at < tbs.End) {
+        if (!ReadTlv(der, at, tbs.End, ref t)) return false;
+        if (t.Tag == 0xa3) {
+            Tlv exts;
+            if (!ReadTlv(der, t.Start, t.End, ref exts)) return false;
+            usize e = exts.Start;
+            while (e < exts.End) {
+                Tlv ext;
+                if (!ReadTlv(der, e, exts.End, ref ext)) return false;
+                Tlv eoid;
+                if (!ReadTlv(der, ext.Start, ext.End, ref eoid)) return false;
+                Tlv val;
+                if (!ReadTlv(der, eoid.End, ext.End, ref val)) return false;
+                if (val.Tag == 0x01) {
+                    // the critical flag; the value follows
+                    if (!ReadTlv(der, val.End, ext.End, ref val)) return false;
+                }
+                string o = OidText(der[eoid.Start..eoid.End]);
+                if (o.Equals("2.5.29.17")) ReadSans(der, val, ref c);
+                if (o.Equals("2.5.29.19")) {
+                    Tlv bc;
+                    Tlv flag;
+                    if (ReadTlv(der, val.Start, val.End, ref bc) && bc.Len > 0 && ReadTlv(der, bc.Start, bc.End, ref flag) && flag.Tag == 0x01 && flag.Len == 1) c.IsCa = der[flag.Start] != 0;
+                }
+                e = ext.End;
+            }
+        }
+        at = t.End;
+    }
+    return true;
+}
+
+void ReadSans(u8[] der, in Tlv octets, ref Certificate c) {
+    Tlv names;
+    if (!ReadTlv(der, octets.Start, octets.End, ref names) || names.Tag != 0x30) return;
+    usize at = names.Start;
+    while (at < names.End) {
+        Tlv n;
+        if (!ReadTlv(der, at, names.End, ref n)) return;
+        if (n.Tag == 0x82) {
+            string s = string.New();
+            for (usize i = n.Start; i < n.End; i++) s.AppendByte(der[i]);
+            c.DnsNames.Push(s);
+        } else if (n.Tag == 0x87 && n.Len == 4) {
+            string s = string.New();
+            for (usize i = 0; i < 4; i++) {
+                if (i > 0) s.AppendByte('.');
+                s.Append(text.Uint(der[n.Start + i] as u64).AsStr());
+            }
+            c.IpAddresses.Push(s);
+        }
+        at = n.End;
+    }
+}
+
+// ------------------------------------------------------------------ PEM
+
+u8 B64(u8 c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return 255;
+}
+
+// The DER of every CERTIFICATE block in PEM text.
+public List<List<u8>> FromPem(str pem) {
+    List<List<u8>> all = List<List<u8>>.New();
+    str begin = "-----BEGIN CERTIFICATE-----";
+    str end = "-----END CERTIFICATE-----";
+    usize at = 0;
+    while (at < pem.Len) {
+        usize? b = ct.IndexOf(pem[at..pem.Len], begin);
+        if (b.IsNone()) break;
+        usize start = at + b.Unwrap() + begin.Len;
+        usize? e = ct.IndexOf(pem[start..pem.Len], end);
+        if (e.IsNone()) break;
+        str body = pem[start..start + e.Unwrap()];
+        List<u8> der = List<u8>.New();
+        u32 acc = 0;
+        u32 bits = 0;
+        for (usize i = 0; i < body.Len; i++) {
+            u8 v = B64(body[i]);
+            if (v == 255) continue;
+            acc = (acc << 6) | v as u32;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                der.Push((acc >> bits) as u8);
+            }
+        }
+        all.Push(der);
+        at = start + e.Unwrap() + end.Len;
+    }
+    return all;
+}
+
+// ------------------------------------------------------------------ verification
+
+// Does name (as asked for) match the certificate's names? DNS names, with a wildcard only
+// as the whole leftmost label; IPv4 addresses against IP names. Case does not matter.
+public bool MatchesHost(in Certificate c, str host) {
+    foreach (var ip in c.IpAddresses.AsSlice()) {
+        if (ip.Equals(host)) return true;
+    }
+    string h = text.Lower(host);
+    foreach (var d in c.DnsNames.AsSlice()) {
+        string n = text.Lower(d.AsStr());
+        if (n.Equals(h.AsStr())) return true;
+        if (ct.StartsWith(n.AsStr(), "*.")) {
+            usize? dot = ct.IndexOfByte(h.AsStr(), '.');
+            if (dot.IsSome() && dot.Unwrap() > 0 && ct.Compare(h.AsStr()[dot.Unwrap()..h.Len()], n.AsStr()[1..n.Len()]) == 0) return true;
+        }
+    }
+    return false;
+}
+
+// Does key (in c) verify signature over data with the given algorithm OID? digest says
+// which SHA-2 the algorithm uses.
+public bool VerifyWith(in Certificate key, str sigAlg, u8[] data, u8[] signature) {
+    if (ct.Compare(key.KeyAlg.AsStr(), "1.2.840.113549.1.1.1") == 0) {
+        // RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }
+        u8[] k = key.Key.AsSlice();
+        Tlv seq;
+        Tlv nT;
+        Tlv eT;
+        if (!ReadTlv(k, 0, k.Len, ref seq) || !ReadTlv(k, seq.Start, seq.End, ref nT) || !ReadTlv(k, nT.End, seq.End, ref eT)) return false;
+        if (eT.Len > 8) return false;
+        u64 e = 0;
+        for (usize i = eT.Start; i < eT.End; i++) e = (e << 8) | k[i] as u64;
+        rsa.PublicKey pk = rsa.PublicKey.New(k[nT.Start..nT.End], e);
+        if (ct.Compare(sigAlg, "1.2.840.113549.1.1.11") == 0) return rsa.VerifyPkcs1(pk, 256, data, signature);
+        if (ct.Compare(sigAlg, "1.2.840.113549.1.1.12") == 0) return rsa.VerifyPkcs1(pk, 384, data, signature);
+        if (ct.Compare(sigAlg, "1.2.840.113549.1.1.13") == 0) return rsa.VerifyPkcs1(pk, 512, data, signature);
+        if (ct.Compare(sigAlg, "1.2.840.113549.1.1.10") == 0) return rsa.VerifyPssSha256(pk, data, signature);
+        return false;
+    }
+    if (ct.Compare(key.KeyAlg.AsStr(), "1.2.840.10045.2.1") == 0) {
+        bool p256 = key.KeyCurve.Equals("1.2.840.10045.3.1.7");
+        bool p384 = key.KeyCurve.Equals("1.3.132.0.34");
+        if (!p256 && !p384) return false;
+        usize n = 32;
+        if (p384) n = 48;
+        u8[] k = key.Key.AsSlice();
+        if (k.Len != 1 + 2 * n || k[0] != 4) return false;     // an uncompressed point
+        List<u8> digest = List<u8>.New();
+        if (ct.Compare(sigAlg, "1.2.840.10045.4.3.2") == 0) {
+            u8[32] d;
+            sha2.Sha256 h = sha2.Sha256.New();
+            h.Update(data);
+            h.Finish(d[0..32]);
+            for (usize i = 0; i < 32; i++) digest.Push(d[i]);
+        } else if (ct.Compare(sigAlg, "1.2.840.10045.4.3.3") == 0) {
+            u8[48] d;
+            sha2.Sha384 h = sha2.Sha384.New();
+            h.Update(data);
+            h.Finish(d[0..48]);
+            for (usize i = 0; i < 48; i++) digest.Push(d[i]);
+        } else {
+            return false;
+        }
+        List<u8> r = List<u8>.New();
+        List<u8> s = List<u8>.New();
+        if (!ecdsa.SplitDer(signature, ref r, ref s)) return false;
+        if (p256) return ecdsa.Verify(ecdsa.Curve.P256(), k[1..1 + n], k[1 + n..1 + 2 * n], digest.AsSlice(), r.AsSlice(), s.AsSlice());
+        return ecdsa.Verify(ecdsa.Curve.P384(), k[1..1 + n], k[1 + n..1 + 2 * n], digest.AsSlice(), r.AsSlice(), s.AsSlice());
+    }
+    return false;
+}
+
+// Was child signed by parent's key?
+public bool SignedBy(in Certificate child, in Certificate parent) {
+    if (child.Issuer.Len() != parent.Subject.Len()) return false;
+    for (usize i = 0; i < child.Issuer.Len(); i++) {
+        if (child.Issuer.AsSlice()[i] != parent.Subject.AsSlice()[i]) return false;
+    }
+    return VerifyWith(parent, child.SigAlg.AsStr(), child.Der.AsSlice()[child.TbsStart..child.TbsEnd], child.Signature.AsSlice());
+}
+
+bool Current(in Certificate c, str now) => ct.Compare(c.NotBefore.AsStr(), now) <= 0 && ct.Compare(now, c.NotAfter.AsStr()) <= 0;
+
+// Verifies a chain: chain[0] is the server's certificate for host, the others are
+// intermediates it sent; trust holds the trust anchors; now is YYYYMMDDHHMMSS (UTC).
+// Gives "" if it holds, else why not.
+public string VerifyChain(in List<Certificate> chain, in List<Certificate> trust, str host, str now) {
+    if (chain.Len() == 0) return string.From("the server sent no certificate");
+    Certificate[] all = chain.AsSlice();
+    Certificate[] anchors = trust.AsSlice();
+    var leaf = all[0];
+    if (!MatchesHost(leaf, host)) {
+        string m = string.From("the certificate is for ");
+        if (leaf.DnsNames.Len() > 0) m.Append(leaf.DnsNames.AsSlice()[0].AsStr());
+        else m.Append(leaf.CommonName.AsStr());
+        m.Append(", not ");
+        m.Append(host);
+        return m;
+    }
+    usize current = 0;
+    for (usize depth = 0; depth < 10; depth++) {
+        var c = all[current];
+        if (!Current(c, now)) return string.From("a certificate in the chain has expired or is not valid yet");
+        foreach (var anchor in anchors) {
+            if (SignedBy(c, anchor)) return string.New();
+        }
+        // an intermediate the server sent
+        bool found = false;
+        for (usize i = 1; i < chain.Len(); i++) {
+            var cand = all[i];
+            if (i != current && cand.IsCa && SignedBy(c, cand)) {
+                current = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return string.From("the certificate does not chain to a trusted root");
+    }
+    return string.From("the certificate chain is too long");
+}

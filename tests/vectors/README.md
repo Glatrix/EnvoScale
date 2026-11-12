@@ -19,6 +19,7 @@ below; nothing else from those documents is copied.
 | Ed25519 | RFC 8032 | section 7.1, tests 1 to 3 | `curve25519.envo` |
 | SHA-384 | NIST FIPS 180-4 examples | "abc" | `hashes.envo` |
 | RSA (PKCS #1 v1.5, PSS), ECDSA P-256 and P-384 | Made with OpenSSL 1.1.1 for these tests, from throwaway keys (the public keys and signatures only) | one signature each | `signatures.envo` |
+| X.509 | A test CA (P-256) and a server certificate it signed (RSA-2048), made with OpenSSL 1.1.1 for these tests | parsing, names, chains | `x509.envo` |
 
 Larger suites (Wycheproof, NIST CAVP) arrive as data files with a `SOURCE.md` each when
 the library can read them in its tests.

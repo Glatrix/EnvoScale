@@ -14,8 +14,9 @@ Cryptography in Envo-S1 (PLAN D37), one module per family:
 | `envo.crypto.aes` | `Aes` (AES-128/256 block), `Gcm` (`Seal`, `Open`) | FIPS 197, SP 800-38D | vectors pass |
 | `envo.crypto.curve25519` | `X25519`, `X25519Base`, `Ed25519Public`, `Ed25519Sign`, `Ed25519Verify` | RFC 7748, 8032 | vectors pass |
 | `envo.crypto.bigint` | `Nat`, `Mont` (Montgomery arithmetic for public values: not constant time) | — | used by rsa and ecdsa |
-| `envo.crypto.rsa` | `PublicKey`, `VerifyPkcs1Sha256`, `VerifyPssSha256` (verification only) | RFC 8017 | OpenSSL signatures pass |
+| `envo.crypto.rsa` | `PublicKey`, `VerifyPkcs1` (SHA-256/384/512), `VerifyPkcs1Sha256`, `VerifyPssSha256` (verification only) | RFC 8017 | OpenSSL signatures pass |
 | `envo.crypto.ecdsa` | `Curve.P256`, `Curve.P384`, `Verify`, `SplitDer` (verification only) | FIPS 186-5 | OpenSSL signatures pass |
+| `envo.crypto.x509` | `Parse`, `FromPem`, `MatchesHost`, `VerifyChain`, `SignedBy` (RSA PKCS #1 v1.5 SHA-256/384/512 and PSS; ECDSA P-256/SHA-256, P-384/SHA-384) | RFC 5280, 6125 | an OpenSSL-made chain verifies |
 | `envo.crypto.random` | `Rng` (`New`, `From`, `Fill`, `Below`): ChaCha20 keyed from the `Entropy` port, with fast key erasure (D39) | — | tested against the key stream |
 | `envo.crypto` | the simple door: `Sha256`, `Sha512`, `HmacSha256` (a `Digest` with `Hex`, `Equals`), `RandomBytes`, `RandomHex` | — | tested |
 
