@@ -153,6 +153,8 @@ public struct Tree {
     i32 LineH;          // an editor line's height
     u32 Act;
     usize ActItem;
+    i32 PtrX;           // where the pointer was last seen (the wheel scrolls what is there)
+    i32 PtrY;
     string Clip;        // the clipboard, unless the system's is used
     bool SystemClip;
 
@@ -161,7 +163,7 @@ public struct Tree {
             Nodes = List<Node>.New(), Labels = List<string>.New(), Lists = List<Items>.New(),
             Bufs = List<edit.Buffer>.New(), Codes = List<Code>.New(), Focus = 0, Hover = 0,
             Pressed = 0, Drag = 0, Before = 0, Cells = false, RowH = 1, LineH = 1, Act = ACT_NONE,
-            ActItem = 0, Clip = string.New(), SystemClip = false
+            ActItem = 0, PtrX = 0, PtrY = 0, Clip = string.New(), SystemClip = false
         };
         t.Make(Kind.Column, 0, "");         // 0: none
         t.Make(Kind.Column, 0, "");         // 1: the root
@@ -1306,13 +1308,18 @@ public struct Tree {
     public u32 OnEvent(ref this, Event e) {
         this.Act = ACT_NONE;
         EventKind k = e.Kind();
+        if (k == EventKind.MouseMove || k == EventKind.MouseDown || k == EventKind.MouseUp) {
+            this.PtrX = e.X();
+            this.PtrY = e.Y();
+        }
         if (k == EventKind.MouseMove) return this.PointerMove(e.X(), e.Y());
         if (k == EventKind.MouseDown && e.Code() == 1) return this.PointerDown(e.X(), e.Y(), e.Mods());
         if (k == EventKind.MouseUp && e.Code() == 1) return this.PointerUp(e.X(), e.Y());
         if (k == EventKind.Wheel) {
             i32 notches = (e.Code() as i32) / 120;
             if (notches == 0 && e.Code() != 0) notches = 1;
-            return this.Wheel(e.X(), e.Y(), notches);
+            // where the pointer is (a system may not say where with the wheel)
+            return this.Wheel(this.PtrX, this.PtrY, notches);
         }
         if (k == EventKind.KeyDown) return this.Key(e.Code(), e.Mods(), 0);
         if (k == EventKind.Char) return this.Key(0, e.Mods(), e.Code());

@@ -36,6 +36,7 @@ void Run<W>(ref W w) where W : IWindow {
     u32 n = 0;
     while (n < 10000 && !w.Poll().Is(EventKind.None)) n++;
     Check(n < 10000, "Poll runs out of events");
+    Check(w.IsOpen(), "still open after a frame, a title and events");
     w.Close();
     Check(!w.IsOpen(), "closed after Close");
     Check(w.Poll().Is(EventKind.None), "no events after Close");

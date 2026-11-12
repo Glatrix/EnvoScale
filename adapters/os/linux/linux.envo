@@ -8,6 +8,7 @@ use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet
 use core.text as ct;
 use alloc.text;
 use os.linux.sys;
+use os.linux.x11;
 
 const i64 O_WRONLY = 1;
 const i64 O_CREAT = 0x40;
@@ -1136,24 +1137,86 @@ impl ITerminal for Terminal {
 
 // ------------------------------------------------------------------ window
 
-// Linux windows (X11, Wayland) come after M8 (PLAN D45): Open says no.
+// Windows through the X server $DISPLAY names, spoken to over its socket (os.linux.x11,
+// M14.7). With no X server (no $DISPLAY, or none listening) Open says no.
 public struct Window {
-    u8 Unused;
+    x11.Conn C;
+    bool Live;
+    bool Closed;            // the user closed it: Close was reported
 
-    public static Window New() => new Window { Unused = 0 };
+    public static Window New() => new Window { C = x11.Conn.Closed(), Live = false, Closed = false };
 }
 
 impl IWindow for Window {
-    bool Open(ref this, str title, u32 width, u32 height) => false;
-    bool IsOpen(ref this) => false;
-    u32 Width(ref this) => 0;
-    u32 Height(ref this) => 0;
-    Event Poll(ref this) => Event.Nothing();
+    bool Open(ref this, str title, u32 width, u32 height) {
+        if (this.Live || width == 0 || height == 0) return false;
+        Environment env = Environment.New();
+        string? display = env.Var("DISPLAY");
+        if (display.IsNone()) return false;
+        string auth = string.New();
+        string? given = env.Var("XAUTHORITY");
+        if (given.IsSome()) {
+            auth = given.Unwrap();
+        } else {
+            string? home = env.Var("HOME");
+            if (home.IsSome()) {
+                auth = home.Unwrap();
+                auth.Append("/.Xauthority");
+            }
+        }
+        this.C = x11.Conn.Open(display.Unwrap().AsStr(), auth.AsStr());
+        if (this.C.IsBroken()) return false;
+        if (!this.C.CreateWindow(title, width, height)) {
+            this.C.Close();
+            return false;
+        }
+        this.Live = true;
+        this.Closed = false;
+        return true;
+    }
+
+    bool IsOpen(ref this) => this.Live && !this.C.IsBroken();
+
+    u32 Width(ref this) {
+        if (!this.Live) return 0;
+        return this.C.Width();
+    }
+
+    u32 Height(ref this) {
+        if (!this.Live) return 0;
+        return this.C.Height();
+    }
+
+    Event Poll(ref this) {
+        if (!this.Live) return Event.Nothing();
+        if (this.C.IsBroken()) {
+            // the server went away, or refused a request: the window is gone
+            this.Live = false;
+            this.C.Close();
+            return Event.Of(EventKind.Close, 0, 0, 0);
+        }
+        Event e = this.C.Poll();
+        if (e.Is(EventKind.Close)) {
+            this.C.Destroy();
+            this.C.Close();
+            this.Live = false;
+        }
+        return e;
+    }
+
     void Present(ref this, u8[] rgba, u32 width, u32 height) {
+        if (this.Live) this.C.Present(rgba, width, height);
     }
+
     void SetTitle(ref this, str title) {
+        if (this.Live) this.C.SetTitle(title);
     }
+
     void Close(ref this) {
+        if (!this.Live) return;
+        this.C.Destroy();
+        this.C.Close();
+        this.Live = false;
     }
 }
 

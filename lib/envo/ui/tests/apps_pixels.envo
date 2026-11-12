@@ -131,8 +131,9 @@ Report("head col", s.Head.Col as i64);
 t.DrawPixels(ref c, f, th);
 print(c.Hash().AsStr());
 
-// the wheel scrolls three lines a notch
-t.OnEvent(Event.Of(EventKind.Wheel, ex + 50, ey + 50, (0 - 120) as u32));
+// the wheel scrolls three lines a notch, where the pointer is
+t.OnEvent(Event.Of(EventKind.MouseMove, ex + 50, ey + 50, 0));
+t.OnEvent(Event.Of(EventKind.Wheel, 0, 0, (0 - 120) as u32));
 t.LayoutPixels(f, th, 320, 200);
 Report("scroll", t.ScrollOf(ed) as i64);
 

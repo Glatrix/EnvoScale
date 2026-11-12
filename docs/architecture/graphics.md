@@ -49,8 +49,8 @@ character and mouse event carries the modifier keys held (`Event.Mods`, `MOD_SHI
 `MOD_CTRL`, `MOD_ALT`, `MOD_META`). The codes match Win32's virtual keys, so the Windows
 adapter passes them through; other adapters translate. The Clipboard port
 (`ports.IClipboard`, `std.clipboard`) holds text: Windows' through `CF_UNICODETEXT`, the
-reference adapters' in memory; Linux and the browser get theirs with their windows
-(M14.7, M14.8) and until then have none.
+reference adapters' in memory. Linux (X11 selections) and the browser have none yet: an
+empty clipboard that keeps nothing.
 
 The Win32 adapter needs no callback from Windows into Envo code. Its window class uses
 `DefWindowProcW` itself as the window procedure, so:
@@ -68,8 +68,19 @@ Two calls take 12 arguments (`CreateWindowExW`, `SetDIBitsToDevice`). For them,
 EIR ([`library.md`](library.md)).
 
 `os.none` is an off-screen window. It keeps the last frame (`Frame`) and gives the events
-a test queued (`Queue`). Linux windows (X11, Wayland) come after M8: the Linux adapter's
-`Open` says no.
+a test queued (`Queue`).
+
+Linux windows (M14.7) speak X11 to the server `$DISPLAY` names, over its Unix socket
+(`/tmp/.X11-unix/X<n>`), with no Xlib: `os.linux.x11` is a core-protocol client of a few
+hundred lines. It authenticates with the `MIT-MAGIC-COOKIE-1` for that display from the
+Xauthority file (`$XAUTHORITY`, else `~/.Xauthority`), reads the keyboard map
+(`GetKeyboardMapping`) to turn key codes into keysyms, and from those into `KEY_*` codes
+and typed characters (Latin-1 and Unicode keysyms). The window asks for
+`WM_DELETE_WINDOW`, so closing it is an event, not a broken connection. Frames go up with
+`PutImage` (ZPixmap, depth 24, BGRX) in strips of rows that fit the server's request
+size. Buttons 4 and 5 are the wheel. An error from the server ends the window: `Poll`
+reports `Close`. With no X server, `Open` says no. CI runs the Linux suites under Xvfb, so
+the window conformance suite opens a real window there. Wayland comes later.
 
 In the script runtime the window calls need `--allow all`: a window class names a
 function for Windows to call, which the sandbox cannot check

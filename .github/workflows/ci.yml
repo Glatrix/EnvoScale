@@ -29,7 +29,10 @@ jobs:
           persist-credentials: false
       # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
       - run: sh adapters/ci/github/install-nasm.sh
-      - run: ./bootstrap.sh test
+      # An X server without a screen (M14.7): the window conformance suite opens a real
+      # X11 window through the Linux adapter.
+      - run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+      - run: xvfb-run -a ./bootstrap.sh test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: stage0-built-on-linux
