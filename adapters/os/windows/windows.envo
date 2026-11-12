@@ -4,7 +4,7 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IGpu, Vertex, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, IClipboard, Event, EventKind, IGpu, Vertex, IoError, MOD_SHIFT, MOD_CTRL, MOD_ALT, MOD_META};
 use core.text as ct;
 use alloc.text;
 use envo.gpu;
@@ -1083,6 +1083,95 @@ u64 Get64(u8[] b, usize at) {
     return v;
 }
 
+// ------------------------------------------------------------------ input and clipboard
+
+static i64 KeyStateFn = 0;      // USER32's GetKeyState, found on first use
+
+// The modifier keys held now (MOD_*).
+u32 HeldMods() {
+    unsafe {
+        if (KeyStateFn == 0) KeyStateFn = ProcAddress("user32.dll", "GetKeyState");
+        if (KeyStateFn == 0) return 0;
+    }
+    u32 m = 0;
+    unsafe {
+        if (__wincallp(KeyStateFn, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) & 0x8000 != 0) m = m | MOD_SHIFT;
+        if (__wincallp(KeyStateFn, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) & 0x8000 != 0) m = m | MOD_CTRL;
+        if (__wincallp(KeyStateFn, 0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) & 0x8000 != 0) m = m | MOD_ALT;
+        if (__wincallp(KeyStateFn, 0x5B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) & 0x8000 != 0) m = m | MOD_META;
+        if (__wincallp(KeyStateFn, 0x5C, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) & 0x8000 != 0) m = m | MOD_META;
+    }
+    return m;
+}
+
+// The Windows clipboard (CF_UNICODETEXT), through USER32 and KERNEL32 functions found on
+// first use.
+public struct Clipboard {
+    i64 Open;
+    i64 CloseFn;
+    i64 Empty;
+    i64 Get;
+    i64 Set;
+    i64 GAlloc;
+    i64 GLock;
+    i64 GUnlock;
+
+    public static Clipboard New() => new Clipboard {
+        Open = ProcAddress("user32.dll", "OpenClipboard"), CloseFn = ProcAddress("user32.dll", "CloseClipboard"),
+        Empty = ProcAddress("user32.dll", "EmptyClipboard"), Get = ProcAddress("user32.dll", "GetClipboardData"),
+        Set = ProcAddress("user32.dll", "SetClipboardData"), GAlloc = ProcAddress("kernel32.dll", "GlobalAlloc"),
+        GLock = ProcAddress("kernel32.dll", "GlobalLock"), GUnlock = ProcAddress("kernel32.dll", "GlobalUnlock")
+    };
+
+    bool Ready(in this) => this.Open != 0 && this.CloseFn != 0 && this.Empty != 0 && this.Get != 0 && this.Set != 0 && this.GAlloc != 0 && this.GLock != 0 && this.GUnlock != 0;
+
+    i64 P(in this, i64 f, i64 a, i64 b) {
+        unsafe { return __wincallp(f, a, b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
+    }
+}
+
+impl IClipboard for Clipboard {
+    string? Text(ref this) {
+        if (!this.Ready() || this.P(this.Open, 0, 0) == 0) return None;
+        string? got = None;
+        i64 h = this.P(this.Get, 13, 0);                // CF_UNICODETEXT
+        if (h != 0) {
+            i64 p = this.P(this.GLock, h, 0);
+            if (p != 0) {
+                unsafe { got = Some(Narrow(p as isize as *u8)); }
+                this.P(this.GUnlock, h, 0);
+            }
+        }
+        this.P(this.CloseFn, 0, 0);
+        return got;
+    }
+
+    bool SetText(ref this, str text) {
+        if (!this.Ready()) return false;
+        // as UTF-16 with a terminating 0 (invalid bytes become U+FFFD; a NUL ends the text)
+        i64 units = 0;
+        unsafe {
+            if (text.Len > 0) units = Call(W_MULTIBYTETOWIDECHAR, 65001, 0, Ptr(text.Ptr), text.Len as i64, 0, 0);
+        }
+        i64 h = this.P(this.GAlloc, 2, (units + 1) * 2);        // GMEM_MOVEABLE
+        if (h == 0) return false;
+        i64 p = this.P(this.GLock, h, 0);
+        if (p == 0) return false;
+        unsafe {
+            if (units > 0) Call(W_MULTIBYTETOWIDECHAR, 65001, 0, Ptr(text.Ptr), text.Len as i64, p, units);
+            *u8 end = (p + units * 2) as isize as *u8;
+            end[0] = 0;
+            end[1] = 0;
+        }
+        this.P(this.GUnlock, h, 0);
+        if (this.P(this.Open, 0, 0) == 0) return false;
+        this.P(this.Empty, 0, 0);
+        bool ok = this.P(this.Set, 13, h) != 0;
+        this.P(this.CloseFn, 0, 0);
+        return ok;
+    }
+}
+
 // A NUL-terminated byte string, for GetProcAddress.
 *u8 CName(str s) {
     unsafe {
@@ -1196,8 +1285,9 @@ impl IWindow for Window {
             u64 lp = Get64(msg[0..48], 24);
             i32 x = (lp & 0xFFFF) as u16 as i16 as i32;
             i32 y = (lp >> 16 & 0xFFFF) as u16 as i16 as i32;
-            if (m == 0x100 || m == 0x104) return Event.Of(EventKind.KeyDown, 0, 0, wp as u32);
-            if (m == 0x101 || m == 0x105) return Event.Of(EventKind.KeyUp, 0, 0, wp as u32);
+            // key codes are ports' own, which match the virtual keys (PLAN D73)
+            if (m == 0x100 || m == 0x104) return Event.Of(EventKind.KeyDown, 0, 0, wp as u32).WithMods(HeldMods());
+            if (m == 0x101 || m == 0x105) return Event.Of(EventKind.KeyUp, 0, 0, wp as u32).WithMods(HeldMods());
             if (m == 0x102) {
                 u32 u = (wp & 0xFFFF) as u32;
                 if (u >= 0xD800 && u < 0xDC00) {
@@ -1209,16 +1299,20 @@ impl IWindow for Window {
                     u = 0x10000 + ((this.High - 0xD800) << 10) + (u - 0xDC00);
                 }
                 this.High = 0;
-                return Event.Of(EventKind.Char, 0, 0, u);
+                return Event.Of(EventKind.Char, 0, 0, u).WithMods(HeldMods());
             }
-            if (m == 0x200) return Event.Of(EventKind.MouseMove, x, y, 0);
-            if (m == 0x201) return Event.Of(EventKind.MouseDown, x, y, 1);
-            if (m == 0x202) return Event.Of(EventKind.MouseUp, x, y, 1);
-            if (m == 0x204) return Event.Of(EventKind.MouseDown, x, y, 2);
-            if (m == 0x205) return Event.Of(EventKind.MouseUp, x, y, 2);
-            if (m == 0x207) return Event.Of(EventKind.MouseDown, x, y, 3);
-            if (m == 0x208) return Event.Of(EventKind.MouseUp, x, y, 3);
-            if (m == 0x20A) return Event.Of(EventKind.Wheel, 0, 0, ((wp >> 16 & 0xFFFF) as u16 as i16 as i32) as u32);
+            // the mouse messages carry Shift and Ctrl in wParam (MK_SHIFT, MK_CONTROL)
+            u32 mm = 0;
+            if (wp & 4 != 0) mm = mm | MOD_SHIFT;
+            if (wp & 8 != 0) mm = mm | MOD_CTRL;
+            if (m == 0x200) return Event.Of(EventKind.MouseMove, x, y, 0).WithMods(mm);
+            if (m == 0x201) return Event.Of(EventKind.MouseDown, x, y, 1).WithMods(mm);
+            if (m == 0x202) return Event.Of(EventKind.MouseUp, x, y, 1).WithMods(mm);
+            if (m == 0x204) return Event.Of(EventKind.MouseDown, x, y, 2).WithMods(mm);
+            if (m == 0x205) return Event.Of(EventKind.MouseUp, x, y, 2).WithMods(mm);
+            if (m == 0x207) return Event.Of(EventKind.MouseDown, x, y, 3).WithMods(mm);
+            if (m == 0x208) return Event.Of(EventKind.MouseUp, x, y, 3).WithMods(mm);
+            if (m == 0x20A) return Event.Of(EventKind.Wheel, 0, 0, ((wp >> 16 & 0xFFFF) as u16 as i16 as i32) as u32).WithMods(HeldMods());
             // anything else was handled by the window procedure: look again
         }
         return Event.Nothing();

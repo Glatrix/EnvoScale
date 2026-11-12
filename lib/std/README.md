@@ -17,6 +17,7 @@ OS-level services built on ports, with no platform code
 - `std.process`: `Run`, `RunTo` (output to a file), `RunIn` (a working directory and
   output files), `RunWith`.
 - `std.random`: `Fill`, `U64`, `Below` (the system's generator) and `Rng` (seeded).
+- `std.clipboard`: `Text`, `SetText` (the system clipboard's text; PLAN D73).
 
 ## Simple door
 

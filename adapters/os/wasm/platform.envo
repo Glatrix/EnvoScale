@@ -14,6 +14,7 @@ public wasm.Net Net() => wasm.Net.New();
 public wasm.Trust Trust() => wasm.Trust.New();
 public wasm.Terminal Terminal() => wasm.Terminal.New();
 public wasm.Window Window() => wasm.Window.New();
+public wasm.Clipboard Clipboard() => wasm.Clipboard.New();
 // The GPU port: the software adapter (WebGPU comes later).
 public gpu.Software Gpu() => gpu.Software.New();
 

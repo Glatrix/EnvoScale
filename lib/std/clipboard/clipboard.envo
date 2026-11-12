@@ -1,0 +1,18 @@
+// std.clipboard: the system clipboard's text (PLAN D73), through the platform's Clipboard
+// port. On a system without a clipboard, Text is None and SetText returns false.
+namespace std.clipboard;
+
+use ports.{IClipboard};
+use platform;
+
+// The clipboard's text, if it holds text.
+public string? Text() {
+    var c = platform.Clipboard();
+    return c.Text();
+}
+
+// Puts text on the clipboard; false if there is no clipboard.
+public bool SetText(str text) {
+    var c = platform.Clipboard();
+    return c.SetText(text);
+}

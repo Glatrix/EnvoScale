@@ -14,6 +14,7 @@ public windows.Trust Trust() => windows.Trust.New();
 public windows.Terminal Terminal() => windows.Terminal.New();
 public windows.Window Window() => windows.Window.New();
 public windows.Gpu Gpu() => windows.Gpu.New();
+public windows.Clipboard Clipboard() => windows.Clipboard.New();
 
 // The host's raw call gate for the script runtime: `wincall` (kind 2) and `wincallp`
 // (kind 3, k is the function pointer) on Windows.

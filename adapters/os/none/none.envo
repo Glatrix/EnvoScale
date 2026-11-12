@@ -7,7 +7,7 @@
 // share it (the heap never frees in Envo-S1, so nothing is lost).
 namespace os.none;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, IClipboard, Event, EventKind, IoError};
 use alloc.map.{Map};
 use alloc.set.{Set};
 use alloc.text;
@@ -507,6 +507,7 @@ impl IProcess for Process {
 // One of each for the whole program: what `platform` hands out with `--os none`.
 static usize SharedFs = 0;
 static usize SharedClockState = 0;
+static usize SharedClipboardState = 0;
 static usize SharedEntropyState = 0;
 static usize SharedEnvState = 0;
 static usize SharedProcState = 0;
@@ -521,6 +522,44 @@ public FileSystem SharedFileSystem() {
             SharedFs = f.State as usize;
         }
         return new FileSystem { State = SharedFs as *FsState };
+    }
+}
+
+struct ClipboardState {
+    bool Has;
+    string Text;
+}
+
+// A clipboard in memory (PLAN D73): what SetText put there, for the next Text.
+public struct Clipboard {
+    *ClipboardState State;
+}
+
+impl IClipboard for Clipboard {
+    string? Text(ref this) {
+        unsafe {
+            if (!this.State[0].Has) return None;
+            return Some(string.From(this.State[0].Text.AsStr()));
+        }
+    }
+
+    bool SetText(ref this, str text) {
+        unsafe {
+            this.State[0].Text = string.From(text);
+            this.State[0].Has = true;
+        }
+        return true;
+    }
+}
+
+public Clipboard SharedClipboard() {
+    unsafe {
+        if (SharedClipboardState == 0) {
+            *ClipboardState p = alloc(sizeof(ClipboardState)) as *ClipboardState;
+            p[0] = new ClipboardState { Has = false, Text = string.New() };
+            SharedClipboardState = p as usize;
+        }
+        return new Clipboard { State = SharedClipboardState as *ClipboardState };
     }
 }
 

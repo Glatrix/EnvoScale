@@ -143,12 +143,43 @@ public interface ITerminal {
     usize Read(ref this, mut u8[] into, i32 waitMs);
 }
 
+// Key codes (PLAN D73): EnvoScale's own, the same on every system; adapters translate
+// the system's codes to them. Letters are their capital ASCII, digits theirs; the numbers
+// match Win32's virtual keys by design, so that adapter passes them through.
+public const u32 KEY_BACKSPACE = 8;
+public const u32 KEY_TAB = 9;
+public const u32 KEY_ENTER = 13;
+public const u32 KEY_SHIFT = 16;
+public const u32 KEY_CONTROL = 17;
+public const u32 KEY_ALT = 18;
+public const u32 KEY_ESCAPE = 27;
+public const u32 KEY_SPACE = 32;
+public const u32 KEY_PAGE_UP = 33;
+public const u32 KEY_PAGE_DOWN = 34;
+public const u32 KEY_END = 35;
+public const u32 KEY_HOME = 36;
+public const u32 KEY_LEFT = 37;
+public const u32 KEY_UP = 38;
+public const u32 KEY_RIGHT = 39;
+public const u32 KEY_DOWN = 40;
+public const u32 KEY_INSERT = 45;
+public const u32 KEY_DELETE = 46;
+public const u32 KEY_0 = 48;           // to KEY_0 + 9
+public const u32 KEY_A = 65;           // to KEY_A + 25
+public const u32 KEY_F1 = 112;         // to KEY_F1 + 11
+
+// Modifier keys held during an event (Event.Mods).
+public const u32 MOD_SHIFT = 1;
+public const u32 MOD_CTRL = 2;
+public const u32 MOD_ALT = 4;
+public const u32 MOD_META = 8;         // the Windows key; Command on a Mac
+
 // What happened to a window.
 public enum EventKind {
     None,           // nothing waiting
     Close,          // the window was closed
     Resize,         // the drawable area has a new size: Width, Height
-    KeyDown,        // a key went down (or repeats): Code is the key (Win32 virtual-key numbers)
+    KeyDown,        // a key went down (or repeats): Code is the key (KEY_*)
     KeyUp,          // a key went up: Code
     Char,           // a character was typed: Code is its code point
     MouseMove,      // the pointer moved: X, Y
@@ -157,15 +188,20 @@ public enum EventKind {
     Wheel,          // the wheel turned: Code is the distance (120 a notch, up positive, as two's complement)
 }
 
-// One window event. Positions are pixels from the top left of the drawable area.
+// One window event. Positions are pixels from the top left of the drawable area; Mods
+// are the modifier keys held (MOD_*) for keys, characters and the mouse.
 public struct Event {
     EventKind K;
     i32 PX;
     i32 PY;
     u32 C;
+    u32 M;
 
-    public static Event Of(EventKind k, i32 x, i32 y, u32 code) => new Event { K = k, PX = x, PY = y, C = code };
-    public static Event Nothing() => new Event { K = EventKind.None, PX = 0, PY = 0, C = 0 };
+    public static Event Of(EventKind k, i32 x, i32 y, u32 code) => new Event { K = k, PX = x, PY = y, C = code, M = 0 };
+    public static Event Nothing() => new Event { K = EventKind.None, PX = 0, PY = 0, C = 0, M = 0 };
+
+    // The same event with modifier keys mods.
+    public Event WithMods(in this, u32 mods) => new Event { K = this.K, PX = this.PX, PY = this.PY, C = this.C, M = mods };
 
     public EventKind Kind(in this) => this.K;
     public i32 X(in this) => this.PX;
@@ -174,6 +210,19 @@ public struct Event {
     // The wheel's distance, signed.
     public i32 Delta(in this) => this.C as i32;
     public bool Is(in this, EventKind k) => this.K == k;
+    public u32 Mods(in this) => this.M;
+    public bool Shift(in this) => this.M & MOD_SHIFT != 0;
+    public bool Ctrl(in this) => this.M & MOD_CTRL != 0;
+    public bool Alt(in this) => this.M & MOD_ALT != 0;
+}
+
+// The system clipboard's text (PLAN D73). A system without one (no desktop) has an empty
+// clipboard that keeps nothing.
+public interface IClipboard {
+    // The clipboard's text, if it holds text.
+    string? Text(ref this);
+    // Puts text on the clipboard; false if this system has no clipboard.
+    bool SetText(ref this, str text);
 }
 
 // A window on the desktop (PLAN D45): a title, a drawable area of pixels, and events.

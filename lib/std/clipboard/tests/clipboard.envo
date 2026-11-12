@@ -1,0 +1,12 @@
+// std.clipboard with the reference adapters: what SetText puts there, Text gives back.
+// os: none
+// expect: empty at first
+// expect: round trip: Hello, clipboard!
+use std.clipboard;
+
+if (clipboard.Text().IsNone()) print("empty at first");
+if (clipboard.SetText("Hello, clipboard!")) {
+    string t = clipboard.Text().Unwrap();
+    write(1, "round trip: ");
+    print(t.AsStr());
+}

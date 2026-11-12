@@ -44,6 +44,14 @@ pixels, or the coverage drawn as text.
 close, resize, key down and up, character, mouse move, buttons, wheel), `Present(rgba,
 width, height)`, `SetTitle`, `Close`.
 
+Input is in EnvoScale's terms (PLAN D73): key codes are `ports.KEY_*` and every key,
+character and mouse event carries the modifier keys held (`Event.Mods`, `MOD_SHIFT`,
+`MOD_CTRL`, `MOD_ALT`, `MOD_META`). The codes match Win32's virtual keys, so the Windows
+adapter passes them through; other adapters translate. The Clipboard port
+(`ports.IClipboard`, `std.clipboard`) holds text: Windows' through `CF_UNICODETEXT`, the
+reference adapters' in memory; Linux and the browser get theirs with their windows
+(M14.7, M14.8) and until then have none.
+
 The Win32 adapter needs no callback from Windows into Envo code. Its window class uses
 `DefWindowProcW` itself as the window procedure, so:
 - events are read from the message queue (`PeekMessageW`, then `TranslateMessage` for

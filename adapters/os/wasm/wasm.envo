@@ -4,7 +4,7 @@
 // there are none, and the program has its console, clock, entropy and arguments.
 namespace os.wasm;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, IClipboard, Event, IoError};
 
 // host functions past the runtime's (0-8)
 const i64 H_STAT = 9;           // (ptr, len): 0 nothing, 1 a file, 2 a directory
@@ -288,4 +288,16 @@ impl IWindow for Window {
     }
     void Close(ref this) {
     }
+}
+
+// No clipboard yet: it comes with the browser host (M14.8). Text is always None and SetText says no.
+public struct Clipboard {
+    bool Unused;
+
+    public static Clipboard New() => new Clipboard { Unused = false };
+}
+
+impl IClipboard for Clipboard {
+    string? Text(ref this) => None;
+    bool SetText(ref this, str text) => false;
 }

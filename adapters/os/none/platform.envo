@@ -18,6 +18,7 @@ public none.Net Net() => none.SharedNet();
 public none.Trust Trust() => none.Trust.New();
 public none.Terminal Terminal() => none.Terminal.New();
 public none.Window Window() => none.Window.New();
+public none.Clipboard Clipboard() => none.SharedClipboard();
 // The GPU port: the software adapter (D3D12 is Windows', Vulkan comes after M8).
 public gpu.Software Gpu() => gpu.Software.New();
 

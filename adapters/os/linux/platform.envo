@@ -14,6 +14,7 @@ public linux.Net Net() => linux.Net.New();
 public linux.Trust Trust() => linux.Trust.New();
 public linux.Terminal Terminal() => linux.Terminal.New();
 public linux.Window Window() => linux.Window.New();
+public linux.Clipboard Clipboard() => linux.Clipboard.New();
 // The GPU port: the software adapter (D3D12 is Windows', Vulkan comes after M8).
 public gpu.Software Gpu() => gpu.Software.New();
 

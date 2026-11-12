@@ -1,0 +1,17 @@
+// std.clipboard through the native adapter: a round trip where the system has a
+// clipboard (Windows; Linux once X11 windows exist), a refusal where it has none. What
+// was on the clipboard before is put back.
+// expect: clipboard ok
+use std.clipboard;
+
+str text = "EnvoScale clipboard test \u{2713}";
+string? before = clipboard.Text();
+if (clipboard.SetText(text)) {
+    string? got = clipboard.Text();
+    if (got.IsSome() && got.Unwrap().Equals(text)) print("clipboard ok");
+    else print("clipboard: the text came back different");
+} else {
+    if (clipboard.Text().IsNone()) print("clipboard ok");
+    else print("clipboard: refused SetText but has text");
+}
+if (before.IsSome()) clipboard.SetText(before.Unwrap().AsStr());

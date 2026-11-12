@@ -4,7 +4,7 @@
 // Paths are passed as NUL-terminated copies; a path holding a NUL byte is refused.
 namespace os.linux;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, IClipboard, Event, EventKind, IoError};
 use core.text as ct;
 use alloc.text;
 use os.linux.sys;
@@ -904,4 +904,16 @@ impl IWindow for Window {
     }
     void Close(ref this) {
     }
+}
+
+// No clipboard yet: it comes with X11 windows (M14.7). Text is always None and SetText says no.
+public struct Clipboard {
+    bool Unused;
+
+    public static Clipboard New() => new Clipboard { Unused = false };
+}
+
+impl IClipboard for Clipboard {
+    string? Text(ref this) => None;
+    bool SetText(ref this, str text) => false;
 }
