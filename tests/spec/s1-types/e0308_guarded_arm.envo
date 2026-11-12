@@ -1,0 +1,7 @@
+// expect-error: E0308 @ 4:22
+// [s1.expr.1] an arm with a guard does not cover its variant
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+i64 Side(Shape s) => match s {
+    Square(x) if x > 0 => x,
+    Rect(_, _) | Empty => 0,
+};

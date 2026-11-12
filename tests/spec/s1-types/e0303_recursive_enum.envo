@@ -1,0 +1,4 @@
+// expect-error: E0303 @ 4:6
+// [core.type.2] an enum may not contain itself
+enum List { Nil, Cons(i64 head, List tail) }
+List l = Nil;

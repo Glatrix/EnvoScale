@@ -27,6 +27,7 @@ const u8 TYK_ENUM = 9;
 const u8 TYK_PARAM = 10;    // a generic type parameter (Envo-S1)
 const u8 TYK_IFACE = 11;    // an interface, only as a bound or in `impl` (Envo-S1)
 const u8 TYK_FN = 12;       // a function type (Envo-S1, RFC 0003; check/closure.envo)
+const u8 TYK_UNION = 13;    // a tagged enum: payloads or type parameters (check/enums.envo)
 
 // Fixed type indices, in Stage 0's order. 0 means "no type".
 const u32 T_VOID = 1;

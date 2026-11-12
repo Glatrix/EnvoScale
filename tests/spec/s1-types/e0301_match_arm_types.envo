@@ -1,0 +1,4 @@
+// expect-error: E0301 @ 4:51
+// [s1.expr.1] the arms of a match expression have one type
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+i64 W(Shape s) => match s { Rect(w, _) => w, _ => "none" };

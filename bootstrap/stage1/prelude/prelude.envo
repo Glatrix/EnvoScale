@@ -3,7 +3,8 @@
 // the same name, so every Envo-Core program means what it did ([s1.subset.2]). `Copy` is
 // built into the checker: it is implemented automatically ([type.copy.1]).
 //
-// M2.10 brings the interfaces ownership needs; M2.12 adds Option, Result, List and string.
+// M2.10 brought the interfaces ownership needs and M2.11 Option and Result; M2.12 adds
+// List and string.
 
 // Runs when a value is dropped: at the end of its owner's scope, unless it was moved
 // ([own.drop.1], [s1.own.2]).
@@ -22,4 +23,53 @@ interface IHash {
 // An explicit copy of a value that is not `Copy` ([own.move.3]).
 interface IClone<T> {
     T Clone();
+}
+
+// An optional value ([type.opt.1]): `T?` is `Option<T>`, `null` is `None`, `a ?? b` is the
+// value or `b`, and a postfix `?` returns `None` early ([expr.q.1]).
+enum Option<T> {
+    None,
+    Some(T value),
+}
+
+impl<T> Option<T> {
+    bool IsSome() => match this { Some(_) => true, None => false };
+    bool IsNone() => match this { Some(_) => false, None => true };
+
+    // The value; panics on `None`.
+    T Unwrap(this) {
+        match this {
+            Some(v) => { return v; }
+            None => { panic("called `Unwrap` on `None`"); }
+        }
+    }
+
+    T UnwrapOr(this, T other) => match this { Some(v) => v, None => other };
+}
+
+// A value or an error (chapter 2, section 2.4); a postfix `?` returns the error early.
+enum Result<T, E> {
+    Ok(T value),
+    Err(E error),
+}
+
+impl<T, E> Result<T, E> {
+    bool IsOk() => match this { Ok(_) => true, Err(_) => false };
+    bool IsErr() => match this { Ok(_) => false, Err(_) => true };
+
+    // The value; panics on an error.
+    T Unwrap(this) {
+        match this {
+            Ok(v) => { return v; }
+            Err(_) => { panic("called `Unwrap` on an `Err`"); }
+        }
+    }
+
+    // The error; panics on a value.
+    E UnwrapErr(this) {
+        match this {
+            Ok(_) => { panic("called `UnwrapErr` on an `Ok`"); }
+            Err(e) => { return e; }
+        }
+    }
 }

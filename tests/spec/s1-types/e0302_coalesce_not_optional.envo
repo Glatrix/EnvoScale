@@ -1,0 +1,4 @@
+// expect-error: E0302 @ 4:11
+// [s1.expr.3] `??` needs an optional value
+i64 a = 1;
+i64 b = a ?? 2;

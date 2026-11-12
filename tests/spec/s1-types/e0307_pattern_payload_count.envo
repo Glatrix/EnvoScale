@@ -1,0 +1,4 @@
+// expect-error: E0307 @ 4:33
+// [s1.expr.1] a payload pattern names every field
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+i64 W(Shape s) => match s { Rect(w) => w, _ => 0 };

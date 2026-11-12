@@ -177,6 +177,7 @@ bool IsNoreturnCall(*Checker c, u32 n) {
 bool CheckMatch(*Checker c, u32 n) {
     Node m = CNode(c, n);
     u32 t = CheckValue(c, m.A, 0);
+    if (MatchIsS1(c, n, t)) return CheckMatchS1(c, n, t, 0, false) == 1;
     u8 tk = TyKind(c, t);
     if (tk == TYK_ENUM) {
         EnumDeclare(c, TypeGet(c, t).Sym);

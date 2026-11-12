@@ -1,0 +1,11 @@
+// expect-error: E0503 @ 8:22
+// [own.borrow.1] a value borrowed by a pattern binding cannot change in that arm
+struct R { str N; }
+impl IDrop for R { void Drop(ref this) { } }
+enum Box { Full(R r), Nothing }
+void Swap(ref Box b) {
+    match b {
+        Full(r) => { b = Nothing; }
+        Nothing => { }
+    }
+}

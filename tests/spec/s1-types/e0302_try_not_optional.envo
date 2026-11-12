@@ -1,0 +1,6 @@
+// expect-error: E0302 @ 4:14
+// [expr.q.1] `?` needs an optional value or a Result
+i64? F(i64 a) {
+    i64 b = a?;
+    return Some(b);
+}

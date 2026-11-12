@@ -1,0 +1,4 @@
+// expect-error: E0206 @ 4:17
+// [item.enum.3] a variant of the enum
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+Shape s = Shape.Circle(1);

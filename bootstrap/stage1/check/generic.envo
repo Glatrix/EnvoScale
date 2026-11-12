@@ -240,7 +240,7 @@ void TypeArgCount(*Checker c, u32 tok, u32 want, u32 have) {
 
 void BufOwnerKey(*Buf b, *Checker c, u32 t) {
     Type ty = TypeGet(c, t);
-    if (ty.Kind == TYK_STRUCT || ty.Kind == TYK_ENUM) {
+    if (ty.Kind == TYK_STRUCT || ty.Kind == TYK_ENUM || ty.Kind == TYK_UNION) {
         BufByte(b, 's');
         BufU64(b, ty.Sym as u64);
         return;
@@ -471,7 +471,7 @@ void DeclareImpl(*Checker c, u32 n) {
     Type tt = TypeGet(c, target);
     if (count > 0) {
         // impl<T, U> applies to S<T, U> exactly
-        bool exact = tt.Kind == TYK_STRUCT && tt.NArgs == count;
+        bool exact = (tt.Kind == TYK_STRUCT || tt.Kind == TYK_UNION) && tt.NArgs == count;
         u32 p = im.E;
         for (u32 i = 0; exact && i < count; i++) {
             if (EnvGet(c, tt.Args, i) != SymGet(c, NSym(c, p)).Type) exact = false;
@@ -597,7 +597,7 @@ u32 FindImpl(*Checker c, u32 t, u32 it) {
             if (r.Target != t) continue;
         } else {
             Type rt = TypeGet(c, r.Target);
-            if (ty.Kind != TYK_STRUCT || ty.Sym != rt.Sym || ty.NArgs != r.NParams) continue;
+            if ((ty.Kind != TYK_STRUCT && ty.Kind != TYK_UNION) || ty.Sym != rt.Sym || ty.NArgs != r.NParams) continue;
             env = ty.Args;
             n = ty.NArgs;
         }
@@ -848,7 +848,7 @@ str InstName(*Checker c, u32 i) {
             BufByte(&b, '.');
         } else if (s.Flags & SF_METHOD != 0) {
             Type ot = TypeGet(c, s.OwnerType);
-            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM) BufStr(&b, ot.Name);
+            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM || ot.Kind == TYK_UNION) BufStr(&b, ot.Name);
             else BufMangle(&b, c, s.OwnerType);
             BufByte(&b, '.');
         }

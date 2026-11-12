@@ -89,8 +89,10 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
 
 - **[s1.expr.1] `match` as an expression**, with payload patterns: `Name(a, b)` binds
   payload fields, `Name(_, b)` ignores some, plus Core's constants, `|` alternatives and
-  `_`, and `if` guards. A `match` must be exhaustive (E0308). Statement-form `match` is
-  as in Core.
+  `_`, and `if` guards. A `match` must be exhaustive (E0308); arms with a guard do not
+  count. Statement-form `match` is as in Core. A binding copies a `Copy` payload; any other
+  payload is taken from a local the function owns or from a temporary, and is borrowed
+  (`in`) from anything else, which then may not change or move in that arm.
 - **[s1.expr.2] Conditional** `c ? a : b`.
 - **[s1.expr.3] Option and Result.** `null`; `a ?? b` (the value of `a`, or `b` if it is
   `None`); and the postfix `?`, which returns early with `Err(e)` from a function

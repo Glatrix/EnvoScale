@@ -45,6 +45,7 @@ Stage 0.
 | `check/own.envo` | `Copy`, drops, the S1 prelude's file |
 | `check/move.envo` | the move checker: use after move (E0501), moves out of borrows (E0502) |
 | `check/borrow.envo` | borrows held by a call (E0503, E0504), escaping closures and `from` clauses (E0507, E0508) |
+| `check/enums.envo` | tagged enums: variants, values, layout; `match` with payload patterns and guards; Option and Result sugar |
 | `check/dump.envo` | the typed-tree dump of `check` |
 | `eir/ir.envo` | EIR v1 in memory: types and layout, module records, opcode table, intrinsics |
 | `eir/read.envo` | the EIR text reader |
@@ -61,6 +62,7 @@ Stage 0.
 | `lower/expr.envo` | lowering expressions, places, checks, casts and calls |
 | `lower/closure.envo` | function values: lambdas and their environments, thunks for named functions, calls through `call.ind` |
 | `lower/drop.envo` | drop flags, drops at scope exits and of temporaries |
+| `lower/enums.envo` | tagged enum values and drops, Envo-S1 `match`, `??` and `?` |
 | `prelude/prelude.envo` | the Envo-S1 prelude, embedded in `envoc1` with the runtime |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |

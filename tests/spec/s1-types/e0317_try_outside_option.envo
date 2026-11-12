@@ -1,0 +1,7 @@
+// expect-error: E0317 @ 5:18
+// [expr.q.1] `?` returns early, so the function returns an optional value
+i64? Get() => null;
+i64 Use() {
+    i64 v = Get()?;
+    return v;
+}

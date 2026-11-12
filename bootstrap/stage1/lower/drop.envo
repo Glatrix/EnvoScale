@@ -88,6 +88,10 @@ void DropValue(*Lower l, u32 t, u32 p) {
             EmitCall(l, InstFunc(l, InstGet(c, s, env, n, 0, 0)), &args, 0);
         }
     }
+    if (ty.Kind == TYK_UNION) {
+        DropPayload(l, t, p);
+        return;
+    }
     u32 et = LType(l, t);
     u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
     u32 i = 0;
@@ -136,13 +140,19 @@ void TrackTemp(*Lower l, u32 n, u32 t, u32 p) {
 
 // Drops the statement's temporaries, newest first.
 void DropTemps(*Lower l) {
+    DropTempsOnPath(l);
+    unsafe { VecClear(&l.Temps); }
+}
+
+// The same on one path out of the statement (an early `return` from `?`): the other paths
+// still have them.
+void DropTempsOnPath(*Lower l) {
     unsafe {
         usize i = VecLen(&l.Temps);
         while (i >= 2) {
             i -= 2;
             if (l.Block != 0) DropValue(l, MemLoadU32(VecAt(&l.Temps, i)), MemLoadU32(VecAt(&l.Temps, i + 1)));
         }
-        VecClear(&l.Temps);
     }
 }
 

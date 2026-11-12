@@ -234,6 +234,7 @@ u32 LType(*Lower l, u32 t) {
     else if (ty.Kind == TYK_FN) {
         unsafe { r = l.FnvType; }
     }
+    else if (ty.Kind == TYK_UNION) r = TaggedEType(l, t);
     else if (ty.Kind == TYK_STR || ty.Kind == TYK_SLICE) {
         unsafe { r = l.StrType; }
     } else if (ty.Kind == TYK_INT) {
@@ -291,7 +292,7 @@ u32 EIntType(u32 size, bool signed) {
 // Is checker type t passed and stored by address (str, slice, array, struct)?
 bool IsAggregate(*Lower l, u32 t) {
     u8 k = TyKind(LC(l), t);
-    return k == TYK_STR || k == TYK_SLICE || k == TYK_ARRAY || k == TYK_STRUCT || k == TYK_FN;
+    return k == TYK_STR || k == TYK_SLICE || k == TYK_ARRAY || k == TYK_STRUCT || k == TYK_FN || k == TYK_UNION;
 }
 
 // ------------------------------------------------------------------ module

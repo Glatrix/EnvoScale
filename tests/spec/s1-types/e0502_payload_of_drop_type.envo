@@ -1,0 +1,12 @@
+// expect-error: E0502 @ 9:13
+// [own.move.3] a payload cannot be moved out of a value whose type implements IDrop
+struct R { str N; }
+impl IDrop for R { void Drop(ref this) { } }
+enum Box { Full(R r), Nothing }
+impl IDrop for Box { void Drop(ref this) { } }
+void Take(Box b) {
+    match b {
+        Full(r) => { }
+        Nothing => { }
+    }
+}

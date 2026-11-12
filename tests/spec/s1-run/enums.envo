@@ -1,0 +1,152 @@
+// Enums with payloads and `match` ([item.enum.1]–[item.enum.3], [s1.expr.1], [s1.expr.2]):
+// variants built qualified or, where the type is known, unqualified; payload patterns that
+// bind or skip fields; `|` alternatives and `if` guards; `match` as an expression; generic
+// enums with methods; a recursive enum through pointers; payloads that need a drop.
+// expect: 12 9 0
+// expect: rect square empty
+// expect: 7 big 3 small
+// expect: 2 -1 10
+// expect: 42 none
+// expect: 14
+// expect: drop a
+// expect: took b
+// expect: drop b
+// expect: end
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+enum Shape {
+    Rect(i64 w, i64 h),
+    Square(i64 side),
+    Empty,
+}
+
+impl Shape {
+    i64 Area() => match this {
+        Rect(w, h) => w * h,
+        Square(s) => s * s,
+        Empty => 0,
+    };
+    str Name() {
+        match this {
+            Shape.Rect(_, _) => { return "rect"; }
+            Square(s) if s > 2 => { return "square"; }
+            Square(_) => { return "small square"; }
+            Empty => { return "empty"; }
+        }
+    }
+}
+
+// a generic enum with a method
+enum Maybe<T> { Nothing, Just(T value) }
+
+impl<T> Maybe<T> {
+    bool Has() => match this { Just(_) => true, Nothing => false };
+}
+
+i64 Or(Maybe<i64> m, i64 other) => match m {
+    Just(v) => v,
+    Nothing => other,
+};
+
+Maybe<i64> Find(i64 x) {
+    if (x > 0) return Just(x * 2);
+    return Nothing;
+}
+
+// a recursive expression tree
+enum Expr {
+    Lit(i64 value),
+    Add(*Expr left, *Expr right),
+    Neg(*Expr inner),
+}
+
+*Expr Make(Expr e) {
+    unsafe {
+        *Expr p = alloc(sizeof(Expr)) as *Expr;
+        *p = e;
+        return p;
+    }
+}
+
+i64 Eval(*Expr e) {
+    unsafe {
+        match *e {
+            Lit(v) => { return v; }
+            Add(l, r) => { return Eval(l) + Eval(r); }
+            Neg(x) => { return 0 - Eval(x); }
+        }
+    }
+}
+
+// payloads that need a drop
+struct Res { str Name; }
+impl IDrop for Res {
+    void Drop(ref this) {
+        write(1, "drop ");
+        print(this.Name);
+    }
+}
+enum Slot { Free, Held(Res res) }
+
+void Inspect(Slot s) {
+    match s {
+        Held(r) => {
+            write(1, "took ");
+            print(r.Name);
+        }
+        Free => { }
+    }
+}
+
+W(Shape.Rect(3, 4).Area());
+W(Shape.Square(3).Area());
+print(Num(Shape.Empty.Area()));
+
+write(1, Shape.Rect(1, 1).Name());
+write(1, " ");
+write(1, Shape.Square(5).Name());
+write(1, " ");
+print(Shape.Empty.Name());
+
+Shape s = Square(7);
+i64 side = match s { Square(x) => x, Rect(_, _) | Empty => 0 };
+W(side);
+str size = side > 5 ? "big" : "small";
+write(1, size);
+write(1, " ");
+i64 n = 3;
+W(n);
+print(match n { 0 | 1 => "tiny", _ if n < 10 => "small", _ => "big" });
+
+W(Or(Find(1), 0));
+W(Or(Find(-1), -1));
+print(Num(Or(Maybe<i64>.Just(10), 0)));
+
+Maybe<str> name = Just("x");
+W(42);
+print(Maybe<str>.Nothing.Has() ? "some" : "none");
+
+*Expr tree = Make(Add(Make(Lit(20)), Make(Neg(Make(Lit(6))))));
+print(Num(Eval(tree)));
+
+Slot a = Held(new Res { Name = "a" });
+a = Free;
+Inspect(Held(new Res { Name = "b" }));
+print("end");

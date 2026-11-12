@@ -1,0 +1,3 @@
+// expect-error: E0335 @ 3:9
+// [type.opt.1] `null` needs an expected `T?`
+var x = null;

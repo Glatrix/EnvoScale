@@ -1,0 +1,10 @@
+// expect-error: E0308 @ 5:5
+// [s1.expr.1] a match covers every variant
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+i64 Area(Shape s) {
+    match s {
+        Rect(w, h) => { return w * h; }
+        Empty => { return 0; }
+    }
+    return 0;
+}

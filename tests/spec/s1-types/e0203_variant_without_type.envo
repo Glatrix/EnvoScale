@@ -1,0 +1,3 @@
+// expect-error: E0203 @ 3:9
+// [item.enum.3] an unqualified variant needs a known type
+var x = Some(1);

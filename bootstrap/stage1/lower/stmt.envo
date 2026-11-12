@@ -104,7 +104,8 @@ void LowerStmt(*Lower l, u32 n) {
         return;
     }
     if (k == NK_MATCH) {
-        LowerMatch(l, n);
+        if (NValue(c, n) != 0) LowerMatchS1(l, n, false);     // the Envo-S1 form
+        else LowerMatch(l, n);
         return;
     }
     LowerSimple(l, n);

@@ -27,6 +27,7 @@ struct MoveCx {
     Vec Loops;      // LoopFrame
     u32 Caps;       // in a lambda body: its captures (in Checker.Captures)
     u32 NCaps;
+    Vec Frozen;     // u32 locals that a match arm's bindings borrow: no changes or moves
 }
 
 MoveSnap SnapNew() {
@@ -100,7 +101,69 @@ MoveCx MoveCxNew() {
     x.Places = VecNew(4, 16);
     x.St = SnapNew();
     x.Loops = VecNew(sizeof(LoopFrame), 4);
+    x.Frozen = VecNew(4, 4);
     return x;
+}
+
+bool IsFrozen(*MoveCx x, u32 s) {
+    unsafe {
+        for (usize i = 0; i < VecLen(&x.Frozen); i++) {
+            if (MemLoadU32(VecAt(&x.Frozen, i)) == s) return true;
+        }
+    }
+    return false;
+}
+
+// A change to place n (assignment, `++`, `ref`): not while a binding borrows its local.
+void MvMutate(*Checker c, *MoveCx x, u32 n) {
+    u32 root = PlaceRoot(c, n);
+    if (root == 0 || NSym(c, root) == 0) return;
+    if (IsFrozen(x, NSym(c, root))) BorrowError(c, NTok(c, root), NSym(c, root), E_BORROW_CONFLICT, "` is borrowed by a binding of this `match` arm, so it cannot change here");
+}
+
+// A `match` in Envo-S1 form ([s1.expr.1]): a temporary scrutinee is taken; an arm whose
+// bindings take an owned local's payload moves that local; an arm whose bindings borrow
+// it freezes it. move: an expression match whose value is taken.
+void MvMatch(*Checker c, *MoveCx x, u32 n, bool isExpr, bool move) {
+    Node m = CNode(c, n);
+    u64 kind = NValue(c, n);
+    MvExpr(c, x, m.A, kind == MS_TEMP as u64);
+    u32 root = 0;
+    if (kind == MS_BORROW as u64) root = PlaceRoot(c, m.A);
+    unsafe {
+        MoveSnap before = SnapCopy(x.St);
+        MoveSnap after = SnapDead();
+        u32 arm = m.B;
+        while (arm != 0) {
+            Node a = CNode(c, arm);
+            x.St = SnapCopy(before);
+            if (kind == MS_OWNED_LOCAL as u64 && NValue(c, arm) == 1) PlaceSet(x, NSym(c, m.A), 0, MS_MOVED);
+            bool froze = root != 0 && NSym(c, root) != 0 && ArmBorrows(c, a.A);
+            if (froze) MemStoreU32(VecPush(&x.Frozen), NSym(c, root));
+            MvExpr(c, x, a.E, false);
+            if (isExpr && NKind(c, a.B) != NK_BLOCK) MvExpr(c, x, a.B, move);
+            else MvStmt(c, x, a.B);
+            if (froze) VecPop(&x.Frozen);
+            after = SnapJoin(after, x.St);
+            arm = a.Next;
+        }
+        x.St = after;
+    }
+}
+
+// Does a pattern list bind a payload by borrowing it?
+bool ArmBorrows(*Checker c, u32 pat) {
+    while (pat != 0) {
+        if (NKind(c, pat) == NK_CALL) {
+            u32 a = CNode(c, pat).B;
+            while (a != 0) {
+                if (NKind(c, a) == NK_NAME && SymGet(c, NSym(c, a)).Flags & SF_BYREF != 0) return true;
+                a = CNode(c, a).Next;
+            }
+        }
+        pat = CNode(c, pat).Next;
+    }
+    return false;
 }
 
 // The index of place (s, field), or -1 if it is not tracked yet.
@@ -191,6 +254,7 @@ void UseLocal(*Checker c, *MoveCx x, u32 n, u32 s, bool move) {
         }
     }
     if (!move || IsCopy(c, sym.Type)) return;
+    if (IsFrozen(x, s)) BorrowError(c, tok, s, E_MOVED_WHILE_BORROWED, "` is moved while a binding of this `match` arm borrows it");
     if (sym.Flags & SF_BYREF != 0) MoveOutOfBorrow(c, tok, "", s, ", which is borrowed; borrow it or clone it instead");
     if (IsCapture(c, x, s)) MoveOutOfBorrow(c, tok, "", s, ", which this lambda captures");
     PlaceSet(x, s, 0, MS_MOVED);
@@ -301,6 +365,37 @@ void MvExpr(*Checker c, *MoveCx x, u32 n, bool move) {
         MvLambda(c, x, n);
         return;
     }
+    if (k == NK_MATCH) {
+        MvMatch(c, x, n, true, move);
+        return;
+    }
+    if (k == NK_TRY) {
+        MvExpr(c, x, node.A, true);
+        return;
+    }
+    if (k == NK_BINARY && node.Op == TK_QQ) {
+        // the left side is taken; the right side runs only when it is `None`
+        MvExpr(c, x, node.A, true);
+        unsafe {
+            MoveSnap before = SnapCopy(x.St);
+            MvExpr(c, x, node.B, move);
+            x.St = SnapJoin(before, x.St);
+        }
+        return;
+    }
+    if (k == NK_COND) {
+        // like `if`: each branch from the state after the condition
+        MvExpr(c, x, node.A, false);
+        unsafe {
+            MoveSnap before = SnapCopy(x.St);
+            MvExpr(c, x, node.B, move);
+            MoveSnap then = x.St;
+            x.St = before;
+            MvExpr(c, x, node.C, move);
+            x.St = SnapJoin(then, x.St);
+        }
+        return;
+    }
     if (k == NK_UNARY || k == NK_CAST) {
         MvExpr(c, x, node.A, false);
         return;
@@ -321,10 +416,12 @@ void MvCall(*Checker c, *MoveCx x, u32 n) {
         if (fs.Flags & SF_METHOD != 0 && fs.Flags & SF_STATIC == 0 && NKind(c, node.A) == NK_MEMBER) {
             u32 obj = CNode(c, node.A).A;
             bool byValue = fs.Flags & (SF_RECV_IN | SF_RECV_REF) == 0 && TyKind(c, NType(c, obj)) != TYK_PTR;
+            if (fs.Flags & SF_RECV_REF != 0) MvMutate(c, x, obj);
             MvExpr(c, x, obj, byValue);
         }
         u32 p = FirstParam(c, cs);
         while (a != 0) {
+            if (CNode(c, p).Flags & NF_REF != 0) MvMutate(c, x, a);
             MvExpr(c, x, a, CNode(c, p).Flags & (NF_IN | NF_REF) == 0);
             a = CNode(c, a).Next;
             p = CNode(c, p).Next;
@@ -428,6 +525,10 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
         unsafe { x.St = SnapDead(); }
         return;
     }
+    if (k == NK_MATCH && NValue(c, n) != 0) {
+        MvMatch(c, x, n, false, false);
+        return;
+    }
     if (k == NK_MATCH) {
         MvExpr(c, x, node.A, false);
         unsafe {
@@ -458,6 +559,7 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
         bool plain = TokText(c, node.Tok).Len == 1;
         MvExpr(c, x, node.B, plain);
         u32 target = node.A;
+        MvMutate(c, x, target);
         u16 tk = NKind(c, target);
         if (plain && (tk == NK_NAME || tk == NK_THIS) && NSym(c, target) != 0 && SymGet(c, NSym(c, target)).Kind == SK_LOCAL) {
             PlaceReset(x, NSym(c, target));
@@ -477,6 +579,7 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
         return;
     }
     // NK_INC, NK_DEC
+    MvMutate(c, x, node.A);
     MvExpr(c, x, node.A, false);
 }
 

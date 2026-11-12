@@ -23,6 +23,10 @@ bool IsCopy(*Checker c, u32 t) {
         unsafe { copy = c.CopySym; }
         return copy != 0 && Implements(c, t, SymGet(c, copy).Type);
     }
+    if (k == TYK_UNION) {
+        if (HasDropImpl(c, t)) return false;
+        return PayloadsAll(c, t, 0);
+    }
     if (k != TYK_STRUCT) return false;
     if (HasDropImpl(c, t)) return false;
     u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
@@ -31,6 +35,25 @@ bool IsCopy(*Checker c, u32 t) {
         f = CNode(c, f).Next;
     }
     return true;
+}
+
+// For tagged enum type t: what 0 (is `Copy`), 1 (needs a drop: any), 2 (needs a drop,
+// counting type parameters: any) holds of its payload fields.
+bool PayloadsAll(*Checker c, u32 t, u32 what) {
+    TaggedEnumDeclare(c, TypeGet(c, t).Sym);
+    u32 v = CNode(c, SymGet(c, TypeGet(c, t).Sym).Node).B;
+    while (v != 0) {
+        u32 f = CNode(c, v).E;
+        while (f != 0) {
+            u32 ft = PayloadType(c, t, f);
+            if (what == 0 && !IsCopy(c, ft)) return false;
+            if (what == 1 && NeedsDrop(c, ft)) return true;
+            if (what == 2 && NeedsDropAt(c, ft)) return true;
+            f = CNode(c, f).Next;
+        }
+        v = CNode(c, v).Next;
+    }
+    return what == 0;
 }
 
 // Does type t implement the prelude's `IDrop`?
@@ -46,6 +69,7 @@ bool NeedsDropAt(*Checker c, u32 t) {
     Type ty = TypeGet(c, t);
     if (ty.Kind == TYK_PARAM) return true;
     if (ty.Kind == TYK_ARRAY) return NeedsDropAt(c, ty.Elem);
+    if (ty.Kind == TYK_UNION) return HasDropImpl(c, t) || PayloadsAll(c, t, 2);
     if (ty.Kind != TYK_STRUCT) return false;
     if (HasDropImpl(c, t)) return true;
     u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
@@ -61,6 +85,7 @@ bool NeedsDropAt(*Checker c, u32 t) {
 bool NeedsDrop(*Checker c, u32 t) {
     Type ty = TypeGet(c, t);
     if (ty.Kind == TYK_ARRAY) return NeedsDrop(c, ty.Elem);
+    if (ty.Kind == TYK_UNION) return HasDropImpl(c, t) || PayloadsAll(c, t, 1);
     if (ty.Kind != TYK_STRUCT) return false;
     if (HasDropImpl(c, t)) return true;
     u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;

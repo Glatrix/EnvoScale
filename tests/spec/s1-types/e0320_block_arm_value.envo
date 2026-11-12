@@ -1,0 +1,4 @@
+// expect-error: E0320 @ 4:48
+// [s1.expr.1] a block arm of a match expression must leave by `return` or a panic
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+i64 W(Shape s) => match s { Rect(w, _) => w, _ => { print("x"); } };

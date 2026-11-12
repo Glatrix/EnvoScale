@@ -125,9 +125,9 @@ generic instance's argument count before its arguments: `Box.1.i64`), so differe
 instances never share a name.
 
 **Not yet (E0951).** Envo-S1 constructs `envoc1` does not compile yet are reported as
-E0951 rather than mis-compiled: generic enums and enums with payloads, `T?`, `mut` views,
-namespaces and `use`, generic interface methods, generic functions, methods and built-ins
-used as values, and an `impl` whose type parameters are not exactly its type's
+E0951 rather than mis-compiled: `mut` views, slicing, `foreach`, namespaces and `use`,
+generic interface methods, generic functions, methods and built-ins used as values,
+bindings in `|` patterns, and an `impl` whose type parameters are not exactly its type's
 (`impl<T> I for Box<Box<T>>`). Each goes away with the increment that implements it;
 M2.13 removes the code.
 
@@ -205,6 +205,37 @@ locals across statements, disjoint field borrows, `once fn` inference (a lambda 
 capture is E0502), partial moves out of values that need a drop, and lambdas that take a
 value with a drop (E0951) are Stage 2's. Function values do not free their environments:
 the Stage 1 heap never frees.
+
+## Enums (M2.11)
+
+`check/enums.envo` and `lower/enums.envo`. An enum with a payload on any variant, or with
+type parameters, is a *tagged enum* (`TYK_UNION`): a `u32` tag holding the variant's
+index, then the payload of the variant it holds. In EIR it is `{ u32, [K x word] }`,
+where `word` is the largest payload alignment and K words fit the largest payload; each
+variant's payload is a struct of its fields laid over those words. Fieldless enums stay
+integers, exactly as in Envo-Core, so Core programs are unchanged.
+
+- **Values.** `Shape.Rect(1, 2)`, `Option<i64>.None`, or, where the expected type is
+  known (an initializer, an argument, a `return`), just `Rect(1, 2)` or `None`
+  ([item.enum.3]). Type arguments come from the expected type or from the payload.
+- **`match`** in Envo-S1 form (a tagged scrutinee, guards, or a `match` expression)
+  tests each arm's patterns in order, binds, checks the guard, and runs the arm; a failed
+  guard goes on to the next arm, so the checker counts only unguarded arms for
+  exhaustiveness (E0308) and duplicates (E0319). Core-form matches keep the `switch`.
+- **Bindings** ([s1.expr.1]) copy `Copy` payloads. A payload that is not `Copy` is taken
+  when the scrutinee is a local the function owns (that arm moves the local) or a
+  temporary (the match holds it, and drops it unless an arm takes it); otherwise the
+  binding is an `in` borrow of the payload, and the arm may not change or move the
+  scrutinee (E0503, E0504). A payload cannot be taken out of a type that implements
+  `IDrop` (E0502).
+- **Drops** of a tagged value drop the active variant's payload fields.
+- **Option and Result** are prelude enums with `IsSome`/`IsNone`, `Unwrap`, `UnwrapOr`,
+  `IsOk`/`IsErr` and `UnwrapErr`. `T?` is `Option<T>`; `null` is `None` of the expected
+  `T?` (E0335 without one). `a ?? b` takes `a` and gives its value or evaluates `b`.
+  `e?` gives the value, or returns `None` (or `Err` with `e`'s error) early, running the
+  drops of a `return`; the function's result must be optional (or a `Result` with the
+  same error type), else E0317.
+- **`c ? a : b`** evaluates one branch into a slot of the result type ([s1.expr.2]).
 
 ## Executable images
 

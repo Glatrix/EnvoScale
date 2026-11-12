@@ -47,6 +47,8 @@ struct Checker {
     u32 PreludeFile;    // the source file of the S1 prelude (0xFFFFFFFF: none)
     u32 CopySym;        // the built-in auto-interface `Copy`
     u32 DropSym;        // the prelude's `IDrop`
+    u32 OptionSym;      // the prelude's `Option` (`T?`)
+    u32 ResultSym;      // the prelude's `Result`
 }
 
 // ------------------------------------------------------------------ side tables

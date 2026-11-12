@@ -1,0 +1,3 @@
+// expect-error: E0324 @ 3:10
+// [item.enum.2] only fieldless enums declare a representation
+enum E : u8 { A(i64 x), B }

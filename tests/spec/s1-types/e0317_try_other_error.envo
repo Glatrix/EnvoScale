@@ -1,0 +1,7 @@
+// expect-error: E0317 @ 5:16
+// [expr.q.1] `?` on a Result needs the same error type
+Result<i64, str> A() => Ok(1);
+Result<i64, i32> B() {
+    i64 v = A()?;
+    return Ok(v);
+}

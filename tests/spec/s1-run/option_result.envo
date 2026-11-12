@@ -1,0 +1,106 @@
+// Option and Result from the prelude ([type.opt.1], chapter 2 section 2.4, [expr.q.1],
+// [s1.expr.3]): `T?` and `null`, `Some`/`None` and `Ok`/`Err` where the type is known,
+// `??`, the postfix `?` returning `None` or the error early (with its drops), and the
+// prelude's methods.
+// expect: 6 none 7
+// expect: true false 5 9
+// expect: half 21
+// expect: odd 7
+// expect: drop guard
+// expect: chain 3
+// expect: drop guard
+// expect: chain stopped
+// expect: 64 too big
+// expect: end
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    bool negative = v < 0;
+    u64 n;
+    if (negative) { n = (0 -% v) as u64; } else { n = v as u64; }
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        if (negative) { at--; buf[at] = '-'; }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+void W(i64 v) { write(1, Num(v)); write(1, " "); }
+
+i64? Half(i64 x) {
+    if (x % 2 != 0) return null;
+    return Some(x / 2);
+}
+
+Result<i64, str> Checked(i64 x) {
+    if (x > 50) return Err("too big");
+    return Ok(x * 2);
+}
+
+struct Guard { str Name; }
+impl IDrop for Guard {
+    void Drop(ref this) {
+        write(1, "drop ");
+        print(this.Name);
+    }
+}
+
+// `?` returns early, dropping what the function holds
+i64? Quarter(i64 x) {
+    Guard g = new Guard { Name = "guard" };
+    i64 h = Half(x)?;
+    i64 q = Half(h)?;
+    return Some(q);
+}
+
+Result<i64, str> Grow(i64 x) {
+    i64 a = Checked(x)?;
+    i64 b = Checked(a)?;
+    return Ok(b);
+}
+
+i64? some = Half(12);
+i64? none = Half(7);
+W(some ?? 0);
+write(1, none.IsNone() ? "none " : "some ");
+print(Num(none ?? 7));
+
+write(1, Option<i64>.Some(1).IsSome() ? "true " : "false ");
+write(1, Option<i64>.None.IsSome() ? "true " : "false ");
+W(Half(10).Unwrap());
+print(Num(Half(3).UnwrapOr(9)));
+
+match Half(42) {
+    Some(h) => {
+        write(1, "half ");
+        print(Num(h));
+    }
+    None => { print("odd"); }
+}
+match Half(7) {
+    Some(h) => { print("even"); }
+    None => {
+        write(1, "odd ");
+        print(Num(7));
+    }
+}
+
+i64 q = Quarter(12).Unwrap();
+write(1, "chain ");
+print(Num(q));
+i64? stopped = Quarter(6);
+if (stopped.IsNone()) print("chain stopped");
+
+match Grow(16) {
+    Ok(v) => { W(v); }
+    Err(e) => { print(e); }
+}
+match Grow(30) {
+    Ok(v) => { W(v); }
+    Err(e) => { print(e); }
+}
+print("end");

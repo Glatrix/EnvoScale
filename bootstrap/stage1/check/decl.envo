@@ -92,11 +92,14 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
         unsafe {
             SymPtr(c, s).Flags = SF_PRELUDE;
             if (kind == SK_IFACE && StrEq(SymGet(c, s).Name, "IDrop")) c.DropSym = s;
+            if (kind == SK_ENUM && StrEq(SymGet(c, s).Name, "Option")) c.OptionSym = s;
+            if (kind == SK_ENUM && StrEq(SymGet(c, s).Name, "Result")) c.ResultSym = s;
         }
     }
     u32 tps = CNode(c, n).E;
-    if (kind == SK_ENUM && tps != 0) CNotYet(c, "generic enums", NTok(c, tps));
-    if (kind == SK_STRUCT || kind == SK_ENUM) {
+    bool tagged = kind == SK_ENUM && IsTaggedEnumNode(c, n);
+    if (tagged) DefineTaggedEnum(c, s, n);
+    if (kind == SK_STRUCT || (kind == SK_ENUM && !tagged)) {
         u8 tk = TYK_STRUCT;
         if (kind == SK_ENUM) tk = TYK_ENUM;
         u32 t = 0;
@@ -133,7 +136,7 @@ u32 ResolveType(*Checker c, u32 n, bool voidOk) {
 u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
     Node node = CNode(c, n);
     u32 t = 0;
-    if (node.Kind == NK_TOPT) CNotYet(c, "optional types `T?`", node.Tok);
+    if (node.Kind == NK_TOPT) return OptionOf(c, ResolveType(c, node.A, false), node.Tok);
     if (node.Kind == NK_TFN) return ResolveFnType(c, n);
     if (node.Kind == NK_TSLICE && node.Flags & NF_MUT != 0) CNotYet(c, "`mut` views", node.Tok);
     if (node.Kind == NK_TPTR) {
@@ -188,7 +191,7 @@ u32 ResolveTypeName(*Checker c, u32 tok, u32 args, u32 quals) {
     u8 k = sym.Kind;
     if (k != SK_TYPE && k != SK_STRUCT && k != SK_ENUM && k != SK_IFACE) CFailName(c, tok, E_NOT_A_TYPE, "`", tok, "` is not a type");
     u32 want = 0;
-    if (k == SK_STRUCT || k == SK_IFACE) want = sym.NEnv;
+    if (k == SK_STRUCT || k == SK_IFACE || k == SK_ENUM) want = sym.NEnv;
     if (have != want) TypeArgCount(c, tok, want, have);
     if (want == 0) return sym.Type;
     u32 env = EnvNew(c, want);
@@ -199,6 +202,7 @@ u32 ResolveTypeName(*Checker c, u32 tok, u32 args, u32 quals) {
     }
     u8 kind = TYK_STRUCT;
     if (k == SK_IFACE) kind = TYK_IFACE;
+    if (k == SK_ENUM) kind = TYK_UNION;
     return TypeInstance(c, kind, s, env, want);
 }
 
@@ -212,6 +216,7 @@ u64 SizeOf(*Checker c, u32 t, u32 blame, *u64 align) {
             *align = 1;
             return 0;
         }
+        if (ty.Kind == TYK_UNION) return TaggedLayout(c, t, blame, align);
         if (ty.Kind == TYK_STRUCT && ty.NArgs > 0) {
             StructLayout(c, ty.Sym, blame);
             if (HasParams(c, t)) {
@@ -339,6 +344,10 @@ void CheckDuplicateInList(*Checker c, u32 first, u32 n) {
 // progress returns quietly: a value that names a later variant then reports E0206.
 void EnumDeclare(*Checker c, u32 s) {
     Sym sym = SymGet(c, s);
+    if (TyKind(c, sym.Type) == TYK_UNION) {
+        TaggedEnumDeclare(c, s);
+        return;
+    }
     if (sym.State != 0) return;
     unsafe { SymPtr(c, s).State = 1; }
     u32 repr = T_I32;

@@ -26,6 +26,8 @@ const u32 ET_BOOL = 2;
 const u32 ET_I32 = 5;
 const u32 ET_I64 = 6;
 const u32 ET_U8 = 7;
+const u32 ET_U16 = 8;
+const u32 ET_U32 = 9;
 const u32 ET_U64 = 10;
 const u32 ET_PTR = 13;
 

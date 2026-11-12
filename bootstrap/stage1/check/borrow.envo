@@ -57,6 +57,16 @@ void CollectUses(*Checker c, *Vec uses, u32 n, u8 k) {
         CollectUses(c, uses, node.A, k);
         return;
     }
+    if (node.Kind == NK_TRY) {
+        CollectUses(c, uses, node.A, k);
+        return;
+    }
+    if (node.Kind == NK_COND) {
+        CollectUses(c, uses, node.A, BK_READ);
+        CollectUses(c, uses, node.B, k);
+        CollectUses(c, uses, node.C, k);
+        return;
+    }
     if (node.Kind == NK_INDEX || node.Kind == NK_BINARY) {
         CollectUses(c, uses, node.A, k);
         CollectUses(c, uses, node.B, BK_READ);
@@ -189,6 +199,18 @@ bool HoldsBorrow(*Checker c, u32 t) {
     u8 k = ty.Kind;
     if (k == TYK_STR || k == TYK_SLICE || k == TYK_FN || k == TYK_PARAM) return true;
     if (k == TYK_ARRAY) return HoldsBorrow(c, ty.Elem);
+    if (k == TYK_UNION) {
+        u32 v = CNode(c, SymGet(c, ty.Sym).Node).B;
+        while (v != 0) {
+            u32 f = CNode(c, v).E;
+            while (f != 0) {
+                if (HoldsBorrow(c, PayloadType(c, t, f))) return true;
+                f = CNode(c, f).Next;
+            }
+            v = CNode(c, v).Next;
+        }
+        return false;
+    }
     if (k != TYK_STRUCT) return false;
     u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
     while (f != 0) {
@@ -323,6 +345,15 @@ u64 OriginOf(*Checker c, *OriginCx x, u32 n) {
         }
         return o;
     }
+    if (k == NK_COND) {
+        unsafe {
+            OriginOf(c, x, node.A);
+            return OriginOf(c, x, node.B) | OriginOf(c, x, node.C);
+        }
+    }
+    if (k == NK_MATCH) unsafe { return OriginMatch(c, x, n, true); }
+    if (k == NK_TRY) unsafe { return OriginOf(c, x, node.A); }
+    if (k == NK_BINARY && node.Op == TK_QQ) unsafe { return OriginOf(c, x, node.A) | OriginOf(c, x, node.B); }
     if (!HoldsBorrow(c, NType(c, n))) return 0;
     if (k == NK_NAME || k == NK_THIS) {
         u32 s = NSym(c, n);
@@ -363,12 +394,7 @@ void OriginStmt(*Checker c, *OriginCx x, u32 n) {
         return;
     }
     if (k == NK_MATCH) {
-        unsafe { OriginOf(c, x, node.A); }
-        u32 arm = node.B;
-        while (arm != 0) {
-            OriginStmt(c, x, CNode(c, arm).B);
-            arm = CNode(c, arm).Next;
-        }
+        unsafe { OriginMatch(c, x, n, false); }
         return;
     }
     if (k == NK_RETURN) {
@@ -397,6 +423,35 @@ void OriginStmt(*Checker c, *OriginCx x, u32 n) {
         return;
     }
     if (k == NK_EXPR) unsafe { OriginOf(c, x, node.A); }
+}
+
+// A match: its bindings carry the scrutinee's origins; an expression match's value, those
+// of its arms.
+u64 OriginMatch(*Checker c, *OriginCx x, u32 n, bool isExpr) {
+    Node m = CNode(c, n);
+    u64 so;
+    unsafe { so = OriginOf(c, x, m.A); }
+    u64 o = 0;
+    u32 arm = m.B;
+    while (arm != 0) {
+        Node a = CNode(c, arm);
+        u32 pat = a.A;
+        while (pat != 0) {
+            if (NKind(c, pat) == NK_CALL) {
+                u32 b = CNode(c, pat).B;
+                while (b != 0) {
+                    if (NKind(c, b) == NK_NAME && NSym(c, b) != 0) unsafe { AddLocalOrigins(x, NSym(c, b), so); }
+                    b = CNode(c, b).Next;
+                }
+            }
+            pat = CNode(c, pat).Next;
+        }
+        unsafe { OriginOf(c, x, a.E); }
+        if (isExpr && NKind(c, a.B) != NK_BLOCK) unsafe { o = o | OriginOf(c, x, a.B); }
+        else OriginStmt(c, x, a.B);
+        arm = a.Next;
+    }
+    return o;
 }
 
 // `return e`: no borrowed closure leaves; with a `from` clause, only borrows of what it

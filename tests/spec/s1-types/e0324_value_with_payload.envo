@@ -1,0 +1,3 @@
+// expect-error: E0324 @ 3:24
+// [item.enum.2] only fieldless enums give variants values
+enum E { A(i64 x), B = 3 }

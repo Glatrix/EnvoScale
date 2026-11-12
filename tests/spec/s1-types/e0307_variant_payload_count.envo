@@ -1,0 +1,4 @@
+// expect-error: E0307 @ 4:17
+// [item.enum.1] a variant takes its payload
+enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
+Shape s = Shape.Rect(1);

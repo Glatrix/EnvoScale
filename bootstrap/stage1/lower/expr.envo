@@ -33,9 +33,31 @@ u32 LowerExpr(*Lower l, u32 n) {
     }
     if (k == NK_THIS) return LowerLocalUse(l, n, t);
     if (k == NK_LAMBDA) return LowerLambda(l, n);
+    if (k == NK_MATCH) return LowerMatchS1(l, n, true);
+    if (k == NK_NULL) return LowerVariantValue(l, t, NValue(c, n) as u32, 0);
+    if (k == NK_TRY) return LowerTry(l, n, t);
+    if (k == NK_BINARY && node.Op == TK_QQ) return LowerCoalesce(l, n, t);
+    if (k == NK_COND) {
+        // c ? a : b through a slot of the result type
+        u32 et = LType(l, t);
+        u32 slot = LSlot(l, et);
+        u32 yes = LNewBlock(l);
+        u32 no = LNewBlock(l);
+        u32 join = LNewBlock(l);
+        LCondBr(l, LowerExpr(l, node.A), yes, no);
+        LStart(l, yes);
+        StoreTo(l, t, LowerExpr(l, node.B), slot);
+        LBr(l, join);
+        LStart(l, no);
+        StoreTo(l, t, LowerExpr(l, node.C), slot);
+        LBr(l, join);
+        LStart(l, join);
+        return LoadPlace(l, t, slot);
+    }
     if (k == NK_NAME) {
         Sym sym = SymGet(c, NSym(c, n));
         if (sym.Kind == SK_FN) return FnItemValue(l, NSym(c, n));
+        if (sym.Kind == SK_ENUM) return LowerVariantValue(l, t, NValue(c, n) as u32, 0);
         if (sym.Kind == SK_CONST) {
             if (TyKind(c, sym.Type) == TYK_STR) return StrTemp(l, StringValue(l, CNode(c, sym.Node).B));
             return LConst(l, LType(l, sym.Type), WrapValue(c, sym.Value, IntReprType(c, sym.Type)));
@@ -44,6 +66,7 @@ u32 LowerExpr(*Lower l, u32 n) {
     }
     if (k == NK_MEMBER) {
         // Enum.Variant
+        if (NType(c, node.A) == 0 && IsTagged(c, t)) return LowerVariantValue(l, t, NValue(c, n) as u32, 0);
         if (NType(c, node.A) == 0) {
             u32 v = EnumVariantNamed(c, t, n);
             return LConst(l, LType(l, t), NValue(c, v));
@@ -326,6 +349,7 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     *Checker c = LC(l);
     *Module m = LM(l);
     u32 cs = NSym(c, n);
+    if (cs != 0 && SymGet(c, cs).Kind == SK_ENUM) return LowerVariantValue(l, t, NValue(c, n) as u32, node.B);
     if (cs != 0 && NeedsInst(c, cs)) return LowerInstCall(l, n, node, t);
     if (cs == 0 && TyKind(c, LNType(l, node.A)) == TYK_FN) return LowerIndirectCall(l, n, node, t);
     u32 s = NSym(c, node.A);
