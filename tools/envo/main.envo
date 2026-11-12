@@ -15,6 +15,8 @@ use envoc.diag;
 const str ENVO_VERSION = "0.5.0-dev";
 const u32 TGT_LINUX = 1;
 const u32 TGT_WINDOWS = 2;
+const u32 TGT_A64 = 4;          // aarch64-linux (M10)
+const u32 TGT_MACOS = 5;        // aarch64-macos (M10)
 
 void EnvoUsage(i32 fd) {
     write(fd, "usage: envo <command> [arguments]\n");
@@ -175,7 +177,9 @@ BuildOpts ParseOpts(usize from) {
             if (Eq(a, "--target")) {
                 if (Eq(v, "x86_64-windows")) o.Target = TGT_WINDOWS;
                 else if (Eq(v, "x86_64-linux")) o.Target = TGT_LINUX;
-                else EnvoFail("--target must be x86_64-windows or x86_64-linux", 2);
+                else if (Eq(v, "aarch64-linux")) o.Target = TGT_A64;
+                else if (Eq(v, "aarch64-macos")) o.Target = TGT_MACOS;
+                else EnvoFail("--target must be x86_64-windows, x86_64-linux, aarch64-linux or aarch64-macos", 2);
             }
             i += 2;
         } else if (a.Len > 0 && a[0] == '-') {

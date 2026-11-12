@@ -179,6 +179,9 @@ void LoadLibraries(ref Sources src, str root, str os, str arch, bool core) {
             str ns = wanted.AsSlice()[k].AsStr();
             if (HasText(declared, ns) || HasText(tried, ns)) continue;
             tried.Push(string.From(ns));
+            if (Same(ns, "platform") && Same(os, "macos")) {
+                Fail(src, wantedFile.Get(k), wantedAt.Get(k) as usize, 214, "the standard platform has no macOS adapters yet (M10): build with `--os none` for the reference adapters");
+            }
             string file = ModuleFile(root, ns, os);
             string archFile = ArchFile(file.AsStr(), arch);
             string? text = ReadFile(archFile.AsStr());

@@ -92,7 +92,7 @@ str PlatformOs(str os, u32 target) {
     if (os.Len == 0) {
         if (target == TARGET_WINDOWS) return "windows";
         if (target == TARGET_WASM) return "wasm";
-        if (target == TARGET_MACOS) ToolFail("aarch64-macos programs use the libraries with `--os none` for now: the macOS adapters are not written yet (M10)", EXIT_USAGE);
+        if (target == TARGET_MACOS) return "macos";     // no adapters yet: LoadLibraries says so if used
         return "linux";
     }
     bool linux = target == TARGET_LINUX || target == TARGET_A64;
