@@ -272,9 +272,13 @@ package ([s1.item.2]).
 
 ## Executable images
 
-The same layout as Stage 0 (bootstrap.md, "Executable layout"): one read-write-execute
-section at `0x400000`, headers written by Stage 1's own PE and ELF writers, and on Windows
-an import table for `KERNEL32.dll`. Builds are deterministic, so `envoc1` builds of a
+Hardened since M13 (PLAN D68): the code (read and execute) and the data (read and write)
+are on separate pages. Linux programs are position-independent (`ET_DYN`, an R+X and an R+W
+`PT_LOAD`) and relocate their few 8-byte absolute addresses themselves with a 45-byte stub
+at the entry; Windows programs have `.text`, `.data` and `.reloc` sections and
+`DYNAMIC_BASE | HIGH_ENTROPY_VA`, so the loader places them anywhere. Headers are written
+by Stage 1's own PE and ELF writers, with the import tables on Windows. Stage 2 writes the
+same bytes. Builds are deterministic, so `envoc1` builds of a
 program are byte-identical on every host.
 
 ## Testing

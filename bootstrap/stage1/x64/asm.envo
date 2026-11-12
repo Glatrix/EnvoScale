@@ -87,6 +87,56 @@ void BindData(*Asm a, u32 l) {
     unsafe { VecSetU64(&a.Labels, l as usize, BufLen(&a.Data) as u64 | DATA_BIT); }
 }
 
+// Binds label l to the start of the data.
+void BindDataStart(*Asm a, u32 l) {
+    unsafe { VecSetU64(&a.Labels, l as usize, DATA_BIT); }
+}
+
+// The self-relocation stub at the entry of a Linux program (PLAN D68): the program is
+// position-independent and loaded anywhere, so it adds the load address to each 8-byte
+// absolute address in its data. table holds their count, then each one's data offset
+// (WriteImage fills it); data0 is the data's start. The stub sits at the start of the
+// code, which the image puts at ELF_HEADERS, so the image's base is that much before.
+// Stage 2 emits the same bytes (compiler/backend/x86_64/asm.envo).
+void RelocStub(*Asm a, u32 data0, u32 table) {
+    B(a, 0x4C);                                 // lea r8, [rip - (ELF_HEADERS + 7)]: the base
+    B(a, 0x8D);
+    B(a, 0x05);
+    U32(a, (0x100000000 - (ELF_HEADERS + 7)) as u32);
+    B(a, 0x4C);                                 // lea r9, [rip + data0]
+    B(a, 0x8D);
+    B(a, 0x0D);
+    Rel32(a, data0);
+    B(a, 0x48);                                 // lea rsi, [rip + table]
+    B(a, 0x8D);
+    B(a, 0x35);
+    Rel32(a, table);
+    B(a, 0x8B);                                 // mov ecx, [rsi]: the count
+    B(a, 0x0E);
+    B(a, 0x48);                                 // add rsi, 4
+    B(a, 0x83);
+    B(a, 0xC6);
+    B(a, 0x04);
+    B(a, 0x85);                                 // test ecx, ecx
+    B(a, 0xC9);
+    B(a, 0x74);                                 // jz +14: past the loop
+    B(a, 0x0E);
+    B(a, 0x8B);                                 // loop: mov eax, [rsi]
+    B(a, 0x06);
+    B(a, 0x4D);                                 // add [r9 + rax], r8
+    B(a, 0x01);
+    B(a, 0x04);
+    B(a, 0x01);
+    B(a, 0x48);                                 // add rsi, 4
+    B(a, 0x83);
+    B(a, 0xC6);
+    B(a, 0x04);
+    B(a, 0xFF);                                 // dec ecx
+    B(a, 0xC9);
+    B(a, 0x75);                                 // jnz loop
+    B(a, 0xF2);
+}
+
 usize CodeLen(*Asm a) {
     unsafe { return BufLen(&a.Code); }
 }
@@ -444,7 +494,8 @@ u64 LabelOffset(*Asm a, u32 l, u64 dataStart) {
 str AsmLink(*Asm a, u64 imageBase, u64 rva, *u64 dataStart) {
     unsafe {
         usize codeLen = BufLen(&a.Code);
-        usize dataOff = (codeLen + 15) & ~15;
+        // the data starts on a page of its own, so code and data get their own protections
+        usize dataOff = ((rva as usize + codeLen + 0xFFF) & ~0xFFF) - rva as usize;
         *dataStart = dataOff as u64;
         Buf img = BufNew(dataOff + BufLen(&a.Data));
         BufStr(&img, BufView(&a.Code));

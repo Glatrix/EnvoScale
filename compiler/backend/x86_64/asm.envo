@@ -95,6 +95,55 @@ public struct Asm {
         this.Labels.Set(l as usize, at);
     }
 
+    // Binds label l to the start of the data.
+    public void BindDataStart(ref this, u32 l) {
+        this.Labels.Set(l as usize, DATA_BIT);
+    }
+
+    // The self-relocation stub at the entry of a Linux program (PLAN D68): the program is
+    // position-independent and loaded anywhere, so it adds the load address to each 8-byte
+    // absolute address in its data. table holds their count, then each one's data offset
+    // (WriteImage fills it); data0 is the data's start. The stub sits at the start of the
+    // code, which the image puts at ELF_HEADERS, so the image's base is that much before.
+    public void RelocStub(ref this, u32 data0, u32 table) {
+        this.B(0x4C);                                   // lea r8, [rip - (ELF_HEADERS + 7)]: the base
+        this.B(0x8D);
+        this.B(0x05);
+        this.U32((0x100000000 - (ELF_HEADERS + 7)) as u32);
+        this.B(0x4C);                                   // lea r9, [rip + data0]
+        this.B(0x8D);
+        this.B(0x0D);
+        this.Rel32(data0);
+        this.B(0x48);                                   // lea rsi, [rip + table]
+        this.B(0x8D);
+        this.B(0x35);
+        this.Rel32(table);
+        this.B(0x8B);                                   // mov ecx, [rsi]: the count
+        this.B(0x0E);
+        this.B(0x48);                                   // add rsi, 4
+        this.B(0x83);
+        this.B(0xC6);
+        this.B(0x04);
+        this.B(0x85);                                   // test ecx, ecx
+        this.B(0xC9);
+        this.B(0x74);                                   // jz +14: past the loop
+        this.B(0x0E);
+        this.B(0x8B);                                   // loop: mov eax, [rsi]
+        this.B(0x06);
+        this.B(0x4D);                                   // add [r9 + rax], r8
+        this.B(0x01);
+        this.B(0x04);
+        this.B(0x01);
+        this.B(0x48);                                   // add rsi, 4
+        this.B(0x83);
+        this.B(0xC6);
+        this.B(0x04);
+        this.B(0xFF);                                   // dec ecx
+        this.B(0xC9);
+        this.B(0x75);                                   // jnz loop
+        this.B(0xF2);
+    }
+
     void B(ref this, u8 b) => this.Code.AppendByte(b);
 
     void U32(ref this, u32 v) {
@@ -463,7 +512,8 @@ public struct Asm {
     // section bytes; dataStart receives the data's offset in the section.
     public string Link(in this, u64 imageBase, u64 rva, ref u64 dataStart) {
         usize codeLen = this.Code.Len();
-        usize dataOff = (codeLen + 15) & ~15;
+        // the data starts on a page of its own, so code and data get their own protections
+        usize dataOff = (((rva as usize + codeLen + 0xFFF) & ~0xFFF) - rva as usize);
         dataStart = dataOff as u64;
         string img = string.New();
         img.Append(this.Code);

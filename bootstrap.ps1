@@ -210,6 +210,37 @@ function Invoke-Test {
     function Pass([string]$name) { $script:passed++ }
     function Bad([string]$name, [string]$why) { $script:failed++; Say "FAIL  $name"; if ($why) { Say "      $why" } }
 
+    # Hardening (PLAN D68): Stage 1 and Stage 2 executables keep code and data apart (W^X)
+    # and can be loaded anywhere (ASLR): Linux ET_DYN with an R+X and an R+W segment;
+    # Windows with DYNAMIC_BASE and HIGH_ENTROPY_VA and no section both writable and executable
+    Say ''
+    Say 'hardening: W^X and ASLR in the executables of Stages 1 and 2'
+    $hsrc = (Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envo' | Sort-Object Name | Select-Object -First 1).FullName
+    $hdir = Join-Path $Root 'build\hardening'
+    New-Item -ItemType Directory -Force $hdir | Out-Null
+    foreach ($hComp in @((Join-Path $Build1 'envoc1.exe'), (Join-Path $Build2 'envoc.exe'))) {
+        $hElf = Join-Path $hdir 'h-linux'
+        $hExe = Join-Path $hdir 'h-win.exe'
+        Invoke-Tool $hComp @('build', $hsrc, '-o', $hElf, '--target', 'x86_64-linux') $Root | Out-Null
+        Invoke-Tool $hComp @('build', $hsrc, '-o', $hExe, '--target', 'x86_64-windows') $Root | Out-Null
+        $hb = [IO.File]::ReadAllBytes($hElf)
+        $hEt = [BitConverter]::ToUInt16($hb, 16)
+        $hF0 = [BitConverter]::ToUInt32($hb, 68)
+        $hF1 = [BitConverter]::ToUInt32($hb, 124)
+        $hName = Split-Path $hComp -Leaf
+        if ($hEt -eq 3 -and $hF0 -eq 5 -and $hF1 -eq 6) { Pass "hardening: ELF from $hName" } else { Bad "hardening: ELF from $hName" "e_type $hEt, segment flags $hF0 and $hF1" }
+        $hb = [IO.File]::ReadAllBytes($hExe)
+        $hPe = [BitConverter]::ToUInt32($hb, 60)
+        $hDll = [BitConverter]::ToUInt16($hb, $hPe + 94)
+        $hNs = [BitConverter]::ToUInt16($hb, $hPe + 6)
+        $hWx = $false
+        for ($hi = 0; $hi -lt $hNs; $hi++) {
+            $hc = [BitConverter]::ToUInt32($hb, 0x16C + 40 * $hi)
+            if (($hc -band 0x20000000) -ne 0 -and ($hc -band 0x80000000) -ne 0) { $hWx = $true }
+        }
+        if (($hDll -band 0x60) -eq 0x60 -and $hNs -ge 2 -and -not $hWx) { Pass "hardening: PE from $hName" } else { Bad "hardening: PE from $hName" "DllCharacteristics $hDll, $hNs sections, writable code: $hWx" }
+    }
+
     # Phase B (PLAN D67): asm0 made from the hex seed with PowerShell alone assembles
     # itself, the other asm0 and Stage 0 to exactly the bytes NASM gives
     Say ''

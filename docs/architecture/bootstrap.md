@@ -59,8 +59,8 @@ both. One RWX region also means code and data can sit next to each other.
 
 *Trade-off:* RWX images and a fixed base are not what a production linker would emit.
 They are acceptable for a bootstrap tool that only ever reads source files and writes
-binaries, and they remove relocation handling from the seed entirely. Stage 2's linker
-(M3) emits proper W^X, ASLR-enabled images.
+binaries, and they remove relocation handling from the seed entirely. The programs that
+Stages 1 and 2 build are W^X and ASLR-enabled (PLAN D68).
 
 ## Calling convention inside Stage 0
 

@@ -936,6 +936,14 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         g.GlobalLabels.Set(i as usize, l);
     }
     if (target == TARGET_WINDOWS) g.Imports = EmitImports(ref g.A);
+    // Linux programs are position-independent: they relocate themselves first (PLAN D68)
+    u32 data0 = 0;
+    u32 relocs = 0;
+    if (target == TARGET_LINUX) {
+        data0 = g.A.NewLabel();
+        relocs = g.A.NewLabel();
+        g.A.RelocStub(data0, relocs);
+    }
     // the entry point: __rt_init(initial stack pointer), __main(), __rt_exit(code)
     g.A.MovRR(RAX, RSP);
     g.A.AluImm(4, RSP, -16);
@@ -972,7 +980,7 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         g.Init(m, gl.Init, gl.Type);
     }
     if (wantMap) {
-        u64 section = IMAGE_BASE + ELF_HEADERS;
+        u64 section = ELF_HEADERS;      // from the load address (position-independent)
         if (target == TARGET_WINDOWS) section = IMAGE_BASE + PE_SECTION_RVA;
         for (u32 i = 1; i < m.Funcs.Len() as u32; i++) {
             AppendHex(ref map, section + g.A.LabelOffset(g.FuncLabels.Get(i as usize), 0));
@@ -981,5 +989,5 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
             map.AppendByte(10);
         }
     }
-    return WriteImage(ref g.A, target, g.Imports);
+    return WriteImage(ref g.A, target, g.Imports, data0, relocs);
 }

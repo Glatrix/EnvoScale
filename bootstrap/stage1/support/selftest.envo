@@ -110,13 +110,20 @@ void SelfTestImage(str path, str os) {
             u64 iat = VecGetU64(&a.Labels, imports.Iat as usize);
             VecSetU64(&a.Labels, exitLabel as usize, iat + 9 * 8);
             CallIndirectLabel(&a, exitLabel);
-        } else {
+        }
+        u32 data0 = 0;
+        u32 relocs = 0;
+        if (target == TARGET_LINUX) {
+            // position-independent: the relocation stub first (PLAN D68)
+            data0 = NewLabel(&a);
+            relocs = NewLabel(&a);
+            RelocStub(&a, data0, relocs);
             MovRI(&a, RAX, 60);                 // exit
             MovRI(&a, RDI, 42);
             Syscall(&a);
         }
         Ud2(&a);
-        str image = WriteImage(&a, target, imports);
+        str image = WriteImage(&a, target, imports, data0, relocs);
         if (!FileWrite(path, image, true)) ToolFail("cannot write the test image", EXIT_INTERNAL);
     }
 }

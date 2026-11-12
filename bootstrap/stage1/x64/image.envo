@@ -1,5 +1,8 @@
-// Executable images: one read-write-execute section at IMAGE_BASE, as in Stage 0
-// (docs/architecture/bootstrap.md, "Executable layout"). Windows images import from
+// Executable images (PLAN D68): code and data in separate pages, the code read and
+// execute, the data read and write (W^X), loaded at an address the system chooses (ASLR):
+// Linux programs are position-independent (ET_DYN) and relocate their few absolute
+// addresses themselves (RelocStub); Windows programs carry base relocations. Stage 0's
+// own executables keep one read-write-execute section (docs/architecture/bootstrap.md). Windows images import from
 // KERNEL32.dll and ADVAPI32.dll; the runtime and the native adapters reach import k
 // through `wincall`, where k is the import's slot in the address table: KERNEL32's
 // functions are 0-27, slot 28 ends them, ADVAPI32's SystemFunction036 (RtlGenRandom) is
@@ -9,7 +12,7 @@
 // (PLAN D25, D28, D40, D41, D43, D45). Stage 2 writes the same tables.
 
 const u64 IMAGE_BASE = 0x400000;
-const u64 ELF_HEADERS = 176;        // ELF header (64) + 2 program headers (56 each)
+const u64 ELF_HEADERS = 232;        // ELF header (64) + 3 program headers (56 each)
 const u64 PE_SECTION_RVA = 0x1000;
 
 const u32 TARGET_LINUX = 1;
@@ -339,39 +342,45 @@ void PutU64(*u8 p, usize at, u64 v) {
     unsafe { MemStoreU64(&p[at], v); }
 }
 
-// Links the code and data and writes a complete executable. The section starts with the
-// entry point.
-str WriteImage(*Asm a, u32 target, WinImports imports) {
+// Links the code and data and writes a complete executable. The code starts with the
+// entry point. data0 and relocs are the labels of RelocStub (Linux).
+str WriteImage(*Asm a, u32 target, WinImports imports, u32 data0, u32 relocs) {
     u64 dataStart;
     if (target == TARGET_WINDOWS) {
         str section;
         unsafe { section = AsmLink(a, IMAGE_BASE, PE_SECTION_RVA, &dataStart); }
-        u64 size = (section.Len as u64 + 0xFFF) & ~0xFFF;
-        u64 fileSize = 0x1000 + size;
+        u64 textSize = dataStart;
+        u64 dataSize = (section.Len as u64 - dataStart + 0xFFF) & ~0xFFF;
+        str reloc = BaseRelocs(a, dataStart);
+        u64 relocRva = PE_SECTION_RVA + textSize + dataSize;
+        u64 relocSize = (reloc.Len as u64 + 0xFFF) & ~0xFFF;
+        u64 fileSize = relocRva + relocSize;
         *u8 f = alloc(fileSize as usize);
         unsafe {
             MemCopy(&f[0x1000], section.Ptr, section.Len);
+            MemCopy(&f[relocRva as usize], reloc.Ptr, reloc.Len);
         }
         PutU16(f, 0, 0x5A4D);                   // MZ
         PutU32(f, 0x3C, 0x40);                  // e_lfanew
         PutU32(f, 0x40, 0x4550);                // PE
         PutU16(f, 0x44, 0x8664);                // AMD64
-        PutU16(f, 0x46, 1);                     // one section
+        PutU16(f, 0x46, 3);                     // .text, .data, .reloc
         PutU16(f, 0x54, 240);                   // SizeOfOptionalHeader
-        PutU16(f, 0x56, 0x0023);                // RELOCS_STRIPPED | EXECUTABLE | LARGE_ADDRESS_AWARE
+        PutU16(f, 0x56, 0x0022);                // EXECUTABLE | LARGE_ADDRESS_AWARE
         PutU16(f, 0x58, 0x020B);                // PE32+
-        PutU32(f, 0x5C, size);                  // SizeOfCode
-        PutU32(f, 0x68, PE_SECTION_RVA);        // entry point: the start of the section
+        PutU32(f, 0x5C, textSize);              // SizeOfCode
+        PutU32(f, 0x60, dataSize + relocSize);  // SizeOfInitializedData
+        PutU32(f, 0x68, PE_SECTION_RVA);        // entry point: the start of the code
         PutU32(f, 0x6C, PE_SECTION_RVA);        // BaseOfCode
-        PutU64(f, 0x70, IMAGE_BASE);
+        PutU64(f, 0x70, IMAGE_BASE);            // preferred; the loader moves it (ASLR)
         PutU32(f, 0x78, 0x1000);                // SectionAlignment
         PutU32(f, 0x7C, 0x1000);                // FileAlignment
         PutU16(f, 0x80, 6);                     // OS version 6.0
         PutU16(f, 0x88, 6);                     // subsystem version 6.0
-        PutU32(f, 0x90, size + 0x1000);         // SizeOfImage
+        PutU32(f, 0x90, fileSize);              // SizeOfImage
         PutU32(f, 0x94, 0x1000);                // SizeOfHeaders
         PutU16(f, 0x9C, 3);                     // console
-        PutU16(f, 0x9E, 0x8100);                // NX_COMPAT | TERMINAL_SERVER_AWARE
+        PutU16(f, 0x9E, 0x8160);                // HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT | TERMINAL_SERVER_AWARE
         PutU64(f, 0xA0, 0x800000);              // stack reserve (8 MiB)
         PutU64(f, 0xA8, 0x1000);                // stack commit
         PutU64(f, 0xB0, 0x100000);              // heap reserve
@@ -379,39 +388,136 @@ str WriteImage(*Asm a, u32 target, WinImports imports) {
         PutU32(f, 0xC4, 16);                    // NumberOfRvaAndSizes
         PutU32(f, 0xD0, PE_SECTION_RVA + LabelOffset(a, imports.Dir, dataStart));
         PutU32(f, 0xD4, 100);
-        PutU32(f, 0x148, 0x7865742E);           // ".tex"
-        PutU16(f, 0x14C, 0x74);                 // "t"
-        PutU32(f, 0x150, size);                 // VirtualSize
-        PutU32(f, 0x154, PE_SECTION_RVA);       // VirtualAddress
-        PutU32(f, 0x158, size);                 // SizeOfRawData
-        PutU32(f, 0x15C, 0x1000);               // PointerToRawData
-        PutU32(f, 0x16C, 0xE0000020);           // CODE | EXECUTE | READ | WRITE
+        PutU32(f, 0xF0, relocRva);              // base relocation table
+        PutU32(f, 0xF4, reloc.Len as u64);
+        PeSection(f, 0x148, 0x7865742E, 0x74, textSize, PE_SECTION_RVA, textSize, 0x60000020);                  // .text: CODE | EXECUTE | READ
+        PeSection(f, 0x170, 0x7461642E, 0x61, dataSize, PE_SECTION_RVA + textSize, dataSize, 0xC0000040);       // .data: DATA | READ | WRITE
+        PeSection(f, 0x198, 0x6C65722E, 0x636F, reloc.Len as u64, relocRva, relocSize, 0x42000040);            // .reloc: DATA | DISCARDABLE | READ
         unsafe { return str_from(f, fileSize as usize); }
     }
+    // the table RelocStub reads: the count, then the data offset of each absolute address
+    DataAlign(a, 4);
+    BindData(a, relocs);
+    u32 count = 0;
+    unsafe {
+        for (usize i = 0; i < VecLen(&a.Fixups); i++) {
+            Fixup x = *(VecAt(&a.Fixups, i) as *Fixup);
+            if (x.Kind == FX_ABS64 && x.InData) count++;
+        }
+    }
+    DataU32(a, count);
+    unsafe {
+        usize n = VecLen(&a.Fixups);
+        for (usize i = 0; i < n; i++) {
+            Fixup x = *(VecAt(&a.Fixups, i) as *Fixup);
+            if (x.Kind == FX_ABS64 && x.InData) DataU32(a, x.At);
+        }
+    }
+    BindDataStart(a, data0);
     str section;
-    unsafe { section = AsmLink(a, IMAGE_BASE, ELF_HEADERS, &dataStart); }
+    unsafe { section = AsmLink(a, 0, ELF_HEADERS, &dataStart); }
+    u64 codeEnd = ELF_HEADERS + dataStart;      // page-aligned
     u64 fileSize = ELF_HEADERS + section.Len as u64;
     *u8 f = alloc(fileSize as usize);
     unsafe { MemCopy(&f[ELF_HEADERS as usize], section.Ptr, section.Len); }
     PutU32(f, 0, 0x464C457F);                   // 0x7F 'E' 'L' 'F'
     PutU32(f, 4, 0x00010102);                   // 64-bit, little-endian, version 1
-    PutU16(f, 16, 2);                           // ET_EXEC
+    PutU16(f, 16, 3);                           // ET_DYN: position-independent
     PutU16(f, 18, 0x3E);                        // x86-64
     PutU32(f, 20, 1);
-    PutU64(f, 24, IMAGE_BASE + ELF_HEADERS);    // entry point: the start of the section
+    PutU64(f, 24, ELF_HEADERS);                 // entry point: the start of the code
     PutU64(f, 32, 64);                          // program headers follow
     PutU16(f, 52, 64);
     PutU16(f, 54, 56);
-    PutU16(f, 56, 2);
-    PutU32(f, 64, 1);                           // PT_LOAD, R | W | X, the whole file
-    PutU32(f, 68, 7);
-    PutU64(f, 80, IMAGE_BASE);
-    PutU64(f, 88, IMAGE_BASE);
-    PutU64(f, 96, fileSize);
-    PutU64(f, 104, fileSize);
+    PutU16(f, 56, 3);
+    PutU32(f, 64, 1);                           // PT_LOAD, R | X: the headers and the code
+    PutU32(f, 68, 5);
+    PutU64(f, 96, codeEnd);
+    PutU64(f, 104, codeEnd);
     PutU64(f, 112, 0x1000);
-    PutU32(f, 120, 0x6474E551);                 // PT_GNU_STACK, R | W
+    PutU32(f, 120, 1);                          // PT_LOAD, R | W: the data
     PutU32(f, 124, 6);
-    PutU64(f, 168, 16);
+    PutU64(f, 128, codeEnd);
+    PutU64(f, 136, codeEnd);
+    PutU64(f, 144, codeEnd);
+    PutU64(f, 152, fileSize - codeEnd);
+    PutU64(f, 160, fileSize - codeEnd);
+    PutU64(f, 168, 0x1000);
+    PutU32(f, 176, 0x6474E551);                 // PT_GNU_STACK, R | W
+    PutU32(f, 180, 6);
+    PutU64(f, 224, 16);
     unsafe { return str_from(f, fileSize as usize); }
+}
+
+// A PE section header at `at`: name (low 4 bytes, then 4 more), sizes, address, flags.
+void PeSection(*u8 f, usize at, u64 name, u64 name2, u64 vsize, u64 rva, u64 rawSize, u64 flags) {
+    PutU32(f, at, name);
+    PutU32(f, at + 4, name2);
+    PutU32(f, at + 8, vsize);
+    PutU32(f, at + 12, rva);
+    PutU32(f, at + 16, rawSize);
+    PutU32(f, at + 20, rva);                    // PointerToRawData: files map 1:1
+    PutU32(f, at + 36, flags);
+}
+
+void BufU32(*Buf b, u64 v) {
+    BufByte(b, (v & 0xFF) as u8);
+    BufByte(b, (v >> 8 & 0xFF) as u8);
+    BufByte(b, (v >> 16 & 0xFF) as u8);
+    BufByte(b, (v >> 24 & 0xFF) as u8);
+}
+
+// The base relocation table: a DIR64 entry for each 8-byte absolute address, in blocks of
+// one page each. With none, one block of padding (the loader needs no work).
+str BaseRelocs(*Asm a, u64 dataStart) {
+    Buf r = BufNew(64);
+    usize total = 0;
+    *u64 rvas;
+    unsafe {
+        total = VecLen(&a.Fixups);
+        rvas = alloc((total + 1) * 8) as *u64;
+    }
+    usize n = 0;
+    unsafe {
+        for (usize i = 0; i < total; i++) {
+            Fixup x = *(VecAt(&a.Fixups, i) as *Fixup);
+            if (x.Kind != FX_ABS64) continue;
+            u64 at = x.At as u64;
+            if (x.InData) at += dataStart;
+            rvas[n] = PE_SECTION_RVA + at;
+            n++;
+        }
+    }
+    if (n == 0) {
+        unsafe {
+            BufU32(&r, PE_SECTION_RVA);
+            BufU32(&r, 12);
+            BufU32(&r, 0);                      // two ABSOLUTE (padding) entries
+            return BufView(&r);
+        }
+    }
+    usize i = 0;
+    unsafe {
+        while (i < n) {
+            u64 page = rvas[i] & ~0xFFF;
+            usize j = i;
+            while (j < n && rvas[j] & ~0xFFF == page) j++;
+            u64 count = (j - i) as u64;
+            u64 size = 8 + 2 * count;
+            if (count % 2 == 1) size += 2;
+            BufU32(&r, page);
+            BufU32(&r, size);
+            for (usize k = i; k < j; k++) {
+                u64 e = 0xA000 | (rvas[k] & 0xFFF);     // IMAGE_REL_BASED_DIR64
+                BufByte(&r, (e & 0xFF) as u8);
+                BufByte(&r, (e >> 8) as u8);
+            }
+            if (count % 2 == 1) {
+                BufByte(&r, 0);
+                BufByte(&r, 0);
+            }
+            i = j;
+        }
+        return BufView(&r);
+    }
 }

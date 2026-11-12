@@ -59,10 +59,10 @@ drop support for library types to reach Envo-S1's runtime).
 These are known and tracked. Programs the compilers produce today are for development,
 not for running untrusted input.
 
-- **Executable layout** (PLAN D2). Executables have one read-write-execute
-  section at a fixed base address, with no relocations: no W^X, no ASLR. The layout
-  was chosen to keep Stage 0 auditable; separate code and data sections and relocatable
-  images are tracked in [#80](https://github.com/envoscale/EnvoScale/issues/80).
+- **Stage 0's own executables** (PLAN D2) have one read-write-execute section at a
+  fixed base, to keep Stage 0 auditable. It is a bootstrap tool that reads source and
+  writes binaries; the programs Stages 1 and 2 build keep code and data apart (W^X) and
+  load at a random address (ASLR), PLAN D68.
 - **Write errors in programs.** The Envo-Core `write` built-in returns nothing, so a
   program cannot see a failed write (a full disk, a closed pipe). The compilers check
   their own output by reading it back. A `write` that reports errors belongs to the

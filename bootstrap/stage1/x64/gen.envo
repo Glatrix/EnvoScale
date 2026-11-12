@@ -600,6 +600,14 @@ str GenModule(*Module m, u32 target) {
         for (u32 i = 1; i < ECount(&m.Blocks); i++) MemStoreU32(VecAt(&g.BlockLabels, i as usize), NewLabel(&a));
         for (u32 i = 1; i < ECount(&m.Globals); i++) MemStoreU32(VecAt(&g.GlobalLabels, i as usize), NewLabel(&a));
         if (target == TARGET_WINDOWS) g.Imports = EmitImports(&a);
+        // Linux programs are position-independent: they relocate themselves first (PLAN D68)
+        u32 data0 = 0;
+        u32 relocs = 0;
+        if (target == TARGET_LINUX) {
+            data0 = NewLabel(&a);
+            relocs = NewLabel(&a);
+            RelocStub(&a, data0, relocs);
+        }
         // the entry point: __rt_init(initial stack pointer), __main(), __rt_exit(code)
         MovRR(&a, RAX, RSP);
         AluImm(&a, 4, RSP, -16);
@@ -632,6 +640,6 @@ str GenModule(*Module m, u32 target) {
             BindData(&a, LabelOf(&g.GlobalLabels, i));
             GenInit(&g, gl.Init, gl.Type);
         }
-        return WriteImage(&a, target, g.Imports);
+        return WriteImage(&a, target, g.Imports, data0, relocs);
     }
 }

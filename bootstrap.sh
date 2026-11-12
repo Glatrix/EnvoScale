@@ -180,6 +180,37 @@ do_test() {
     TMP=$(mktemp -d)
     trap 'rm -rf "$TMP"' EXIT
 
+    # Hardening (PLAN D68): Stage 1 and Stage 2 executables keep code and data apart (W^X)
+    # and can be loaded anywhere (ASLR): Linux ET_DYN with an R+X and an R+W segment;
+    # Windows with DYNAMIC_BASE and HIGH_ENTROPY_VA and no section both writable and executable
+    say ''
+    say 'hardening: W^X and ASLR in the executables of Stages 1 and 2'
+    u8at() { od -An -t u1 -j "$2" -N 1 "$1" | tr -d ' '; }
+    u16at() { echo $(( $(u8at "$1" "$2") + 256 * $(u8at "$1" $(($2 + 1))) )); }
+    u32at() { echo $(( $(u16at "$1" "$2") + 65536 * $(u16at "$1" $(($2 + 2))) )); }
+    h_hsrc="$ROOT/tests/spec/core-run/$(ls "$ROOT/tests/spec/core-run" | head -n 1)"
+    for h_comp in "$BUILD1/envoc1$(host_suffix)" "$BUILD2/envoc$(host_suffix)"; do
+        set +e
+        "$h_comp" build "$h_hsrc" -o "$TMP/h-linux" --target x86_64-linux > /dev/null 2>&1
+        "$h_comp" build "$h_hsrc" -o "$TMP/h-win.exe" --target x86_64-windows > /dev/null 2>&1
+        set -e
+        h_et=$(u16at "$TMP/h-linux" 16)
+        h_f0=$(u32at "$TMP/h-linux" 68)
+        h_f1=$(u32at "$TMP/h-linux" 124)
+        if [ "$h_et" -eq 3 ] && [ "$h_f0" -eq 5 ] && [ "$h_f1" -eq 6 ]; then pass; else bad "hardening: ELF from ${h_comp##*/}" "e_type $h_et, segment flags $h_f0 and $h_f1"; fi
+        h_pe=$(u32at "$TMP/h-win.exe" 60)
+        h_dll=$(u16at "$TMP/h-win.exe" $((h_pe + 94)))
+        h_ns=$(u16at "$TMP/h-win.exe" $((h_pe + 6)))
+        h_wx=0
+        h_i=0
+        while [ "$h_i" -lt "$h_ns" ]; do
+            h_c=$(u32at "$TMP/h-win.exe" $((0x16C + 40 * h_i)))
+            if [ $((h_c & 0x20000000)) -ne 0 ] && [ $((h_c & 0x80000000)) -ne 0 ]; then h_wx=1; fi
+            h_i=$((h_i + 1))
+        done
+        if [ $((h_dll & 0x60)) -eq 96 ] && [ "$h_ns" -ge 2 ] && [ "$h_wx" -eq 0 ]; then pass; else bad "hardening: PE from ${h_comp##*/}" "DllCharacteristics $h_dll, $h_ns sections, writable code: $h_wx"; fi
+    done
+
     # Phase B (PLAN D67): asm0 made from the hex seed with the OS's own tools assembles
     # itself, the other OS's asm0 and Stage 0 to exactly the bytes NASM gives
     say ''
