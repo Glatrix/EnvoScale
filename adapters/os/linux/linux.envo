@@ -358,6 +358,73 @@ i64 OpenForChild(str path) {
     return sys.Open(Ptr(p), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0x1A4);      // 0644
 }
 
+// ------------------------------------------------------------------ child processes
+
+// A spawned child (M14.3): its process and this program's ends of its pipes (-1 once
+// closed), and its exit code once reaped.
+struct Child {
+    i64 Pid;
+    i64 In;
+    i64 Out;
+    i64 Err;
+    bool Done;
+    i32 Code;
+}
+
+struct Children {
+    List<Child> All;
+}
+
+static usize ChildrenState = 0;
+static bool PipeSignalIgnored = false;
+
+*Children ChildTable() {
+    unsafe {
+        if (ChildrenState == 0) {
+            *Children p = alloc(sizeof(Children)) as *Children;
+            p[0] = new Children { All = List<Child>.New() };
+            ChildrenState = p as usize;
+        }
+        return ChildrenState as *Children;
+    }
+}
+
+// Writing to a pipe whose reader has gone would end this program with SIGPIPE: ignore
+// the signal, so the write fails with EPIPE instead.
+void IgnoreBrokenPipe() {
+    unsafe {
+        if (PipeSignalIgnored) return;
+        u64[4] act;             // handler SIG_IGN, no flags, no restorer, an empty mask
+        act[0] = 1;
+        act[1] = 0;
+        act[2] = 0;
+        act[3] = 0;
+        Sys6(sys.RT_SIGACTION, 13, Ptr(&act[0] as *u8), 0, 8, 0, 0);
+        PipeSignalIgnored = true;
+    }
+}
+
+i32 ExitCodeOf(i64 status) {
+    i64 sig = status & 0x7F;
+    if (sig == 0) return ((status >> 8) & 0xFF) as i32;
+    return (128 + sig) as i32;
+}
+
+void CloseFd(ref i64 fd) {
+    if (fd >= 0) Sys(sys.CLOSE, fd, 0, 0, 0);
+    fd = -1;
+}
+
+// The child for handle h, or a negative index.
+isize ChildIndex(u64 h) {
+    unsafe {
+        *Children t = ChildTable();
+        if (h == 0 || h > t[0].All.Len() as u64) return -1;
+        if (t[0].All.AsSlice()[(h - 1) as usize].Pid == 0) return -1;
+        return (h - 1) as isize;
+    }
+}
+
 impl IProcess for Process {
     Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath) {
         *u8 wdir = CPath(workDir);
@@ -436,6 +503,190 @@ impl IProcess for Process {
         i64 sig = status & 0x7F;
         if (sig == 0) return Ok(((status >> 8) & 0xFF) as i32);
         return Ok((128 + sig) as i32);
+    }
+
+    Result<u64, IoError> Spawn(ref this, str program, str[] args, str workDir) {
+        *u8 wdir = CPath(workDir);
+        unsafe {
+            if (CPath(program) as usize == 0 || wdir as usize == 0) return Err(IoError.Invalid);
+        }
+        if (workDir.Len > 0 && Kind(workDir) != S_IFDIR) return Err(IoError.NotFound);
+        foreach (var a in args) {
+            unsafe {
+                if (CPath(a) as usize == 0) return Err(IoError.Invalid);
+            }
+        }
+        string exe = Resolve(program);
+        if (exe.Len() == 0) return Err(IoError.NotFound);
+        IgnoreBrokenPipe();
+        string env = Environ();
+        i32[2] pin;
+        i32[2] pout;
+        i32[2] perr;
+        unsafe {
+            // three pipes, closed on exec: the child gets its ends by dup2, which clears that
+            if (Sys(sys.PIPE2, Ptr(&pin[0] as *u8), O_CLOEXEC, 0, 0) < 0) return Err(IoError.Other);
+            if (Sys(sys.PIPE2, Ptr(&pout[0] as *u8), O_CLOEXEC, 0, 0) < 0) {
+                Sys(sys.CLOSE, pin[0] as i64, 0, 0, 0);
+                Sys(sys.CLOSE, pin[1] as i64, 0, 0, 0);
+                return Err(IoError.Other);
+            }
+            if (Sys(sys.PIPE2, Ptr(&perr[0] as *u8), O_CLOEXEC, 0, 0) < 0) {
+                Sys(sys.CLOSE, pin[0] as i64, 0, 0, 0);
+                Sys(sys.CLOSE, pin[1] as i64, 0, 0, 0);
+                Sys(sys.CLOSE, pout[0] as i64, 0, 0, 0);
+                Sys(sys.CLOSE, pout[1] as i64, 0, 0, 0);
+                return Err(IoError.Other);
+            }
+            *i64 argv = alloc((args.Len + 2) * 8) as *i64;
+            argv[0] = Ptr(CPath(program));
+            for (usize i = 0; i < args.Len; i++) argv[i + 1] = Ptr(CPath(args[i]));
+            argv[args.Len + 1] = 0;
+            str es = env.AsStr();
+            usize count = 0;
+            for (usize i = 0; i < es.Len; i++) {
+                if (es[i] == 0) count++;
+            }
+            *u8 ebuf = alloc(es.Len + 1);
+            for (usize i = 0; i < es.Len; i++) ebuf[i] = es[i];
+            ebuf[es.Len] = 0;
+            *i64 envp = alloc((count + 1) * 8) as *i64;
+            usize at = 0;
+            for (usize k = 0; k < count; k++) {
+                envp[k] = Ptr(&ebuf[at]);
+                while (ebuf[at] != 0) at++;
+                at++;
+            }
+            envp[count] = 0;
+            *u8 path = CPath(exe.AsStr());
+            i64 pid = sys.Fork();
+            if (pid == 0) {
+                sys.Dup2(pin[0] as i64, 0);
+                sys.Dup2(pout[1] as i64, 1);
+                sys.Dup2(perr[1] as i64, 2);
+                if (workDir.Len > 0 && Sys(sys.CHDIR, Ptr(wdir), 0, 0, 0) < 0) Sys(sys.EXIT_GROUP, 127, 0, 0, 0);
+                Sys(sys.EXECVE, Ptr(path), argv as isize as i64, envp as isize as i64, 0);
+                Sys(sys.EXIT_GROUP, 127, 0, 0, 0);
+            }
+            Sys(sys.CLOSE, pin[0] as i64, 0, 0, 0);
+            Sys(sys.CLOSE, pout[1] as i64, 0, 0, 0);
+            Sys(sys.CLOSE, perr[1] as i64, 0, 0, 0);
+            if (pid < 0) {
+                Sys(sys.CLOSE, pin[1] as i64, 0, 0, 0);
+                Sys(sys.CLOSE, pout[0] as i64, 0, 0, 0);
+                Sys(sys.CLOSE, perr[0] as i64, 0, 0, 0);
+                return Err(ErrorOf(pid));
+            }
+            *Children t = ChildTable();
+            t[0].All.Push(new Child { Pid = pid, In = pin[1] as i64, Out = pout[0] as i64, Err = perr[0] as i64, Done = false, Code = 0 });
+            return Ok(t[0].All.Len() as u64);
+        }
+    }
+
+    Result<usize, IoError> Send(ref this, u64 child, u8[] bytes) {
+        isize k = ChildIndex(child);
+        if (k < 0) return Err(IoError.Invalid);
+        unsafe {
+            *Children t = ChildTable();
+            i64 fd = t[0].All.AsSlice()[k as usize].In;
+            if (fd < 0) return Err(IoError.Other);
+            usize done = 0;
+            while (done < bytes.Len) {
+                i64 n = Sys(sys.WRITE, fd, Ptr(&bytes[done]), (bytes.Len - done) as i64, 0);
+                if (n == -4) continue;          // EINTR
+                if (n <= 0) return Err(IoError.Other);
+                done += n as usize;
+            }
+            return Ok(done);
+        }
+    }
+
+    void EndInput(ref this, u64 child) {
+        isize k = ChildIndex(child);
+        if (k < 0) return;
+        unsafe {
+            *Children t = ChildTable();
+            mut Child[] cs = t[0].All.AsMutSlice();
+            CloseFd(ref cs[k as usize].In);
+        }
+    }
+
+    isize Receive(ref this, u64 child, u32 stream, mut u8[] into) {
+        isize k = ChildIndex(child);
+        if (k < 0) return -1;
+        unsafe {
+            *Children t = ChildTable();
+            mut Child[] cs = t[0].All.AsMutSlice();
+            i64 fd = cs[k as usize].Out;
+            if (stream == 2) fd = cs[k as usize].Err;
+            if (fd < 0) return -1;
+            if (into.Len == 0) return 0;
+            u8[8] pfd;          // struct pollfd: the descriptor, events POLLIN
+            pfd[0] = (fd & 0xFF) as u8;
+            pfd[1] = ((fd >> 8) & 0xFF) as u8;
+            pfd[2] = ((fd >> 16) & 0xFF) as u8;
+            pfd[3] = ((fd >> 24) & 0xFF) as u8;
+            pfd[4] = 1;
+            pfd[5] = 0;
+            pfd[6] = 0;
+            pfd[7] = 0;
+            if (sys.Poll(Ptr(&pfd[0]), 1, 0) <= 0) return 0;
+            isize n = read(fd as i32, &into[0], into.Len);
+            if (n > 0) return n;
+            if (n == 0) {
+                if (stream == 2) CloseFd(ref cs[k as usize].Err);
+                else CloseFd(ref cs[k as usize].Out);
+                return -1;
+            }
+            return 0;
+        }
+    }
+
+    i32? Exited(ref this, u64 child) {
+        isize k = ChildIndex(child);
+        if (k < 0) return None;
+        unsafe {
+            *Children t = ChildTable();
+            mut Child[] cs = t[0].All.AsMutSlice();
+            if (cs[k as usize].Done) return Some(cs[k as usize].Code);
+            i64 status = 0;
+            i64 r = Sys(sys.WAIT4, cs[k as usize].Pid, &status as isize as i64, 1, 0);     // WNOHANG
+            if (r != cs[k as usize].Pid) return None;
+            cs[k as usize].Done = true;
+            cs[k as usize].Code = ExitCodeOf(status);
+            return Some(cs[k as usize].Code);
+        }
+    }
+
+    void Kill(ref this, u64 child) {
+        isize k = ChildIndex(child);
+        if (k < 0) return;
+        unsafe {
+            *Children t = ChildTable();
+            Child c = t[0].All.AsSlice()[k as usize];
+            if (!c.Done) Sys(sys.KILL, c.Pid, 9, 0, 0);
+        }
+    }
+
+    void Release(ref this, u64 child) {
+        isize k = ChildIndex(child);
+        if (k < 0) return;
+        unsafe {
+            *Children t = ChildTable();
+            mut Child[] cs = t[0].All.AsMutSlice();
+            usize i = k as usize;
+            CloseFd(ref cs[i].In);
+            CloseFd(ref cs[i].Out);
+            CloseFd(ref cs[i].Err);
+            if (!cs[i].Done) {
+                // still running: end it, and reap it so it leaves no zombie
+                Sys(sys.KILL, cs[i].Pid, 9, 0, 0);
+                i64 status = 0;
+                while (Sys(sys.WAIT4, cs[i].Pid, &status as isize as i64, 0, 0) == -4) {}
+                cs[i].Done = true;
+            }
+            cs[i].Pid = 0;
+        }
     }
 }
 

@@ -1,0 +1,39 @@
+// std.process.Spawn through the native adapter: this program starts itself as a child
+// that reads its input to the end and writes it back in capitals, exiting with 3; the
+// parent sends, reads the output without waiting, and sees the exit code.
+// vm: skip (the child is this program as a native executable)
+// expect: child said: HELLO, PIPES
+// expect: exit code 3
+use std.process;
+use std.env;
+use std.io;
+use alloc.text;
+use core.text as ct;
+
+if (env.ArgCount() > 1 && ct.Compare(env.Arg(1), "child") == 0) {
+    string all = io.ReadAll();
+    string up = string.New();
+    foreach (var b in all.AsStr()) {
+        if (b >= 'a' && b <= 'z') up.AppendByte(b - 32); else up.AppendByte(b);
+    }
+    write(1, up.AsStr());
+    exit(3);
+}
+List<str> args = List<str>.New();
+args.Push("child");
+process.Child c = process.Spawn(env.Arg(0), args.AsSlice(), "").Unwrap();
+c.Send("hello, pipes");
+c.EndInput();
+string got = string.New();
+u64 spins = 0;
+while (c.Receive(1, ref got) && spins < 200000000) spins++;
+i32? code = c.Exited();
+while (code.IsNone() && spins < 400000000) {
+    spins++;
+    code = c.Exited();
+}
+write(1, "child said: ");
+print(got.AsStr());
+write(1, "exit code ");
+print(text.Int(code.Unwrap() as i64).AsStr());
+c.Release();

@@ -29,3 +29,65 @@ public Result<i32, IoError> RunIn(str program, str[] args, str workDir, str outP
 public Result<i32, IoError> RunWith<P>(ref P proc, str program, str[] args, str workDir, str outPath, str errPath) where P : IProcess {
     return proc.Run(program, args, workDir, outPath, errPath);
 }
+
+// A program started by Spawn, with pipes to its standard streams (M14.3). Its output is
+// read without waiting (Receive), so a program with a window or a server keeps running
+// while the child works. Release it once it has ended.
+public struct Child {
+    u64 H;
+
+    // Writes text to the child's standard input; false once the child stopped reading.
+    public bool Send(in this, str text) {
+        var p = platform.Process();
+        unsafe {
+            u8[] bytes = slice_from(text.Ptr, text.Len);
+            return p.Send(this.H, bytes).IsOk();
+        }
+    }
+
+    // Ends the child's standard input.
+    public void EndInput(in this) {
+        var p = platform.Process();
+        p.EndInput(this.H);
+    }
+
+    // What the child wrote to stream (1 output, 2 error) since the last call, appended to
+    // into, without waiting. False once that stream has ended and all of it was read.
+    public bool Receive(in this, u32 stream, ref string into) {
+        var p = platform.Process();
+        u8[4096] buf;
+        while (true) {
+            isize n = p.Receive(this.H, stream, buf[0..4096]);
+            if (n < 0) return false;
+            if (n == 0) return true;
+            for (usize i = 0; i < n as usize; i++) into.AppendByte(buf[i]);
+        }
+        return true;
+    }
+
+    // The exit code once the child has ended; None while it runs.
+    public i32? Exited(in this) {
+        var p = platform.Process();
+        return p.Exited(this.H);
+    }
+
+    // Ends the child at once.
+    public void Kill(in this) {
+        var p = platform.Process();
+        p.Kill(this.H);
+    }
+
+    // Forgets the child and closes its pipes (ending it, if it still runs).
+    public void Release(in this) {
+        var p = platform.Process();
+        p.Release(this.H);
+    }
+}
+
+// Starts program with args in workDir ("" for this program's), its standard streams
+// piped to this program.
+public Result<Child, IoError> Spawn(str program, str[] args, str workDir) {
+    var p = platform.Process();
+    u64 h = p.Spawn(program, args, workDir)?;
+    return Ok(new Child { H = h });
+}

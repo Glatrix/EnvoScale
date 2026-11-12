@@ -91,6 +91,29 @@ public interface IProcess {
     // NotFound if there is no such program, no directory workDir, or a file's directory
     // does not exist.
     Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath);
+
+    // Child processes with pipes (M14.3). Spawn starts program (found as Run finds it)
+    // with args in workDir ("" for this program's), its standard input, output and error
+    // connected to this program by pipes, and gives the child's handle. NotFound as for
+    // Run; Other on a system without processes.
+    Result<u64, IoError> Spawn(ref this, str program, str[] args, str workDir);
+    // Writes all of bytes to the child's standard input, waiting while the pipe is full.
+    // Other once the child has stopped reading.
+    Result<usize, IoError> Send(ref this, u64 child, u8[] bytes);
+    // Ends the child's standard input: it reads the end of its input.
+    void EndInput(ref this, u64 child);
+    // What the child wrote to stream (1 its output, 2 its error) without waiting: up to
+    // into.Len bytes; 0 when nothing is waiting; -1 once the stream has ended and all of
+    // it has been read.
+    isize Receive(ref this, u64 child, u32 stream, mut u8[] into);
+    // The child's exit code once it has ended, without waiting (on Linux a child ended by
+    // signal n gives 128 + n); None while it runs.
+    i32? Exited(ref this, u64 child);
+    // Ends the child at once.
+    void Kill(ref this, u64 child);
+    // Forgets the child and closes what is left of its pipes. Call it once the child has
+    // ended; the handle is not valid after.
+    void Release(ref this, u64 child);
 }
 
 // TCP over IPv4 and name lookup (PLAN D40). Handles are opaque numbers the adapter gives.

@@ -1,0 +1,37 @@
+// std.process.Spawn with the reference adapters: the echoing program writes its
+// arguments, then its input as it arrives; it ends when its input ends, with its number
+// of arguments.
+// os: none
+// expect: running: yes
+// expect: output: a|b|hello|
+// expect: error: err|
+// expect: exit code 2
+use std.process;
+use alloc.text;
+
+List<str> args = List<str>.New();
+args.Push("a");
+args.Push("b");
+process.Child c = process.Spawn("program", args.AsSlice(), "").Unwrap();
+if (c.Exited().IsNone()) print("running: yes");
+c.Send("hello\n");
+c.EndInput();
+string got = string.New();
+string err = string.New();
+while (c.Receive(1, ref got)) {}
+while (c.Receive(2, ref err)) {}
+string shown = string.New();
+foreach (var b in got.AsStr()) {
+    if (b == '\n') shown.AppendByte('|'); else shown.AppendByte(b);
+}
+write(1, "output: ");
+print(shown.AsStr());
+string eshown = string.New();
+foreach (var b in err.AsStr()) {
+    if (b == '\n') eshown.AppendByte('|'); else eshown.AppendByte(b);
+}
+write(1, "error: ");
+print(eshown.AsStr());
+write(1, "exit code ");
+print(text.Int(c.Exited().Unwrap() as i64).AsStr());
+c.Release();

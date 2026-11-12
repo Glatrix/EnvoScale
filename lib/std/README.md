@@ -15,7 +15,8 @@ OS-level services built on ports, with no platform code
   `FromUnixSeconds`, `Iso`, `Stopwatch`.
 - `std.env`: `ArgCount`, `Arg`, `Args`, `Var`, `CurrentDir`.
 - `std.process`: `Run`, `RunTo` (output to a file), `RunIn` (a working directory and
-  output files), `RunWith`.
+  output files), `RunWith`; `Spawn` gives a `Child` with pipes to its standard streams
+  (`Send`, `EndInput`, `Receive` without waiting, `Exited`, `Kill`, `Release`; M14.3).
 - `std.random`: `Fill`, `U64`, `Below` (the system's generator) and `Rng` (seeded).
 - `std.clipboard`: `Text`, `SetText` (the system clipboard's text; PLAN D73).
 

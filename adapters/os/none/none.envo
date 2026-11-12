@@ -428,19 +428,35 @@ struct ProcState {
     *FsState Fs;
     Set<string> Programs;
     string Runs;
+    List<Child> Children;
+}
+
+// A spawned child of the reference adapter: its output so far (its arguments, a line
+// each, then its input as it arrives), its error output, how much of each was read, and
+// whether its input has ended (then it has ended, with its number of arguments).
+struct Child {
+    bool Live;
+    string Out;
+    string Err;
+    usize OutRead;
+    usize ErrRead;
+    bool InputEnded;
+    bool Killed;
+    i32 Code;
 }
 
 // Programs that exist only by name. Each one echoes: it writes each of its arguments
 // and a newline to standard output, "err" and a newline to standard error, and exits
 // with its number of arguments. Their output files are written to a FileSystem of this
-// module; output not sent to a file goes to this process's own streams.
+// module; output not sent to a file goes to this process's own streams. A spawned one
+// (Spawn) also copies its input to its output, and ends when its input ends.
 public struct Process {
     *ProcState State;
 
     public static Process On(FileSystem fs) {
         unsafe {
             *ProcState p = alloc(sizeof(ProcState)) as *ProcState;
-            p[0] = new ProcState { Fs = fs.State, Programs = Set<string>.New(), Runs = string.New() };
+            p[0] = new ProcState { Fs = fs.State, Programs = Set<string>.New(), Runs = string.New(), Children = List<Child>.New() };
             return new Process { State = p };
         }
     }
@@ -499,6 +515,95 @@ impl IProcess for Process {
             this.State[0].Runs.AppendByte('\n');
         }
         return Ok(args.Len as i32);
+    }
+
+    Result<u64, IoError> Spawn(ref this, str program, str[] args, str workDir) {
+        if (BadPath(program) || BadPath(workDir)) return Err(IoError.Invalid);
+        unsafe {
+            if (!this.State[0].Programs.Has(string.From(program))) return Err(IoError.NotFound);
+            FileSystem fs = new FileSystem { State = this.State[0].Fs };
+            if (!fs.IsDir(workDir)) return Err(IoError.NotFound);
+            Child c = new Child { Live = true, Out = string.New(), Err = string.From("err\n"), OutRead = 0, ErrRead = 0, InputEnded = false, Killed = false, Code = args.Len as i32 };
+            foreach (var a in args) {
+                c.Out.Append(a);
+                c.Out.AppendByte('\n');
+            }
+            this.State[0].Children.Push(c);
+            return Ok(this.State[0].Children.Len() as u64);
+        }
+    }
+
+    Result<usize, IoError> Send(ref this, u64 child, u8[] bytes) {
+        unsafe {
+            if (child == 0 || child > this.State[0].Children.Len() as u64) return Err(IoError.Invalid);
+            mut Child[] cs = this.State[0].Children.AsMutSlice();
+            usize k = (child - 1) as usize;
+            if (!cs[k].Live || cs[k].InputEnded || cs[k].Killed) return Err(IoError.Other);
+            foreach (var b in bytes) cs[k].Out.AppendByte(b);
+        }
+        return Ok(bytes.Len);
+    }
+
+    void EndInput(ref this, u64 child) {
+        unsafe {
+            if (child == 0 || child > this.State[0].Children.Len() as u64) return;
+            mut Child[] cs = this.State[0].Children.AsMutSlice();
+            cs[(child - 1) as usize].InputEnded = true;
+        }
+    }
+
+    isize Receive(ref this, u64 child, u32 stream, mut u8[] into) {
+        unsafe {
+            if (child == 0 || child > this.State[0].Children.Len() as u64) return -1;
+            mut Child[] cs = this.State[0].Children.AsMutSlice();
+            usize k = (child - 1) as usize;
+            str all = cs[k].Out.AsStr();
+            usize at = cs[k].OutRead;
+            if (stream == 2) {
+                all = cs[k].Err.AsStr();
+                at = cs[k].ErrRead;
+            }
+            if (at >= all.Len) {
+                if (cs[k].InputEnded || cs[k].Killed) return -1;
+                return 0;
+            }
+            usize n = all.Len - at;
+            if (n > into.Len) n = into.Len;
+            for (usize i = 0; i < n; i++) into[i] = all[at + i];
+            if (stream == 2) cs[k].ErrRead = at + n;
+            else cs[k].OutRead = at + n;
+            return n as isize;
+        }
+    }
+
+    i32? Exited(ref this, u64 child) {
+        unsafe {
+            if (child == 0 || child > this.State[0].Children.Len() as u64) return None;
+            Child[] cs = this.State[0].Children.AsSlice();
+            usize k = (child - 1) as usize;
+            if (cs[k].Killed) return Some(137);
+            if (cs[k].InputEnded) return Some(cs[k].Code);
+        }
+        return None;
+    }
+
+    void Kill(ref this, u64 child) {
+        unsafe {
+            if (child == 0 || child > this.State[0].Children.Len() as u64) return;
+            mut Child[] cs = this.State[0].Children.AsMutSlice();
+            cs[(child - 1) as usize].Killed = true;
+        }
+    }
+
+    void Release(ref this, u64 child) {
+        unsafe {
+            if (child == 0 || child > this.State[0].Children.Len() as u64) return;
+            mut Child[] cs = this.State[0].Children.AsMutSlice();
+            usize k = (child - 1) as usize;
+            cs[k].Live = false;
+            cs[k].Out = string.New();
+            cs[k].Err = string.New();
+        }
     }
 }
 

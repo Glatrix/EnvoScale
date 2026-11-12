@@ -222,6 +222,13 @@ public struct Process {
 
 impl IProcess for Process {
     Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath) => Err(IoError.Denied);
+    Result<u64, IoError> Spawn(ref this, str program, str[] args, str workDir) => Err(IoError.Other);
+    Result<usize, IoError> Send(ref this, u64 child, u8[] bytes) => Err(IoError.Other);
+    void EndInput(ref this, u64 child) {}
+    isize Receive(ref this, u64 child, u32 stream, mut u8[] into) => -1;
+    i32? Exited(ref this, u64 child) => Some(-1);
+    void Kill(ref this, u64 child) {}
+    void Release(ref this, u64 child) {}
 }
 
 // The network goes through the browser's own APIs (fetch, WebSocket), which come later.

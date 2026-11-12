@@ -23,6 +23,10 @@ public const i64 RECVFROM = 207;
 public const i64 BIND = 200;
 public const i64 LISTEN = 201;
 public const i64 GETSOCKNAME = 204;
+public const i64 PIPE2 = 59;
+public const i64 KILL = 129;
+public const i64 WRITE = 64;
+public const i64 RT_SIGACTION = 134;
 public const i64 SETSOCKOPT = 208;
 
 public const i64 O_DIRECTORY = 0x4000;
