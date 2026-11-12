@@ -1,0 +1,6 @@
+#eon 1
+// A library package, used by path (app) and from a folder registry (app2, app3).
+package {
+    name = "greet"
+    version = "1.0.0"
+}

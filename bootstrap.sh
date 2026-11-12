@@ -844,7 +844,7 @@ EOF_ERR
         else bad 'website pages' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
-    say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg'
+    say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg, packages'
     erun="$ROOT/build/run-envo"
     rm -rf "$erun"
     mkdir -p "$erun"
@@ -886,6 +886,33 @@ EOF_ERR
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     tr -d '\r' < "$ROOT/tests/envo/dbg/expected.txt" > "$TMP/expected"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass; else bad 'envo dbg' "exit $rc: $(diff "$TMP/expected" "$TMP/actual" | head -n 10) $(cat "$TMP/err")"; fi
+    # packages (PLAN D66; tests/envo/pkg): a path dependency; a signed archive in a folder
+    # registry, fetched into a lock; a changed archive and an untrusted key refused
+    rm -rf "$erun/pk"
+    cp -r "$ROOT/tests/envo/pkg" "$erun/pk"
+    envo_do run pk/app
+    if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, app!' ]; then pass; else bad 'packages: a path dependency' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    envo_do key pk/publisher.key
+    pub=$(sed -n 's/^public key //p' "$TMP/out" | tr -d '\r')
+    envo_do key pk/other.key
+    other=$(sed -n 's/^public key //p' "$TMP/out" | tr -d '\r')
+    sed "s/KEY/$pub/" "$erun/pk/app2/envo.envon" > "$TMP/m" && cp "$TMP/m" "$erun/pk/app2/envo.envon"
+    sed "s/KEY/$other/" "$erun/pk/app3/envo.envon" > "$TMP/m" && cp "$TMP/m" "$erun/pk/app3/envo.envon"
+    envo_do publish pk/greet --registry pk/reg --key pk/publisher.key
+    prc=$rc
+    envo_do publish pk/greet --registry pk/reg
+    if [ "$prc" -eq 0 ] && [ "$rc" -eq 1 ] && [ -f "$erun/pk/reg/greet/1.0.0.envopkg" ] && [ -f "$erun/pk/reg/greet/1.0.0.sig" ]; then pass; else bad 'packages: envo publish (once per version)' "exit $prc, then $rc: $(cat "$TMP/err")"; fi
+    envo_do run pk/app2
+    urc=$rc
+    envo_do fetch pk/app2
+    frc=$rc
+    envo_do run pk/app2
+    if [ "$urc" -eq 1 ] && [ "$frc" -eq 0 ] && [ -f "$erun/pk/app2/envo.lock.envon" ] && [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, app2!' ]; then pass; else bad 'packages: envo fetch, the lock, a registry dependency' "exit $urc, $frc, $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    envo_do fetch pk/app3
+    if [ "$rc" -eq 1 ] && grep -q 'no signature by a trusted key' "$TMP/err"; then pass; else bad 'packages: an untrusted signature' "exit $rc: $(cat "$TMP/err")"; fi
+    printf ' ' >> "$erun/pk/reg/greet/1.0.0.envopkg"
+    envo_do run pk/app2
+    if [ "$rc" -eq 1 ] && grep -q 'the registry.s copy changed' "$TMP/err"; then pass; else bad 'packages: a changed archive' "exit $rc: $(cat "$TMP/err")"; fi
     # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
     set +e
     printf 'print("hello")\ni32 Twice(i32 x) {\n    return x * 2;\n}\nuse alloc.text;\nprint(text.Int(Twice(21) as i64).AsStr())\nu8 bad = nope;\n:quit\n' | (cd "$erun" && "$envo" repl) > "$TMP/out" 2> "$TMP/err"

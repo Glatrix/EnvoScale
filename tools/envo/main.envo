@@ -42,6 +42,12 @@ void EnvoUsage(i32 fd) {
     write(fd, "  fuzz target.envo [--runs N] [--seed N] [--max-len N] [--corpus dir]\n");
     write(fd, "                          coverage-guided fuzzing: the target reads the file\n");
     write(fd, "                          named by its first argument; a panic is a crash\n");
+    write(fd, "  fetch [dir]             resolve the package's dependencies, get registry ones,\n");
+    write(fd, "                          and write envo.lock.envon\n");
+    write(fd, "  pack [dir]              the package's archive in build/, and its SHA-256\n");
+    write(fd, "  publish [dir] --registry <folder> [--key <file>]\n");
+    write(fd, "                          add the package to a folder registry, signed\n");
+    write(fd, "  key <file>              a new Ed25519 key for signing; prints its public key\n");
     write(fd, "  dbg [dir | file.envo] [-- args]\n");
     write(fd, "                          debug in the script runtime: breakpoints, stepping,\n");
     write(fd, "                          the call stack and locals (commands on stdin)\n");
@@ -215,6 +221,8 @@ Plan PlanBuild(in BuildOpts o) {
         EnvoFail(msg.AsStr(), 1);
     }
     foreach (var f in pkg.Sources.AsSlice()) p.Files.Push(string.From(f.AsStr()));
+    List<string> deps = DepSources(pkg);
+    foreach (var f in deps.AsSlice()) p.Files.Push(string.From(f.AsStr()));
     if (o.Output.Len() > 0) {
         p.Output = string.From(o.Output.AsStr());
     } else {
@@ -386,6 +394,10 @@ if (Eq(command, "repl")) return CmdEnvoRepl(2);
 if (Eq(command, "prof")) return CmdEnvoProf(2);
 if (Eq(command, "fuzz")) return CmdEnvoFuzz(2);
 if (Eq(command, "dbg")) return CmdEnvoDbg(2);
+if (Eq(command, "fetch")) return CmdEnvoFetch(2);
+if (Eq(command, "pack")) return CmdEnvoPack(2);
+if (Eq(command, "publish")) return CmdEnvoPublish(2);
+if (Eq(command, "key")) return CmdEnvoKey(2);
 string msg = string.From("unknown command '");
 msg.Append(command);
 msg.Append("'; run `envo help` for the list");

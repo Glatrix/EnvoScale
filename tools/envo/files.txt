@@ -12,3 +12,5 @@ tools/envo/repl.envo
 tools/envo/prof.envo
 tools/envo/fuzz.envo
 tools/envo/dbg.envo
+tools/envo/registry.envo
+tools/envo/deps.envo

@@ -809,7 +809,7 @@ function Invoke-Test {
         if ($ok) { Pass 'website pages' } else { Bad 'website pages' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
-    Say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg'
+    Say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg, packages'
     $envoRun = Join-Path $Root 'build\run-envo'
     if (Test-Path -LiteralPath $envoRun) { Remove-Item -Recurse -Force $envoRun }
     New-Item -ItemType Directory -Force $envoRun | Out-Null
@@ -858,6 +858,33 @@ function Invoke-Test {
     $p.WaitForExit()
     $want = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'tests\envo\dbg\expected.txt')))
     if ($p.ExitCode -eq 0 -and (Normalize $outTask.Result) -eq $want) { Pass 'envo dbg' } else { Bad 'envo dbg' "exit $($p.ExitCode): $($outTask.Result) $($errTask.Result)" }
+    # packages (PLAN D66; tests\envo\pkg): a path dependency; a signed archive in a folder
+    # registry, fetched into a lock; a changed archive and an untrusted key refused
+    $pk = Join-Path $envoRun 'pk'
+    if (Test-Path -LiteralPath $pk) { Remove-Item -Recurse -Force $pk }
+    Copy-Item -Recurse (Join-Path $Root 'tests\envo\pkg') $pk
+    $r = Invoke-Tool $envo @('run', 'pk/app') $envoRun
+    if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, app!`n") { Pass 'packages: a path dependency' } else { Bad 'packages: a path dependency' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    $r = Invoke-Tool $envo @('key', 'pk/publisher.key') $envoRun
+    $pub = ($r.Out.Trim() -replace '^public key ', '')
+    $r = Invoke-Tool $envo @('key', 'pk/other.key') $envoRun
+    $other = ($r.Out.Trim() -replace '^public key ', '')
+    foreach ($pair in @(@('app2', $pub), @('app3', $other))) {
+        $m = Join-Path $pk "$($pair[0])\envo.envon"
+        [IO.File]::WriteAllText($m, ([IO.File]::ReadAllText($m) -creplace 'KEY', $pair[1]), $Utf8)
+    }
+    $r1 = Invoke-Tool $envo @('publish', 'pk/greet', '--registry', 'pk/reg', '--key', 'pk/publisher.key') $envoRun
+    $r2 = Invoke-Tool $envo @('publish', 'pk/greet', '--registry', 'pk/reg') $envoRun
+    if ($r1.Code -eq 0 -and $r2.Code -eq 1 -and (Test-Path -LiteralPath (Join-Path $pk 'reg\greet\1.0.0.envopkg')) -and (Test-Path -LiteralPath (Join-Path $pk 'reg\greet\1.0.0.sig'))) { Pass 'packages: envo publish (once per version)' } else { Bad 'packages: envo publish (once per version)' "exit $($r1.Code), then $($r2.Code): $($r1.Err.Trim()) $($r2.Err.Trim())" }
+    $r1 = Invoke-Tool $envo @('run', 'pk/app2') $envoRun
+    $r2 = Invoke-Tool $envo @('fetch', 'pk/app2') $envoRun
+    $r = Invoke-Tool $envo @('run', 'pk/app2') $envoRun
+    if ($r1.Code -eq 1 -and $r2.Code -eq 0 -and (Test-Path -LiteralPath (Join-Path $pk 'app2\envo.lock.envon')) -and $r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, app2!`n") { Pass 'packages: envo fetch, the lock, a registry dependency' } else { Bad 'packages: envo fetch, the lock, a registry dependency' "exit $($r1.Code), $($r2.Code), $($r.Code): $($r.Out.Trim()) $($r.Err.Trim()) $($r2.Err.Trim())" }
+    $r = Invoke-Tool $envo @('fetch', 'pk/app3') $envoRun
+    if ($r.Code -eq 1 -and $r.Err.Contains('no signature by a trusted key')) { Pass 'packages: an untrusted signature' } else { Bad 'packages: an untrusted signature' "exit $($r.Code): $($r.Err.Trim())" }
+    [IO.File]::AppendAllText((Join-Path $pk 'reg\greet\1.0.0.envopkg'), ' ')
+    $r = Invoke-Tool $envo @('run', 'pk/app2') $envoRun
+    if ($r.Code -eq 1 -and $r.Err.Contains("the registry's copy changed")) { Pass 'packages: a changed archive' } else { Bad 'packages: a changed archive' "exit $($r.Code): $($r.Err.Trim())" }
     # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
     $replIn = "print(`"hello`")`ni32 Twice(i32 x) {`n    return x * 2;`n}`nuse alloc.text;`nprint(text.Int(Twice(21) as i64).AsStr())`nu8 bad = nope;`n:quit`n"
     $psi = New-Object System.Diagnostics.ProcessStartInfo

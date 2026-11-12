@@ -1,0 +1,62 @@
+// Package registries (PLAN D66): where `envo fetch` gets archives and `envo publish` puts
+// them, through the IRegistry port. A registry holds, per package and version, the
+// archive (.envopkg) and optionally its signature (.sig: the Ed25519 signature of the
+// archive's SHA-256 in hex, itself in hex).
+//
+// RegistryFolder is the adapter for a folder (local, or a shared drive):
+//     <root>/<name>/<version>.envopkg
+//     <root>/<name>/<version>.sig
+// A network registry is another adapter of the same port; running one is the owner's
+// decision (STATUS).
+use std.fs;
+use std.path;
+use ports.{IoError};
+
+interface IRegistry {
+    // The archive of name at version.
+    Result<string, IoError> Archive(ref this, str name, str version);
+    // Its signature, if the registry has one.
+    Result<string, IoError> Signature(ref this, str name, str version);
+    // Adds name at version; a version once published is never replaced.
+    bool Publish(ref this, str name, str version, str archive, str signature);
+}
+
+struct RegistryFolder {
+    string Root;
+}
+
+impl RegistryFolder {
+    static RegistryFolder At(str root) => new RegistryFolder { Root = string.From(root) };
+
+    string FileOf(in this, str name, str version, str ext) {
+        string dir = path.Join(this.Root.AsStr(), name);
+        string file = string.From(version);
+        file.Append(ext);
+        return path.Join(dir.AsStr(), file.AsStr());
+    }
+}
+
+impl IRegistry for RegistryFolder {
+    Result<string, IoError> Archive(ref this, str name, str version) {
+        string f = this.FileOf(name, version, ".envopkg");
+        return fs.ReadText(f.AsStr());
+    }
+
+    Result<string, IoError> Signature(ref this, str name, str version) {
+        string f = this.FileOf(name, version, ".sig");
+        return fs.ReadText(f.AsStr());
+    }
+
+    bool Publish(ref this, str name, str version, str archive, str signature) {
+        string f = this.FileOf(name, version, ".envopkg");
+        if (fs.IsFile(f.AsStr())) return false;
+        string dir = path.Join(this.Root.AsStr(), name);
+        fs.CreateDirAll(dir.AsStr());
+        if (fs.WriteText(f.AsStr(), archive).IsErr()) return false;
+        if (signature.Len > 0) {
+            string s = this.FileOf(name, version, ".sig");
+            if (fs.WriteText(s.AsStr(), signature).IsErr()) return false;
+        }
+        return true;
+    }
+}

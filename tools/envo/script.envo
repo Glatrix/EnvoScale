@@ -48,6 +48,8 @@ Plan PlanScript(in BuildOpts o) {
         EnvoFail(msg.AsStr(), 1);
     }
     foreach (var f in pkg.Sources.AsSlice()) p.Files.Push(string.From(f.AsStr()));
+    List<string> deps = DepSources(pkg);
+    foreach (var f in deps.AsSlice()) p.Files.Push(string.From(f.AsStr()));
     return p;
 }
 

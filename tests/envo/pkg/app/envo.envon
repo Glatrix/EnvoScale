@@ -1,0 +1,7 @@
+#eon 1
+package {
+    name = "app"
+}
+dependencies {
+    greet = { path = "../greet" }
+}

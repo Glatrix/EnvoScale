@@ -1,0 +1,11 @@
+#eon 1
+// KEY is replaced by the test with a public key: app2 trusts the publisher, app3 another.
+package {
+    name = "app3"
+}
+dependencies {
+    greet = { version = "1.0.0", registry = "../reg" }
+}
+trust {
+    keys = ["KEY"]
+}

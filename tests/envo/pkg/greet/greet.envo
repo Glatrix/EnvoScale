@@ -1,0 +1,8 @@
+namespace greet;
+
+public string Hello(str who) {
+    string s = string.From("Hello, ");
+    s.Append(who);
+    s.Append("!");
+    return s;
+}

@@ -19,6 +19,7 @@ The scripts check each `envo` command end to end, in a scratch folder
 | `envo prof hot.envo` (`prof/hot.envo`) | the program prints `ok`, and the report on stderr counts 177 calls of `Fib` and 10 of `Square` |
 | `envo fuzz magic.envo --runs 50000 --seed 1` (`fuzz/magic.envo`) | it finds the input starting `FUZ!` (checked a byte at a time), exits 1, saves it as `build/fuzz/magic/crash`, and the replay shows the panic |
 | `envo dbg sum.envo` with `dbg/session.txt` on stdin | the transcript is `dbg/expected.txt`: stepping into and out of a call, a breakpoint, locals, the call stack, the source list |
+| packages (`pkg/`) | `app` runs with a path dependency; `envo key`, `envo publish` (signed, once per version); `app2` needs `envo fetch`, then runs with the registry package; `app3` (another key) is refused; a changed archive is refused |
 | an unknown command | it exits 2 |
 | `envo fmt --stdout` on `tests/golden/fmt/*.envo` | the output is `name.expected`, which formats to itself |
 | `envo fmt --check` on `lib`, `adapters`, `tools`, `tests/conformance`, `compiler`, `bootstrap/stage1`, `examples` | nothing would change |

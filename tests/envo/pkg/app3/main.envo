@@ -1,0 +1,2 @@
+use greet;
+print(greet.Hello("app3").AsStr());

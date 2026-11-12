@@ -295,10 +295,18 @@ void TestPackage(ref TestRun r, str dir) {
     foreach (var f in pkg.Sources.AsSlice()) {
         if (!pkg.HasMain || ct.Compare(f.AsStr(), pkg.Sources.AsSlice()[0].AsStr()) != 0) lib.Push(string.From(f.AsStr()));
     }
+    // the dependencies' sources go with the package's (PLAN D66)
+    List<string> deps = DepSources(pkg);
+    List<string> whole = List<string>.New();
+    foreach (var f in pkg.Sources.AsSlice()) whole.Push(string.From(f.AsStr()));
+    foreach (var f in deps.AsSlice()) {
+        lib.Push(string.From(f.AsStr()));
+        whole.Push(string.From(f.AsStr()));
+    }
     if (pkg.HasMain) {
         string label = string.From(dir);
         label.Append(" (builds)");
-        string exe = BuildFor(ref r, pkg.Sources, "", r.Quick == false, label.AsStr());
+        string exe = BuildFor(ref r, whole, "", r.Quick == false, label.AsStr());
         if (exe.Len() > 0) {
             Report(ref r, true, label.AsStr(), "");
             fs.Delete(exe.AsStr());
