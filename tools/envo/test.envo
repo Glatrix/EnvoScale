@@ -8,7 +8,8 @@
 //   tests/ folder, built on its own with the library;
 // - a .envo file: that file, on its own.
 //
-// A test program runs in a scratch folder (build/envo-test/run) and must exit with 0.
+// A test program runs in a scratch folder (build/envo-test/run) and must exit with 0;
+// a bare `// expect:` stands for an empty line.
 // `// os: none` builds it with the reference adapters; a program under
 // tests/conformance/ runs against both the reference and the native adapters. Each is
 // built at -O0 and -O2 (only -O0 with `-O0`) and also run in the script runtime
@@ -44,6 +45,9 @@ string Expected(str src) {
         if (line.Len > 0 && line[line.Len - 1] == 13) line = line[0..line.Len - 1];
         if (ct.StartsWith(line, "// expect: ")) {
             want.Append(line[11..line.Len]);
+            want.AppendByte(10);
+        } else if (ct.Compare(line, "// expect:") == 0) {
+            // an empty line (envo fmt drops the space after the colon)
             want.AppendByte(10);
         }
         at = end + 1;

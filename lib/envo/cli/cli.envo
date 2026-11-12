@@ -1,0 +1,378 @@
+// envo.cli: command-line programs (brief §7.4): commands, flags and positional arguments
+// with generated help, then tables and progress bars for output. Pure text: it takes the
+// arguments as a list and gives text back, so it runs and tests anywhere.
+//
+//   cli.App app = cli.App.New("greet", "Says hello.");
+//   app.Flag("name", 'n', "who to greet", "World");
+//   cli.Parsed p = app.Parse(std.env.Args());
+//   print(p.Value("name"));
+//
+// The brief's attribute door, `[Command("greet")] void Greet(string name = "World")`, needs
+// attributes and reflection, which Envo-S1 does not have; it becomes sugar over this.
+namespace envo.cli;
+
+use core.text as ct;
+use alloc.text;
+
+// A flag: --long, or -s, with a value unless it is a switch.
+struct FlagSpec {
+    string Long;
+    u8 Short;           // 0 for none
+    string About;
+    bool Switch;        // no value: present or not
+    string Default;
+}
+
+struct CommandSpec {
+    string Name;
+    string About;
+    List<FlagSpec> Flags;
+    List<string> Positionals;   // names, for the help
+}
+
+public struct App {
+    string Name;
+    string About;
+    List<FlagSpec> Flags;           // flags every command takes
+    List<CommandSpec> Commands;
+
+    public static App New(str name, str about) {
+        return new App { Name = string.From(name), About = string.From(about), Flags = List<FlagSpec>.New(), Commands = List<CommandSpec>.New() };
+    }
+
+    // A flag with a value (--name value, --name=value, -n value), default used when absent.
+    public void Flag(ref this, str longName, u8 shortName, str about, str fallback) {
+        this.Flags.Push(new FlagSpec { Long = string.From(longName), Short = shortName, About = string.From(about), Switch = false, Default = string.From(fallback) });
+    }
+
+    // A switch: --long or -s, present or not.
+    public void Switch(ref this, str longName, u8 shortName, str about) {
+        this.Flags.Push(new FlagSpec { Long = string.From(longName), Short = shortName, About = string.From(about), Switch = true, Default = string.New() });
+    }
+
+    // A command; flags and positionals added with CommandFlag and CommandArg.
+    public void Command(ref this, str name, str about) {
+        this.Commands.Push(new CommandSpec { Name = string.From(name), About = string.From(about), Flags = List<FlagSpec>.New(), Positionals = List<string>.New() });
+    }
+
+    public void CommandFlag(ref this, str command, str longName, u8 shortName, str about, str fallback) {
+        for (usize i = 0; i < this.Commands.Len(); i++) {
+            if (this.Commands.AsSlice()[i].Name.Equals(command)) {
+                this.Commands.AsMutSlice()[i].Flags.Push(new FlagSpec { Long = string.From(longName), Short = shortName, About = string.From(about), Switch = false, Default = string.From(fallback) });
+            }
+        }
+    }
+
+    public void CommandSwitch(ref this, str command, str longName, u8 shortName, str about) {
+        for (usize i = 0; i < this.Commands.Len(); i++) {
+            if (this.Commands.AsSlice()[i].Name.Equals(command)) {
+                this.Commands.AsMutSlice()[i].Flags.Push(new FlagSpec { Long = string.From(longName), Short = shortName, About = string.From(about), Switch = true, Default = string.New() });
+            }
+        }
+    }
+
+    // Names a positional argument of command, for the help.
+    public void CommandArg(ref this, str command, str name) {
+        for (usize i = 0; i < this.Commands.Len(); i++) {
+            if (this.Commands.AsSlice()[i].Name.Equals(command)) this.Commands.AsMutSlice()[i].Positionals.Push(string.From(name));
+        }
+    }
+
+    // Reads the arguments after the program's name.
+    public Parsed Parse(in this, str[] args) {
+        Parsed p = new Parsed {
+            Command = string.New(), Names = List<string>.New(), Values = List<string>.New(), Positionals = List<string>.New(),
+            Error = string.New(), Help = false,
+        };
+        usize i = 0;
+        // the command, if the app has any
+        if (this.Commands.Len() > 0) {
+            if (i < args.Len && !ct.StartsWith(args[i], "-")) {
+                bool known = false;
+                foreach (var c in this.Commands.AsSlice()) {
+                    if (c.Name.Equals(args[i])) known = true;
+                }
+                if (!known) {
+                    p.Error = string.From("unknown command '");
+                    p.Error.Append(args[i]);
+                    p.Error.Append("'");
+                    return p;
+                }
+                p.Command = string.From(args[i]);
+                i++;
+            }
+        }
+        List<FlagSpec> flags = List<FlagSpec>.New();
+        foreach (var f in this.Flags.AsSlice()) flags.Push(Copy(f));
+        foreach (var c in this.Commands.AsSlice()) {
+            if (c.Name.Equals(p.Command.AsStr())) {
+                foreach (var f in c.Flags.AsSlice()) flags.Push(Copy(f));
+            }
+        }
+        bool rest = false;
+        while (i < args.Len) {
+            str a = args[i];
+            i++;
+            if (rest || a.Len < 2 || a[0] != '-') {
+                p.Positionals.Push(string.From(a));
+                continue;
+            }
+            if (ct.Compare(a, "--") == 0) {
+                rest = true;
+                continue;
+            }
+            if (ct.Compare(a, "--help") == 0 || ct.Compare(a, "-h") == 0) {
+                p.Help = true;
+                continue;
+            }
+            // --name=value, --name value, -n value
+            str name = "";
+            str inline = "";
+            bool hasInline = false;
+            if (a[1] == '-') {
+                name = a[2..a.Len];
+                usize? eq = ct.IndexOfByte(name, '=');
+                if (eq.IsSome()) {
+                    inline = name[eq.Unwrap() + 1..name.Len];
+                    name = name[0..eq.Unwrap()];
+                    hasInline = true;
+                }
+            }
+            FlagSpec? found = null;
+            foreach (var f in flags.AsSlice()) {
+                bool hit = (a[1] == '-' && f.Long.Equals(name)) || (a[1] != '-' && a.Len == 2 && f.Short != 0 && f.Short == a[1]);
+                if (hit) found = Some(Copy(f));
+            }
+            if (found.IsNone()) {
+                p.Error = string.From("unknown flag '");
+                p.Error.Append(a);
+                p.Error.Append("'");
+                return p;
+            }
+            FlagSpec f = found.Unwrap();
+            if (f.Switch) {
+                p.Set(f.Long.AsStr(), "true");
+                continue;
+            }
+            if (hasInline) {
+                p.Set(f.Long.AsStr(), inline);
+            } else {
+                if (i >= args.Len) {
+                    p.Error = string.From("--");
+                    p.Error.Append(f.Long.AsStr());
+                    p.Error.Append(" needs a value");
+                    return p;
+                }
+                p.Set(f.Long.AsStr(), args[i]);
+                i++;
+            }
+        }
+        // defaults for flags not given
+        foreach (var f in flags.AsSlice()) {
+            if (!f.Switch && !p.Has(f.Long.AsStr())) p.Set(f.Long.AsStr(), f.Default.AsStr());
+        }
+        return p;
+    }
+
+    // The help text: usage, about, commands and flags.
+    public string Help(in this, str command) {
+        string s = string.From("usage: ");
+        s.Append(this.Name.AsStr());
+        if (command.Len > 0) {
+            s.AppendByte(' ');
+            s.Append(command);
+        } else if (this.Commands.Len() > 0) {
+            s.Append(" <command>");
+        }
+        s.Append(" [flags]");
+        foreach (var c in this.Commands.AsSlice()) {
+            if (c.Name.Equals(command)) {
+                foreach (var a in c.Positionals.AsSlice()) {
+                    s.Append(" <");
+                    s.Append(a.AsStr());
+                    s.AppendByte('>');
+                }
+            }
+        }
+        s.Append("\n\n");
+        s.Append(this.About.AsStr());
+        s.AppendByte(10);
+        if (command.Len == 0 && this.Commands.Len() > 0) {
+            s.Append("\ncommands:\n");
+            usize width = 0;
+            foreach (var c in this.Commands.AsSlice()) {
+                if (c.Name.Len() > width) width = c.Name.Len();
+            }
+            foreach (var c in this.Commands.AsSlice()) {
+                s.Append("  ");
+                s.Append(text.PadRight(c.Name.AsStr(), width + 2, ' ').AsStr());
+                s.Append(c.About.AsStr());
+                s.AppendByte(10);
+            }
+        }
+        List<FlagSpec> flags = List<FlagSpec>.New();
+        foreach (var f in this.Flags.AsSlice()) flags.Push(Copy(f));
+        foreach (var c in this.Commands.AsSlice()) {
+            if (c.Name.Equals(command)) {
+                foreach (var f in c.Flags.AsSlice()) flags.Push(Copy(f));
+            }
+        }
+        s.Append("\nflags:\n");
+        List<string> left = List<string>.New();
+        usize width = 6;            // "--help"
+        foreach (var f in flags.AsSlice()) {
+            string l = string.New();
+            if (f.Short != 0) {
+                l.AppendByte('-');
+                l.AppendByte(f.Short);
+                l.Append(", ");
+            }
+            l.Append("--");
+            l.Append(f.Long.AsStr());
+            if (!f.Switch) l.Append(" <value>");
+            if (l.Len() > width) width = l.Len();
+            left.Push(l);
+        }
+        FlagSpec[] all = flags.AsSlice();
+        for (usize k = 0; k < all.Len; k++) {
+            var f = all[k];
+            s.Append("  ");
+            s.Append(text.PadRight(left.AsSlice()[k].AsStr(), width + 2, ' ').AsStr());
+            s.Append(f.About.AsStr());
+            if (!f.Switch && f.Default.Len() > 0) {
+                s.Append(" (default: ");
+                s.Append(f.Default.AsStr());
+                s.AppendByte(')');
+            }
+            s.AppendByte(10);
+        }
+        s.Append("  ");
+        s.Append(text.PadRight("-h, --help", width + 2, ' ').AsStr());
+        s.Append("this help\n");
+        return s;
+    }
+}
+
+FlagSpec Copy(in FlagSpec f) {
+    return new FlagSpec { Long = string.From(f.Long.AsStr()), Short = f.Short, About = string.From(f.About.AsStr()), Switch = f.Switch, Default = string.From(f.Default.AsStr()) };
+}
+
+// What the arguments said.
+public struct Parsed {
+    string Command;
+    List<string> Names;
+    List<string> Values;
+    List<string> Positionals;
+    string Error;
+    bool Help;
+
+    void Set(ref this, str name, str value) {
+        for (usize i = 0; i < this.Names.Len(); i++) {
+            if (this.Names.AsSlice()[i].Equals(name)) {
+                this.Values.Set(i, string.From(value));
+                return;
+            }
+        }
+        this.Names.Push(string.From(name));
+        this.Values.Push(string.From(value));
+    }
+
+    public bool Has(in this, str name) {
+        foreach (var n in this.Names.AsSlice()) {
+            if (n.Equals(name)) return true;
+        }
+        return false;
+    }
+
+    // The command given ("" for none).
+    public str CommandName(in this) => this.Command.AsStr();
+    // A flag's value: what was given, else its default; "" for an unknown flag.
+    public str Value(in this, str name) {
+        for (usize i = 0; i < this.Names.Len(); i++) {
+            if (this.Names.AsSlice()[i].Equals(name)) return this.Values.AsSlice()[i].AsStr();
+        }
+        return "";
+    }
+    // Was the switch given?
+    public bool On(in this, str name) => ct.Compare(this.Value(name), "true") == 0;
+    public usize ArgCount(in this) => this.Positionals.Len();
+    public str Arg(in this, usize i) => this.Positionals.AsSlice()[i].AsStr();
+    // Why the arguments could not be read ("" if they could).
+    public str ErrorText(in this) => this.Error.AsStr();
+    public bool WantsHelp(in this) => this.Help;
+}
+
+// ------------------------------------------------------------------ tables
+
+// A table: a header row, then rows, laid out in columns two spaces apart.
+public struct Table {
+    List<List<string>> Rows;
+
+    public static Table New() => new Table { Rows = List<List<string>>.New() };
+
+    // Adds a row of cells separated by '|' ("name|size|kind").
+    public void Row(ref this, str cells) {
+        List<string> row = List<string>.New();
+        List<str> parts = text.Split(cells, "|");
+        foreach (var p in parts.AsSlice()) row.Push(string.From(p));
+        this.Rows.Push(row);
+    }
+
+    // The table as text: the first row is the header, underlined.
+    public string Render(in this) {
+        List<usize> widths = List<usize>.New();
+        foreach (var row in this.Rows.AsSlice()) {
+            for (usize i = 0; i < row.Len(); i++) {
+                usize w = ct.CharCount(row.AsSlice()[i].AsStr());
+                if (i >= widths.Len()) widths.Push(w);
+                else if (w > widths.Get(i)) widths.Set(i, w);
+            }
+        }
+        string s = string.New();
+        List<string>[] rows = this.Rows.AsSlice();
+        for (usize r = 0; r < rows.Len; r++) {
+            var row = rows[r];
+            string line = string.New();
+            for (usize i = 0; i < row.Len(); i++) {
+                str cell = row.AsSlice()[i].AsStr();
+                line.Append(cell);
+                if (i + 1 < row.Len()) {
+                    for (usize k = ct.CharCount(cell); k < widths.Get(i) + 2; k++) line.AppendByte(' ');
+                }
+            }
+            s.Append(line.AsStr());
+            s.AppendByte(10);
+            if (r == 0) {
+                usize total = 0;
+                for (usize i = 0; i < widths.Len(); i++) {
+                    total += widths.Get(i);
+                    if (i + 1 < widths.Len()) total += 2;
+                }
+                s.Append(text.Repeat("-", total).AsStr());
+                s.AppendByte(10);
+            }
+        }
+        return s;
+    }
+}
+
+// ------------------------------------------------------------------ progress
+
+// A progress bar of width cells for done out of total: "[#####.....]  50%".
+public string ProgressBar(u64 done, u64 total, usize width) {
+    u64 d = done;
+    if (d > total) d = total;
+    usize filled = 0;
+    u64 percent = 100;
+    if (total > 0) {
+        filled = (d * width as u64 / total) as usize;
+        percent = d * 100 / total;
+    }
+    string s = string.From("[");
+    s.Append(text.Repeat("#", filled).AsStr());
+    s.Append(text.Repeat(".", width - filled).AsStr());
+    s.Append("] ");
+    s.Append(text.PadLeft(text.Uint(percent).AsStr(), 3, ' ').AsStr());
+    s.AppendByte('%');
+    return s;
+}
