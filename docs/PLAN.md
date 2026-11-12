@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M3 (self-hosting). M0–M2 are done; their records are in §4.
+- **Current milestone:** M3 (self-hosting) is done: every increment in §5 is complete. This plan is rewritten for M4 next. M0–M2's records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -138,7 +138,7 @@ reaches the fixed point (D18) in CI on both hosts.
 | [3.7](https://github.com/envoscale/EnvoScale/issues/74) | Separate compilation: the binary EIR form, `.eo` objects and `envoc link` (D19) | multi-file programs built from objects | done: `envoc compile --unit` and `envoc link` give the same executable as `envoc build` for every run and multi-file program and for Stage 2 itself. Each object still reads every source file; interface files come with the build system (M5) |
 | [3.8](https://github.com/envoscale/EnvoScale/issues/75) | `-O2`: SSA optimizations and linear-scan register allocation (D20) | every run program at `-O0` and `-O2` | done: inlining, constant and branch folding, copy propagation, dead code, block merging; rematerialization and linear-scan registers. Every run and multi-file program gives the same results at both levels, and the `-O2` compiler reproduces itself. The `-O2` compiler builds Stage 2 about 40% faster |
 | [3.9](https://github.com/envoscale/EnvoScale/issues/76) | Self-hosting: `envoc` compiles itself; the fixed point (D18) in CI on both hosts | CI `fixed-point` job | done: `bootstrap fixedpoint` builds stage2b and stage2c at `-O2` for both targets; they are identical on each host, and the hosts agree |
-| [3.10](https://github.com/envoscale/EnvoScale/issues/78) | Borrow checking beyond Stage 1: accept the programs chapter 5 allows that Stage 1 rejects (after the fixed point, so Stage 2 builds itself while it changes) | new `s1-own` tests that `envoc` accepts | in progress: disjoint field borrows, partial moves out of values with a drop, `once fn` lambdas that move their captures, locals that borrow (`tests/spec/s2-run`, `s2-own`) |
+| [3.10](https://github.com/envoscale/EnvoScale/issues/78) | Borrow checking beyond Stage 1: accept the programs chapter 5 allows that Stage 1 rejects (after the fixed point, so Stage 2 builds itself while it changes) | new `s1-own` tests that `envoc` accepts | done: disjoint field borrows, partial moves out of values with a drop, `once fn` lambdas that move their captures, locals that borrow (`tests/spec/s2-run`, `s2-own`). Two refinements where Stage 2 is still stricter are [#79](https://github.com/envoscale/EnvoScale/issues/79) |
 
 ## 6. Risks
 

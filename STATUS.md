@@ -16,7 +16,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M0 | Charter and skeleton | **Done** |
 | M1 | Stage 0 | **Done** |
 | M2 | Stage 1 | **Done**: `envoc1`, written in Envo-Core, compiles Envo-Core and Envo-S1 |
-| M3 | Self-hosting | **In progress**: Stage 2 is self-hosting: it compiles itself at `-O2` to a fixed point, checked in CI on both hosts (3.1–3.9). Next, borrow checking beyond Stage 1 (3.10); plan in `docs/PLAN.md` §5 |
+| M3 | Self-hosting | **Done**: `envoc`, written in Envo-S1, compiles itself at `-O2` to a fixed point, checked in CI on both hosts; objects and linking; ownership beyond Stage 1 (3.1–3.10, `docs/PLAN.md` §5) |
 | M4–M13 | | Not started |
 
 ### M0 Definition of Done
