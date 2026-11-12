@@ -1,0 +1,108 @@
+// envo.gfx: exact pixels where the arithmetic is simple (fills, blending, line ends,
+// circle centre and outside), then golden hashes of a scene so any change to the
+// rasterizer shows.
+// expect: hex 26 115 232 255
+// expect: fill inside 255 0 0 255, outside 0 0 0 0
+// expect: blend 127 128 0 255
+// expect: half over nothing 0 0 255 128
+// expect: line ends 1 1
+// expect: circle centre 255, outside 0, edge partial true
+// expect: triangle inside 255, outside 0
+// expect: rounded corner clear 0, middle 255
+// expect: blit 7 8 9
+// expect: scene 64x48 31d477f2e704c0da0e8bf2815d96a672158e5e9d05a59f7c4295f13b6500defc
+use envo.gfx;
+use alloc.text;
+
+void Show(str label, gfx.Color c) {
+    write(1, label);
+    write(1, " ");
+    write(1, text.Uint(c.Red() as u64).AsStr());
+    write(1, " ");
+    write(1, text.Uint(c.Green() as u64).AsStr());
+    write(1, " ");
+    write(1, text.Uint(c.Blue() as u64).AsStr());
+    write(1, " ");
+    print(text.Uint(c.Alpha() as u64).AsStr());
+}
+
+Show("hex", gfx.Color.Hex("#1a73e8"));
+
+gfx.Canvas c = gfx.Canvas.New(16, 16);
+c.FillRect(2, 2, 4, 4, gfx.Color.Rgb(255, 0, 0));
+gfx.Color in1 = c.Get(3, 3);
+gfx.Color out1 = c.Get(6, 6);
+write(1, "fill inside ");
+write(1, text.Uint(in1.Red() as u64).AsStr());
+write(1, " 0 0 255, outside ");
+write(1, text.Uint(out1.Red() as u64).AsStr());
+print(" 0 0 0");
+
+gfx.Canvas b = gfx.Canvas.New(2, 2);
+b.Clear(gfx.Color.Rgb(255, 0, 0));
+b.Blend(0, 0, gfx.Color.Rgba(0, 255, 0, 128));
+gfx.Color mixed = b.Get(0, 0);
+write(1, "blend ");
+write(1, text.Uint(mixed.Red() as u64).AsStr());
+write(1, " ");
+write(1, text.Uint(mixed.Green() as u64).AsStr());
+print(" 0 255");
+b.Blend(1, 1, gfx.Color.Rgba(0, 0, 255, 128));
+gfx.Canvas empty = gfx.Canvas.New(1, 1);
+empty.Blend(0, 0, gfx.Color.Rgba(0, 0, 255, 128));
+Show("half over nothing", empty.Get(0, 0));
+
+gfx.Canvas l = gfx.Canvas.New(10, 10);
+l.Line(1, 1, 8, 5, gfx.Color.Rgb(1, 1, 1));
+write(1, "line ends ");
+write(1, text.Uint(l.Get(1, 1).Red() as u64).AsStr());
+write(1, " ");
+print(text.Uint(l.Get(8, 5).Red() as u64).AsStr());
+
+gfx.Canvas k = gfx.Canvas.New(20, 20);
+k.FillCircle(10, 10, 6, gfx.Color.Rgb(255, 255, 255));
+write(1, "circle centre ");
+write(1, text.Uint(k.Get(10, 10).Alpha() as u64).AsStr());
+write(1, ", outside ");
+write(1, text.Uint(k.Get(1, 1).Alpha() as u64).AsStr());
+u8 edge = k.Get(4, 7).Alpha();
+write(1, ", edge partial ");
+if (edge > 0 && edge < 255) print("true");
+else print("false");
+
+gfx.Canvas t = gfx.Canvas.New(20, 20);
+t.FillTriangle(2, 2, 18, 2, 2, 18, gfx.Color.Rgb(255, 255, 255));
+write(1, "triangle inside ");
+write(1, text.Uint(t.Get(4, 4).Alpha() as u64).AsStr());
+write(1, ", outside ");
+print(text.Uint(t.Get(17, 17).Alpha() as u64).AsStr());
+
+gfx.Canvas r = gfx.Canvas.New(20, 20);
+r.FillRoundedRect(0, 0, 20, 20, 8, gfx.Color.Rgb(255, 255, 255));
+write(1, "rounded corner clear ");
+write(1, text.Uint(r.Get(0, 0).Alpha() as u64).AsStr());
+write(1, ", middle ");
+print(text.Uint(r.Get(10, 10).Alpha() as u64).AsStr());
+
+gfx.Canvas small = gfx.Canvas.New(2, 2);
+small.Clear(gfx.Color.Rgb(7, 8, 9));
+gfx.Canvas big = gfx.Canvas.New(4, 4);
+big.Blit(small, 1, 1);
+gfx.Color bl = big.Get(2, 2);
+write(1, "blit ");
+write(1, text.Uint(bl.Red() as u64).AsStr());
+write(1, " ");
+write(1, text.Uint(bl.Green() as u64).AsStr());
+write(1, " ");
+print(text.Uint(bl.Blue() as u64).AsStr());
+
+gfx.Canvas scene = gfx.Canvas.New(64, 48);
+scene.Clear(gfx.Color.Hex("#f5f5f7"));
+scene.FillRoundedRect(4, 4, 56, 40, 10, gfx.Color.Hex("#ffffff"));
+scene.StrokeRect(4, 4, 56, 40, 1, gfx.Color.Rgba(0, 0, 0, 30));
+scene.FillCircle(18, 24, 8, gfx.Color.Hex("#1a73e8"));
+scene.FillTriangle(32, 34, 56, 34, 44, 12, gfx.Color.Rgba(255, 59, 48, 200));
+scene.Line(6, 42, 58, 6, gfx.Color.Rgba(0, 0, 0, 128));
+string hash = scene.Hash();
+write(1, "scene 64x48 ");
+print(hash.AsStr());
