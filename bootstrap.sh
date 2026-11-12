@@ -391,6 +391,12 @@ do_test() {
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
     else bad 'envoc embedded runtime' "compiler/driver/runtime.envo is stale: regenerate it with envoc1 embed and Stage 1's runtime and prelude files (see docs/architecture/stage2.md)"; fi
+    # and the WebAssembly OS layer, as RUNTIME_WASM (compiler/driver/runtime_wasm.envo)
+    run "$ROOT" embed compiler/runtime/wasm.envo
+    tr -d '\r' < "$ROOT/compiler/driver/runtime_wasm.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_WASM = /' > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc embedded wasm runtime' 'compiler/driver/runtime_wasm.envo is stale: regenerate it with envoc1 embed compiler/runtime/wasm.envo, renaming RUNTIME_0 to RUNTIME_WASM'; fi
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
@@ -763,6 +769,17 @@ EOF_ERR
         fi
     else
         say 'tls: skipped (no openssl on this machine)'
+    fi
+    # The WebAssembly backend: the spec run programs and library tests under Node.js (adapters/interop/js/test-wasm.js)
+    if command -v node > /dev/null 2>&1; then
+        say 'wasm: tests/spec run programs and lib tests as WebAssembly under Node.js'
+        set +e
+        node "$ROOT/adapters/interop/js/test-wasm.js" "$envoc2" > "$TMP/out" 2>&1
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ]; then pass; else bad 'wasm spec run programs' "$(tail -n 40 "$TMP/out")"; fi
+    else
+        say 'wasm: skipped (no Node.js on this machine)'
     fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     say 'envo commands: new, run, test, check, explain, version'

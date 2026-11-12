@@ -1,0 +1,21 @@
+// The platform binding for WebAssembly (PLAN D23, D49): the os.wasm adapters.
+namespace platform;
+
+use os.wasm;
+use envo.gpu;
+
+public wasm.Console Console() => wasm.Console.New();
+public wasm.FileSystem FileSystem() => wasm.FileSystem.New();
+public wasm.Clock Clock() => wasm.Clock.New();
+public wasm.Entropy Entropy() => wasm.Entropy.New();
+public wasm.Environment Environment() => wasm.Environment.New();
+public wasm.Process Process() => wasm.Process.New();
+public wasm.Net Net() => wasm.Net.New();
+public wasm.Trust Trust() => wasm.Trust.New();
+public wasm.Terminal Terminal() => wasm.Terminal.New();
+public wasm.Window Window() => wasm.Window.New();
+// The GPU port: the software adapter (WebGPU comes later).
+public gpu.Software Gpu() => gpu.Software.New();
+
+// The host's raw call gate for the script runtime: none in WebAssembly.
+public i64 RawCall(u32 kind, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j, i64 l, i64 m) => -1;

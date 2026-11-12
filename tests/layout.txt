@@ -68,6 +68,7 @@ compiler/link/pe
 compiler/link/wasm
 compiler/opt
 compiler/query
+compiler/runtime
 compiler/sema
 compiler/syntax
 docs

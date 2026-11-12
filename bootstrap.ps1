@@ -399,6 +399,12 @@ function Invoke-Test {
     $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\runtime.envo'), $Utf8))
     if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc embedded runtime' }
     else { Bad 'envoc embedded runtime' "compiler/driver/runtime.envo is stale: regenerate it with envoc1 embed and Stage 1's runtime and prelude files (see docs/architecture/stage2.md)" }
+    # and the WebAssembly OS layer, as RUNTIME_WASM (compiler/driver/runtime_wasm.envo)
+    $r = Invoke-Tool $envoc1 @('embed', 'compiler/runtime/wasm.envo') $Root
+    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\runtime_wasm.envo'), $Utf8))
+    $actual = (Normalize $r.Out) -replace '(?m)^const str RUNTIME_0 = ', 'const str RUNTIME_WASM = '
+    if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass 'envoc embedded wasm runtime' }
+    else { Bad 'envoc embedded wasm runtime' 'compiler/driver/runtime_wasm.envo is stale: regenerate it with envoc1 embed compiler/runtime/wasm.envo, renaming RUNTIME_0 to RUNTIME_WASM' }
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     $t42 = Join-Path $tmp 't42.exe'
@@ -739,6 +745,16 @@ function Invoke-Test {
         }
     } else {
         Say 'tls: skipped (no openssl on this machine)'
+    }
+    # The WebAssembly backend: the spec run programs and library tests under Node.js (adapters\interop\js\test-wasm.js).
+    # Keep in step with bootstrap.sh.
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if ($node) {
+        Say 'wasm: tests/spec run programs and lib tests as WebAssembly under Node.js'
+        $r = Invoke-Tool $node.Source @((Join-Path $Root 'adapters\interop\js\test-wasm.js'), $envoc) $Root
+        if ($r.Code -eq 0) { Pass 'wasm spec run programs' } else { Bad 'wasm spec run programs' ($r.Out.Trim() + ' ' + $r.Err.Trim()) }
+    } else {
+        Say 'wasm: skipped (no Node.js on this machine)'
     }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     Say 'envo commands: new, run, test, check, explain, version'

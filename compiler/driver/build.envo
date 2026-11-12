@@ -11,6 +11,7 @@ use envoc.sema;
 use envoc.eir;
 use envoc.lower;
 use envoc.x64;
+use envoc.wasm;
 use envoc.opt;
 
 const usize MAX_SOURCE = 16 << 20;      // 16 MiB per file, as in Stages 0 and 1
@@ -82,9 +83,10 @@ i32 WriteOut(str path, in string data, bool executable) {
 str PlatformOs(str os, u32 target) {
     if (os.Len == 0) {
         if (target == TARGET_WINDOWS) return "windows";
+        if (target == TARGET_WASM) return "wasm";
         return "linux";
     }
-    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && target == TARGET_LINUX);
+    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && target == TARGET_LINUX) || (Same(os, "wasm") && target == TARGET_WASM);
     if (!ok) ToolFail("--os must be `none` or the target's operating system", EXIT_USAGE);
     return os;
 }
@@ -98,6 +100,7 @@ Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool c
     if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), core);
     src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
     if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
+    else if (target == TARGET_WASM) src.Add("<runtime>/wasm.envo", string.From(RUNTIME_WASM));
     else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
     u32 prelude = 0xFFFFFFFF;
     if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
@@ -123,13 +126,19 @@ Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool c
     return m;
 }
 
+// Module m's code for target: an executable, or a WebAssembly module (D48).
+string GenFor(ref Module m, u32 target, bool opt, bool wantMap, ref string map) {
+    if (target == TARGET_WASM) return GenWasm(m);
+    return GenModule(ref m, target, opt, wantMap, ref map);
+}
+
 // Compiles the program in the files at paths to an executable at output (and a link map
 // at mapPath unless it is ""). Returns the exit code.
 i32 BuildProgram(in List<string> paths, str output, u32 target, bool opt, str lib, str os, str mapPath) {
     Sources src = Sources.New();
     Module m = CompileProgram(ref src, paths, target, false, true, -1, opt, lib, os);
     string map = string.New();
-    string image = GenModule(ref m, target, opt, mapPath.Len > 0, ref map);
+    string image = GenFor(ref m, target, opt, mapPath.Len > 0, ref map);
     if (mapPath.Len > 0 && WriteOut(mapPath, map, false) != EXIT_OK) return EXIT_ERRORS;
     return WriteOut(output, image, true);
 }

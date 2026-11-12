@@ -12,6 +12,7 @@ use envoc.eir;
 
 public const u32 TARGET_LINUX = 1;
 public const u32 TARGET_WINDOWS = 2;
+public const u32 TARGET_WASM = 3;     // wasm32-web (D48); Stage 2 only
 
 EOp OpNone() => new EOp { Kind = 0, Ref = 0, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 };
 
@@ -321,6 +322,7 @@ public struct Lower {
         for (usize t = 0; t < this.C.Types.Len() + 64; t++) this.TypeIds.Push(0);
         this.M.Target = TextOf("x86_64-linux");
         if (this.Target == TARGET_WINDOWS) this.M.Target = TextOf("x86_64-windows");
+        if (this.Target == TARGET_WASM) this.M.Target = TextOf("wasm32-web");
         // $str = { ptr, u64 }
         List<u32> sf = List<u32>.New();
         sf.Push(ET_PTR);

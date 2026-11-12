@@ -21,8 +21,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M5 | Daily tooling | **Done**: the `envo` binary (the compiler as a library) with `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`; packages; rich diagnostics; `FileSystem.List` and the `Process` port; `envo.eon`, `envo.json` (5.1–5.8) |
 | M6 | Script runtime | **Done**: `envo run` interprets the program's EIR, sandboxed with `--allow` permissions; scripts and `#!/usr/bin/env envo`; `envo repl`; every spec run test and library test passes in both modes (6.1–6.7) |
 | M7 | Crypto and network | **Done** (Experimental, not audited): `envo.crypto` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, a CSPRNG; RSA, ECDSA and X.509 verification), the Net and Trust ports, `envo.http` (HTTP/1.1 client and server), `envo.tls` (a verifying TLS 1.3 client) (7.1–7.8) |
-| M8 | Graphics and UI | **In progress** (`docs/PLAN.md` §5): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port with a Win32 adapter, `envo.ui` on Lumen, `envo.gpu` with software and Direct3D 12 adapters (8.1–8.8) |
-| M9–M13 | | Not started |
+| M8 | Graphics and UI | **Done** (Experimental): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port (Win32), `envo.lumen` and `envo.ui` (desktop and terminal renderers), `envo.gpu` (software and Direct3D 12) (8.1–8.9) |
+| M9 | Web | **In progress** (`docs/PLAN.md` §5): the WebAssembly backend (`--target wasm32-web`), the JS host and the `os.wasm` adapters (9.1–9.2) |
+| M10–M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -89,6 +90,18 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | HTTP/1.1 client and server | `envo.http`, `https://` through `envo.tls` | Done |
 | All crypto test vectors pass | every vector in `tests/vectors/README.md`, natively and (where fast enough) in the script runtime | Done |
 | Marked Experimental | READMEs, `SECURITY.md` (not audited) | Done |
+
+### M8 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| `envo.gpu` with software and Vulkan/D3D12 adapters | `ports.IGpu`; `envo.gpu.Software`; Direct3D 12 in `os.windows`; `tests/conformance/gpu` (every adapter within 1 of software) | Done (Vulkan follows Linux windows, after M8: D46) |
+| `envo.gfx` | software rasterizer with anti-aliased shapes and blending; golden hashes | Done |
+| `envo.font` | TrueType parsing and anti-aliased rendering; system fonts; robustness tests | Done |
+| Win32 window adapter | `ports.IWindow`; `os.windows.Window`; `tests/conformance/window` | Done |
+| `envo.ui` with desktop and terminal renderers | `envo.ui`: one layout for pixels and cells, focus and input | Done |
+| Lumen tokens | `docs/lumen/`, `lib/envo/lumen/tokens.eon`, `envo.lumen` (WCAG 2.2 AA pairs) | Done |
+| `envo.cli` / `envo.term` | `envo.cli`; `ports.ITerminal` and `envo.term` | Done |
 
 ## Subsystems
 

@@ -1,0 +1,58 @@
+// The Stage 2 runtime, part 2 for WebAssembly (PLAN D48, D49): the OS layer over the
+// host's functions, reached through the target intrinsic __hostcall(k, a, b, c, d). The
+// host is adapters/interop/js/envo.js, in Node.js or a browser. k:
+//   0 grow the memory by a bytes: the old end, or -1
+//   1 write(fd a, ptr b, len c)       2 read(fd a, ptr b, len c)
+//   3 exit(code a)                    4 the argument count
+//   5 argument a's length             6 copy argument a to ptr b
+//   7 open(ptr a, len b, mode c)      8 close(fd a)
+// Compiled into every wasm32-web program with runtime/common.envo; embedded in envoc as
+// compiler/driver/runtime_wasm.envo.
+
+i64 __os_ptr(*u8 p) {
+    unsafe { return p as isize as i64; }
+}
+
+void __os_init(i64 sp) {
+    usize argc = __hostcall(4, 0, 0, 0, 0) as usize;
+    *str args = __rt_str_array(argc);
+    unsafe {
+        for (usize i = 0; i < argc; i++) {
+            usize n = __hostcall(5, i as i64, 0, 0, 0) as usize;
+            *u8 p = __rt_alloc(n + 1);
+            __hostcall(6, i as i64, __os_ptr(p), 0, 0);
+            args[i] = str_from(p, n);
+        }
+    }
+    __rt_set_args(argc, args);
+}
+
+isize __os_write(i32 fd, *u8 p, usize n) {
+    return __hostcall(1, fd as i64, __os_ptr(p), n as i64, 0) as isize;
+}
+
+isize __os_read(i32 fd, *u8 p, usize n) {
+    return __hostcall(2, fd as i64, __os_ptr(p), n as i64, 0) as isize;
+}
+
+i32 __os_open(*u8 path, usize len, i32 mode) {
+    return __hostcall(7, __os_ptr(path), len as i64, mode as i64, 0) as i32;
+}
+
+void __os_close(i32 fd) {
+    if (fd < 3) return;
+    __hostcall(8, fd as i64, 0, 0, 0);
+}
+
+// Zeroed memory (new pages are), or null.
+*u8 __os_pages(usize n) {
+    i64 r = __hostcall(0, n as i64, 0, 0, 0);
+    unsafe {
+        if (r < 0) return 0 as usize as *u8;
+        return r as isize as *u8;
+    }
+}
+
+void __os_exit(i32 code) {
+    __hostcall(3, code as i64, 0, 0, 0);
+}

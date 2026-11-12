@@ -550,6 +550,7 @@ Intrinsic IntrinsicNamed(str name) {
     else if (StrEq(name, "syscall")) { x.N = 7; x.AllI64 = true; x.Ret = ET_I64; }
     else if (StrEq(name, "wincall")) { x.N = 11; x.AllI64 = true; x.Ret = ET_I64; }
     else if (StrEq(name, "wincallp")) { x.N = 13; x.AllI64 = true; x.Ret = ET_I64; }
+    else if (StrEq(name, "hostcall")) { x.N = 5; x.AllI64 = true; x.Ret = ET_I64; }
     else x.Name = "";
     return x;
 }

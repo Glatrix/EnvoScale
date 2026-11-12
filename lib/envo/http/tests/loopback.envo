@@ -1,5 +1,6 @@
 // envo.http over the platform's own network (loopback): one exchange through real
 // sockets, the server and the client in one program.
+// wasm: skip (real sockets; os.wasm has no network)
 // expect: GET / -> 200 [hello over loopback]
 use envo.http;
 use ports.{INet, IoError};

@@ -411,7 +411,7 @@ impl Lower {
         List<u32> args = List<u32>.New();
         u32 retTmp = 0;
         bool fromParts = sym.Kind == SK_BUILTIN && (sym.Aux2 == B_STR_FROM || sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT);
-        bool direct = fromParts || (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL || sym.Aux2 == B_WINCALLP));
+        bool direct = fromParts || (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL || sym.Aux2 == B_WINCALLP || sym.Aux2 == B_HOSTCALL));
         if (this.IsAggregate(t) && !direct) {
             u32 et = this.LType(t);
             retTmp = this.Slot(et);
@@ -439,12 +439,13 @@ impl Lower {
                 this.Store(ET_U64, args.Get(1), this.Field(st, tmp, 1));
                 return tmp;
             }
-            if (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL || sym.Aux2 == B_WINCALLP) {
+            if (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL || sym.Aux2 == B_WINCALLP || sym.Aux2 == B_HOSTCALL) {
                 EInst inst = NoInst(54);
                 inst.Block = this.Block;
                 inst.Str = TextOf("syscall");
                 if (sym.Aux2 == B_WINCALL) inst.Str = TextOf("wincall");
                 if (sym.Aux2 == B_WINCALLP) inst.Str = TextOf("wincallp");
+                if (sym.Aux2 == B_HOSTCALL) inst.Str = TextOf("hostcall");
                 inst.FirstOp = this.M.Ops.Len() as u32;
                 foreach (var v in args.AsSlice()) this.M.Ops.Push(OpV(v));
                 inst.NOps = args.Len() as u32;

@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M8 (graphics and UI). M0–M7 are done; their records are in §4.
+- **Current milestone:** M9 (web). M0–M8 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -83,6 +83,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D45 | **A Window port** (`IWindow`): open a window, poll events (keys, mouse, resize, close), present an RGBA framebuffer. The Win32 adapter uses `USER32.dll` and `GDI32.dll` from the import table (both stages, added with D43) and `__wincall12`; the window procedure is `DefWindowProcW`, events are read from the message queue, so no callback into Envo code is needed; `os.none` gives an off-screen window for tests. Linux windows (X11/Wayland) come after M8, as the brief's DoD names Win32 only. | `docs/architecture/graphics.md` |
 | D46 | **`envo.gpu`** is a port (frames of colored triangles, drawn off-screen and read back) with a software adapter in `envo.gpu`, and a Direct3D 12 adapter in `os.windows`. The D3D12 adapter loads the system's libraries at run time through `__wincallp` (a call through a function pointer, in both stages) and compiles its HLSL with the system's `D3DCompile`. Every adapter agrees with the software adapter to within 1 per channel. Vulkan, for Linux GPUs, follows Linux windows after M8, as it needs SPIR-V and the brief's DoD names Win32 windows only. | `docs/architecture/graphics.md` |
 | D47 | **`envo.ui`** is a retained component tree (`Column`, `Row`, `Text`, `Button`, …) with one layout pass, drawn by a desktop renderer (`envo.gfx` into a window) or a terminal renderer (`envo.term` cells). Lumen tokens (`docs/lumen/`) are its default theme. | `lib/envo/ui/README.md` |
+| D48 | **A WebAssembly backend in Stage 2** (`--target wasm32-web`): memory keeps the front end's layout (8-byte pointers, addresses below 4 GiB), so EIR is unchanged. Every value is a canonical `i64` local, so the x86-64 backend's checks and panics carry over. Each function is a loop around a `br_table` on its block number; slots live on a shadow stack in memory; function pointers index the module's table. Stage 1 does not need it. | `compiler/backend/wasm/README.md` |
+| D49 | **One host import**, `envo.host(k, a, b, c, d)`, reached through a `__hostcall` runtime intrinsic (both stages). The runtime's OS layer (`compiler/runtime/wasm.envo`) and the `os.wasm` adapters call it. `adapters/interop/js/envo.js` implements it in Node.js and browsers, with no framework. Every spec run program and library test runs under Node.js in the bootstrap scripts. | `adapters/interop/js/README.md` |
+| D50 | **`envo.web`** on `envo.http`: a router with path parameters, static files with types and confined paths, an HTML builder that escapes by default, and page rendering on the server (SSR) and to files (SSG) from the same code. | `lib/envo/web/README.md` |
+| D51 | **Markdown** (`envo.markdown`: CommonMark's blocks and inlines, with GitHub's tables) and **Lumen templates** for pages (Landing and Docs), with the CSS generated from Lumen's tokens. | `lib/envo/web/README.md` |
+| D52 | **The website is an Envo program** (`website/`, its plan in `website/PLAN.md`) that builds the pages and `docs/` into static files with the Landing and Docs templates, served locally by `envo.web`. Publishing it (#61) is the owner's call. The sandbox runs `envoc` itself, built for `wasm32-web`, in the browser. | `website/README.md` |
 
 ## 3. Open questions
 
@@ -179,23 +184,29 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   client (D40); `envo.http` (D42); a verifying TLS 1.3 client (D41). Increments
   7.1–7.8; design in [`architecture/network.md`](architecture/network.md).
 
-## 5. M8 — Graphics and UI (desktop and terminal)
+- **M8 — Graphics and UI.** The Terminal port and `envo.term` (D43), `envo.cli`,
+  `envo.gfx` in exact integer arithmetic (D44), `envo.font`, the Window port with a
+  Win32 adapter needing no callbacks (D45), the GPU port with software and Direct3D 12
+  adapters reached through `__wincallp` (D46), Lumen version 1 and `envo.ui` with
+  desktop and terminal renderers (D47). Increments 8.1–8.9; design in
+  [`architecture/graphics.md`](architecture/graphics.md).
 
-**DoD (brief §16):** `envo.gpu` with software + Vulkan/D3D12 adapters, `envo.gfx`,
-`envo.font`, Win32 window adapter, `envo.ui` with desktop and terminal renderers, Lumen
-tokens, `envo.cli`/`envo.term`.
+## 5. M9 — Web
+
+**DoD (brief §16):** WASM backend, JS interop adapter, `envo.web` server/router, SSG +
+SSR, Lumen templates (Landing and Docs at minimum). The EnvoScale docs site is built
+with EnvoScale.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [8.1](https://github.com/envoscale/EnvoScale/issues/111) | `envo.term` and the Terminal port (D43): VT output, size, raw mode, key events, a diffing cell buffer | `lib/envo/term/tests/`, conformance | done |
-| [8.2](https://github.com/envoscale/EnvoScale/issues/112) | `envo.cli`: commands, flags and help; tables; progress bars | `lib/envo/cli/tests/` | done |
-| [8.3](https://github.com/envoscale/EnvoScale/issues/113) | `envo.gfx`: the software rasterizer (D44) | golden pixel hashes | done |
-| [8.4](https://github.com/envoscale/EnvoScale/issues/114) | `envo.font`: TrueType outlines rasterized with anti-aliasing | golden glyph hashes | done |
-| [8.5](https://github.com/envoscale/EnvoScale/issues/115) | The Window port and the Win32 adapter (D45) | conformance (off-screen and native) | done |
-| [8.6](https://github.com/envoscale/EnvoScale/issues/116) | `envo.ui` with Lumen tokens: layout, desktop and terminal renderers (D47) | golden renders | done |
-| [8.7](https://github.com/envoscale/EnvoScale/issues/117) | `envo.gpu`: the port and its software adapter (D46) | `lib/envo/gpu/tests/` | done |
-| [8.8](https://github.com/envoscale/EnvoScale/issues/118) | The D3D12 adapter (Vulkan follows Linux windows, after M8) | on machines with a GPU | done |
-| [8.9](https://github.com/envoscale/EnvoScale/issues/119) | Docs and status; M8 complete | CI | |
+| [9.1](https://github.com/envoscale/EnvoScale/issues/120) | The WebAssembly backend (D48) | spec run programs under Node.js, -O0 and -O2 || done |
+| [9.2](https://github.com/envoscale/EnvoScale/issues/121) | The host (`envo.js`) and the `os.wasm` adapters (D49) | library tests and conformance suites under Node.js || done |
+| [9.3](https://github.com/envoscale/EnvoScale/issues/122) | `envo.web`: router, static files, HTML building (D50) | `lib/envo/web/tests/` | |
+| [9.4](https://github.com/envoscale/EnvoScale/issues/123) | `envo.markdown` and Lumen templates (D51) | `lib/envo/markdown/tests/`, golden pages | |
+| [9.5](https://github.com/envoscale/EnvoScale/issues/124) | SSG and SSR from the same pages (D50) | golden sites | |
+| [9.6](https://github.com/envoscale/EnvoScale/issues/126) | The website and docs site built with Envo (D52) | `website/`, CI builds it | |
+| [9.7](https://github.com/envoscale/EnvoScale/issues/125) | The sandbox: `envoc` in the browser (D52) | `envoc` built for `wasm32-web` compiles and runs a program under Node.js | |
+| [9.8](https://github.com/envoscale/EnvoScale/issues/127) | Docs and status; M9 complete | CI | |
 
 ## 6. Risks
 

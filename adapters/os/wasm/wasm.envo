@@ -1,0 +1,291 @@
+// os.wasm: the adapters for WebAssembly programs (PLAN D49), over the host's functions
+// (adapters/interop/js/envo.js) reached through `__hostcall(k, …)`; k is listed in
+// compiler/runtime/wasm.envo and below. In Node.js files are the machine's; in a browser
+// there are none, and the program has its console, clock, entropy and arguments.
+namespace os.wasm;
+
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, IoError};
+
+// host functions past the runtime's (0-8)
+const i64 H_STAT = 9;           // (ptr, len): 0 nothing, 1 a file, 2 a directory
+const i64 H_DELETE = 10;        // (ptr, len): 0, or minus an error kind
+const i64 H_MKDIR = 11;
+const i64 H_RMDIR = 12;
+const i64 H_LIST = 13;          // (ptr, len): the names' bytes (one per line) staged, or minus a kind
+const i64 H_STAGED = 14;        // (ptr): copies the staged bytes there
+const i64 H_NOW = 15;           // nanoseconds since 1970
+const i64 H_MONO = 16;          // nanoseconds, never going back
+const i64 H_RANDOM = 17;        // (ptr, len): random bytes from the host's generator
+const i64 H_GETENV = 18;        // (ptr, len): the value's length staged, or -1
+const i64 H_CWD = 19;           // the working directory's length staged
+
+i64 Ptr(*u8 p) {
+    unsafe { return p as isize as i64; }
+}
+
+i64 StrPtr(str s) {
+    unsafe { return s.Ptr as isize as i64; }
+}
+
+// An error kind the host reports (1-6) as an IoError.
+IoError Kind(i64 k) {
+    if (k == 1) return IoError.NotFound;
+    if (k == 2) return IoError.Exists;
+    if (k == 3) return IoError.NotEmpty;
+    if (k == 4) return IoError.Denied;
+    if (k == 5) return IoError.Invalid;
+    return IoError.Other;
+}
+
+// The staged bytes (n of them), as text.
+string Staged(i64 n) {
+    string s = string.New();
+    if (n <= 0) return s;
+    unsafe {
+        *u8 p = alloc(n as usize);
+        __hostcall(H_STAGED, Ptr(p), 0, 0, 0);
+        for (usize i = 0; i < n as usize; i++) s.AppendByte(p[i]);
+    }
+    return s;
+}
+
+// Does path hold a NUL byte? The host would read only the part before it.
+bool HasNul(str path) {
+    for (usize i = 0; i < path.Len; i++) {
+        if (path[i] == 0) return true;
+    }
+    return false;
+}
+
+// ------------------------------------------------------------------ console
+
+public struct Console {
+    u8 Unused;
+
+    public static Console New() => new Console { Unused = 0 };
+}
+
+impl IConsole for Console {
+    void Out(ref this, str text) => write(1, text);
+    void Err(ref this, str text) => write(2, text);
+
+    usize Read(ref this, mut u8[] into) {
+        if (into.Len == 0) return 0;
+        isize n = 0;
+        unsafe { n = read(0, &into[0], into.Len); }
+        if (n <= 0) return 0;
+        return n as usize;
+    }
+}
+
+// ------------------------------------------------------------------ file system
+
+// The host's files (Node.js); none in a browser.
+public struct FileSystem {
+    u8 Unused;
+
+    public static FileSystem New() => new FileSystem { Unused = 0 };
+}
+
+impl IFileSystem for FileSystem {
+    Result<string, IoError> Read(ref this, str path) {
+        if (HasNul(path)) return Err(IoError.Invalid);
+        i64 kind = __hostcall(H_STAT, StrPtr(path), path.Len as i64, 0, 0);
+        if (kind == 0) return Err(IoError.NotFound);
+        if (kind == 2) return Err(IoError.Invalid);
+        i32 fd = open(path, 0);
+        if (fd < 0) return Err(IoError.Denied);
+        string s = string.New();
+        u8[4096] buf;
+        while (true) {
+            isize n = 0;
+            unsafe { n = read(fd, &buf[0], 4096); }
+            if (n <= 0) break;
+            for (usize i = 0; i < n as usize; i++) s.AppendByte(buf[i]);
+        }
+        close(fd);
+        return Ok(s);
+    }
+
+    Result<usize, IoError> Write(ref this, str path, str data) {
+        if (HasNul(path)) return Err(IoError.Invalid);
+        if (__hostcall(H_STAT, StrPtr(path), path.Len as i64, 0, 0) == 2) return Err(IoError.Invalid);
+        i32 fd = open(path, 1);
+        if (fd < 0) return Err(IoError.NotFound);
+        write(fd, data);
+        close(fd);
+        return Ok(data.Len);
+    }
+
+    bool IsFile(ref this, str path) => !HasNul(path) && __hostcall(H_STAT, StrPtr(path), path.Len as i64, 0, 0) == 1;
+    bool IsDir(ref this, str path) => !HasNul(path) && __hostcall(H_STAT, StrPtr(path), path.Len as i64, 0, 0) == 2;
+
+    Result<bool, IoError> Delete(ref this, str path) {
+        if (HasNul(path)) return Err(IoError.Invalid);
+        if (__hostcall(H_STAT, StrPtr(path), path.Len as i64, 0, 0) == 2) return Err(IoError.Invalid);
+        i64 r = __hostcall(H_DELETE, StrPtr(path), path.Len as i64, 0, 0);
+        if (r < 0) return Err(Kind(0 - r));
+        return Ok(true);
+    }
+
+    Result<bool, IoError> CreateDir(ref this, str path) {
+        if (HasNul(path)) return Err(IoError.Invalid);
+        i64 r = __hostcall(H_MKDIR, StrPtr(path), path.Len as i64, 0, 0);
+        if (r < 0) return Err(Kind(0 - r));
+        return Ok(true);
+    }
+
+    Result<bool, IoError> RemoveDir(ref this, str path) {
+        if (HasNul(path)) return Err(IoError.Invalid);
+        i64 r = __hostcall(H_RMDIR, StrPtr(path), path.Len as i64, 0, 0);
+        if (r < 0) return Err(Kind(0 - r));
+        return Ok(true);
+    }
+
+    Result<List<string>, IoError> List(ref this, str path) {
+        if (HasNul(path)) return Err(IoError.Invalid);
+        i64 n = __hostcall(H_LIST, StrPtr(path), path.Len as i64, 0, 0);
+        if (n < 0) return Err(Kind(0 - n));
+        string all = Staged(n);
+        List<string> names = List<string>.New();
+        string cur = string.New();
+        str a = all.AsStr();
+        for (usize i = 0; i < a.Len; i++) {
+            if (a[i] == 10) {
+                names.Push(cur);
+                cur = string.New();
+            } else {
+                cur.AppendByte(a[i]);
+            }
+        }
+        if (cur.Len() > 0) names.Push(cur);
+        return Ok(names);
+    }
+}
+
+// ------------------------------------------------------------------ clock, entropy
+
+public struct Clock {
+    u8 Unused;
+
+    public static Clock New() => new Clock { Unused = 0 };
+}
+
+impl IClock for Clock {
+    i64 NowNanos(ref this) => __hostcall(H_NOW, 0, 0, 0, 0);
+    u64 MonoNanos(ref this) => __hostcall(H_MONO, 0, 0, 0, 0) as u64;
+}
+
+// The host's generator (crypto.getRandomValues), fit for keys.
+public struct Entropy {
+    u8 Unused;
+
+    public static Entropy New() => new Entropy { Unused = 0 };
+}
+
+impl IEntropy for Entropy {
+    void Fill(ref this, mut u8[] into) {
+        if (into.Len == 0) return;
+        unsafe { __hostcall(H_RANDOM, &into[0] as isize as i64, into.Len as i64, 0, 0); }
+    }
+}
+
+// ------------------------------------------------------------------ environment
+
+public struct Environment {
+    u8 Unused;
+
+    public static Environment New() => new Environment { Unused = 0 };
+}
+
+impl IEnvironment for Environment {
+    usize ArgCount(ref this) => argc();
+    str Arg(ref this, usize i) => arg(i);
+
+    string? Var(ref this, str name) {
+        i64 n = __hostcall(H_GETENV, StrPtr(name), name.Len as i64, 0, 0);
+        if (n < 0) return null;
+        return Some(Staged(n));
+    }
+
+    string CurrentDir(ref this) => Staged(__hostcall(H_CWD, 0, 0, 0, 0));
+}
+
+// ------------------------------------------------------------------ what a web program does not have
+
+// Other programs cannot be started from WebAssembly.
+public struct Process {
+    u8 Unused;
+
+    public static Process New() => new Process { Unused = 0 };
+}
+
+impl IProcess for Process {
+    Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath) => Err(IoError.Denied);
+}
+
+// The network goes through the browser's own APIs (fetch, WebSocket), which come later.
+public struct Net {
+    u8 Unused;
+
+    public static Net New() => new Net { Unused = 0 };
+}
+
+impl INet for Net {
+    Result<List<string>, IoError> Resolve(ref this, str host) => Err(IoError.Denied);
+    Result<i64, IoError> Connect(ref this, str host, u16 port) => Err(IoError.Denied);
+    Result<i64, IoError> Listen(ref this, str host, u16 port) => Err(IoError.Denied);
+    u16 LocalPort(ref this, i64 listener) => 0;
+    Result<i64, IoError> Accept(ref this, i64 listener) => Err(IoError.Denied);
+    Result<usize, IoError> Send(ref this, i64 conn, u8[] data) => Err(IoError.Denied);
+    Result<usize, IoError> Recv(ref this, i64 conn, mut u8[] into) => Err(IoError.Denied);
+    void Close(ref this, i64 handle) {
+    }
+}
+
+public struct Trust {
+    u8 Unused;
+
+    public static Trust New() => new Trust { Unused = 0 };
+}
+
+impl ITrust for Trust {
+    List<List<u8>> Roots(ref this) => List<List<u8>>.New();
+}
+
+// Output goes to the console; there is no terminal to size or make raw.
+public struct Terminal {
+    u8 Unused;
+
+    public static Terminal New() => new Terminal { Unused = 0 };
+}
+
+impl ITerminal for Terminal {
+    bool IsTerminal(ref this) => false;
+    u32 Cols(ref this) => 80;
+    u32 Rows(ref this) => 24;
+    bool Raw(ref this, bool on) => !on;
+    void Write(ref this, str text) => write(1, text);
+    usize Read(ref this, mut u8[] into, i32 waitMs) => 0;
+}
+
+// A page draws through the DOM or a canvas (envo.web, M9), not a window.
+public struct Window {
+    u8 Unused;
+
+    public static Window New() => new Window { Unused = 0 };
+}
+
+impl IWindow for Window {
+    bool Open(ref this, str title, u32 width, u32 height) => false;
+    bool IsOpen(ref this) => false;
+    u32 Width(ref this) => 0;
+    u32 Height(ref this) => 0;
+    Event Poll(ref this) => Event.Nothing();
+    void Present(ref this, u8[] rgba, u32 width, u32 height) {
+    }
+    void SetTitle(ref this, str title) {
+    }
+    void Close(ref this) {
+    }
+}
