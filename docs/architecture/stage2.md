@@ -93,9 +93,8 @@ generator (`gen.envo`) and the PE and ELF writers (`image.envo`). `envoc build` 
 same bytes as `envoc1 build` for every run and multi-file program, both targets. The tests
 run each Stage 2 build and compare it with Stage 1's.
 
-Stage 2 also builds Stage 1 and itself exactly as `envoc1` does. So `envoc` built by
-`envoc` is already byte-identical to `envoc` built by `envoc1`. That holds until the two
-start to differ, which they will with `-O2` (3.8). The fixed point in CI is 3.9.
+Stage 2 also builds Stage 1 and itself exactly as `envoc1` does, so at `-O0`, `envoc`
+built by `envoc` is byte-identical to `envoc` built by `envoc1`.
 
 ## Objects and linking (M3.7)
 
@@ -122,6 +121,19 @@ each multi-file program linked unit by unit, and for Stage 2 itself.
 
 Interface files, which let a unit compile without the other units' sources, come with
 the build system (M5).
+
+## The fixed point (M3.9)
+
+```
+envoc1 --build--> stage2a (build/stage2) --build -O2--> stage2b --build -O2--> stage2c
+```
+
+`bootstrap fixedpoint` builds stage2b and stage2c for both targets and requires them to
+be byte-identical (D18). stage2a and stage2b run different code (`envoc1`'s and `-O2`'s),
+so their outputs may differ; stage2b and stage2c are the same compiler built by itself.
+In CI, `fixed-point-linux` and `fixed-point-windows` run it on each host, and
+`fixed-point` compares the two hosts' stage2c byte for byte, so the fixed point is the
+same on both.
 
 ## -O2 (M3.8)
 

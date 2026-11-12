@@ -71,3 +71,59 @@ jobs:
           name: stage0-built-on-windows
           path: build/from-windows
       - run: ./bootstrap.sh compare build/from-linux build/from-windows
+
+  # PLAN D18 (M3.9): Stage 2 built by itself at -O2 reproduces itself, on both hosts, and
+  # the fixed-point compilers are the same bytes on both.
+  fixed-point-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh adapters/ci/github/install-nasm.sh
+      - run: ./bootstrap.sh fixedpoint
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixed-point-on-linux
+          path: |
+            build/stage0/envoc0
+            build/stage0/envoc0.exe
+            build/stage1/envoc1
+            build/stage1/envoc1.exe
+            build/stage2/envoc
+            build/stage2/envoc.exe
+            build/stage2c/envoc
+            build/stage2c/envoc.exe
+
+  fixed-point-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: choco install nasm --no-progress -y
+      - run: .\bootstrap.ps1 fixedpoint
+        shell: powershell
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixed-point-on-windows
+          path: |
+            build/stage0/envoc0
+            build/stage0/envoc0.exe
+            build/stage1/envoc1
+            build/stage1/envoc1.exe
+            build/stage2/envoc
+            build/stage2/envoc.exe
+            build/stage2c/envoc
+            build/stage2c/envoc.exe
+
+  fixed-point:
+    needs: [fixed-point-linux, fixed-point-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixed-point-on-linux
+          path: build/from-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixed-point-on-windows
+          path: build/from-windows
+      - run: ./bootstrap.sh compare build/from-linux build/from-windows

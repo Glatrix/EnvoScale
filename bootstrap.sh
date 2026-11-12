@@ -728,10 +728,44 @@ do_check() {
 # ------------------------------------------------------------------- compare
 # compare <dir-a> <dir-b>: both builds (each a copy of build/, with stage0/, stage1/ and
 # stage2/) must be byte-identical (brief 4.1).
+# The fixed point (PLAN D18, M3.9): stage2a (build/stage2, built by envoc1) builds Stage 2
+# at -O2 into build/stage2b, and stage2b builds it again into build/stage2c, for both
+# targets. stage2b and stage2c must be byte-identical.
+do_fixedpoint() {
+    do_build
+    set --
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$STAGE2/files.txt"
+    for step in stage2:stage2b stage2b:stage2c; do
+        from=${step%%:*}
+        to=${step#*:}
+        mkdir -p "$ROOT/build/$to"
+        exe="$ROOT/build/$from/envoc$(host_suffix)"
+        for unit in "x86_64-linux:envoc" "x86_64-windows:envoc.exe"; do
+            target=${unit%%:*}
+            out=${unit#*:}
+            say "build     compiler -> build/$to/$out (by build/$from/envoc$(host_suffix), -O2)"
+            (cd "$STAGE2" && "$exe" build "$@" -O2 -o "$ROOT/build/$to/$out" --target "$target") \
+                || fail "building Stage 2 ($target) with build/$from failed"
+            say "          $(wc -c < "$ROOT/build/$to/$out" | tr -d ' ') bytes  sha256 $(sha256 "$ROOT/build/$to/$out")"
+        done
+        chmod +x "$ROOT/build/$to/envoc"
+    done
+    for out in envoc envoc.exe; do
+        if cmp -s "$ROOT/build/stage2b/$out" "$ROOT/build/stage2c/$out"; then say "fixed point: stage2b/$out = stage2c/$out"
+        else fail "no fixed point: build/stage2b/$out and build/stage2c/$out differ"; fi
+    done
+}
+
 do_compare() {
     [ "$#" -eq 2 ] || fail "usage: ./bootstrap.sh compare <dir-a> <dir-b>"
     differ=0
-    for f in stage0/envoc0 stage0/envoc0.exe stage1/envoc1 stage1/envoc1.exe stage2/envoc stage2/envoc.exe; do
+    files='stage0/envoc0 stage0/envoc0.exe stage1/envoc1 stage1/envoc1.exe stage2/envoc stage2/envoc.exe'
+    # after `fixedpoint`, the fixed-point compilers too
+    [ -d "$1/stage2c" ] && files="$files stage2c/envoc stage2c/envoc.exe"
+    for f in $files; do
         [ -f "$1/$f" ] || fail "missing $1/$f"
         [ -f "$2/$f" ] || fail "missing $2/$f"
         say "$f"
@@ -746,14 +780,16 @@ do_compare() {
 case "${1:-help}" in
     build) do_build ;;
     compare) shift; do_compare "$@" ;;
+    fixedpoint) do_fixedpoint ;;
     test)  do_test ;;
     check) do_check ;;
     clean) rm -rf "$ROOT/build"; say 'removed build/' ;;
     help|*)
-        say 'usage: ./bootstrap.sh <build|test|check|clean|help>'
+        say 'usage: ./bootstrap.sh <build|test|fixedpoint|check|clean|help>'
         say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md), then build Stage 1'
         say '  test    build, then run the Stage 0 and Stage 1 tests'
         say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
+        say '  fixedpoint  build, then Stage 2 by itself twice at -O2 (build/stage2b, build/stage2c); they must match'
         say '  compare <dir-a> <dir-b>   require two builds (copies of build/) to be byte-identical'
         say '  clean   delete build/'
         [ "${1:-help}" = help ] || exit 2 ;;

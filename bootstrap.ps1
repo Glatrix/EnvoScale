@@ -74,6 +74,34 @@ function Invoke-Build {
     }
 }
 
+# ------------------------------------------------------------------- fixed point
+# PLAN D18, M3.9: stage2a (build\stage2, built by envoc1) builds Stage 2 at -O2 into
+# build\stage2b, and stage2b builds it again into build\stage2c, for both targets.
+# stage2b and stage2c must be byte-identical. Keep in step with bootstrap.sh.
+function Invoke-FixedPoint {
+    Invoke-Build
+    $files = @(Get-Content -LiteralPath (Join-Path $Stage2 'files.txt') | Where-Object { $_.Trim() -ne '' })
+    foreach ($step in @(@{ From = 'stage2'; To = 'stage2b' }, @{ From = 'stage2b'; To = 'stage2c' })) {
+        $dir = Join-Path $Root "build\$($step.To)"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        $exe = Join-Path $Root "build\$($step.From)\envoc.exe"
+        foreach ($u in @(@{ Target = 'x86_64-linux'; Out = 'envoc' }, @{ Target = 'x86_64-windows'; Out = 'envoc.exe' })) {
+            $out = Join-Path $dir $u.Out
+            Say "build     compiler -> build/$($step.To)/$($u.Out) (by build/$($step.From)/envoc.exe, -O2)"
+            $r = Invoke-Tool $exe (@('build') + $files + @('-O2', '-o', $out, '--target', $u.Target)) $Stage2
+            if ($r.Code -ne 0) { Fail "building Stage 2 ($($u.Target)) with build/$($step.From) failed: $($r.Err.Trim())" }
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
+            Say ("          {0,8} bytes  sha256 {1}" -f (Get-Item -LiteralPath $out).Length, $hash)
+        }
+    }
+    foreach ($out in @('envoc', 'envoc.exe')) {
+        $b = Join-Path $Root "build\stage2b\$out"
+        $c = Join-Path $Root "build\stage2c\$out"
+        if ((Get-FileHash -LiteralPath $b).Hash -eq (Get-FileHash -LiteralPath $c).Hash) { Say "fixed point: stage2b/$out = stage2c/$out" }
+        else { Fail "no fixed point: build/stage2b/$out and build/stage2c/$out differ" }
+    }
+}
+
 # ------------------------------------------------------------------- process helper
 function Quote-Arg([string]$a) {
     if ($a -match '[\s"]') { return '"' + ($a -replace '"', '\"') + '"' }
@@ -704,12 +732,14 @@ function Invoke-Check {
 switch ($Command) {
     'build' { Invoke-Build }
     'test'  { Invoke-Test }
+    'fixedpoint' { Invoke-FixedPoint }
     'check' { Invoke-Check }
     'clean' { if (Test-Path -LiteralPath (Join-Path $Root 'build')) { Remove-Item -Recurse -Force (Join-Path $Root 'build') }; Say 'removed build/' }
     default {
-        Say 'usage: .\bootstrap.ps1 <build|test|check|clean|help>'
+        Say 'usage: .\bootstrap.ps1 <build|test|fixedpoint|check|clean|help>'
         Say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md), then build Stage 1'
         Say '  test    build, then run the Stage 0 and Stage 1 tests'
+        Say '  fixedpoint  build, then Stage 2 by itself twice at -O2 (build\stage2b, build\stage2c); they must match'
         Say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
         Say '  clean   delete build/'
         if ($Command -ne 'help') { exit 2 }

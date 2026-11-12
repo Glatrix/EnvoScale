@@ -1,8 +1,10 @@
 # `adapters/ci/github` — GitHub Actions adapter
 
-> **Status:** Active. Runs `check` on every push and pull request, the Stage 0 build
-> and tests on Windows and Linux, and `reproducible`, which requires the two hosts'
-> builds to be byte-identical (`./bootstrap.sh compare`).
+> **Status:** Active. Runs `check` on every push and pull request, the build and tests
+> on Windows and Linux, and `reproducible`, which requires the two hosts' builds to be
+> byte-identical (`./bootstrap.sh compare`). The `fixed-point` jobs run
+> `bootstrap fixedpoint` on both hosts (Stage 2 built by itself twice at `-O2` must
+> not change) and compare the results across hosts.
 
 GitHub only reads workflows from `.github/workflows/`, so this adapter is that folder
 plus this README. Switching CI providers means deleting `.github/` and adding a sibling
@@ -16,6 +18,7 @@ The workflow contains **no build logic**. Each step is one call to a repository 
 |---|---|
 | `bootstrap.ps1 check` / `bootstrap.sh check` | `envo check` |
 | `bootstrap.ps1 test` / `bootstrap.sh test` | `envo test` |
+| `bootstrap.ps1 fixedpoint` / `bootstrap.sh fixedpoint` | `envo selfhost` |
 
 Calling the bootstrap scripts instead of `envo` is a temporary sequencing necessity
 (decision D8 in [`docs/PLAN.md`](../../../docs/PLAN.md)): `envo` does not exist yet.
