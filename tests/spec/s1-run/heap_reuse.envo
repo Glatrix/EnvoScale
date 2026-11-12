@@ -1,0 +1,31 @@
+// [PLAN D76] The heap gives memory back: a freed block is handed out again, cleared;
+// freeing twice, or a pointer the heap did not hand out, is ignored; larger blocks are
+// reused too, first fit.
+// expect: reused: yes
+// expect: cleared: yes
+// expect: twice: ignored
+// expect: large: reused
+unsafe {
+    *u8 a = alloc(48);
+    for (usize i = 0; i < 48; i++) a[i] = 0xAB;
+    free(a);
+    *u8 b = alloc(40);
+    if (a == b) print("reused: yes"); else print("reused: no");
+    bool clear = true;
+    for (usize i = 0; i < 40; i++) {
+        if (b[i] != 0) clear = false;
+    }
+    if (clear) print("cleared: yes"); else print("cleared: no");
+    free(b);
+    free(b);
+    *u8 c = alloc(48);
+    *u8 d = alloc(48);
+    if (c != d) print("twice: ignored"); else print("twice: handed out twice");
+    *u8 inner = &c[16];
+    free(inner);
+    *u8 big = alloc(3000000);
+    big[2999999] = 7;
+    free(big);
+    *u8 again = alloc(2500000);
+    if (again == big && again[2499999] == 0) print("large: reused"); else print("large: fresh");
+}
