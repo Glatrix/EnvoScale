@@ -46,7 +46,8 @@ t.Raw(false);
   arrows, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete`, `Function`), `Char`,
   `Ctrl`, `Alt`, `Shift`, `Is`, `IsChar`, `IsCtrl`, `Name`.
 - `Screen`: `New`, `Resize`, `Invalidate`, `Clear`, `Set`, `Put`, `Fill`, `Box`,
-  `CharAt`, `Render` (the text from the last frame to this one), `Present`, `Text`.
+  `CharAt`, `Render` (the text from the last frame to this one), `Present`, `Text`;
+  `SetClip` and `ResetClip` (drawing lands only inside a rectangle; `Clear` ignores it).
 
 ## Limits
 

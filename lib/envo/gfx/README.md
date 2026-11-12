@@ -26,7 +26,8 @@ write(1, c.Ppm().AsStr());   // a P6 image, for looking at
 - `Color`: `Rgb`, `Rgba`, `Hex("#rrggbb[aa]")`, `Covered(coverage)`.
 - `Canvas`: `New`, `Width`, `Height`, `Pixels` (RGBA bytes, rows from the top), `Get`,
   `Blend` (one pixel), `Clear`, `FillRect`, `StrokeRect`, `Line` (Bresenham),
-  `FillCircle`, `FillRoundedRect`, `FillTriangle` (any winding), `Blit`, `Hash`, `Ppm`.
+  `FillCircle`, `FillRoundedRect`, `FillTriangle` (any winding), `Blit`, `Hash`, `Ppm`;
+  `SetClip` and `ResetClip` (drawing lands only inside a rectangle; `Clear` ignores it).
 
 ## Not yet
 

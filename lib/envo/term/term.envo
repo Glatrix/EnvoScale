@@ -420,9 +420,16 @@ public struct Screen {
     List<Cell> Cells;
     List<Cell> Shown;       // what the terminal has, after the last Render
     bool Full;              // the next Render redraws everything
+    u32 CX0;                // the clip: drawing lands only in [CX0, CX1) x [CY0, CY1)
+    u32 CY0;
+    u32 CX1;
+    u32 CY1;
 
     public static Screen New(u32 cols, u32 rows) {
-        Screen s = new Screen { C = cols, R = rows, Cells = List<Cell>.New(), Shown = List<Cell>.New(), Full = true };
+        Screen s = new Screen {
+            C = cols, R = rows, Cells = List<Cell>.New(), Shown = List<Cell>.New(), Full = true,
+            CX0 = 0, CY0 = 0, CX1 = cols, CY1 = rows
+        };
         for (u32 i = 0; i < cols * rows; i++) {
             s.Cells.Push(Blank());
             s.Shown.Push(Blank());
@@ -433,10 +440,11 @@ public struct Screen {
     public u32 Cols(in this) => this.C;
     public u32 Rows(in this) => this.R;
 
-    // A new size: the cells are cleared and the next frame is drawn in full.
+    // A new size: the cells are cleared, the clip reset and the next frame drawn in full.
     public void Resize(ref this, u32 cols, u32 rows) {
         this.C = cols;
         this.R = rows;
+        this.ResetClip();
         this.Cells = List<Cell>.New();
         this.Shown = List<Cell>.New();
         for (u32 i = 0; i < cols * rows; i++) {
@@ -462,9 +470,22 @@ public struct Screen {
         return this.Cells.Get((row * this.C + col) as usize).Ch;
     }
 
-    // Code point ch in style s at (col, row); nothing outside the screen.
+    // Drawing lands only inside the w x h rectangle at (col, row) (and the screen) until
+    // the next SetClip or ResetClip. Clear ignores the clip.
+    public void SetClip(ref this, u32 col, u32 row, u32 w, u32 h) {
+        this.CX0 = col;
+        this.CY0 = row;
+        this.CX1 = col + w;
+        this.CY1 = row + h;
+        if (this.CX1 > this.C) this.CX1 = this.C;
+        if (this.CY1 > this.R) this.CY1 = this.R;
+    }
+
+    public void ResetClip(ref this) => this.SetClip(0, 0, this.C, this.R);
+
+    // Code point ch in style s at (col, row); nothing outside the screen or the clip.
     public void Set(ref this, u32 col, u32 row, u32 ch, in Style s) {
-        if (col >= this.C || row >= this.R) return;
+        if (col < this.CX0 || row < this.CY0 || col >= this.CX1 || row >= this.CY1) return;
         this.Cells.Set((row * this.C + col) as usize, new Cell { Ch = ch, Fore = s.Fore, Back = s.Back, Attrs = s.Attrs });
     }
 

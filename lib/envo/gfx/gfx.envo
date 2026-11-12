@@ -55,9 +55,13 @@ public struct Canvas {
     i32 W;
     i32 H;
     List<u8> Px;
+    i32 CX0;                // the clip: drawing lands only in [CX0, CX1) x [CY0, CY1)
+    i32 CY0;
+    i32 CX1;
+    i32 CY1;
 
     public static Canvas New(i32 width, i32 height) {
-        Canvas c = new Canvas { W = width, H = height, Px = List<u8>.New() };
+        Canvas c = new Canvas { W = width, H = height, Px = List<u8>.New(), CX0 = 0, CY0 = 0, CX1 = width, CY1 = height };
         usize n = (width * height * 4) as usize;
         for (usize i = 0; i < n; i++) c.Px.Push(0);
         return c;
@@ -84,9 +88,22 @@ public struct Canvas {
         return Color.Rgba(p[at], p[at + 1], p[at + 2], p[at + 3]);
     }
 
-    // Draws c over pixel (x, y): source-over blending; outside the canvas, nothing.
+    // Drawing lands only inside the w x h rectangle at (x, y) (and the canvas) until
+    // the next SetClip or ResetClip. Clear ignores the clip.
+    public void SetClip(ref this, i32 x, i32 y, i32 w, i32 h) {
+        this.CX0 = Max(x, 0);
+        this.CY0 = Max(y, 0);
+        this.CX1 = Min(x + w, this.W);
+        this.CY1 = Min(y + h, this.H);
+    }
+
+    // Drawing lands anywhere on the canvas again.
+    public void ResetClip(ref this) => this.SetClip(0, 0, this.W, this.H);
+
+    // Draws c over pixel (x, y): source-over blending; outside the canvas or the clip,
+    // nothing.
     public void Blend(ref this, i32 x, i32 y, Color c) {
-        if (x < 0 || y < 0 || x >= this.W || y >= this.H || c.A == 0) return;
+        if (x < this.CX0 || y < this.CY0 || x >= this.CX1 || y >= this.CY1 || c.A == 0) return;
         usize at = ((y * this.W + x) * 4) as usize;
         unsafe {
             *u8 p = &this.Px.Data[at];
@@ -125,10 +142,10 @@ public struct Canvas {
     }
 
     public void FillRect(ref this, i32 x, i32 y, i32 w, i32 h, Color c) {
-        i32 x0 = Max(x, 0);
-        i32 y0 = Max(y, 0);
-        i32 x1 = Min(x + w, this.W);
-        i32 y1 = Min(y + h, this.H);
+        i32 x0 = Max(x, this.CX0);
+        i32 y0 = Max(y, this.CY0);
+        i32 x1 = Min(x + w, this.CX1);
+        i32 y1 = Min(y + h, this.CY1);
         for (i32 py = y0; py < y1; py++) {
             for (i32 px = x0; px < x1; px++) this.Blend(px, py, c);
         }

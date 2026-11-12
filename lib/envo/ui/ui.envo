@@ -1,15 +1,21 @@
 // envo.ui: user interfaces as a retained tree of components (PLAN D47). A program builds
-// the tree (Column, Row, Card, Text, Button, Checkbox, Spacer, Divider), lays it out for
-// a size, draws it, and hands it input; input comes back as the component that was
-// activated, so the program decides what that means. One layout pass serves both
-// renderers: pixels (envo.gfx with envo.font, in a window) and cells (envo.term). Lumen
-// (envo.lumen) is the theme.
+// the tree, lays it out for a size, draws it, and hands it input; input comes back as the
+// component that was activated, with Action() saying what happened, so the program
+// decides what that means. One layout pass serves both renderers: pixels (envo.gfx with
+// envo.font, in a window) and cells (envo.term). Lumen (envo.lumen) is the theme.
+//
+// The components for applications (M14.6): a scroll view, lists and trees of items (only
+// the rows in view are drawn), tabs, split panes, a text field and a code editor (both on
+// envo.edit), and a command palette.
 namespace envo.ui;
 
 use envo.gfx;
 use envo.font;
 use envo.term;
 use envo.lumen;
+use envo.edit;
+use std.clipboard;
+use core.text as ct;
 use ports.{Event, EventKind};
 
 // What a component is.
@@ -22,6 +28,14 @@ public enum Kind {
     Checkbox,
     Spacer,         // empty; takes the space left over
     Divider,        // a line across its container
+    Scroll,         // a column taller than its space, scrolled
+    ListView,       // rows of items, one selected
+    TreeView,       // a list of nested items that open and close
+    Tabs,           // a row of tabs, one selected
+    Split,          // two children side by side (or one above the other), a divider between
+    TextField,      // one line of text to edit
+    Editor,         // a code editor: lines, a gutter, highlighting
+    Palette,        // a command palette: a filter over items, shown above everything
 }
 
 // Where children sit across a container (left to right in a column, top to bottom in
@@ -49,6 +63,25 @@ public const u8 L = 4;
 public const u8 XL = 5;
 public const u8 XXL = 6;
 
+// What happened at the component input returned (Action()).
+public const u32 ACT_NONE = 0;
+public const u32 ACT_ACTIVATE = 1;      // a button pressed, a checkbox flipped
+public const u32 ACT_SELECT = 2;        // another item selected (Item() is which)
+public const u32 ACT_OPEN = 3;          // an item opened (Enter), a text field submitted
+public const u32 ACT_TOGGLE = 4;        // a tree item opened or closed
+public const u32 ACT_CLOSE = 5;         // a tab's close mark clicked (Item() is which)
+public const u32 ACT_EDIT = 6;          // the text changed
+public const u32 ACT_CANCEL = 7;        // the palette closed with Escape
+
+// Pointer work an editor does at its next layout, when the font is at hand.
+const u8 PEND_NONE = 0;
+const u8 PEND_CLICK = 1;                // the cursor where the pointer is
+const u8 PEND_EXTEND = 2;               // the selection grows to the pointer
+const u8 PEND_ADD = 3;                  // another cursor where the pointer is
+
+// The rows a palette shows at most.
+const usize PALETTE_ROWS = 8;
+
 struct Node {
     Kind K;
     u32 Parent;
@@ -60,15 +93,46 @@ struct Node {
     u8 PadStep;
     Align Cross;
     u32 Grow;           // a share of the space left over along the container
-    bool On;            // a checkbox's state
+    bool On;            // a checkbox's state; an open palette
     bool Primary;       // a button drawn in the accent
     bool Enabled;
+    bool Hidden;        // takes no space, is not drawn, does not take input
+    bool Vertical;      // a split with one child above the other
     i32 MW;             // measured size
     i32 MH;
     i32 X;              // laid-out bounds
     i32 Y;
     i32 W;
     i32 H;
+    i32 ScrollX;        // an editor's horizontal scroll (pixels or cells)
+    i32 ScrollY;        // a scroll view's offset; a list's or editor's first row in view
+    i32 Extent;         // a scroll view's content height
+    u32 Ratio;          // a split's first share, in thousandths
+    u32 Data;           // a list's items, an editor's buffer
+    u32 Data2;          // a palette's query buffer
+    i32 PX;             // the pointer, for pending editor work
+    i32 PY;
+    u8 Pend;
+    bool Reveal;        // bring the cursor into view at the next layout
+}
+
+// The items of a list, tree, tabs or palette.
+struct Items {
+    List<string> Labels;
+    List<u32> Depth;        // a tree item's nesting
+    List<bool> Open;        // a tree item shows its children
+    List<u32> Shown;        // the rows: items not inside a closed one, or matching the query
+    List<i32> Ends;         // tabs: where each ends (laid out)
+    usize Sel;              // the selected row
+    bool Closable;          // tabs with a close mark
+}
+
+// An editor's or text field's settings (its buffer is Bufs at the same index).
+struct Code {
+    string Keywords;        // highlighted words, separated by spaces
+    string Comment;         // a line comment's start
+    bool Gutter;            // line numbers
+    bool Single;            // one line: a text field
 }
 
 // A user interface: its components, their layout, and focus, hover and press.
@@ -76,13 +140,29 @@ struct Node {
 public struct Tree {
     List<Node> Nodes;
     List<string> Labels;
+    List<Items> Lists;
+    List<edit.Buffer> Bufs;
+    List<Code> Codes;
     u32 Focus;
     u32 Hover;
     u32 Pressed;
+    u32 Drag;           // the split whose divider, or editor whose selection, is dragged
+    u32 Before;         // the focus before a palette opened
     bool Cells;         // laid out in terminal cells (else pixels)
+    i32 RowH;           // a list row's height, from the last layout
+    i32 LineH;          // an editor line's height
+    u32 Act;
+    usize ActItem;
+    string Clip;        // the clipboard, unless the system's is used
+    bool SystemClip;
 
     public static Tree New() {
-        Tree t = new Tree { Nodes = List<Node>.New(), Labels = List<string>.New(), Focus = 0, Hover = 0, Pressed = 0, Cells = false };
+        Tree t = new Tree {
+            Nodes = List<Node>.New(), Labels = List<string>.New(), Lists = List<Items>.New(),
+            Bufs = List<edit.Buffer>.New(), Codes = List<Code>.New(), Focus = 0, Hover = 0,
+            Pressed = 0, Drag = 0, Before = 0, Cells = false, RowH = 1, LineH = 1, Act = ACT_NONE,
+            ActItem = 0, Clip = string.New(), SystemClip = false
+        };
         t.Make(Kind.Column, 0, "");         // 0: none
         t.Make(Kind.Column, 0, "");         // 1: the root
         return t;
@@ -94,8 +174,9 @@ public struct Tree {
         u32 id = this.Nodes.Len() as u32;
         this.Nodes.Push(new Node {
             K = k, Parent = parent, First = 0, Last = 0, Next = 0, Style = BODY, GapStep = NONE, PadStep = NONE,
-            Cross = Align.Start, Grow = 0, On = false, Primary = false, Enabled = true,
-            MW = 0, MH = 0, X = 0, Y = 0, W = 0, H = 0,
+            Cross = Align.Start, Grow = 0, On = false, Primary = false, Enabled = true, Hidden = false,
+            Vertical = false, MW = 0, MH = 0, X = 0, Y = 0, W = 0, H = 0, ScrollX = 0, ScrollY = 0,
+            Extent = 0, Ratio = 500, Data = 0, Data2 = 0, PX = 0, PY = 0, Pend = PEND_NONE, Reveal = false,
         });
         this.Labels.Push(string.From(label));
         if (id > 1) {
@@ -106,6 +187,24 @@ public struct Tree {
         }
         return id;
     }
+
+    u32 NewItems(ref this) {
+        u32 at = this.Lists.Len() as u32;
+        this.Lists.Push(new Items {
+            Labels = List<string>.New(), Depth = List<u32>.New(), Open = List<bool>.New(),
+            Shown = List<u32>.New(), Ends = List<i32>.New(), Sel = 0, Closable = false
+        });
+        return at;
+    }
+
+    u32 NewCode(ref this, bool single) {
+        u32 at = this.Bufs.Len() as u32;
+        this.Bufs.Push(edit.Buffer.New());
+        this.Codes.Push(new Code { Keywords = string.New(), Comment = string.New(), Gutter = !single, Single = single });
+        return at;
+    }
+
+    Node N(in this, u32 id) => this.Nodes.Get(id as usize);
 
     // ---------------------------------------------------------------- building
 
@@ -156,6 +255,83 @@ public struct Tree {
 
     public u32 Divider(ref this, u32 parent) => this.Make(Kind.Divider, parent, "");
 
+    // A column that scrolls: it takes the space it is given (it grows), and the wheel
+    // moves its children.
+    public u32 Scroll(ref this, u32 parent) {
+        u32 id = this.Make(Kind.Scroll, parent, "");
+        this.SetGap(id, S);
+        this.SetGrow(id, 1);
+        return id;
+    }
+
+    // A list of items (AddItem), one selected; it grows.
+    public u32 ListView(ref this, u32 parent) {
+        u32 id = this.Make(Kind.ListView, parent, "");
+        this.Nodes.AsMutSlice()[id as usize].Data = this.NewItems();
+        this.SetGrow(id, 1);
+        return id;
+    }
+
+    // A tree of items: AddItem with a depth; an item followed by deeper ones opens and
+    // closes. It grows.
+    public u32 TreeView(ref this, u32 parent) {
+        u32 id = this.Make(Kind.TreeView, parent, "");
+        this.Nodes.AsMutSlice()[id as usize].Data = this.NewItems();
+        this.SetGrow(id, 1);
+        return id;
+    }
+
+    // A row of tabs (AddItem); closable: each has a close mark (ACT_CLOSE).
+    public u32 Tabs(ref this, u32 parent, bool closable) {
+        u32 id = this.Make(Kind.Tabs, parent, "");
+        u32 at = this.NewItems();
+        this.Lists.AsMutSlice()[at as usize].Closable = closable;
+        this.Nodes.AsMutSlice()[id as usize].Data = at;
+        return id;
+    }
+
+    // Two panes: the next two children added, side by side, or one above the other when
+    // vertical; dragging the divider between them moves it. It grows.
+    public u32 Split(ref this, u32 parent, bool vertical) {
+        u32 id = this.Make(Kind.Split, parent, "");
+        this.Nodes.AsMutSlice()[id as usize].Vertical = vertical;
+        this.SetGrow(id, 1);
+        return id;
+    }
+
+    // One line of text to edit; Enter submits it (ACT_OPEN).
+    public u32 TextField(ref this, u32 parent, str text) {
+        u32 id = this.Make(Kind.TextField, parent, "");
+        u32 at = this.NewCode(true);
+        this.Bufs.AsMutSlice()[at as usize].Load(text);
+        this.Bufs.AsMutSlice()[at as usize].SetCursor(edit.Pos.At(0, text.Len));
+        this.Nodes.AsMutSlice()[id as usize].Data = at;
+        return id;
+    }
+
+    // A code editor holding text; it grows.
+    public u32 Editor(ref this, u32 parent, str text) {
+        u32 id = this.Make(Kind.Editor, parent, "");
+        u32 at = this.NewCode(false);
+        this.Bufs.AsMutSlice()[at as usize].Load(text);
+        this.Nodes.AsMutSlice()[id as usize].Data = at;
+        this.SetGrow(id, 1);
+        return id;
+    }
+
+    // A command palette over items (AddItem); hidden until OpenPalette. Typing filters
+    // the items; Enter chooses one (ACT_OPEN, Item() is which), Escape closes it.
+    public u32 Palette(ref this, u32 parent) {
+        u32 id = this.Make(Kind.Palette, parent, "");
+        u32 items = this.NewItems();
+        u32 query = this.NewCode(true);
+        mut Node[] ns = this.Nodes.AsMutSlice();
+        ns[id as usize].Data = items;
+        ns[id as usize].Data2 = query;
+        ns[id as usize].Hidden = true;
+        return id;
+    }
+
     // ---------------------------------------------------------------- properties
 
     public void SetGap(ref this, u32 id, u8 step) {
@@ -178,6 +354,12 @@ public struct Tree {
         this.Nodes.AsMutSlice()[id as usize].Enabled = on;
     }
 
+    // Shows or hides a component (a hidden one takes no space).
+    public void SetVisible(ref this, u32 id, bool on) {
+        this.Nodes.AsMutSlice()[id as usize].Hidden = !on;
+        if (!on && this.Focus != 0 && this.Within(this.Focus, id)) this.Focus = 0;
+    }
+
     public void SetText(ref this, u32 id, str label) {
         this.Labels.Set(id as usize, string.From(label));
     }
@@ -186,24 +368,304 @@ public struct Tree {
         this.Nodes.AsMutSlice()[id as usize].On = on;
     }
 
-    public bool Checked(in this, u32 id) => this.Nodes.Get(id as usize).On;
-    public Kind KindOf(in this, u32 id) => this.Nodes.Get(id as usize).K;
+    // A split's first pane's share, in thousandths.
+    public void SetRatio(ref this, u32 id, u32 thousandths) {
+        u32 r = thousandths;
+        if (r > 1000) r = 1000;
+        this.Nodes.AsMutSlice()[id as usize].Ratio = r;
+    }
+
+    public void SetFocus(ref this, u32 id) {
+        this.Focus = id;
+    }
+
+    // Copy, cut and paste use the system clipboard (std.clipboard), not one of their own.
+    public void UseSystemClipboard(ref this, bool on) {
+        this.SystemClip = on;
+    }
+
+    public bool Checked(in this, u32 id) => this.N(id).On;
+    public bool Visible(in this, u32 id) => !this.N(id).Hidden;
+    public Kind KindOf(in this, u32 id) => this.N(id).K;
     public u32 Focused(in this) => this.Focus;
+    public u32 Ratio(in this, u32 id) => this.N(id).Ratio;
+
+    // What the last input did (ACT_*) and the item it concerned.
+    public u32 Action(in this) => this.Act;
+    public usize Item(in this) => this.ActItem;
 
     // A component's laid-out bounds.
-    public i32 X(in this, u32 id) => this.Nodes.Get(id as usize).X;
-    public i32 Y(in this, u32 id) => this.Nodes.Get(id as usize).Y;
-    public i32 Width(in this, u32 id) => this.Nodes.Get(id as usize).W;
-    public i32 Height(in this, u32 id) => this.Nodes.Get(id as usize).H;
+    public i32 X(in this, u32 id) => this.N(id).X;
+    public i32 Y(in this, u32 id) => this.N(id).Y;
+    public i32 Width(in this, u32 id) => this.N(id).W;
+    public i32 Height(in this, u32 id) => this.N(id).H;
+
+    // A scroll view's offset, a list's or editor's first row in view.
+    public i32 ScrollOf(in this, u32 id) => this.N(id).ScrollY;
+    public void ScrollTo(ref this, u32 id, i32 at) {
+        i32 v = at;
+        if (v < 0) v = 0;
+        this.Nodes.AsMutSlice()[id as usize].ScrollY = v;
+    }
+
+    // ---------------------------------------------------------------- items
+
+    // Adds an item to a list, tree, tabs or palette; depth is a tree item's nesting (0
+    // elsewhere). A tree item starts closed. Returns its index.
+    public usize AddItem(ref this, u32 id, str label, u32 depth) {
+        usize at = 0;
+        {
+            mut Items[] ls = this.Lists.AsMutSlice();
+            usize i = this.N(id).Data as usize;
+            at = ls[i].Labels.Len();
+            ls[i].Labels.Push(string.From(label));
+            ls[i].Depth.Push(depth);
+            ls[i].Open.Push(false);
+        }
+        this.Refresh(id);
+        return at;
+    }
+
+    // Removes item i (a tab closed, say); the selection stays on the item it was on, or
+    // the one before.
+    public void RemoveItem(ref this, u32 id, usize i) {
+        {
+            mut Items[] ls = this.Lists.AsMutSlice();
+            usize d = this.N(id).Data as usize;
+            if (i >= ls[d].Labels.Len()) return;
+            List<string> labels = List<string>.New();
+            List<u32> depth = List<u32>.New();
+            List<bool> open = List<bool>.New();
+            usize n = ls[d].Labels.Len();
+            for (usize k = 0; k < n; k++) {
+                if (k == i) continue;
+                labels.Push(string.From(ls[d].Labels.AsSlice()[k].AsStr()));
+                depth.Push(ls[d].Depth.Get(k));
+                open.Push(ls[d].Open.Get(k));
+            }
+            ls[d].Labels = labels;
+            ls[d].Depth = depth;
+            ls[d].Open = open;
+        }
+        usize sel = this.SelectedRow(id);
+        this.Refresh(id);
+        if (sel > 0 && sel >= i) this.SetRow(id, sel - 1);
+    }
+
+    public void ClearItems(ref this, u32 id) {
+        {
+            mut Items[] ls = this.Lists.AsMutSlice();
+            usize d = this.N(id).Data as usize;
+            ls[d].Labels = List<string>.New();
+            ls[d].Depth = List<u32>.New();
+            ls[d].Open = List<bool>.New();
+            ls[d].Sel = 0;
+        }
+        this.Refresh(id);
+        this.Nodes.AsMutSlice()[id as usize].ScrollY = 0;
+    }
+
+    public usize ItemCount(in this, u32 id) => this.Lists.AsSlice()[this.N(id).Data as usize].Labels.Len();
+    public str ItemText(in this, u32 id, usize i) => this.Lists.AsSlice()[this.N(id).Data as usize].Labels.AsSlice()[i].AsStr();
+    public void SetItemText(ref this, u32 id, usize i, str label) {
+        mut Items[] ls = this.Lists.AsMutSlice();
+        ls[this.N(id).Data as usize].Labels.Set(i, string.From(label));
+    }
+
+    // The selected item (ItemCount if there is none).
+    public usize Selected(in this, u32 id) {
+        Items[] ls = this.Lists.AsSlice();
+        usize d = this.N(id).Data as usize;
+        if (ls[d].Sel >= ls[d].Shown.Len()) return ls[d].Labels.Len();
+        return ls[d].Shown.Get(ls[d].Sel) as usize;
+    }
+
+    // Selects item i, opening the tree items around it, and scrolls it into view.
+    public void Select(ref this, u32 id, usize i) {
+        if (this.N(id).K == Kind.TreeView) {
+            // open every item it is inside
+            mut Items[] ls = this.Lists.AsMutSlice();
+            usize d = this.N(id).Data as usize;
+            if (i < ls[d].Depth.Len()) {
+                u32 want = ls[d].Depth.Get(i);
+                usize k = i;
+                while (k > 0 && want > 0) {
+                    k--;
+                    if (ls[d].Depth.Get(k) < want) {
+                        ls[d].Open.Set(k, true);
+                        want = ls[d].Depth.Get(k);
+                    }
+                }
+            }
+        }
+        this.Refresh(id);
+        usize rows = this.Lists.AsSlice()[this.N(id).Data as usize].Shown.Len();
+        for (usize r = 0; r < rows; r++) {
+            if (this.Lists.AsSlice()[this.N(id).Data as usize].Shown.Get(r) as usize == i) {
+                this.SetRow(id, r);
+                return;
+            }
+        }
+    }
+
+    // Opens or closes tree item i.
+    public void SetOpen(ref this, u32 id, usize i, bool open) {
+        usize item = this.Selected(id);
+        {
+            mut Items[] ls = this.Lists.AsMutSlice();
+            ls[this.N(id).Data as usize].Open.Set(i, open);
+        }
+        this.Refresh(id);
+        if (item < this.ItemCount(id)) this.Select(id, item);
+    }
+
+    public bool IsOpen(in this, u32 id, usize i) => this.Lists.AsSlice()[this.N(id).Data as usize].Open.Get(i);
+
+    // Whether tree item i has items inside it.
+    public bool HasChildren(in this, u32 id, usize i) {
+        Items[] ls = this.Lists.AsSlice();
+        usize d = this.N(id).Data as usize;
+        return i + 1 < ls[d].Depth.Len() && ls[d].Depth.Get(i + 1) > ls[d].Depth.Get(i);
+    }
+
+    usize SelectedRow(in this, u32 id) => this.Lists.AsSlice()[this.N(id).Data as usize].Sel;
+    usize RowCount(in this, u32 id) => this.Lists.AsSlice()[this.N(id).Data as usize].Shown.Len();
+    usize ItemAtRow(in this, u32 id, usize r) => this.Lists.AsSlice()[this.N(id).Data as usize].Shown.Get(r) as usize;
+
+    // The selected row becomes r (kept in range) and comes into view.
+    void SetRow(ref this, u32 id, usize r) {
+        usize rows = this.RowCount(id);
+        usize v = r;
+        if (rows == 0) v = 0;
+        else if (v >= rows) v = rows - 1;
+        this.Lists.AsMutSlice()[this.N(id).Data as usize].Sel = v;
+        this.Nodes.AsMutSlice()[id as usize].Reveal = true;
+    }
+
+    // The rows again: every item, less those inside a closed tree item, or (a palette)
+    // those matching the query, best first.
+    void Refresh(ref this, u32 id) {
+        Node d = this.N(id);
+        if (d.K == Kind.Palette) {
+            string q = this.Bufs.AsSlice()[d.Data2 as usize].Text();
+            List<u32> rows = List<u32>.New();
+            List<u32> scores = List<u32>.New();
+            usize n = this.Lists.AsSlice()[d.Data as usize].Labels.Len();
+            for (usize i = 0; i < n; i++) {
+                u32? s = Fuzzy(this.Lists.AsSlice()[d.Data as usize].Labels.AsSlice()[i].AsStr(), q.AsStr());
+                if (s.IsNone()) continue;
+                // insert by score, stable
+                u32 sc = s.Unwrap();
+                rows.Push(i as u32);
+                scores.Push(sc);
+                mut u32[] rs = rows.AsMutSlice();
+                mut u32[] ss = scores.AsMutSlice();
+                usize k = rs.Len - 1;
+                while (k > 0 && ss[k - 1] > sc) {
+                    rs[k] = rs[k - 1];
+                    ss[k] = ss[k - 1];
+                    k--;
+                }
+                rs[k] = i as u32;
+                ss[k] = sc;
+            }
+            mut Items[] ms = this.Lists.AsMutSlice();
+            ms[d.Data as usize].Shown = rows;
+            ms[d.Data as usize].Sel = 0;
+            return;
+        }
+        mut Items[] ls = this.Lists.AsMutSlice();
+        usize at = d.Data as usize;
+        List<u32> rows = List<u32>.New();
+        usize n = ls[at].Labels.Len();
+        u32 closedAt = 0xFFFFFFFF;          // the depth of a closed item being skipped
+        for (usize i = 0; i < n; i++) {
+            u32 dep = ls[at].Depth.Get(i);
+            if (closedAt != 0xFFFFFFFF) {
+                if (dep > closedAt) continue;
+                closedAt = 0xFFFFFFFF;
+            }
+            rows.Push(i as u32);
+            bool parent = i + 1 < n && ls[at].Depth.Get(i + 1) > dep;
+            if (d.K == Kind.TreeView && parent && !ls[at].Open.Get(i)) closedAt = dep;
+        }
+        ls[at].Shown = rows;
+        if (ls[at].Sel >= ls[at].Shown.Len() && ls[at].Shown.Len() > 0) ls[at].Sel = ls[at].Shown.Len() - 1;
+    }
+
+    // ---------------------------------------------------------------- text
+
+    // The buffer of a text field, editor or palette's query (one element): the whole
+    // envo.edit API. After moving its cursor, RevealCursor brings it into view.
+    public mut edit.Buffer[] Buffer(ref this, u32 id) {
+        Node d = this.N(id);
+        usize at = d.Data as usize;
+        if (d.K == Kind.Palette) at = d.Data2 as usize;
+        mut edit.Buffer[] all = this.Bufs.AsMutSlice();
+        return all[at..at + 1];
+    }
+
+    // An editor or text field scrolls its cursor into view at the next layout.
+    public void RevealCursor(ref this, u32 id) {
+        this.Nodes.AsMutSlice()[id as usize].Reveal = true;
+    }
+
+    // The text of a text field or editor.
+    public string Value(in this, u32 id) => this.Bufs.AsSlice()[this.N(id).Data as usize].Text();
+
+    // Replaces the text of a text field or editor (and forgets its history).
+    public void SetValue(ref this, u32 id, str text) {
+        usize at = this.N(id).Data as usize;
+        this.Bufs.AsMutSlice()[at].Load(text);
+        mut Node[] ns = this.Nodes.AsMutSlice();
+        ns[id as usize].ScrollX = 0;
+        ns[id as usize].ScrollY = 0;
+    }
+
+    // An editor's highlighting: keywords (separated by spaces) and a line comment's start.
+    public void SetSyntax(ref this, u32 id, str keywords, str lineComment) {
+        mut Code[] cs = this.Codes.AsMutSlice();
+        usize at = this.N(id).Data as usize;
+        cs[at].Keywords = string.From(keywords);
+        cs[at].Comment = string.From(lineComment);
+    }
+
+    // Line numbers in an editor's gutter (on by default).
+    public void SetGutter(ref this, u32 id, bool on) {
+        this.Codes.AsMutSlice()[this.N(id).Data as usize].Gutter = on;
+    }
+
+    // ---------------------------------------------------------------- the palette
+
+    // Shows a palette with an empty query and all its items, and gives it the focus.
+    public void OpenPalette(ref this, u32 id) {
+        {
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].Hidden = false;
+            ns[id as usize].ScrollY = 0;
+        }
+        this.Bufs.AsMutSlice()[this.N(id).Data2 as usize].Load("");
+        this.Refresh(id);
+        if (this.Focus != id) this.Before = this.Focus;
+        this.Focus = id;
+    }
+
+    // Hides a palette; the focus goes back where it was.
+    public void ClosePalette(ref this, u32 id) {
+        this.Nodes.AsMutSlice()[id as usize].Hidden = true;
+        if (this.Focus == id) this.Focus = this.Before;
+    }
 
     // ---------------------------------------------------------------- layout
 
     // Lays the tree out in a width x height pixel area, measuring text with f.
     public void LayoutPixels(ref this, in font.Font f, in lumen.Theme th, i32 width, i32 height) {
         this.Cells = false;
+        this.RowH = th.Body.Line as i32 + 2 * th.Xs as i32;
+        this.LineH = th.Body.Line as i32;
         u32 n = this.Nodes.Len() as u32;
         for (u32 id = 2; id < n; id++) {
-            Node d = this.Nodes.Get(id as usize);
+            Node d = this.N(id);
             str label = this.Labels.AsSlice()[id as usize].AsStr();
             i32 w = 0;
             i32 h = 0;
@@ -219,20 +681,40 @@ public struct Tree {
                 h = th.ControlHeight as i32;
             } else if (d.K == Kind.Divider) {
                 h = 1;
+            } else if (d.K == Kind.TextField) {
+                w = 8 * th.ControlHeight as i32;
+                h = th.ControlHeight as i32;
+            } else if (d.K == Kind.Tabs) {
+                // where each tab ends
+                List<i32> ends = List<i32>.New();
+                Items[] ls = this.Lists.AsSlice();
+                usize at = d.Data as usize;
+                i32 x = 0;
+                for (usize i = 0; i < ls[at].Labels.Len(); i++) {
+                    x += f.Measure(ls[at].Labels.AsSlice()[i].AsStr(), th.Body.Size) + 2 * th.M as i32;
+                    if (ls[at].Closable) x += th.Body.Size as i32;
+                    ends.Push(x);
+                }
+                this.Lists.AsMutSlice()[at].Ends = ends;
+                w = x;
+                h = th.ControlHeight as i32;
             }
             mut Node[] ns = this.Nodes.AsMutSlice();
             ns[id as usize].MW = w;
             ns[id as usize].MH = h;
         }
         this.Solve(th, width, height);
+        this.EditorsPixels(f, th);
     }
 
     // Lays the tree out in a cols x rows terminal.
     public void LayoutCells(ref this, in lumen.Theme th, i32 cols, i32 rows) {
         this.Cells = true;
+        this.RowH = 1;
+        this.LineH = 1;
         u32 n = this.Nodes.Len() as u32;
         for (u32 id = 2; id < n; id++) {
-            Node d = this.Nodes.Get(id as usize);
+            Node d = this.N(id);
             str label = this.Labels.AsSlice()[id as usize].AsStr();
             i32 len = Chars(label);
             i32 w = 0;
@@ -248,12 +730,29 @@ public struct Tree {
                 h = 1;
             } else if (d.K == Kind.Divider) {
                 h = 1;
+            } else if (d.K == Kind.TextField) {
+                w = 20;
+                h = 1;
+            } else if (d.K == Kind.Tabs) {
+                List<i32> ends = List<i32>.New();
+                Items[] ls = this.Lists.AsSlice();
+                usize at = d.Data as usize;
+                i32 x = 0;
+                for (usize i = 0; i < ls[at].Labels.Len(); i++) {
+                    x += Chars(ls[at].Labels.AsSlice()[i].AsStr()) + 2;      // " name "
+                    if (ls[at].Closable) x += 2;                                // "× "
+                    ends.Push(x);
+                }
+                this.Lists.AsMutSlice()[at].Ends = ends;
+                w = x;
+                h = 1;
             }
             mut Node[] ns = this.Nodes.AsMutSlice();
             ns[id as usize].MW = w;
             ns[id as usize].MH = h;
         }
         this.Solve(th, cols, rows);
+        this.EditorsCells();
     }
 
     // A spacing step in this layout's units.
@@ -286,19 +785,57 @@ public struct Tree {
         return 0;
     }
 
-    bool IsBox(Kind k) => k == Kind.Column || k == Kind.Row || k == Kind.Card;
+    // A split's divider: its thickness.
+    i32 Gutter(in this) {
+        if (this.Cells) return 1;
+        return 5;
+    }
+
+    bool IsBox(Kind k) => k == Kind.Column || k == Kind.Row || k == Kind.Card || k == Kind.Scroll || k == Kind.Split;
+
+    // Whether children go left to right.
+    bool Across(in this, in Node d) => d.K == Kind.Row || (d.K == Kind.Split && !d.Vertical);
 
     void Solve(ref this, in lumen.Theme th, i32 width, i32 height) {
         this.Measure(th, 1);
         this.Arrange(th, 1, 0, 0, width, height);
+        // palettes float at the top, across the middle
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.N(id);
+            if (d.K != Kind.Palette || d.Hidden) continue;
+            i32 margin = this.Step(th, XL);
+            i32 w = width - 2 * margin;
+            i32 most = 60;
+            if (!this.Cells) most = 600;
+            if (w > most) w = most;
+            usize rows = this.RowCount(id);
+            if (rows > PALETTE_ROWS) rows = PALETTE_ROWS;
+            i32 border = 1;
+            i32 field = 1;
+            if (!this.Cells) {
+                border = th.S as i32;
+                field = th.ControlHeight as i32;
+            }
+            i32 h = 2 * border + field + rows as i32 * this.RowH;
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].Extent = border + field;        // where the rows start
+            ns[id as usize].X = (width - w) / 2;
+            ns[id as usize].Y = margin;
+            ns[id as usize].W = w;
+            ns[id as usize].H = h;
+        }
+        this.KeepRowsInView();
     }
 
-    // Containers' sizes from their children's, bottom up.
+    // Containers' sizes from their children's, bottom up. A scroll view, list, tree and
+    // editor ask for no height of their own: they take what they are given.
     void Measure(ref this, in lumen.Theme th, u32 id) {
-        Node d = this.Nodes.Get(id as usize);
+        Node d = this.N(id);
         if (!this.IsBox(d.K)) return;
-        bool row = d.K == Kind.Row;
+        bool row = this.Across(d);
         i32 gap = this.GapOf(th, d.K, d.GapStep);
+        if (d.K == Kind.Split) gap = this.Gutter();
         i32 pad = this.Step(th, d.PadStep) + this.Border(d.K);
         i32 main = 0;
         i32 cross = 0;
@@ -306,7 +843,9 @@ public struct Tree {
         u32 c = d.First;
         while (c != 0) {
             this.Measure(th, c);
-            Node k = this.Nodes.Get(c as usize);
+            Node k = this.N(c);
+            c = k.Next;
+            if (k.Hidden || k.K == Kind.Palette) continue;
             i32 km = k.MH;
             i32 kc = k.MW;
             if (row) {
@@ -316,10 +855,11 @@ public struct Tree {
             main += km;
             if (kc > cross) cross = kc;
             count++;
-            c = k.Next;
         }
         if (count > 1) main += gap * (count - 1) as i32;
         mut Node[] ns = this.Nodes.AsMutSlice();
+        ns[id as usize].Extent = main + 2 * pad;
+        if (d.K == Kind.Scroll) main = 0;
         if (row) {
             ns[id as usize].MW = main + 2 * pad;
             ns[id as usize].MH = cross + 2 * pad;
@@ -330,7 +870,8 @@ public struct Tree {
     }
 
     // Bounds top down: each container shares what is left over among the children that
-    // grow, and places them across by its alignment.
+    // grow, and places them across by its alignment. A split shares by its ratio; a scroll
+    // view lays its children out at their own heights, moved up by its offset.
     void Arrange(ref this, in lumen.Theme th, u32 id, i32 x, i32 y, i32 w, i32 h) {
         {
             mut Node[] ns = this.Nodes.AsMutSlice();
@@ -339,9 +880,13 @@ public struct Tree {
             ns[id as usize].W = w;
             ns[id as usize].H = h;
         }
-        Node d = this.Nodes.Get(id as usize);
+        Node d = this.N(id);
         if (!this.IsBox(d.K)) return;
-        bool row = d.K == Kind.Row;
+        if (d.K == Kind.Split) {
+            this.ArrangeSplit(th, id);
+            return;
+        }
+        bool row = this.Across(d);
         i32 gap = this.GapOf(th, d.K, d.GapStep);
         i32 pad = this.Step(th, d.PadStep) + this.Border(d.K);
         i32 innerMain = h - 2 * pad;
@@ -350,42 +895,53 @@ public struct Tree {
             innerMain = w - 2 * pad;
             innerCross = h - 2 * pad;
         }
+        i32 shift = 0;
+        if (d.K == Kind.Scroll) {
+            // the offset stays inside the content
+            i32 most = d.Extent - h;
+            if (most < 0) most = 0;
+            i32 off = d.ScrollY;
+            if (off > most) off = most;
+            if (off < 0) off = 0;
+            this.Nodes.AsMutSlice()[id as usize].ScrollY = off;
+            shift = off;
+            innerMain = d.Extent - 2 * pad;
+        }
         // what the children take, and the shares of what is left
         i32 used = 0;
         u32 shares = 0;
         u32 count = 0;
         u32 c = d.First;
         while (c != 0) {
-            Node k = this.Nodes.Get(c as usize);
+            Node k = this.N(c);
+            c = k.Next;
+            if (k.Hidden || k.K == Kind.Palette) continue;
             if (row) used += k.MW;
             else used += k.MH;
             shares += k.Grow;
             count++;
-            c = k.Next;
         }
         if (count > 1) used += gap * (count - 1) as i32;
         i32 extra = innerMain - used;
         if (extra < 0) extra = 0;
         i32 at = pad;
         c = d.First;
-        i32 given = 0;
         while (c != 0) {
-            Node k = this.Nodes.Get(c as usize);
+            u32 cid = c;
+            Node k = this.N(cid);
+            c = k.Next;
+            if (k.Hidden || k.K == Kind.Palette) continue;
             i32 km = k.MH;
             i32 kc = k.MW;
             if (row) {
                 km = k.MW;
                 kc = k.MH;
             }
-            if (k.Grow > 0 && shares > 0) {
-                i32 more = (extra as i64 * k.Grow as i64 / shares as i64) as i32;
-                given += more;
-                km += more;
-            }
+            if (k.Grow > 0 && shares > 0) km += (extra as i64 * k.Grow as i64 / shares as i64) as i32;
             // dividers and stretched children fill the cross axis
             i32 cs = kc;
             i32 off = 0;
-            if (d.Cross == Align.Stretch || k.K == Kind.Divider || this.IsBox(k.K) && d.K != Kind.Row) {
+            if (d.Cross == Align.Stretch || k.K == Kind.Divider || (this.IsBox(k.K) && !row) || IsWide(k.K)) {
                 cs = innerCross;
             } else if (d.Cross == Align.Center) {
                 off = (innerCross - kc) / 2;
@@ -393,27 +949,312 @@ public struct Tree {
                 off = innerCross - kc;
             }
             if (cs > innerCross) cs = innerCross;
-            if (row) this.Arrange(th, c, x + at, y + pad + off, km, cs);
-            else this.Arrange(th, c, x + pad + off, y + at, cs, km);
+            if (row) this.Arrange(th, cid, x + at, y + pad + off, km, cs);
+            else this.Arrange(th, cid, x + pad + off, y + at - shift, cs, km);
             at += km + gap;
-            c = k.Next;
         }
     }
 
-    // ---------------------------------------------------------------- input
-
-    bool Focusable(in this, u32 id) {
-        Node d = this.Nodes.Get(id as usize);
-        return d.Enabled && (d.K == Kind.Button || d.K == Kind.Checkbox);
+    // A split's two panes, by its ratio, with the divider between.
+    void ArrangeSplit(ref this, in lumen.Theme th, u32 id) {
+        Node d = this.N(id);
+        u32 a = 0;
+        u32 b = 0;
+        u32 c = d.First;
+        while (c != 0) {
+            Node k = this.N(c);
+            if (!k.Hidden && k.K != Kind.Palette) {
+                if (a == 0) a = c;
+                else if (b == 0) b = c;
+            }
+            c = k.Next;
+        }
+        i32 g = this.Gutter();
+        i32 total = d.H;
+        if (!d.Vertical) total = d.W;
+        if (b == 0) {
+            if (a != 0) this.Arrange(th, a, d.X, d.Y, d.W, d.H);
+            return;
+        }
+        i32 first = ((total - g) as i64 * d.Ratio as i64 / 1000) as i32;
+        if (first < 0) first = 0;
+        if (first > total - g) first = total - g;
+        i32 second = total - g - first;
+        if (d.Vertical) {
+            this.Arrange(th, a, d.X, d.Y, d.W, first);
+            this.Arrange(th, b, d.X, d.Y + first + g, d.W, second);
+        } else {
+            this.Arrange(th, a, d.X, d.Y, first, d.H);
+            this.Arrange(th, b, d.X + first + g, d.Y, second, d.H);
+        }
     }
 
-    // The focusable component at (x, y); 0 if none.
-    public u32 HitTest(in this, i32 x, i32 y) {
+    // Lists and trees keep their selected row in view when asked to (Reveal).
+    void KeepRowsInView(ref this) {
         u32 n = this.Nodes.Len() as u32;
         for (u32 id = 2; id < n; id++) {
+            Node d = this.N(id);
+            if (d.K != Kind.ListView && d.K != Kind.TreeView && d.K != Kind.Palette) continue;
+            i32 view = this.RowsIn(id);
+            i32 rows = this.RowCount(id) as i32;
+            i32 top = d.ScrollY;
+            if (d.Reveal) {
+                i32 sel = this.SelectedRow(id) as i32;
+                if (sel < top) top = sel;
+                if (view > 0 && sel >= top + view) top = sel - view + 1;
+            }
+            if (top > rows - view) top = rows - view;
+            if (top < 0) top = 0;
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].ScrollY = top;
+            ns[id as usize].Reveal = false;
+        }
+    }
+
+    // How many rows a list, tree or palette shows.
+    i32 RowsIn(in this, u32 id) {
+        Node d = this.N(id);
+        if (d.K == Kind.Palette) return PALETTE_ROWS as i32;
+        if (this.RowH <= 0) return 0;
+        return d.H / this.RowH;
+    }
+
+    // ---------------------------------------------------------------- editors at layout
+
+    // The text area of an editor or text field: where its text starts (after the gutter
+    // and padding) and how wide it is, given the gutter's width.
+    i32 TextLeft(in this, u32 id, i32 gutter) {
+        Node d = this.N(id);
+        if (this.Cells) {
+            if (d.K == Kind.TextField) return d.X + 1;
+            return d.X + gutter;
+        }
+        return d.X + gutter + 8;
+    }
+
+    // The gutter's width: room for the last line number.
+    i32 GutterWidth(in this, u32 id, i32 digit) {
+        Node d = this.N(id);
+        if (d.K != Kind.Editor || !this.Codes.AsSlice()[d.Data as usize].Gutter) return 0;
+        usize n = this.Bufs.AsSlice()[d.Data as usize].LineCount();
+        i32 digits = 1;
+        while (n >= 10) {
+            n /= 10;
+            digits++;
+        }
+        if (digits < 3) digits = 3;
+        if (this.Cells) return digits + 2;
+        return digits * digit + 16;
+    }
+
+    // Pointer work, and the cursor kept in view, for each editor and text field (pixels).
+    void EditorsPixels(ref this, in font.Font f, in lumen.Theme th) {
+        u32 n = this.Nodes.Len() as u32;
+        i32 digit = f.Measure("0", th.Body.Size);
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.N(id);
+            if (d.K != Kind.Editor && d.K != Kind.TextField && d.K != Kind.Palette) continue;
+            usize at = d.Data as usize;
+            if (d.K == Kind.Palette) at = d.Data2 as usize;
+            i32 left = this.TextLeft(id, this.GutterWidth(id, digit));
+            i32 top = d.Y;
+            i32 lh = this.LineH;
+            if (d.K == Kind.TextField || d.K == Kind.Palette) top = d.Y + (th.ControlHeight as i32 - lh) / 2;
+            if (d.K == Kind.Palette) {
+                left = d.X + th.S as i32 + 8;
+                top = d.Y + th.S as i32 + (th.ControlHeight as i32 - lh) / 2;
+            }
+            i32 width = d.X + d.W - left - 8;
+            usize tab = 4;
+            i32 space = f.Measure(" ", th.Body.Size);
+            mut edit.Buffer[] bs = this.Bufs.AsMutSlice();
+            if (d.Pend != PEND_NONE) {
+                i32 line = d.ScrollY + (d.PY - top) / lh;
+                if (d.PY < top) line = d.ScrollY - 1;
+                if (line < 0) line = 0;
+                if (line >= bs[at].LineCount() as i32) line = bs[at].LineCount() as i32 - 1;
+                str t = bs[at].Line(line as usize);
+                usize col = ColAtPixels(f, t, d.PX - left + d.ScrollX, th.Body.Size, space, tab);
+                PointerAt(ref bs[at], d.Pend, edit.Pos.At(line as usize, col));
+            }
+            // the cursor in view
+            i32 rows = d.H / lh;
+            if (d.K != Kind.Editor) rows = 1;
+            i32 scrollY = d.ScrollY;
+            i32 scrollX = d.ScrollX;
+            edit.Pos cur = bs[at].Cursor();
+            if (d.Reveal || d.Pend != PEND_NONE) {
+                if ((cur.Line as i32) < scrollY) scrollY = cur.Line as i32;
+                if (rows > 0 && cur.Line as i32 >= scrollY + rows) scrollY = cur.Line as i32 - rows + 1;
+                i32 cx = XOfPixels(f, bs[at].Line(cur.Line), cur.Col, th.Body.Size, space, tab);
+                if (cx < scrollX) scrollX = cx - 4 * space;
+                if (cx > scrollX + width - space) scrollX = cx - width + 4 * space;
+                if (scrollX < 0) scrollX = 0;
+            }
+            i32 most = bs[at].LineCount() as i32 - 1;
+            if (scrollY > most) scrollY = most;
+            if (scrollY < 0) scrollY = 0;
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].ScrollY = scrollY;
+            ns[id as usize].ScrollX = scrollX;
+            ns[id as usize].Pend = PEND_NONE;
+            ns[id as usize].Reveal = false;
+        }
+    }
+
+    // The same in cells: a character to a cell, a tab to the next tab stop.
+    void EditorsCells(ref this) {
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.N(id);
+            if (d.K != Kind.Editor && d.K != Kind.TextField && d.K != Kind.Palette) continue;
+            usize at = d.Data as usize;
+            if (d.K == Kind.Palette) at = d.Data2 as usize;
+            i32 left = this.TextLeft(id, this.GutterWidth(id, 1));
+            i32 top = d.Y;
+            if (d.K == Kind.Palette) {
+                left = d.X + 2;
+                top = d.Y + 1;
+            }
+            i32 width = d.X + d.W - left;
+            mut edit.Buffer[] bs = this.Bufs.AsMutSlice();
+            if (d.Pend != PEND_NONE) {
+                i32 line = d.ScrollY + d.PY - top;
+                if (line < 0) line = 0;
+                if (line >= bs[at].LineCount() as i32) line = bs[at].LineCount() as i32 - 1;
+                i32 v = d.PX - left + d.ScrollX;
+                if (v < 0) v = 0;
+                edit.Pos p = bs[at].Clamp(edit.Pos.At(line as usize, 0));
+                usize col = ColAtVisual(ref bs[at], line as usize, v as usize);
+                PointerAt(ref bs[at], d.Pend, edit.Pos.At(p.Line, col));
+            }
+            i32 rows = d.H;
+            if (d.K != Kind.Editor) rows = 1;
+            i32 scrollY = d.ScrollY;
+            i32 scrollX = d.ScrollX;
+            edit.Pos cur = bs[at].Cursor();
+            if (d.Reveal || d.Pend != PEND_NONE) {
+                if ((cur.Line as i32) < scrollY) scrollY = cur.Line as i32;
+                if (rows > 0 && cur.Line as i32 >= scrollY + rows) scrollY = cur.Line as i32 - rows + 1;
+                i32 cx = bs[at].VisualCol(cur) as i32;
+                if (cx < scrollX) scrollX = cx;
+                if (cx >= scrollX + width) scrollX = cx - width + 1;
+                if (scrollX < 0) scrollX = 0;
+            }
+            i32 most = bs[at].LineCount() as i32 - 1;
+            if (scrollY > most) scrollY = most;
+            if (scrollY < 0) scrollY = 0;
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].ScrollY = scrollY;
+            ns[id as usize].ScrollX = scrollX;
+            ns[id as usize].Pend = PEND_NONE;
+            ns[id as usize].Reveal = false;
+        }
+    }
+
+    // ---------------------------------------------------------------- where things are
+
+    // Whether id is inside (or is) outer.
+    bool Within(in this, u32 id, u32 outer) {
+        u32 p = id;
+        while (p != 0) {
+            if (p == outer) return true;
+            p = this.N(p).Parent;
+        }
+        return false;
+    }
+
+    // Whether id and every container it is in are shown.
+    bool Showing(in this, u32 id) {
+        u32 p = id;
+        while (p != 0) {
+            if (this.N(p).Hidden) return false;
+            p = this.N(p).Parent;
+        }
+        return true;
+    }
+
+    // Whether (x, y) is inside every scroll view id is in (what is scrolled out of one
+    // cannot be pointed at).
+    bool InClip(in this, u32 id, i32 x, i32 y) {
+        u32 p = this.N(id).Parent;
+        while (p != 0) {
+            Node d = this.N(p);
+            if (d.K == Kind.Scroll && (x < d.X || y < d.Y || x >= d.X + d.W || y >= d.Y + d.H)) return false;
+            p = d.Parent;
+        }
+        return true;
+    }
+
+    // The open palette, or 0.
+    u32 OpenPaletteId(in this) {
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.N(id);
+            if (d.K == Kind.Palette && !d.Hidden) return id;
+        }
+        return 0;
+    }
+
+    bool Focusable(in this, u32 id) {
+        Node d = this.N(id);
+        if (!d.Enabled || !this.Showing(id)) return false;
+        return d.K == Kind.Button || d.K == Kind.Checkbox || d.K == Kind.ListView || d.K == Kind.TreeView ||
+            d.K == Kind.Tabs || d.K == Kind.TextField || d.K == Kind.Editor;
+    }
+
+    // The component at (x, y) that takes input (the innermost); 0 if none. An open
+    // palette is above everything.
+    public u32 HitTest(in this, i32 x, i32 y) {
+        u32 pal = this.OpenPaletteId();
+        if (pal != 0) {
+            Node p = this.N(pal);
+            if (x >= p.X && y >= p.Y && x < p.X + p.W && y < p.Y + p.H) return pal;
+            return 0;
+        }
+        u32 id = this.Nodes.Len() as u32;
+        while (id > 2) {
+            id--;
             if (!this.Focusable(id)) continue;
-            Node d = this.Nodes.Get(id as usize);
-            if (x >= d.X && y >= d.Y && x < d.X + d.W && y < d.Y + d.H) return id;
+            Node d = this.N(id);
+            if (x >= d.X && y >= d.Y && x < d.X + d.W && y < d.Y + d.H && this.InClip(id, x, y)) return id;
+        }
+        return 0;
+    }
+
+    // The split whose divider is at (x, y), or 0.
+    u32 SplitAt(in this, i32 x, i32 y) {
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.N(id);
+            if (d.K != Kind.Split || !this.Showing(id)) continue;
+            u32 a = d.First;
+            while (a != 0 && this.N(a).Hidden) a = this.N(a).Next;
+            if (a == 0) continue;
+            Node first = this.N(a);
+            if (d.Vertical) {
+                i32 top = first.Y + first.H;
+                if (x >= d.X && x < d.X + d.W && y >= top && y < top + this.Gutter()) return id;
+            } else {
+                i32 left = first.X + first.W;
+                if (y >= d.Y && y < d.Y + d.H && x >= left && x < left + this.Gutter()) return id;
+            }
+        }
+        return 0;
+    }
+
+    // The innermost thing at (x, y) that the wheel scrolls (a scroll view, list, tree or
+    // editor), or 0.
+    u32 ScrollableAt(in this, i32 x, i32 y) {
+        u32 pal = this.OpenPaletteId();
+        if (pal != 0) return pal;
+        u32 id = this.Nodes.Len() as u32;
+        while (id > 2) {
+            id--;
+            Node d = this.N(id);
+            bool scrolls = d.K == Kind.Scroll || d.K == Kind.ListView || d.K == Kind.TreeView || d.K == Kind.Editor;
+            if (!scrolls || !this.Showing(id)) continue;
+            if (x >= d.X && y >= d.Y && x < d.X + d.W && y < d.Y + d.H && this.InClip(id, x, y)) return id;
         }
         return 0;
     }
@@ -438,180 +1279,957 @@ public struct Tree {
         }
     }
 
-    // Activates a component: a checkbox flips. Returns it.
-    u32 Activate(ref this, u32 id) {
-        if (id == 0 || !this.Focusable(id)) return 0;
-        mut Node[] ns = this.Nodes.AsMutSlice();
-        if (ns[id as usize].K == Kind.Checkbox) ns[id as usize].On = !ns[id as usize].On;
+    // ---------------------------------------------------------------- input
+
+    // What input returns: the component, with what happened to it.
+    u32 Did(ref this, u32 id, u32 act, usize item) {
+        this.Act = act;
+        this.ActItem = item;
+        if (act == ACT_NONE) return 0;
         return id;
     }
 
-    // A window event (pixels): pointer hover and press, a click (press and release on the
-    // same component), Tab to move the focus, Enter or Space to activate it. Returns the
-    // component activated, or 0.
+    // Activates a button or checkbox: a checkbox flips. Returns it.
+    u32 Activate(ref this, u32 id) {
+        if (id == 0 || !this.Focusable(id)) return this.Did(id, ACT_NONE, 0);
+        Kind k = this.N(id).K;
+        if (k != Kind.Button && k != Kind.Checkbox) return this.Did(id, ACT_NONE, 0);
+        mut Node[] ns = this.Nodes.AsMutSlice();
+        if (k == Kind.Checkbox) ns[id as usize].On = !ns[id as usize].On;
+        return this.Did(id, ACT_ACTIVATE, 0);
+    }
+
+    // A window event (pixels): pointer hover, press and drag, a click (press and release
+    // on the same component), the wheel, keys and typed characters for the focused
+    // component; Tab moves the focus where Tab means nothing else. Returns the component
+    // something happened to (Action() says what), or 0.
     public u32 OnEvent(ref this, Event e) {
+        this.Act = ACT_NONE;
         EventKind k = e.Kind();
-        if (k == EventKind.MouseMove) {
-            this.Hover = this.HitTest(e.X(), e.Y());
+        if (k == EventKind.MouseMove) return this.PointerMove(e.X(), e.Y());
+        if (k == EventKind.MouseDown && e.Code() == 1) return this.PointerDown(e.X(), e.Y(), e.Mods());
+        if (k == EventKind.MouseUp && e.Code() == 1) return this.PointerUp(e.X(), e.Y());
+        if (k == EventKind.Wheel) {
+            i32 notches = (e.Code() as i32) / 120;
+            if (notches == 0 && e.Code() != 0) notches = 1;
+            return this.Wheel(e.X(), e.Y(), notches);
+        }
+        if (k == EventKind.KeyDown) return this.Key(e.Code(), e.Mods(), 0);
+        if (k == EventKind.Char) return this.Key(0, e.Mods(), e.Code());
+        return 0;
+    }
+
+    // A terminal key: the focused component takes it first; otherwise Tab, Shift+Tab and
+    // the arrows move the focus, and Enter or Space activates it. Returns the component
+    // something happened to (Action() says what), or 0.
+    public u32 OnKey(ref this, term.Key key) {
+        this.Act = ACT_NONE;
+        u32 mods = 0;
+        if (key.Shift()) mods |= ports.MOD_SHIFT;
+        if (key.Ctrl()) mods |= ports.MOD_CTRL;
+        if (key.Alt()) mods |= ports.MOD_ALT;
+        if (key.Is(term.KeyKind.Char)) {
+            u32 c = key.Char();
+            if (key.Ctrl() && c >= 'a' as u32 && c <= 'z' as u32) return this.Key(ports.KEY_A + c - 'a' as u32, mods, 0);
+            if (key.Ctrl() && c >= 'A' as u32 && c <= 'Z' as u32) return this.Key(ports.KEY_A + c - 'A' as u32, mods, 0);
+            if (c == ' ' as u32 && !this.TakesText(this.Focus)) return this.Key(ports.KEY_SPACE, mods, 0);
+            return this.Key(0, mods, c);
+        }
+        if (key.Is(term.KeyKind.BackTab)) return this.Key(ports.KEY_TAB, mods | ports.MOD_SHIFT, 0);
+        u32 code = KeyCode(key);
+        if (code == 0) return 0;
+        // arrows move the focus between buttons, as Tab does
+        Kind f = this.N(this.Focus).K;
+        bool plain = this.Focus == 0 || f == Kind.Button || f == Kind.Checkbox;
+        if (plain && (code == ports.KEY_DOWN || code == ports.KEY_RIGHT)) return this.Key(ports.KEY_TAB, 0, 0);
+        if (plain && (code == ports.KEY_UP || code == ports.KEY_LEFT)) return this.Key(ports.KEY_TAB, ports.MOD_SHIFT, 0);
+        return this.Key(code, mods, 0);
+    }
+
+    bool TakesText(in this, u32 id) {
+        if (id == 0) return false;
+        Kind k = this.N(id).K;
+        return k == Kind.TextField || k == Kind.Editor || k == Kind.Palette;
+    }
+
+    u32 PointerMove(ref this, i32 x, i32 y) {
+        this.Hover = this.HitTest(x, y);
+        if (this.Drag == 0) return 0;
+        Node d = this.N(this.Drag);
+        if (d.K == Kind.Split) {
+            i32 total = d.W - this.Gutter();
+            i32 at = x - d.X;
+            if (d.Vertical) {
+                total = d.H - this.Gutter();
+                at = y - d.Y;
+            }
+            if (total > 0) {
+                if (at < 0) at = 0;
+                if (at > total) at = total;
+                this.Nodes.AsMutSlice()[this.Drag as usize].Ratio = (at as i64 * 1000 / total as i64) as u32;
+            }
             return 0;
         }
-        if (k == EventKind.MouseDown && e.Code() == 1) {
-            u32 hit = this.HitTest(e.X(), e.Y());
-            this.Pressed = hit;
-            if (hit != 0) this.Focus = hit;
+        mut Node[] ns = this.Nodes.AsMutSlice();
+        ns[this.Drag as usize].PX = x;
+        ns[this.Drag as usize].PY = y;
+        ns[this.Drag as usize].Pend = PEND_EXTEND;
+        return 0;
+    }
+
+    u32 PointerDown(ref this, i32 x, i32 y, u32 mods) {
+        u32 split = this.SplitAt(x, y);
+        if (split != 0 && this.OpenPaletteId() == 0) {
+            this.Drag = split;
             return 0;
         }
-        if (k == EventKind.MouseUp && e.Code() == 1) {
-            u32 hit = this.HitTest(e.X(), e.Y());
-            u32 was = this.Pressed;
-            this.Pressed = 0;
-            if (hit != 0 && hit == was) return this.Activate(hit);
+        u32 hit = this.HitTest(x, y);
+        this.Pressed = hit;
+        if (hit == 0) return 0;
+        Node d = this.N(hit);
+        if (d.K != Kind.Palette) this.Focus = hit;
+        if (d.K == Kind.ListView || d.K == Kind.TreeView) {
+            if (this.RowH <= 0) return 0;
+            i32 r = d.ScrollY + (y - d.Y) / this.RowH;
+            if (r < 0 || r >= this.RowCount(hit) as i32) return 0;
+            usize item = this.ItemAtRow(hit, r as usize);
+            this.SetRow(hit, r as usize);
+            if (d.K == Kind.TreeView && this.HasChildren(hit, item)) {
+                this.SetOpen(hit, item, !this.IsOpen(hit, item));
+                return this.Did(hit, ACT_TOGGLE, item);
+            }
+            return this.Did(hit, ACT_SELECT, item);
+        }
+        if (d.K == Kind.Tabs) {
+            Items[] ls = this.Lists.AsSlice();
+            usize at = d.Data as usize;
+            i32 start = d.X;
+            for (usize i = 0; i < ls[at].Ends.Len(); i++) {
+                i32 end = d.X + ls[at].Ends.Get(i);
+                if (x >= start && x < end) {
+                    i32 mark = 2;
+                    if (!this.Cells) mark = 20;
+                    bool close = ls[at].Closable && x >= end - mark - 2;
+                    if (close) return this.Did(hit, ACT_CLOSE, i);
+                    this.Lists.AsMutSlice()[at].Sel = i;
+                    return this.Did(hit, ACT_SELECT, i);
+                }
+                start = end;
+            }
             return 0;
         }
-        if (k == EventKind.KeyDown) {
-            if (e.Code() == 9) this.MoveFocus(true);                          // VK_TAB
-            else if (e.Code() == 13 || e.Code() == 32) return this.Activate(this.Focus);     // VK_RETURN, VK_SPACE
+        if (d.K == Kind.Palette) {
+            i32 top = d.Y + d.Extent;
+            if (y < top || this.RowH <= 0) return 0;
+            i32 r = d.ScrollY + (y - top) / this.RowH;
+            if (r < 0 || r >= this.RowCount(hit) as i32) return 0;
+            usize item = this.ItemAtRow(hit, r as usize);
+            this.ClosePalette(hit);
+            return this.Did(hit, ACT_OPEN, item);
+        }
+        if (d.K == Kind.Editor || d.K == Kind.TextField) {
+            u8 pend = PEND_CLICK;
+            if (mods & ports.MOD_SHIFT != 0) pend = PEND_EXTEND;
+            if (mods & ports.MOD_ALT != 0) pend = PEND_ADD;
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[hit as usize].PX = x;
+            ns[hit as usize].PY = y;
+            ns[hit as usize].Pend = pend;
+            this.Drag = hit;
         }
         return 0;
     }
 
-    // A terminal key: Tab, Shift+Tab and the arrows move the focus; Enter or Space
-    // activates it. Returns the component activated, or 0.
-    public u32 OnKey(ref this, term.Key key) {
-        if (key.Is(term.KeyKind.Tab) || key.Is(term.KeyKind.Down) || key.Is(term.KeyKind.Right)) {
-            this.MoveFocus(true);
-            return 0;
-        }
-        if (key.Is(term.KeyKind.BackTab) || key.Is(term.KeyKind.Up) || key.Is(term.KeyKind.Left)) {
-            this.MoveFocus(false);
-            return 0;
-        }
-        if (key.Is(term.KeyKind.Enter) || key.IsChar(' ' as u32)) return this.Activate(this.Focus);
+    u32 PointerUp(ref this, i32 x, i32 y) {
+        this.Drag = 0;
+        u32 hit = this.HitTest(x, y);
+        u32 was = this.Pressed;
+        this.Pressed = 0;
+        if (hit != 0 && hit == was) return this.Activate(hit);
         return 0;
+    }
+
+    // The wheel: notches up (positive) or down, three rows each.
+    u32 Wheel(ref this, i32 x, i32 y, i32 notches) {
+        u32 id = this.ScrollableAt(x, y);
+        if (id == 0) return 0;
+        Node d = this.N(id);
+        i32 by = 3 * notches;
+        if (d.K == Kind.Scroll) by = by * this.RowH;
+        i32 v = d.ScrollY - by;
+        if (v < 0) v = 0;
+        this.Nodes.AsMutSlice()[id as usize].ScrollY = v;
+        return 0;
+    }
+
+    // A key (KEY_*, with MOD_*) or a typed character (ch, key 0), for the focused
+    // component.
+    u32 Key(ref this, u32 key, u32 mods, u32 ch) {
+        u32 id = this.Focus;
+        Kind k = this.N(id).K;
+        if (id != 0 && (k == Kind.Editor || k == Kind.TextField)) {
+            u32 r = this.EditKey(id, key, mods, ch);
+            if (r != 0 || this.Act != ACT_NONE || key != ports.KEY_TAB || k == Kind.Editor) return r;
+        }
+        if (id != 0 && k == Kind.Palette) return this.PaletteKey(id, key, mods, ch);
+        if (id != 0 && (k == Kind.ListView || k == Kind.TreeView)) {
+            u32 r = this.ListKey(id, key);
+            if (this.Act != ACT_NONE || key != ports.KEY_TAB) return r;
+        }
+        if (id != 0 && k == Kind.Tabs && (key == ports.KEY_LEFT || key == ports.KEY_RIGHT)) {
+            usize sel = this.SelectedRow(id);
+            usize n = this.RowCount(id);
+            if (key == ports.KEY_LEFT && sel > 0) sel--;
+            else if (key == ports.KEY_RIGHT && sel + 1 < n) sel++;
+            else return 0;
+            this.Lists.AsMutSlice()[this.N(id).Data as usize].Sel = sel;
+            return this.Did(id, ACT_SELECT, sel);
+        }
+        if (key == ports.KEY_TAB) {
+            this.MoveFocus(mods & ports.MOD_SHIFT == 0);
+            return 0;
+        }
+        if (key == ports.KEY_ENTER || key == ports.KEY_SPACE) return this.Activate(id);
+        return 0;
+    }
+
+    // Keys in a list or tree: the arrows, Home, End and the page keys move the
+    // selection; Enter opens the item (a tree item with children opens or closes); in a
+    // tree Right opens and Left closes or goes to the item outside.
+    u32 ListKey(ref this, u32 id, u32 key) {
+        usize rows = this.RowCount(id);
+        if (rows == 0) return 0;
+        usize sel = this.SelectedRow(id);
+        usize page = 1;
+        i32 view = this.RowsIn(id);
+        if (view > 1) page = (view - 1) as usize;
+        usize to = sel;
+        bool tree = this.N(id).K == Kind.TreeView;
+        usize item = this.ItemAtRow(id, sel);
+        if (key == ports.KEY_UP && sel > 0) to = sel - 1;
+        else if (key == ports.KEY_DOWN) to = sel + 1;
+        else if (key == ports.KEY_HOME) to = 0;
+        else if (key == ports.KEY_END) to = rows - 1;
+        else if (key == ports.KEY_PAGE_UP) {
+            if (sel > page) to = sel - page;
+            else to = 0;
+        } else if (key == ports.KEY_PAGE_DOWN) to = sel + page;
+        else if (key == ports.KEY_ENTER) {
+            if (tree && this.HasChildren(id, item)) {
+                this.SetOpen(id, item, !this.IsOpen(id, item));
+                return this.Did(id, ACT_TOGGLE, item);
+            }
+            return this.Did(id, ACT_OPEN, item);
+        } else if (tree && key == ports.KEY_RIGHT && this.HasChildren(id, item)) {
+            if (!this.IsOpen(id, item)) {
+                this.SetOpen(id, item, true);
+                return this.Did(id, ACT_TOGGLE, item);
+            }
+            to = sel + 1;
+        } else if (tree && key == ports.KEY_LEFT) {
+            if (this.HasChildren(id, item) && this.IsOpen(id, item)) {
+                this.SetOpen(id, item, false);
+                return this.Did(id, ACT_TOGGLE, item);
+            }
+            // to the item this one is inside
+            Items[] ls = this.Lists.AsSlice();
+            usize at = this.N(id).Data as usize;
+            u32 dep = ls[at].Depth.Get(item);
+            usize r = sel;
+            while (r > 0) {
+                r--;
+                if (ls[at].Depth.Get(ls[at].Shown.Get(r) as usize) < dep) break;
+            }
+            to = r;
+        } else {
+            return 0;
+        }
+        if (to >= rows) to = rows - 1;
+        if (to == sel) return 0;
+        this.SetRow(id, to);
+        return this.Did(id, ACT_SELECT, this.ItemAtRow(id, to));
+    }
+
+    // Keys in a palette: typing filters, the arrows and page keys move, Enter chooses,
+    // Escape closes.
+    u32 PaletteKey(ref this, u32 id, u32 key, u32 mods, u32 ch) {
+        if (key == ports.KEY_ESCAPE) {
+            this.ClosePalette(id);
+            return this.Did(id, ACT_CANCEL, 0);
+        }
+        if (key == ports.KEY_ENTER) {
+            if (this.RowCount(id) == 0) return 0;
+            usize item = this.ItemAtRow(id, this.SelectedRow(id));
+            this.ClosePalette(id);
+            return this.Did(id, ACT_OPEN, item);
+        }
+        if (key == ports.KEY_UP || key == ports.KEY_DOWN || key == ports.KEY_PAGE_UP || key == ports.KEY_PAGE_DOWN) {
+            usize sel = this.SelectedRow(id);
+            usize rows = this.RowCount(id);
+            if (rows == 0) return 0;
+            if (key == ports.KEY_UP && sel > 0) sel--;
+            if (key == ports.KEY_DOWN && sel + 1 < rows) sel++;
+            if (key == ports.KEY_PAGE_UP) sel = 0;
+            if (key == ports.KEY_PAGE_DOWN) sel = rows - 1;
+            this.SetRow(id, sel);
+            return this.Did(id, ACT_SELECT, this.ItemAtRow(id, sel));
+        }
+        u64 before = this.Bufs.AsSlice()[this.N(id).Data2 as usize].Changes();
+        this.TextKey(this.N(id).Data2 as usize, true, key, mods, ch);
+        if (this.Bufs.AsSlice()[this.N(id).Data2 as usize].Changes() != before) {
+            this.Refresh(id);
+            this.Nodes.AsMutSlice()[id as usize].ScrollY = 0;
+            return this.Did(id, ACT_EDIT, 0);
+        }
+        return 0;
+    }
+
+    // Keys in an editor or text field.
+    u32 EditKey(ref this, u32 id, u32 key, u32 mods, u32 ch) {
+        Node d = this.N(id);
+        bool single = d.K == Kind.TextField;
+        if (single && key == ports.KEY_ENTER) return this.Did(id, ACT_OPEN, 0);
+        if (single && (key == ports.KEY_TAB || key == ports.KEY_UP || key == ports.KEY_DOWN)) return 0;
+        usize at = d.Data as usize;
+        u64 before = this.Bufs.AsSlice()[at].Changes();
+        i32 rows = d.H / this.LineH;
+        if (rows < 1) rows = 1;
+        bool used = this.TextKey(at, single, key, mods, ch);
+        if (key == ports.KEY_PAGE_UP || key == ports.KEY_PAGE_DOWN) {
+            mut edit.Buffer[] bs = this.Bufs.AsMutSlice();
+            u32 m = edit.MOVE_PAGE_DOWN;
+            if (key == ports.KEY_PAGE_UP) m = edit.MOVE_PAGE_UP;
+            bs[at].Move(m, mods & ports.MOD_SHIFT != 0, rows as usize);
+            used = true;
+        }
+        if (used) this.Nodes.AsMutSlice()[id as usize].Reveal = true;
+        if (this.Bufs.AsSlice()[at].Changes() != before) return this.Did(id, ACT_EDIT, 0);
+        return 0;
+    }
+
+    // The editing keys, on buffer at; single: one line (no line breaks, no Tab). Returns
+    // whether the key meant something.
+    bool TextKey(ref this, usize at, bool single, u32 key, u32 mods, u32 ch) {
+        bool shift = mods & ports.MOD_SHIFT != 0;
+        bool ctrl = mods & (ports.MOD_CTRL | ports.MOD_META) != 0;
+        if (ch != 0) {
+            if (ch < 32 || ch == 127 || (ctrl && mods & ports.MOD_ALT == 0)) return false;
+            string s = string.New();
+            AppendChar(ref s, ch);
+            this.Bufs.AsMutSlice()[at].Insert(s.AsStr());
+            return true;
+        }
+        if (ctrl) {
+            if (key == ports.KEY_A + 0) this.Bufs.AsMutSlice()[at].SelectAll();
+            else if (key == ports.KEY_A + 25 && shift) this.Bufs.AsMutSlice()[at].Redo();
+            else if (key == ports.KEY_A + 25) this.Bufs.AsMutSlice()[at].Undo();
+            else if (key == ports.KEY_A + 24) this.Bufs.AsMutSlice()[at].Redo();
+            else if (key == ports.KEY_A + 2) {
+                string s = this.Bufs.AsSlice()[at].Copy();
+                if (s.Len() > 0) this.PutClip(s.AsStr());
+            } else if (key == ports.KEY_A + 23) {
+                string s = this.Bufs.AsMutSlice()[at].Cut();
+                if (s.Len() > 0) this.PutClip(s.AsStr());
+            } else if (key == ports.KEY_A + 21) {
+                string s = this.GetClip();
+                if (single) s = Flatten(s.AsStr());
+                this.Bufs.AsMutSlice()[at].Paste(s.AsStr());
+            } else if (key == ports.KEY_A + 3 && !single) {
+                mut edit.Buffer[] bs = this.Bufs.AsMutSlice();
+                AddNextMatch(ref bs[at]);
+            } else if (key == ports.KEY_LEFT) this.Bufs.AsMutSlice()[at].Move(edit.MOVE_WORD_LEFT, shift, 0);
+            else if (key == ports.KEY_RIGHT) this.Bufs.AsMutSlice()[at].Move(edit.MOVE_WORD_RIGHT, shift, 0);
+            else if (key == ports.KEY_HOME) this.Bufs.AsMutSlice()[at].Move(edit.MOVE_TOP, shift, 0);
+            else if (key == ports.KEY_END) this.Bufs.AsMutSlice()[at].Move(edit.MOVE_BOTTOM, shift, 0);
+            else return false;
+            return true;
+        }
+        mut edit.Buffer[] bs = this.Bufs.AsMutSlice();
+        if (key == ports.KEY_LEFT) bs[at].Move(edit.MOVE_LEFT, shift, 0);
+        else if (key == ports.KEY_RIGHT) bs[at].Move(edit.MOVE_RIGHT, shift, 0);
+        else if (key == ports.KEY_UP && !single) bs[at].Move(edit.MOVE_UP, shift, 0);
+        else if (key == ports.KEY_DOWN && !single) bs[at].Move(edit.MOVE_DOWN, shift, 0);
+        else if (key == ports.KEY_HOME) bs[at].Move(edit.MOVE_HOME, shift, 0);
+        else if (key == ports.KEY_END) bs[at].Move(edit.MOVE_END, shift, 0);
+        else if (key == ports.KEY_BACKSPACE) bs[at].Backspace();
+        else if (key == ports.KEY_DELETE) bs[at].Delete();
+        else if (key == ports.KEY_ENTER && !single) bs[at].Newline();
+        else if (key == ports.KEY_TAB && !single && shift) bs[at].Dedent();
+        else if (key == ports.KEY_TAB && !single) bs[at].Indent();
+        else if (key == ports.KEY_ESCAPE && bs[at].SelectionCount() > 1) bs[at].SingleCursor();
+        else return false;
+        return true;
+    }
+
+    void PutClip(ref this, str s) {
+        if (this.SystemClip) clipboard.SetText(s);
+        else this.Clip = string.From(s);
+    }
+
+    string GetClip(in this) {
+        if (this.SystemClip) {
+            string? t = clipboard.Text();
+            if (t.IsSome()) return t.Unwrap();
+            return string.New();
+        }
+        return string.From(this.Clip.AsStr());
     }
 
     // ---------------------------------------------------------------- drawing
 
     // Draws the tree (laid out in pixels) on c, its text in f.
     public void DrawPixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th) {
+        c.ResetClip();
         c.FillRect(0, 0, c.Width(), c.Height(), Rgb(th.C.Background));
         u32 n = this.Nodes.Len() as u32;
         for (u32 id = 2; id < n; id++) {
-            Node d = this.Nodes.Get(id as usize);
-            str label = this.Labels.AsSlice()[id as usize].AsStr();
-            if (d.K == Kind.Card) {
-                i32 r = th.RadiusLarge as i32;
-                c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Separator));
-                c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(th.C.Surface));
-            } else if (d.K == Kind.Divider) {
-                c.FillRect(d.X, d.Y, d.W, 1, Rgb(th.C.Separator));
-            } else if (d.K == Kind.Text) {
-                lumen.TypeStyle ts = TypeOf(th, d.Style);
-                u32 color = th.C.Text;
-                if (d.Style == CAPTION) color = th.C.TextSecondary;
-                DrawLabel(ref c, f, d.X, d.Y, d.H, label, ts.Size, color);
-            } else if (d.K == Kind.Button) {
-                i32 r = th.RadiusMedium as i32;
-                if (this.Focus == id) {
-                    i32 ring = th.FocusRing as i32;
-                    c.FillRoundedRect(d.X - ring, d.Y - ring, d.W + 2 * ring, d.H + 2 * ring, r + ring, Rgb(th.C.Accent));
-                    c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Background));
+            Node d = this.N(id);
+            if (d.K == Kind.Palette || !this.Showing(id)) continue;
+            this.ClipPixels(ref c, id);
+            this.DrawNodePixels(ref c, f, th, id);
+        }
+        c.ResetClip();
+        for (u32 id = 2; id < n; id++) {
+            if (this.N(id).K == Kind.Palette && this.Showing(id)) this.DrawPalettePixels(ref c, f, th, id);
+        }
+    }
+
+    // The clip for drawing id: the scroll views it is in, and its own bounds for the
+    // components that draw rows of text.
+    void ClipPixels(in this, ref gfx.Canvas c, u32 id) {
+        i32 x0 = 0;
+        i32 y0 = 0;
+        i32 x1 = c.Width();
+        i32 y1 = c.Height();
+        Node own = this.N(id);
+        if (IsWide(own.K)) {
+            x0 = own.X;
+            y0 = own.Y;
+            x1 = own.X + own.W;
+            y1 = own.Y + own.H;
+        }
+        u32 p = own.Parent;
+        while (p != 0) {
+            Node d = this.N(p);
+            if (d.K == Kind.Scroll) {
+                if (d.X > x0) x0 = d.X;
+                if (d.Y > y0) y0 = d.Y;
+                if (d.X + d.W < x1) x1 = d.X + d.W;
+                if (d.Y + d.H < y1) y1 = d.Y + d.H;
+            }
+            p = d.Parent;
+        }
+        c.SetClip(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    void DrawNodePixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th, u32 id) {
+        Node d = this.N(id);
+        str label = this.Labels.AsSlice()[id as usize].AsStr();
+        if (d.K == Kind.Card) {
+            i32 r = th.RadiusLarge as i32;
+            c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Separator));
+            c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(th.C.Surface));
+        } else if (d.K == Kind.Divider) {
+            c.FillRect(d.X, d.Y, d.W, 1, Rgb(th.C.Separator));
+        } else if (d.K == Kind.Text) {
+            lumen.TypeStyle ts = TypeOf(th, d.Style);
+            u32 color = th.C.Text;
+            if (d.Style == CAPTION) color = th.C.TextSecondary;
+            DrawLabel(ref c, f, d.X, d.Y, d.H, label, ts.Size, color);
+        } else if (d.K == Kind.Button) {
+            i32 r = th.RadiusMedium as i32;
+            if (this.Focus == id) {
+                i32 ring = th.FocusRing as i32;
+                c.FillRoundedRect(d.X - ring, d.Y - ring, d.W + 2 * ring, d.H + 2 * ring, r + ring, Rgb(th.C.Accent));
+                c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Background));
+            }
+            u32 fill = th.C.SurfaceRaised;
+            u32 ink = th.C.Text;
+            if (d.Primary) {
+                fill = th.C.Accent;
+                ink = th.C.OnAccent;
+                if (this.Hover == id) fill = th.C.AccentHover;
+            }
+            if (this.Pressed == id) fill = th.C.SurfacePressed;
+            if (!d.Enabled) ink = th.C.TextSecondary;
+            if (!d.Primary) {
+                c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.ControlEdge));
+                c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(fill));
+            } else {
+                c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(fill));
+            }
+            i32 tw = f.Measure(label, th.Body.Size);
+            DrawLabel(ref c, f, d.X + (d.W - tw) / 2, d.Y, d.H, label, th.Body.Size, ink);
+        } else if (d.K == Kind.Checkbox) {
+            i32 bs = 20;
+            i32 by = d.Y + (d.H - bs) / 2;
+            i32 r = th.RadiusSmall as i32;
+            if (this.Focus == id) {
+                i32 ring = th.FocusRing as i32;
+                c.FillRoundedRect(d.X - ring, by - ring, bs + 2 * ring, bs + 2 * ring, r + ring, Rgb(th.C.Accent));
+                c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.Background));
+            }
+            if (d.On) {
+                c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.Accent));
+                gfx.Color mark = Rgb(th.C.OnAccent);
+                for (i32 t = 0; t < 2; t++) {
+                    c.Line(d.X + 5, by + 10 + t, d.X + 8, by + 13 + t, mark);
+                    c.Line(d.X + 8, by + 13 + t, d.X + 15, by + 6 + t, mark);
                 }
-                u32 fill = th.C.SurfaceRaised;
-                u32 ink = th.C.Text;
-                if (d.Primary) {
+            } else {
+                c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.ControlEdge));
+                c.FillRoundedRect(d.X + 1, by + 1, bs - 2, bs - 2, r - 1, Rgb(th.C.SurfaceRaised));
+            }
+            u32 ink = th.C.Text;
+            if (!d.Enabled) ink = th.C.TextSecondary;
+            DrawLabel(ref c, f, d.X + bs + th.S as i32, d.Y, d.H, label, th.Body.Size, ink);
+        } else if (d.K == Kind.Scroll) {
+            // a thin thumb at the right when the content is taller
+            if (d.Extent > d.H && d.H > 0) {
+                i32 thumb = (d.H as i64 * d.H as i64 / d.Extent as i64) as i32;
+                if (thumb < 16) thumb = 16;
+                i32 top = d.Y + ((d.H - thumb) as i64 * d.ScrollY as i64 / (d.Extent - d.H) as i64) as i32;
+                c.SetClip(d.X, d.Y, d.W, d.H);
+                c.FillRoundedRect(d.X + d.W - 6, top, 4, thumb, 2, Rgb(th.C.ControlEdge));
+            }
+        } else if (d.K == Kind.ListView || d.K == Kind.TreeView) {
+            this.DrawRowsPixels(ref c, f, th, id, d.X, d.Y, d.W, d.H);
+        } else if (d.K == Kind.Tabs) {
+            this.DrawTabsPixels(ref c, f, th, id);
+        } else if (d.K == Kind.Split) {
+            u32 a = d.First;
+            while (a != 0 && this.N(a).Hidden) a = this.N(a).Next;
+            if (a != 0) {
+                Node first = this.N(a);
+                if (d.Vertical) c.FillRect(d.X, first.Y + first.H + this.Gutter() / 2, d.W, 1, Rgb(th.C.Separator));
+                else c.FillRect(first.X + first.W + this.Gutter() / 2, d.Y, 1, d.H, Rgb(th.C.Separator));
+            }
+        } else if (d.K == Kind.TextField) {
+            i32 r = th.RadiusMedium as i32;
+            u32 edge = th.C.ControlEdge;
+            if (this.Focus == id) edge = th.C.Accent;
+            c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(edge));
+            c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(th.C.SurfaceRaised));
+            i32 lh = this.LineH;
+            this.DrawTextPixels(ref c, f, th, id, d.Data as usize, d.X + 8, d.Y + (d.H - lh) / 2, d.X + d.W - 8, 0);
+        } else if (d.K == Kind.Editor) {
+            c.FillRect(d.X, d.Y, d.W, d.H, Rgb(th.C.Surface));
+            i32 g = this.GutterWidth(id, f.Measure("0", th.Body.Size));
+            this.DrawTextPixels(ref c, f, th, id, d.Data as usize, d.X + g + 8, d.Y, d.X + d.W, g);
+        }
+    }
+
+    // The rows of a list, tree or palette in the box at (x, y), w x h.
+    void DrawRowsPixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th, u32 id, i32 x, i32 y, i32 w, i32 h) {
+        Node d = this.N(id);
+        Items[] ls = this.Lists.AsSlice();
+        usize at = d.Data as usize;
+        usize rows = ls[at].Shown.Len();
+        i32 rh = this.RowH;
+        bool tree = d.K == Kind.TreeView;
+        bool focused = this.Focus == id;
+        i32 indent = th.L as i32;
+        for (i32 r = 0; r * rh < h; r++) {
+            usize row = (d.ScrollY + r) as usize;
+            if (row >= rows) break;
+            usize item = ls[at].Shown.Get(row) as usize;
+            i32 ry = y + r * rh;
+            u32 ink = th.C.Text;
+            if (row == ls[at].Sel) {
+                u32 fill = th.C.SurfacePressed;
+                if (focused) {
                     fill = th.C.Accent;
                     ink = th.C.OnAccent;
-                    if (this.Hover == id) fill = th.C.AccentHover;
                 }
-                if (this.Pressed == id) fill = th.C.SurfacePressed;
-                if (!d.Enabled) ink = th.C.TextSecondary;
-                if (!d.Primary) {
-                    c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.ControlEdge));
-                    c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(fill));
-                } else {
-                    c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(fill));
+                c.FillRect(x, ry, w, rh, Rgb(fill));
+            }
+            i32 tx = x + th.S as i32;
+            if (tree) {
+                tx += ls[at].Depth.Get(item) as i32 * indent;
+                bool parent = item + 1 < ls[at].Depth.Len() && ls[at].Depth.Get(item + 1) > ls[at].Depth.Get(item);
+                if (parent) {
+                    i32 cy = ry + rh / 2;
+                    gfx.Color mark = Rgb(th.C.TextSecondary);
+                    if (row == ls[at].Sel && focused) mark = Rgb(th.C.OnAccent);
+                    if (ls[at].Open.Get(item)) c.FillTriangle(tx + 2, cy - 2, tx + 10, cy - 2, tx + 6, cy + 3, mark);
+                    else c.FillTriangle(tx + 4, cy - 4, tx + 4, cy + 4, tx + 9, cy, mark);
                 }
-                i32 tw = f.Measure(label, th.Body.Size);
-                DrawLabel(ref c, f, d.X + (d.W - tw) / 2, d.Y, d.H, label, th.Body.Size, ink);
-            } else if (d.K == Kind.Checkbox) {
-                i32 bs = 20;
-                i32 by = d.Y + (d.H - bs) / 2;
-                i32 r = th.RadiusSmall as i32;
-                if (this.Focus == id) {
-                    i32 ring = th.FocusRing as i32;
-                    c.FillRoundedRect(d.X - ring, by - ring, bs + 2 * ring, bs + 2 * ring, r + ring, Rgb(th.C.Accent));
-                    c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.Background));
+                tx += 14;
+            }
+            DrawLabel(ref c, f, tx, ry, rh, ls[at].Labels.AsSlice()[item].AsStr(), th.Body.Size, ink);
+        }
+    }
+
+    void DrawTabsPixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th, u32 id) {
+        Node d = this.N(id);
+        Items[] ls = this.Lists.AsSlice();
+        usize at = d.Data as usize;
+        c.FillRect(d.X, d.Y + d.H - 1, d.W, 1, Rgb(th.C.Separator));
+        i32 start = d.X;
+        for (usize i = 0; i < ls[at].Ends.Len() && i < ls[at].Labels.Len(); i++) {
+            i32 end = d.X + ls[at].Ends.Get(i);
+            bool sel = i == ls[at].Sel;
+            if (sel) {
+                c.FillRect(start, d.Y, end - start, d.H - 1, Rgb(th.C.Surface));
+                c.FillRect(start, d.Y + d.H - 2, end - start, 2, Rgb(th.C.Accent));
+            }
+            u32 ink = th.C.TextSecondary;
+            if (sel) ink = th.C.Text;
+            DrawLabel(ref c, f, start + th.M as i32, d.Y, d.H, ls[at].Labels.AsSlice()[i].AsStr(), th.Body.Size, ink);
+            if (ls[at].Closable) {
+                // a small cross
+                i32 cx = end - th.M as i32 - 5;
+                i32 cy = d.Y + d.H / 2;
+                gfx.Color mark = Rgb(ink);
+                c.Line(cx - 3, cy - 3, cx + 3, cy + 3, mark);
+                c.Line(cx - 3, cy + 3, cx + 3, cy - 3, mark);
+            }
+            start = end;
+        }
+    }
+
+    // A buffer's lines from (x, y) to the right edge right: selections, highlighted text,
+    // the cursors when focused, and line numbers in a gutter of width g at the left.
+    void DrawTextPixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th, u32 id, usize at, i32 x, i32 y, i32 right, i32 g) {
+        Node d = this.N(id);
+        edit.Buffer[] bs = this.Bufs.AsSlice();
+        Code[] cs = this.Codes.AsSlice();
+        i32 lh = this.LineH;
+        u32 size = th.Body.Size;
+        i32 space = f.Measure(" ", size);
+        usize tab = 4;
+        bool focused = this.Focus == id;
+        i32 rows = (d.Y + d.H - y + lh - 1) / lh;
+        if (d.K != Kind.Editor) rows = 1;
+        gfx.Color selection = Mix(th.C.Accent, th.C.Surface, 64);
+        for (i32 r = 0; r < rows; r++) {
+            usize l = (d.ScrollY + r) as usize;
+            if (l >= bs[at].LineCount()) break;
+            i32 ly = y + r * lh;
+            str t = bs[at].Line(l);
+            if (g > 0) {
+                string num = UintText(l as u64 + 1);
+                i32 nw = f.Measure(num.AsStr(), size);
+                u32 ink = th.C.TextSecondary;
+                if (l == bs[at].Cursor().Line) ink = th.C.Text;
+                c.SetClip(d.X, d.Y, g, d.H);
+                DrawLabel(ref c, f, d.X + g - 8 - nw, ly, lh, num.AsStr(), size, ink);
+            }
+            c.SetClip(x, d.Y, right - x, d.H);
+            i32 base0 = x - d.ScrollX;
+            // selections on this line
+            for (usize s = 0; s < bs[at].SelectionCount(); s++) {
+                edit.Selection sel = bs[at].SelectionAt(s);
+                if (sel.IsEmpty()) continue;
+                edit.Pos a = sel.Start();
+                edit.Pos b = sel.End();
+                if (l < a.Line || l > b.Line) continue;
+                usize c0 = 0;
+                if (l == a.Line) c0 = a.Col;
+                usize c1 = t.Len;
+                if (l == b.Line) c1 = b.Col;
+                i32 x0 = base0 + XOfPixels(f, t, c0, size, space, tab);
+                i32 x1 = base0 + XOfPixels(f, t, c1, size, space, tab);
+                if (l != b.Line) x1 += space;
+                c.FillRect(x0, ly, x1 - x0, lh, selection);
+            }
+            // the text, run by run
+            List<u8> cls = Classify(t, cs[at].Keywords.AsStr(), cs[at].Comment.AsStr());
+            usize i = 0;
+            i32 pen = 0;
+            usize vcol = 0;
+            while (i < t.Len) {
+                usize n = CharLen(t, i);
+                if (t[i] == 9) {
+                    usize w = tab - vcol % tab;
+                    pen += w as i32 * space;
+                    vcol += w;
+                    i += 1;
+                    continue;
                 }
-                if (d.On) {
-                    c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.Accent));
-                    gfx.Color mark = Rgb(th.C.OnAccent);
-                    for (i32 t = 0; t < 2; t++) {
-                        c.Line(d.X + 5, by + 10 + t, d.X + 8, by + 13 + t, mark);
-                        c.Line(d.X + 8, by + 13 + t, d.X + 15, by + 6 + t, mark);
-                    }
-                } else {
-                    c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.ControlEdge));
-                    c.FillRoundedRect(d.X + 1, by + 1, bs - 2, bs - 2, r - 1, Rgb(th.C.SurfaceRaised));
+                str ch = t[i..i + n];
+                i32 adv = f.Measure(ch, size);
+                if (base0 + pen + adv >= x && base0 + pen < right) {
+                    DrawLabel(ref c, f, base0 + pen, ly, lh, ch, size, TokenColor(th, cls.Get(i)));
                 }
-                u32 ink = th.C.Text;
-                if (!d.Enabled) ink = th.C.TextSecondary;
-                DrawLabel(ref c, f, d.X + bs + th.S as i32, d.Y, d.H, label, th.Body.Size, ink);
+                pen += adv;
+                vcol++;
+                i += n;
+            }
+            // cursors
+            if (focused) {
+                for (usize s = 0; s < bs[at].SelectionCount(); s++) {
+                    edit.Pos h = bs[at].SelectionAt(s).Head;
+                    if (h.Line != l) continue;
+                    i32 cx = base0 + XOfPixels(f, t, h.Col, size, space, tab);
+                    c.FillRect(cx, ly + 1, 2, lh - 2, Rgb(th.C.Accent));
+                }
             }
         }
+        c.ResetClip();
+    }
+
+    void DrawPalettePixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th, u32 id) {
+        Node d = this.N(id);
+        i32 r = th.RadiusLarge as i32;
+        c.FillRoundedRect(d.X - 1, d.Y - 1, d.W + 2, d.H + 2, r + 1, Rgb(th.C.ControlEdge));
+        c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Surface));
+        i32 pad = th.S as i32;
+        i32 field = th.ControlHeight as i32;
+        c.FillRoundedRect(d.X + pad, d.Y + pad, d.W - 2 * pad, field, th.RadiusMedium as i32, Rgb(th.C.SurfaceRaised));
+        i32 lh = this.LineH;
+        this.DrawTextPixels(ref c, f, th, id, d.Data2 as usize, d.X + pad + 8, d.Y + pad + (field - lh) / 2, d.X + d.W - pad - 8, 0);
+        i32 top = d.Y + pad + field;
+        this.DrawRowsPixels(ref c, f, th, id, d.X + pad, top, d.W - 2 * pad, d.H - pad - field - pad);
     }
 
     // Draws the tree (laid out in cells) on a terminal screen.
     public void DrawCells(in this, ref term.Screen s, in lumen.Theme th) {
+        s.ResetClip();
         term.Style base0 = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Background);
         s.Fill(0, 0, s.Cols(), s.Rows(), ' ' as u32, base0);
         u32 n = this.Nodes.Len() as u32;
         for (u32 id = 2; id < n; id++) {
-            Node d = this.Nodes.Get(id as usize);
-            str label = this.Labels.AsSlice()[id as usize].AsStr();
-            if (d.W <= 0 || d.H <= 0 || d.X < 0 || d.Y < 0) continue;
-            u32 x = d.X as u32;
-            u32 y = d.Y as u32;
-            term.Style surface = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Surface);
-            if (d.K == Kind.Card) {
-                s.Fill(x, y, d.W as u32, d.H as u32, ' ' as u32, surface);
-                s.Box(x, y, d.W as u32, d.H as u32, term.Style.Plain().Fg(th.C.ControlEdge).Bg(th.C.Surface));
-            } else if (d.K == Kind.Divider) {
-                for (u32 i = 0; i < d.W as u32; i++) s.Set(x + i, y, 0x2500, term.Style.Plain().Fg(th.C.Separator).Bg(this.BgAt(th, id)));
-            } else if (d.K == Kind.Text) {
-                term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(this.BgAt(th, id));
-                if (d.Style == CAPTION) st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
-                if (d.Style >= HEADLINE) st = st.Bold();
-                s.Put(x, y, label, st);
-            } else if (d.K == Kind.Button) {
-                term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(th.C.SurfaceRaised);
-                if (d.Primary) st = term.Style.Plain().Fg(th.C.OnAccent).Bg(th.C.Accent).Bold();
-                if (this.Focus == id) st = st.Reverse();
-                if (!d.Enabled) st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
-                u32 after = s.Put(x, y, "[ ", st);
-                after = s.Put(after, y, label, st);
-                s.Put(after, y, " ]", st);
-            } else if (d.K == Kind.Checkbox) {
-                term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(this.BgAt(th, id));
-                term.Style box = st;
-                if (this.Focus == id) box = st.Reverse();
-                if (d.On) s.Put(x, y, "[x]", box);
-                else s.Put(x, y, "[ ]", box);
-                s.Put(x + 4, y, label, st);
+            Node d = this.N(id);
+            if (d.K == Kind.Palette || !this.Showing(id)) continue;
+            if (d.W <= 0 || d.H <= 0) continue;
+            if (!this.ClipCells(ref s, id)) continue;
+            this.DrawNodeCells(ref s, th, id);
+        }
+        s.ResetClip();
+        for (u32 id = 2; id < n; id++) {
+            if (this.N(id).K == Kind.Palette && this.Showing(id)) this.DrawPaletteCells(ref s, th, id);
+        }
+    }
+
+    // The clip for drawing id in cells; false when nothing of it can show.
+    bool ClipCells(in this, ref term.Screen s, u32 id) {
+        i32 x0 = 0;
+        i32 y0 = 0;
+        i32 x1 = s.Cols() as i32;
+        i32 y1 = s.Rows() as i32;
+        Node own = this.N(id);
+        if (IsWide(own.K)) {
+            if (own.X > x0) x0 = own.X;
+            if (own.Y > y0) y0 = own.Y;
+            if (own.X + own.W < x1) x1 = own.X + own.W;
+            if (own.Y + own.H < y1) y1 = own.Y + own.H;
+        }
+        u32 p = own.Parent;
+        while (p != 0) {
+            Node d = this.N(p);
+            if (d.K == Kind.Scroll) {
+                if (d.X > x0) x0 = d.X;
+                if (d.Y > y0) y0 = d.Y;
+                if (d.X + d.W < x1) x1 = d.X + d.W;
+                if (d.Y + d.H < y1) y1 = d.Y + d.H;
+            }
+            p = d.Parent;
+        }
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 <= x0 || y1 <= y0) return false;
+        s.SetClip(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32);
+        return true;
+    }
+
+    void DrawNodeCells(in this, ref term.Screen s, in lumen.Theme th, u32 id) {
+        Node d = this.N(id);
+        str label = this.Labels.AsSlice()[id as usize].AsStr();
+        term.Style surface = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Surface);
+        if (d.K == Kind.Card) {
+            FillCells(ref s, d.X, d.Y, d.W, d.H, surface);
+            if (d.X >= 0 && d.Y >= 0) s.Box(d.X as u32, d.Y as u32, d.W as u32, d.H as u32, term.Style.Plain().Fg(th.C.ControlEdge).Bg(th.C.Surface));
+        } else if (d.K == Kind.Divider) {
+            for (i32 i = 0; i < d.W; i++) SetCell(ref s, d.X + i, d.Y, 0x2500, term.Style.Plain().Fg(th.C.Separator).Bg(this.BgAt(th, id)));
+        } else if (d.K == Kind.Text) {
+            term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(this.BgAt(th, id));
+            if (d.Style == CAPTION) st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
+            if (d.Style >= HEADLINE) st = st.Bold();
+            PutCells(ref s, d.X, d.Y, label, st);
+        } else if (d.K == Kind.Button) {
+            term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(th.C.SurfaceRaised);
+            if (d.Primary) st = term.Style.Plain().Fg(th.C.OnAccent).Bg(th.C.Accent).Bold();
+            if (this.Focus == id) st = st.Reverse();
+            if (!d.Enabled) st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
+            i32 after = PutCells(ref s, d.X, d.Y, "[ ", st);
+            after = PutCells(ref s, after, d.Y, label, st);
+            PutCells(ref s, after, d.Y, " ]", st);
+        } else if (d.K == Kind.Checkbox) {
+            term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(this.BgAt(th, id));
+            term.Style box = st;
+            if (this.Focus == id) box = st.Reverse();
+            if (d.On) PutCells(ref s, d.X, d.Y, "[x]", box);
+            else PutCells(ref s, d.X, d.Y, "[ ]", box);
+            PutCells(ref s, d.X + 4, d.Y, label, st);
+        } else if (d.K == Kind.Scroll) {
+            if (d.Extent > d.H && d.H > 0) {
+                i32 thumb = (d.H as i64 * d.H as i64 / d.Extent as i64) as i32;
+                if (thumb < 1) thumb = 1;
+                i32 top = d.Y + ((d.H - thumb) as i64 * d.ScrollY as i64 / (d.Extent - d.H) as i64) as i32;
+                term.Style st = term.Style.Plain().Fg(th.C.ControlEdge).Bg(this.BgAt(th, id));
+                for (i32 i = 0; i < thumb; i++) SetCell(ref s, d.X + d.W - 1, top + i, 0x2503, st);
+            }
+        } else if (d.K == Kind.ListView || d.K == Kind.TreeView) {
+            this.DrawRowsCells(ref s, th, id, d.X, d.Y, d.W, d.H, this.BgAt(th, id));
+        } else if (d.K == Kind.Tabs) {
+            Items[] ls = this.Lists.AsSlice();
+            usize at = d.Data as usize;
+            i32 start = d.X;
+            for (usize i = 0; i < ls[at].Ends.Len() && i < ls[at].Labels.Len(); i++) {
+                i32 end = d.X + ls[at].Ends.Get(i);
+                term.Style st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
+                if (i == ls[at].Sel) {
+                    st = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Surface).Bold();
+                    if (this.Focus == id) st = st.Reverse();
+                }
+                i32 after = PutCells(ref s, start, d.Y, " ", st);
+                after = PutCells(ref s, after, d.Y, ls[at].Labels.AsSlice()[i].AsStr(), st);
+                after = PutCells(ref s, after, d.Y, " ", st);
+                if (ls[at].Closable) PutCells(ref s, after, d.Y, "\u{d7} ", st);
+                start = end;
+            }
+        } else if (d.K == Kind.Split) {
+            u32 a = d.First;
+            while (a != 0 && this.N(a).Hidden) a = this.N(a).Next;
+            if (a != 0) {
+                Node first = this.N(a);
+                term.Style st = term.Style.Plain().Fg(th.C.Separator).Bg(this.BgAt(th, id));
+                if (d.Vertical) {
+                    for (i32 i = 0; i < d.W; i++) SetCell(ref s, d.X + i, first.Y + first.H, 0x2500, st);
+                } else {
+                    for (i32 i = 0; i < d.H; i++) SetCell(ref s, first.X + first.W, d.Y + i, 0x2502, st);
+                }
+            }
+        } else if (d.K == Kind.TextField) {
+            term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(th.C.SurfaceRaised);
+            FillCells(ref s, d.X, d.Y, d.W, 1, st);
+            SetCell(ref s, d.X, d.Y, '[' as u32, st);
+            SetCell(ref s, d.X + d.W - 1, d.Y, ']' as u32, st);
+            this.DrawTextCells(ref s, th, id, d.Data as usize, d.X + 1, d.Y, d.X + d.W - 1, 0, th.C.SurfaceRaised);
+        } else if (d.K == Kind.Editor) {
+            FillCells(ref s, d.X, d.Y, d.W, d.H, surface);
+            i32 g = this.GutterWidth(id, 1);
+            this.DrawTextCells(ref s, th, id, d.Data as usize, d.X + g, d.Y, d.X + d.W, g, th.C.Surface);
+        }
+    }
+
+    void DrawRowsCells(in this, ref term.Screen s, in lumen.Theme th, u32 id, i32 x, i32 y, i32 w, i32 h, u32 bg) {
+        Node d = this.N(id);
+        Items[] ls = this.Lists.AsSlice();
+        usize at = d.Data as usize;
+        usize rows = ls[at].Shown.Len();
+        bool tree = d.K == Kind.TreeView;
+        bool focused = this.Focus == id;
+        for (i32 r = 0; r < h; r++) {
+            usize row = (d.ScrollY + r) as usize;
+            if (row >= rows) break;
+            usize item = ls[at].Shown.Get(row) as usize;
+            term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(bg);
+            if (row == ls[at].Sel) {
+                st = term.Style.Plain().Fg(th.C.Text).Bg(th.C.SurfacePressed);
+                if (focused) st = term.Style.Plain().Fg(th.C.OnAccent).Bg(th.C.Accent);
+                FillCells(ref s, x, y + r, w, 1, st);
+            }
+            i32 tx = x + 1;
+            if (tree) {
+                tx += 2 * ls[at].Depth.Get(item) as i32;
+                bool parent = item + 1 < ls[at].Depth.Len() && ls[at].Depth.Get(item + 1) > ls[at].Depth.Get(item);
+                if (parent && ls[at].Open.Get(item)) SetCell(ref s, tx, y + r, 0x25BE, st);
+                else if (parent) SetCell(ref s, tx, y + r, 0x25B8, st);
+                tx += 2;
+            }
+            PutCells(ref s, tx, y + r, ls[at].Labels.AsSlice()[item].AsStr(), st);
+        }
+    }
+
+    // A buffer's lines in cells from (x, y) to column right; g: the gutter's width.
+    void DrawTextCells(in this, ref term.Screen s, in lumen.Theme th, u32 id, usize at, i32 x, i32 y, i32 right, i32 g, u32 bg) {
+        Node d = this.N(id);
+        edit.Buffer[] bs = this.Bufs.AsSlice();
+        Code[] cs = this.Codes.AsSlice();
+        bool focused = this.Focus == id;
+        i32 rows = d.H;
+        if (d.K != Kind.Editor) rows = 1;
+        u32 selBg = MixRgb(th.C.Accent, bg, 64);
+        for (i32 r = 0; r < rows; r++) {
+            usize l = (d.ScrollY + r) as usize;
+            if (l >= bs[at].LineCount()) break;
+            i32 ly = y + r;
+            str t = bs[at].Line(l);
+            if (g > 0) {
+                string num = UintText(l as u64 + 1);
+                u32 ink = th.C.TextSecondary;
+                if (l == bs[at].Cursor().Line) ink = th.C.Text;
+                PutCells(ref s, d.X + g - 1 - num.Len() as i32, ly, num.AsStr(), term.Style.Plain().Fg(ink).Bg(bg));
+            }
+            List<u8> cls = Classify(t, cs[at].Keywords.AsStr(), cs[at].Comment.AsStr());
+            usize i = 0;
+            i32 v = 0;
+            usize tab = 4;
+            while (i < t.Len) {
+                usize n = CharLen(t, i);
+                bool selected = false;
+                bool cursor = false;
+                for (usize k = 0; k < bs[at].SelectionCount(); k++) {
+                    edit.Selection sel = bs[at].SelectionAt(k);
+                    edit.Pos p = edit.Pos.At(l, i);
+                    if (!sel.IsEmpty() && !p.Before(sel.Start()) && p.Before(sel.End())) selected = true;
+                    if (focused && sel.Head.Same(p)) cursor = true;
+                }
+                term.Style st = term.Style.Plain().Fg(TokenColor(th, cls.Get(i))).Bg(bg);
+                if (selected) st = st.Bg(selBg);
+                if (cursor) st = st.Reverse();
+                i32 w = 1;
+                u32 ch = DecodeAt(t, i, n);
+                if (t[i] == 9) {
+                    w = (tab - v as usize % tab) as i32;
+                    ch = ' ' as u32;
+                }
+                for (i32 k = 0; k < w; k++) {
+                    i32 cx = x + v + k - d.ScrollX;
+                    if (cx >= x && cx < right) SetCell(ref s, cx, ly, ch, st);
+                }
+                v += w;
+                i += n;
+            }
+            // a cursor at the end of the line, and a selection running past it
+            for (usize k = 0; k < bs[at].SelectionCount(); k++) {
+                edit.Selection sel = bs[at].SelectionAt(k);
+                i32 cx = x + v - d.ScrollX;
+                if (cx < x || cx >= right) continue;
+                if (focused && sel.Head.Line == l && sel.Head.Col == t.Len) {
+                    SetCell(ref s, cx, ly, ' ' as u32, term.Style.Plain().Fg(th.C.Text).Bg(bg).Reverse());
+                } else if (!sel.IsEmpty() && sel.Start().Line <= l && sel.End().Line > l) {
+                    SetCell(ref s, cx, ly, ' ' as u32, term.Style.Plain().Bg(selBg));
+                }
             }
         }
     }
 
+    void DrawPaletteCells(in this, ref term.Screen s, in lumen.Theme th, u32 id) {
+        Node d = this.N(id);
+        term.Style surface = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Surface);
+        FillCells(ref s, d.X, d.Y, d.W, d.H, surface);
+        if (d.X >= 0 && d.Y >= 0) s.Box(d.X as u32, d.Y as u32, d.W as u32, d.H as u32, term.Style.Plain().Fg(th.C.ControlEdge).Bg(th.C.Surface));
+        PutCells(ref s, d.X + 1, d.Y + 1, ">", term.Style.Plain().Fg(th.C.Accent).Bg(th.C.Surface));
+        this.DrawTextCells(ref s, th, id, d.Data2 as usize, d.X + 3, d.Y + 1, d.X + d.W - 1, 0, th.C.Surface);
+        this.DrawRowsCells(ref s, th, id, d.X + 1, d.Y + 2, d.W - 2, d.H - 3, th.C.Surface);
+    }
+
     // The background a component sits on: a card's surface, or the window's.
     u32 BgAt(in this, in lumen.Theme th, u32 id) {
-        u32 p = this.Nodes.Get(id as usize).Parent;
+        u32 p = this.N(id).Parent;
         while (p != 0) {
-            if (this.Nodes.Get(p as usize).K == Kind.Card) return th.C.Surface;
-            p = this.Nodes.Get(p as usize).Parent;
+            if (this.N(p).K == Kind.Card) return th.C.Surface;
+            p = this.N(p).Parent;
         }
         return th.C.Background;
     }
 }
+
+// Components that fill their container's width (in a column) or height (in a row).
+bool IsWide(Kind k) => k == Kind.ListView || k == Kind.TreeView || k == Kind.Tabs || k == Kind.Editor || k == Kind.TextField;
 
 lumen.TypeStyle TypeOf(in lumen.Theme th, u8 style) {
     if (style == CAPTION) return th.Caption;
@@ -622,6 +2240,16 @@ lumen.TypeStyle TypeOf(in lumen.Theme th, u8 style) {
 }
 
 gfx.Color Rgb(u32 c) => gfx.Color.Rgb((c >> 16 & 0xFF) as u8, (c >> 8 & 0xFF) as u8, (c & 0xFF) as u8);
+
+// a over b, a weighing w of 256.
+u32 MixRgb(u32 a, u32 b, u32 w) {
+    u32 r = ((a >> 16 & 0xFF) * w + (b >> 16 & 0xFF) * (256 - w)) >> 8;
+    u32 g = ((a >> 8 & 0xFF) * w + (b >> 8 & 0xFF) * (256 - w)) >> 8;
+    u32 bl = ((a & 0xFF) * w + (b & 0xFF) * (256 - w)) >> 8;
+    return r << 16 | g << 8 | bl;
+}
+
+gfx.Color Mix(u32 a, u32 b, u32 w) => Rgb(MixRgb(a, b, w));
 
 // Text vertically centred in a box of height h at (x, y).
 void DrawLabel(ref gfx.Canvas c, in font.Font f, i32 x, i32 y, i32 h, str label, u32 size, u32 color) {
@@ -638,4 +2266,282 @@ i32 Chars(str s) {
         if (s[i] & 0xC0 != 0x80) n++;
     }
     return n;
+}
+
+// The bytes of the character starting at i.
+usize CharLen(str t, usize i) {
+    usize n = 1;
+    while (i + n < t.Len && t[i + n] & 0xC0 == 0x80) n++;
+    return n;
+}
+
+// The code point of the n bytes at i.
+u32 DecodeAt(str t, usize i, usize n) {
+    u8 b = t[i];
+    if (n == 1) return b as u32;
+    u32 c = 0;
+    if (n == 2) c = (b & 0x1F) as u32;
+    else if (n == 3) c = (b & 0x0F) as u32;
+    else c = (b & 0x07) as u32;
+    for (usize k = 1; k < n; k++) c = c << 6 | (t[i + k] & 0x3F) as u32;
+    return c;
+}
+
+void AppendChar(ref string s, u32 c) {
+    if (c < 0x80) {
+        s.AppendByte(c as u8);
+    } else if (c < 0x800) {
+        s.AppendByte((0xC0 | c >> 6) as u8);
+        s.AppendByte((0x80 | c & 0x3F) as u8);
+    } else if (c < 0x10000) {
+        s.AppendByte((0xE0 | c >> 12) as u8);
+        s.AppendByte((0x80 | c >> 6 & 0x3F) as u8);
+        s.AppendByte((0x80 | c & 0x3F) as u8);
+    } else {
+        s.AppendByte((0xF0 | c >> 18) as u8);
+        s.AppendByte((0x80 | c >> 12 & 0x3F) as u8);
+        s.AppendByte((0x80 | c >> 6 & 0x3F) as u8);
+        s.AppendByte((0x80 | c & 0x3F) as u8);
+    }
+}
+
+string UintText(u64 v) {
+    if (v == 0) return string.From("0");
+    u8[20] d;
+    usize n = 0;
+    u64 x = v;
+    while (x > 0) {
+        d[n] = (x % 10) as u8 + '0';
+        x /= 10;
+        n++;
+    }
+    string s = string.New();
+    while (n > 0) {
+        n--;
+        s.AppendByte(d[n]);
+    }
+    return s;
+}
+
+// Line breaks become spaces (pasting into one line).
+string Flatten(str t) {
+    string s = string.New();
+    for (usize i = 0; i < t.Len; i++) {
+        if (t[i] == 13) continue;
+        if (t[i] == 10) s.AppendByte(' ');
+        else s.AppendByte(t[i]);
+    }
+    return s;
+}
+
+// The pixel offset of column col in line t (a tab reaching the next tab stop).
+i32 XOfPixels(in font.Font f, str t, usize col, u32 size, i32 space, usize tab) {
+    i32 x = 0;
+    usize v = 0;
+    usize i = 0;
+    while (i < col && i < t.Len) {
+        usize n = CharLen(t, i);
+        if (t[i] == 9) {
+            usize w = tab - v % tab;
+            x += w as i32 * space;
+            v += w;
+        } else {
+            x += f.Measure(t[i..i + n], size);
+            v++;
+        }
+        i += n;
+    }
+    return x;
+}
+
+// The column nearest pixel offset x in line t.
+usize ColAtPixels(in font.Font f, str t, i32 x, u32 size, i32 space, usize tab) {
+    i32 at = 0;
+    usize v = 0;
+    usize i = 0;
+    while (i < t.Len) {
+        usize n = CharLen(t, i);
+        i32 w = 0;
+        usize vw = 1;
+        if (t[i] == 9) {
+            vw = tab - v % tab;
+            w = vw as i32 * space;
+        } else {
+            w = f.Measure(t[i..i + n], size);
+        }
+        if (x < at + w / 2) return i;
+        at += w;
+        v += vw;
+        i += n;
+    }
+    return t.Len;
+}
+
+// The column of line l drawn at cell v.
+usize ColAtVisual(ref edit.Buffer b, usize l, usize v) {
+    str t = b.Line(l);
+    usize i = 0;
+    while (i < t.Len) {
+        usize next = i + CharLen(t, i);
+        if (b.VisualCol(edit.Pos.At(l, next)) > v) {
+            // nearer the start or the end of this character
+            usize a = b.VisualCol(edit.Pos.At(l, i));
+            usize z = b.VisualCol(edit.Pos.At(l, next));
+            if (v - a < z - v) return i;
+            return next;
+        }
+        i = next;
+    }
+    return t.Len;
+}
+
+// Pointer work on a buffer: a cursor at p, the selection grown to p, or another cursor.
+void PointerAt(ref edit.Buffer b, u8 pend, edit.Pos p) {
+    if (pend == PEND_CLICK) b.SetCursor(p);
+    else if (pend == PEND_ADD) b.AddCursor(p);
+    else if (pend == PEND_EXTEND) {
+        edit.Selection s = b.SelectionAt(0);
+        b.Select(s.Anchor, p);
+    }
+}
+
+// Ctrl+D: the word at the cursor selected, or, with a selection, the next match of it
+// selected too.
+void AddNextMatch(ref edit.Buffer b) {
+    usize n = b.SelectionCount();
+    edit.Selection last = b.SelectionAt(n - 1);
+    if (last.IsEmpty()) {
+        b.SelectWord();
+        return;
+    }
+    string q = b.Between(last.Start(), last.End());
+    edit.Selection? next = b.Find(q.AsStr(), last.End(), true);
+    if (next.IsSome()) b.AddSelection(next.Unwrap().Anchor, next.Unwrap().Head);
+}
+
+// Highlighting: the class of each byte of a line (0 plain, 1 keyword, 2 string,
+// 3 number, 4 comment). Strings and comments end at the line's end.
+List<u8> Classify(str t, str keywords, str comment) {
+    List<u8> c = List<u8>.New();
+    for (usize i = 0; i < t.Len; i++) c.Push(0);
+    mut u8[] cs = c.AsMutSlice();
+    usize i = 0;
+    while (i < t.Len) {
+        u8 b = t[i];
+        if (comment.Len > 0 && ct.MatchesAt(t, i, comment)) {
+            for (usize k = i; k < t.Len; k++) cs[k] = 4;
+            break;
+        }
+        if (b == '"' || b == '\'') {
+            usize k = i + 1;
+            while (k < t.Len && t[k] != b) {
+                if (t[k] == '\\') k++;
+                k++;
+            }
+            if (k < t.Len) k++;
+            if (k > t.Len) k = t.Len;
+            for (usize j = i; j < k; j++) cs[j] = 2;
+            i = k;
+            continue;
+        }
+        if (WordByte(b)) {
+            usize k = i;
+            while (k < t.Len && WordByte(t[k])) k++;
+            u8 cls = 0;
+            if (ct.IsDigit(b)) cls = 3;
+            else if (IsKeyword(keywords, t[i..k])) cls = 1;
+            for (usize j = i; j < k; j++) cs[j] = cls;
+            i = k;
+            continue;
+        }
+        i++;
+    }
+    return c;
+}
+
+bool WordByte(u8 b) => ct.IsAlnum(b) || b == '_' || b >= 0x80;
+
+bool IsKeyword(str keywords, str w) {
+    usize i = 0;
+    while (i < keywords.Len) {
+        usize k = i;
+        while (k < keywords.Len && keywords[k] != ' ') k++;
+        if (k - i == w.Len && ct.MatchesAt(keywords, i, w)) return true;
+        i = k + 1;
+    }
+    return false;
+}
+
+u32 TokenColor(in lumen.Theme th, u8 cls) {
+    if (cls == 1) return th.C.Accent;
+    if (cls == 2) return th.C.Success;
+    if (cls == 3) return th.C.Warning;
+    if (cls == 4) return th.C.TextSecondary;
+    return th.C.Text;
+}
+
+// How well query matches label: its characters in order, case ignored; lower is better
+// (a match at the start, and characters together, score best). None if it does not.
+u32? Fuzzy(str label, str query) {
+    if (query.Len == 0) return Some(0);
+    u32 score = 0;
+    usize at = 0;
+    usize last = 0;
+    bool first = true;
+    for (usize q = 0; q < query.Len; q++) {
+        u8 want = ct.ToLower(query[q]);
+        while (at < label.Len && ct.ToLower(label[at]) != want) at++;
+        if (at >= label.Len) return null;
+        if (first) score += at as u32 * 2;
+        else score += (at - last - 1) as u32;
+        first = false;
+        last = at;
+        at++;
+    }
+    return Some(score);
+}
+
+// The cells helpers: positions may be off the screen (scrolled), so they clip first.
+void SetCell(ref term.Screen s, i32 x, i32 y, u32 ch, in term.Style st) {
+    if (x < 0 || y < 0) return;
+    s.Set(x as u32, y as u32, ch, st);
+}
+
+i32 PutCells(ref term.Screen s, i32 x, i32 y, str t, in term.Style st) {
+    i32 at = x;
+    usize i = 0;
+    while (i < t.Len) {
+        usize n = CharLen(t, i);
+        SetCell(ref s, at, y, DecodeAt(t, i, n), st);
+        at++;
+        i += n;
+    }
+    return at;
+}
+
+void FillCells(ref term.Screen s, i32 x, i32 y, i32 w, i32 h, in term.Style st) {
+    for (i32 r = y; r < y + h; r++) {
+        for (i32 c = x; c < x + w; c++) SetCell(ref s, c, r, ' ' as u32, st);
+    }
+}
+
+// A terminal key's KEY_* code (0 for a character).
+u32 KeyCode(in term.Key k) {
+    u32 c = 0;
+    if (k.Is(term.KeyKind.Enter)) c = ports.KEY_ENTER;
+    else if (k.Is(term.KeyKind.Tab)) c = ports.KEY_TAB;
+    else if (k.Is(term.KeyKind.Backspace)) c = ports.KEY_BACKSPACE;
+    else if (k.Is(term.KeyKind.Escape)) c = ports.KEY_ESCAPE;
+    else if (k.Is(term.KeyKind.Up)) c = ports.KEY_UP;
+    else if (k.Is(term.KeyKind.Down)) c = ports.KEY_DOWN;
+    else if (k.Is(term.KeyKind.Left)) c = ports.KEY_LEFT;
+    else if (k.Is(term.KeyKind.Right)) c = ports.KEY_RIGHT;
+    else if (k.Is(term.KeyKind.Home)) c = ports.KEY_HOME;
+    else if (k.Is(term.KeyKind.End)) c = ports.KEY_END;
+    else if (k.Is(term.KeyKind.PageUp)) c = ports.KEY_PAGE_UP;
+    else if (k.Is(term.KeyKind.PageDown)) c = ports.KEY_PAGE_DOWN;
+    else if (k.Is(term.KeyKind.Insert)) c = ports.KEY_INSERT;
+    else if (k.Is(term.KeyKind.Delete)) c = ports.KEY_DELETE;
+    else if (k.Is(term.KeyKind.Function)) c = ports.KEY_F1 + k.Char() - 1;
+    return c;
 }
