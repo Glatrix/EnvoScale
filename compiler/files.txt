@@ -32,6 +32,7 @@ sema/move.envo
 sema/borrow.envo
 sema/summary.envo
 sema/dump.envo
+sema/index.envo
 eir/ir.envo
 eir/print.envo
 eir/verify.envo

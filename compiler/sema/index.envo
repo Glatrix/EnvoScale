@@ -1,0 +1,438 @@
+// The index of a checked program for editors (PLAN D75, M14.4): its declarations (name,
+// kind, signature or type, container, position, doc comment) and, in the program's own
+// files, every reference to them. `envo query` writes it as JSON; `envo lsp` answers
+// completion, hover, go-to-definition and symbols from it.
+//
+// Positions are 0-based lines and byte columns in their file. Symbol ids are the
+// checker's; a struct field's id is FIELD_ID plus its node.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.syntax;
+
+const u32 FIELD_ID = 0x40000000;
+
+// Appends s as a JSON string.
+void JsonText(ref string b, str s) {
+    b.AppendByte('"');
+    for (usize i = 0; i < s.Len; i++) {
+        u8 c = s[i];
+        if (c == '"' || c == 0x5C) {
+            b.AppendByte(0x5C);
+            b.AppendByte(c);
+        } else if (c == 10) {
+            b.Append("\\n");
+        } else if (c == 13) {
+            b.Append("\\r");
+        } else if (c == 9) {
+            b.Append("\\t");
+        } else if (c < 32) {
+            b.Append("\\u00");
+            b.AppendByte(HexDigit(c >> 4));
+            b.AppendByte(HexDigit(c & 15));
+        } else {
+            b.AppendByte(c);
+        }
+    }
+    b.AppendByte('"');
+}
+
+u8 HexDigit(u8 v) {
+    if (v < 10) return '0' + v;
+    return 'a' + v - 10;
+}
+
+void JsonNum(ref string b, u64 v) {
+    if (v >= 10) JsonNum(ref b, v / 10);
+    b.AppendByte(('0' as u64 + v % 10) as u8);
+}
+
+impl Checker {
+    // The 0-based line and byte column of token tok.
+    void TokPos(in this, u32 tok, ref u64 line, ref u64 col) {
+        Token t = this.T.Toks.Get(tok as usize);
+        str text = TextStr(this.Texts.Get(t.File as usize));
+        usize at = t.Start as usize;
+        usize start = at;
+        while (start > 0 && text[start - 1] != 10) start--;
+        line = 0;
+        for (usize i = 0; i < start; i++) {
+            if (text[i] == 10) line++;
+        }
+        col = (at - start) as u64;
+    }
+
+    // The `//` comment lines just above token tok's line, joined by newlines.
+    void DocAbove(in this, u32 tok, ref string doc) {
+        Token t = this.T.Toks.Get(tok as usize);
+        str text = TextStr(this.Texts.Get(t.File as usize));
+        usize at = t.Start as usize;
+        while (at > 0 && text[at - 1] != 10) at--;
+        // at: the start of the declaration's line; walk up over comment lines
+        List<usize> starts = List<usize>.New();
+        while (at > 0) {
+            usize end = at - 1;                 // the newline ending the line above
+            usize ls = end;
+            while (ls > 0 && text[ls - 1] != 10) ls--;
+            usize i = ls;
+            while (i < end && (text[i] == ' ' || text[i] == 9)) i++;
+            if (i + 1 < end && text[i] == '/' && text[i + 1] == '/') {
+                starts.Push(i + 2);
+                at = ls;
+            } else {
+                break;
+            }
+        }
+        usize k = starts.Len();
+        while (k > 0) {
+            k--;
+            usize i = starts.Get(k);
+            if (i < text.Len && text[i] == ' ') i++;
+            usize e = i;
+            while (e < text.Len && text[e] != 10 && text[e] != 13) e++;
+            if (doc.Len() > 0) doc.AppendByte(10);
+            doc.Append(text[i..e]);
+        }
+    }
+
+    str KindName(in this, u32 s) {
+        Sym sym = this.Syms.Get(s as usize);
+        u8 k = sym.Kind;
+        if (k == SK_FN) {
+            if (sym.Flags & SF_METHOD != 0) return "method";
+            return "fn";
+        }
+        if (k == SK_STRUCT) return "struct";
+        if (k == SK_ENUM) return "enum";
+        if (k == SK_CONST) return "const";
+        if (k == SK_STATIC) return "static";
+        if (k == SK_LOCAL) return "local";
+        if (k == SK_IFACE) return "interface";
+        return "type";
+    }
+
+    // A one-line signature: a function's result, name and parameters; a value's type and name.
+    void Detail(ref this, u32 s, ref string b) {
+        Sym sym = this.Syms.Get(s as usize);
+        u8 k = sym.Kind;
+        if (k == SK_FN) {
+            this.AppendType(ref b, sym.Type);
+            b.AppendByte(' ');
+            b.Append(TextStr(sym.Name));
+            b.AppendByte('(');
+            u32 p = this.FirstParam(s);
+            bool first = true;
+            while (p != 0) {
+                if (!first) b.Append(", ");
+                first = false;
+                Node pn = this.NodeAt(p);
+                if (pn.Flags & NF_IN != 0) b.Append("in ");
+                if (pn.Flags & NF_REF != 0) b.Append("ref ");
+                this.AppendType(ref b, this.NType(p));
+                b.AppendByte(' ');
+                b.Append(this.TokText(pn.Tok));
+                p = pn.Next;
+            }
+            b.AppendByte(')');
+            return;
+        }
+        if (k == SK_LOCAL || k == SK_CONST || k == SK_STATIC) {
+            this.AppendType(ref b, sym.Type);
+            b.AppendByte(' ');
+            b.Append(TextStr(sym.Name));
+            return;
+        }
+        b.Append(this.KindName(s));
+        b.AppendByte(' ');
+        b.Append(TextStr(sym.Name));
+    }
+
+    // The JSON index of the program; files below userFiles are the program's own (their
+    // references are listed).
+    public string Index(ref this, u32 userFiles) {
+        string b = string.From("{\"files\":[");
+        for (usize f = 0; f < this.Paths.Len(); f++) {
+            if (f > 0) b.AppendByte(',');
+            JsonText(ref b, TextStr(this.Paths.Get(f)));
+        }
+        b.Append("],\"user\":");
+        JsonNum(ref b, userFiles as u64);
+        b.Append(",\"symbols\":[");
+        bool any = false;
+        for (u32 s = 1; s < this.Syms.Len() as u32; s++) {
+            Sym sym = this.Syms.Get(s as usize);
+            if (sym.Node == 0 || sym.Kind == SK_BUILTIN || sym.Kind == SK_TPARAM || sym.Name.Len == 0) continue;
+            u32 tok = this.NTok(sym.Node);
+            if (tok == 0 || tok as usize >= this.T.Toks.Len()) continue;
+            if (any) b.AppendByte(',');
+            any = true;
+            this.SymbolJson(ref b, s, tok);
+            if (sym.Kind == SK_STRUCT) this.FieldsJson(ref b, s);
+        }
+        b.Append("],\"refs\":[");
+        any = false;
+        // type names are not resolved on their nodes: by name, the file's namespace first
+        StrMap<u32> types = StrMap<u32>.New();
+        for (u32 s = 1; s < this.Syms.Len() as u32; s++) {
+            Sym sym = this.Syms.Get(s as usize);
+            if (sym.Node == 0 || sym.Name.Len == 0) continue;
+            if (sym.Kind != SK_STRUCT && sym.Kind != SK_ENUM && sym.Kind != SK_IFACE && sym.Kind != SK_TYPE) continue;
+            string full = string.From(TextStr(sym.Ns));
+            full.AppendByte('.');
+            full.Append(TextStr(sym.Name));
+            types.Put(full.AsStr(), s);
+            if (!types.Has(TextStr(sym.Name))) types.Put(TextStr(sym.Name), s);
+        }
+        for (u32 n = 1; n < this.T.Nodes.Len() as u32; n++) {
+            u32 target = 0;
+            u32 tok = 0;
+            this.RefOf(n, ref target, ref tok, types);
+            if (target == 0 || tok == 0) continue;
+            Token t = this.T.Toks.Get(tok as usize);
+            if (t.File >= userFiles) continue;
+            u64 line = 0;
+            u64 col = 0;
+            this.TokPos(tok, ref line, ref col);
+            if (any) b.AppendByte(',');
+            any = true;
+            b.AppendByte('[');
+            JsonNum(ref b, t.File as u64);
+            b.AppendByte(',');
+            JsonNum(ref b, line);
+            b.AppendByte(',');
+            JsonNum(ref b, col);
+            b.AppendByte(',');
+            JsonNum(ref b, t.Len as u64);
+            b.AppendByte(',');
+            JsonNum(ref b, target as u64);
+            b.AppendByte(']');
+        }
+        b.Append("]}");
+        return b;
+    }
+
+    void SymbolJson(ref this, ref string b, u32 s, u32 tok) {
+        Sym sym = this.Syms.Get(s as usize);
+        Token t = this.T.Toks.Get(tok as usize);
+        u64 line = 0;
+        u64 col = 0;
+        this.TokPos(tok, ref line, ref col);
+        b.Append("{\"id\":");
+        JsonNum(ref b, s as u64);
+        b.Append(",\"name\":");
+        JsonText(ref b, TextStr(sym.Name));
+        b.Append(",\"kind\":");
+        JsonText(ref b, this.KindName(s));
+        string detail = string.New();
+        this.Detail(s, ref detail);
+        b.Append(",\"detail\":");
+        JsonText(ref b, detail.AsStr());
+        string container = string.New();
+        if (sym.Kind == SK_FN && sym.Flags & SF_METHOD != 0 && sym.OwnerType != 0) {
+            this.AppendType(ref container, sym.OwnerType);
+        }
+        b.Append(",\"container\":");
+        JsonText(ref b, container.AsStr());
+        b.Append(",\"ns\":");
+        JsonText(ref b, TextStr(sym.Ns));
+        b.Append(",\"public\":");
+        if (sym.Flags & SF_PUBLIC != 0) b.Append("true");
+        else b.Append("false");
+        b.Append(",\"file\":");
+        JsonNum(ref b, t.File as u64);
+        b.Append(",\"line\":");
+        JsonNum(ref b, line);
+        b.Append(",\"col\":");
+        JsonNum(ref b, col);
+        b.Append(",\"len\":");
+        JsonNum(ref b, t.Len as u64);
+        if (sym.Kind == SK_FN) {
+            // the function's extent: its first and last tokens' lines, for locals' scopes
+            Node fn = this.NodeAt(sym.Node);
+            u32 body = fn.C;
+            if (body != 0) {
+                u64 bl = 0;
+                u64 bc = 0;
+                this.TokPos(this.LastTok(body), ref bl, ref bc);
+                b.Append(",\"end\":");
+                JsonNum(ref b, bl);
+            }
+        }
+        if (sym.Kind == SK_LOCAL && this.LocalOwner(s) != 0) {
+            b.Append(",\"fn\":");
+            JsonNum(ref b, this.LocalOwner(s) as u64);
+        }
+        string doc = string.New();
+        if (sym.Kind != SK_LOCAL) this.DocAbove(tok, ref doc);
+        if (doc.Len() > 0) {
+            b.Append(",\"doc\":");
+            JsonText(ref b, doc.AsStr());
+        }
+        b.AppendByte('}');
+    }
+
+    // The fields of struct s, as symbols of kind "field".
+    void FieldsJson(ref this, ref string b, u32 s) {
+        Sym sym = this.Syms.Get(s as usize);
+        u32 f = this.NodeAt(sym.Node).A;
+        while (f != 0) {
+            Node fn = this.NodeAt(f);
+            if (fn.Kind == NK_FIELD) {
+                u64 line = 0;
+                u64 col = 0;
+                this.TokPos(fn.Tok, ref line, ref col);
+                b.Append(",{\"id\":");
+                JsonNum(ref b, (FIELD_ID + f) as u64);
+                b.Append(",\"name\":");
+                JsonText(ref b, this.TokText(fn.Tok));
+                b.Append(",\"kind\":\"field\",\"detail\":");
+                string d = string.New();
+                this.AppendType(ref d, this.FieldType(sym.Type, f));
+                d.AppendByte(' ');
+                d.Append(this.TokText(fn.Tok));
+                JsonText(ref b, d.AsStr());
+                b.Append(",\"container\":");
+                string c = string.New();
+                this.AppendType(ref c, sym.Type);
+                JsonText(ref b, c.AsStr());
+                b.Append(",\"ns\":");
+                JsonText(ref b, TextStr(sym.Ns));
+                b.Append(",\"public\":true,\"file\":");
+                JsonNum(ref b, this.T.Toks.Get(fn.Tok as usize).File as u64);
+                b.Append(",\"line\":");
+                JsonNum(ref b, line);
+                b.Append(",\"col\":");
+                JsonNum(ref b, col);
+                b.Append(",\"len\":");
+                JsonNum(ref b, this.T.Toks.Get(fn.Tok as usize).Len as u64);
+                string doc = string.New();
+                this.DocAbove(fn.Tok, ref doc);
+                if (doc.Len() > 0) {
+                    b.Append(",\"doc\":");
+                    JsonText(ref b, doc.AsStr());
+                }
+                b.AppendByte('}');
+            }
+            f = fn.Next;
+        }
+    }
+
+    // The function symbol a local belongs to (0 for a top-level statement's): the nearest
+    // function declared above it in the same file.
+    u32 LocalOwner(in this, u32 s) {
+        Sym sym = this.Syms.Get(s as usize);
+        Token lt = this.T.Toks.Get(this.NTok(sym.Node) as usize);
+        u32 best = 0;
+        u32 bestStart = 0;
+        for (u32 f = 1; f < this.Syms.Len() as u32; f++) {
+            Sym fs = this.Syms.Get(f as usize);
+            if (fs.Kind != SK_FN || fs.Node == 0) continue;
+            Node fn = this.NodeAt(fs.Node);
+            if (fn.C == 0) continue;
+            Token ft = this.T.Toks.Get(fn.Tok as usize);
+            if (ft.File != lt.File || ft.Start > lt.Start) continue;
+            Token et = this.T.Toks.Get(this.LastTok(fn.C) as usize);
+            if (et.Start < lt.Start) continue;
+            if (best == 0 || ft.Start > bestStart) {
+                best = f;
+                bestStart = ft.Start;
+            }
+        }
+        return best;
+    }
+
+    // The last token of node n's subtree (a block's closing brace, as far as nodes show).
+    u32 LastTok(in this, u32 n) {
+        u32 last = this.NTok(n);
+        Node node = this.NodeAt(n);
+        u32[6] kids;
+        kids[0] = node.A;
+        kids[1] = node.B;
+        kids[2] = node.C;
+        kids[3] = node.D;
+        kids[4] = node.E;
+        kids[5] = node.F;
+        for (usize i = 0; i < 6; i++) {
+            u32 k = kids[i];
+            while (k != 0 && k < this.T.Nodes.Len() as u32) {
+                u32 t = this.LastTok(k);
+                if (t > last) last = t;
+                k = this.NodeAt(k).Next;
+            }
+        }
+        return last;
+    }
+
+    // What node n refers to, and the token naming it: a name's symbol, a called method, a
+    // field read or written through `.`.
+    void RefOf(ref this, u32 n, ref u32 target, ref u32 tok, in StrMap<u32> types) {
+        Node node = this.NodeAt(n);
+        if (node.Kind == NK_NAME) {
+            u32 s = this.NSym(n);
+            if (s == 0) s = this.FixedSym(node.Tok);
+            if (s != 0 && s < this.Syms.Len() as u32 && this.Syms.Get(s as usize).Node != 0) {
+                target = s;
+                tok = node.Tok;
+            }
+            return;
+        }
+        if (node.Kind == NK_TNAME) {
+            Token t = this.T.Toks.Get(node.Tok as usize);
+            string full = string.From(TextStr(this.FileNs.Get(t.File as usize)));
+            full.AppendByte('.');
+            full.Append(this.TokText(node.Tok));
+            u32? s = types.Get(full.AsStr());
+            if (s.IsNone()) s = types.Get(this.TokText(node.Tok));
+            if (s.IsSome()) {
+                target = s.Unwrap();
+                tok = node.Tok;
+            }
+            return;
+        }
+        if (node.Kind == NK_CALL && node.A != 0 && this.NKind(node.A) == NK_NAME) {
+            // a call by name: the call node holds the function
+            u32 callee = this.NodeAt(node.A).Tok;
+            if (this.NSym(node.A) != 0 || this.FixedSym(callee) != 0) return;     // the name node has it
+            u32 s = this.NSym(n);
+            if (s != 0 && s < this.Syms.Len() as u32 && this.Syms.Get(s as usize).Kind == SK_FN && this.Syms.Get(s as usize).Node != 0) {
+                target = s;
+                tok = callee;
+            }
+            return;
+        }
+        if (node.Kind == NK_CALL && node.A != 0 && this.NKind(node.A) == NK_MEMBER) {
+            u32 s = this.NSym(n);
+            if (s != 0 && s < this.Syms.Len() as u32 && this.Syms.Get(s as usize).Kind == SK_FN && this.Syms.Get(s as usize).Node != 0) {
+                target = s;
+                tok = this.MemberNameTok(node.A);
+            }
+            return;
+        }
+        if (node.Kind == NK_MEMBER && node.A != 0) {
+            u32 rt = this.NType(node.A);
+            if (rt == 0 || rt as usize >= this.Types.Len()) return;
+            Type ty = this.Types.Get(rt as usize);
+            if (ty.Kind == TYK_PTR) {
+                rt = ty.Elem;
+                ty = this.Types.Get(rt as usize);
+            }
+            if (ty.Kind != TYK_STRUCT) return;
+            u32 f = this.StructFieldNamed(rt, n);
+            if (f != 0) {
+                target = FIELD_ID + f;
+                tok = this.MemberNameTok(n);
+            }
+        }
+    }
+
+    // The token of the name after `.` in member node m.
+    u32 MemberNameTok(in this, u32 m) {
+        u32 t = this.NTok(m);
+        // the node's token is the name, or the `.` before it
+        if (t + 1 < this.T.Toks.Len() as u32 && this.T.Toks.Get(t as usize).Len == 1) {
+            str dot = this.TokText(t);
+            if (dot.Len == 1 && dot[0] == '.') return t + 1;
+        }
+        return t;
+    }
+}

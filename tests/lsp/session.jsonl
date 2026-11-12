@@ -1,7 +1,12 @@
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}
 {"jsonrpc":"2.0","method":"initialized","params":{}}
 {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"${URI}","languageId":"envo","version":1,"text":"i32 x = ;\n"}}}
-{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"${URI}","version":2},"contentChanges":[{"text":"i32 x = 1;\n"}]}}
+{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"${URI}","version":2},"contentChanges":[{"text":"// The answer.\ni32 Answer() => 42;\n\nstruct Point {\n    i32 X;\n    i32 Y;\n}\n\nPoint p = new Point { X = 1, Y = 2 };\ni32 v = Answer() + p.X;\n"}]}}
+{"jsonrpc":"2.0","id":10,"method":"textDocument/hover","params":{"textDocument":{"uri":"${URI}"},"position":{"line":9,"character":10}}}
+{"jsonrpc":"2.0","id":11,"method":"textDocument/definition","params":{"textDocument":{"uri":"${URI}"},"position":{"line":9,"character":10}}}
+{"jsonrpc":"2.0","id":12,"method":"textDocument/completion","params":{"textDocument":{"uri":"${URI}"},"position":{"line":9,"character":21}}}
+{"jsonrpc":"2.0","id":13,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"${URI}"}}}
+{"jsonrpc":"2.0","id":14,"method":"textDocument/definition","params":{"textDocument":{"uri":"${URI}"},"position":{"line":9,"character":21}}}
 {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"${URI}","version":3},"contentChanges":[{"text":"// café\n/* 😀 */ u8 y = nope;\n"}]}}
 {"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{}}
 {"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"${URI}"}}}

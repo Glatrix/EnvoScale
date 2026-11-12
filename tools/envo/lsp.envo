@@ -3,8 +3,9 @@
 // a blank line, then the JSON body). It gives diagnostics only: when a document is
 // opened, changed or saved, its text goes to a scratch file and a child `envo check`
 // checks it (with the rest of its package, if it is in one); the first error comes back
-// as the document's diagnostic, with its `help:` line. Hover, completion and
-// go-to-definition need the query-based compiler (brief section 8) and come later.
+// as the document's diagnostic, with its `help:` line. After a clean check a child `envo
+// query` indexes the program, and completion, hover, go-to-definition, document symbols
+// and formatting are answered from that index (lspquery.envo, PLAN D75).
 use std.fs;
 use std.env;
 use std.path;
@@ -23,6 +24,7 @@ struct Server {
     List<string> Checked;       // documents whose check put up diagnostics
     List<string> Shown;         // for each, the URI they are shown on
     string Self;                // this program, to run `envo check`
+    List<Doc> Docs;             // open documents: their text and last good index
 }
 
 // Where the next message is in b: 0 if b does not hold all of it yet, 1 if it does (its
@@ -323,6 +325,8 @@ void Diagnose(ref Server s, str uri, str t) {
     args.Push("check");
     foreach (var f in files.AsSlice()) args.Push(f.AsStr());
     Result<i32, IoError> r = process.RunIn(s.Self.AsStr(), args.AsSlice(), "", log.AsStr(), log.AsStr());
+    SetDocText(ref s.Docs, uri, t);
+    if (r.IsOk() && r.Unwrap() == 0) IndexDoc(ref s.Docs, s.Self.AsStr(), args, work.AsStr(), uri, scratch.AsStr(), t);
     json.Value diags = json.Value.NewArray();
     string target = string.From(uri);
     if (r.IsOk() && r.Unwrap() != 0) {
@@ -428,6 +432,15 @@ json.Value Capabilities() {
     sync.Set("save", save);
     json.Value caps = json.Value.NewObject();
     caps.Set("textDocumentSync", sync);
+    json.Value completion = json.Value.NewObject();
+    json.Value triggers = json.Value.NewArray();
+    triggers.Push(json.Value.OfStr("."));
+    completion.Set("triggerCharacters", triggers);
+    caps.Set("completionProvider", completion);
+    caps.Set("hoverProvider", json.Value.OfBool(true));
+    caps.Set("definitionProvider", json.Value.OfBool(true));
+    caps.Set("documentSymbolProvider", json.Value.OfBool(true));
+    caps.Set("documentFormattingProvider", json.Value.OfBool(true));
     json.Value info = json.Value.NewObject();
     info.Set("name", json.Value.OfStr("envo"));
     info.Set("version", json.Value.OfStr(ENVO_VERSION));
@@ -445,7 +458,7 @@ i32 CmdEnvoLsp(usize from) {
     Server s = new Server {
         Buf = string.New(), Ended = false, ShutDown = false, Checked = List<string>.New(),
         Shown = List<string>.New(),
-        Self = string.From(env.Arg(0)),
+        Self = string.From(env.Arg(0)), Docs = List<Doc>.New(),
     };
     while (true) {
         string body = ReadMessage(ref s);
@@ -494,6 +507,16 @@ i32 CmdEnvoLsp(usize from) {
                 Forget(ref s, uri, uri);
                 Publish(uri, json.Value.NewArray());
             }
+        } else if (ct.Compare(m, "textDocument/definition") == 0 && id.Len == 1 && params.Len == 1) {
+            Respond(id[0], Definition(s.Docs, params[0]));
+        } else if (ct.Compare(m, "textDocument/hover") == 0 && id.Len == 1 && params.Len == 1) {
+            Respond(id[0], Hover(s.Docs, params[0]));
+        } else if (ct.Compare(m, "textDocument/completion") == 0 && id.Len == 1 && params.Len == 1) {
+            Respond(id[0], Completion(s.Docs, params[0]));
+        } else if (ct.Compare(m, "textDocument/documentSymbol") == 0 && id.Len == 1 && params.Len == 1) {
+            Respond(id[0], DocumentSymbols(s.Docs, params[0]));
+        } else if (ct.Compare(m, "textDocument/formatting") == 0 && id.Len == 1 && params.Len == 1) {
+            Respond(id[0], Formatting(s.Docs, s.Self.AsStr(), params[0]));
         } else if (id.Len == 1) {
             RespondError(id[0], -32601, "envo lsp does not handle this method yet");
         }

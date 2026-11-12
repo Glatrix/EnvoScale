@@ -4,6 +4,7 @@ tools/envo/test.envo
 tools/envo/explain.envo
 tools/envo/fmt.envo
 tools/envo/lsp.envo
+tools/envo/lspquery.envo
 tools/envo/script.envo
 runtime/vm/vm.envo
 runtime/vm/sandbox.envo

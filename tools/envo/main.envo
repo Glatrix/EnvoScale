@@ -33,6 +33,8 @@ void EnvoUsage(i32 fd) {
     write(fd, "                          -A for all); --native builds and runs native code\n");
     write(fd, "  check [dir | file.envo...] [--os none]\n");
     write(fd, "                          check names, types and ownership without building\n");
+    write(fd, "  query [dir | file.envo...] [--os none]\n");
+    write(fd, "                          the program's symbols and references as JSON (editors)\n");
     write(fd, "  test [path...] [-O0] [-v]\n");
     write(fd, "                          build and run the test programs under each path\n");
     write(fd, "                          (default: the current directory)\n");
@@ -305,6 +307,27 @@ i32 CmdEnvoRun(usize from) {
     return 1;
 }
 
+// `envo query [dir | file.envo...]`: the editor index of the program (PLAN D75), JSON on
+// standard output: its symbols and its own files' references. For `envo lsp`.
+i32 CmdEnvoQuery(usize from) {
+    BuildOpts o = ParseOpts(from);
+    List<string> files = List<string>.New();
+    if (FileInputs(o)) {
+        foreach (var f in o.Inputs.AsSlice()) files.Push(string.From(f.AsStr()));
+    } else {
+        if (o.Inputs.Len() > 1) EnvoFail("give one package folder, or .envo files", 2);
+        str dir = ".";
+        if (o.Inputs.Len() == 1) dir = o.Inputs.AsSlice()[0].AsStr();
+        Package pkg = ReadPackage(dir);
+        foreach (var f in pkg.Sources.AsSlice()) files.Push(string.From(f.AsStr()));
+        if (files.Len() == 0) EnvoFail("the package has no source files", 1);
+    }
+    string home = EnvoHome();
+    string index = IndexProgram(files, home.AsStr(), o.Os.AsStr(), o.Target);
+    print(index.AsStr());
+    return 0;
+}
+
 i32 CmdEnvoCheck(usize from) {
     BuildOpts o = ParseOpts(from);
     List<string> files = List<string>.New();
@@ -414,6 +437,7 @@ if (Eq(command, "new")) return CmdEnvoNew(2);
 if (Eq(command, "build")) return CmdEnvoBuild(2, false);
 if (Eq(command, "run")) return CmdEnvoRun(2);
 if (Eq(command, "check")) return CmdEnvoCheck(2);
+if (Eq(command, "query")) return CmdEnvoQuery(2);
 if (Eq(command, "test")) return CmdEnvoTest(2);
 if (Eq(command, "explain")) return CmdEnvoExplain(2);
 if (Eq(command, "fmt")) return CmdEnvoFmt(2);

@@ -172,3 +172,20 @@ i32 CheckProgram(in List<string> paths, str lib, str os, u32 target) {
     c.CheckProgram();
     return EXIT_OK;
 }
+
+// The editor index of the program in the files at paths (PLAN D75): JSON, as
+// envoc.sema's Checker.Index writes it. A compile error ends the process, as for
+// CheckProgram.
+string IndexProgram(in List<string> paths, str lib, str os, u32 target) {
+    Sources src = Sources.New();
+    foreach (var p in paths.AsSlice()) LoadSource(ref src, p.AsStr());
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), ArchOf(target), false);
+    u32 prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
+    List<usize> starts = List<usize>.New();
+    List<Token> toks = LexAll(src, ref starts, false);
+    Tree tree = Parse(src, toks, starts, false);
+    Checker c = Checker.New(src, tree, false, lib.Len > 0);
+    c.PreludeFile = prelude;
+    c.CheckProgram();
+    return c.Index(paths.Len() as u32);
+}
