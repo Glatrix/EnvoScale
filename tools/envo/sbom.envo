@@ -1,0 +1,217 @@
+// `envo build --sbom` (issue #37): beside the executable, an SPDX 2.3 software bill of
+// materials in JSON (<output>.spdx.json). EnvoScale programs have no third-party code
+// unless a package brings it, so it lists: the program (its SHA-256), every standard
+// platform module compiled into it (its source's SHA-256, EnvoScale's license), and every
+// dependency package (version and archive SHA-256 from envo.lock.envon, or its folder).
+// It holds no timestamp of its own: SOURCE_DATE_EPOCH (seconds) gives one, else the
+// epoch, so the same build gives the same file.
+use std.env;
+use std.fs;
+use std.path;
+use core.text as ct;
+use core.fmt;
+use alloc.text;
+use envo.json;
+use envo.eon;
+use envo.crypto;
+use envoc.eir;
+use envoc.diag;
+
+const str ENVOSCALE_LICENSE = "PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial";
+
+// Builds the program in p and writes its SBOM; gives the build's exit code.
+i32 BuildWithSbom(in Plan p, in BuildOpts o, str home, in List<Dep> deps) {
+    Sources src = Sources.New();
+    Module m = CompileProgram(ref src, p.Files, o.Target, false, true, -1, o.Opt, home, o.Os.AsStr());
+    string map = string.New();
+    string image = GenFor(ref m, o.Target, o.Opt, false, ref map);
+    i32 code = WriteOut(p.Output.AsStr(), image, true);
+    if (code != 0) return code;
+    string doc = SbomFor(p, src, image.AsStr(), deps);
+    string target = string.From(p.Output.AsStr());
+    target.Append(".spdx.json");
+    fs.WriteText(target.AsStr(), doc.AsStr());
+    return 0;
+}
+
+json.Value JStr(str s) => json.Value.OfStr(s);
+
+json.Value Checksum(str sha256) {
+    json.Value c = json.Value.NewObject();
+    c.Set("algorithm", JStr("SHA256"));
+    c.Set("checksumValue", JStr(sha256));
+    json.Value list = json.Value.NewArray();
+    list.Push(c);
+    return list;
+}
+
+// An SPDX identifier from text: letters, digits, `.` and `-` only.
+string SpdxId(str kind, str name) {
+    string id = string.From("SPDXRef-");
+    id.Append(kind);
+    id.AppendByte('-');
+    foreach (var c in name) {
+        if (ct.IsAlnum(c) || c == '.' || c == '-') id.AppendByte(c);
+        else id.AppendByte('-');
+    }
+    return id;
+}
+
+json.Value SpdxPackage(str id, str name, str version, str sha256, str license, str supplier) {
+    json.Value pk = json.Value.NewObject();
+    pk.Set("SPDXID", JStr(id));
+    pk.Set("name", JStr(name));
+    if (version.Len > 0) pk.Set("versionInfo", JStr(version));
+    pk.Set("supplier", JStr(supplier));
+    pk.Set("downloadLocation", JStr("NOASSERTION"));
+    pk.Set("filesAnalyzed", json.Value.OfBool(false));
+    if (sha256.Len > 0) pk.Set("checksums", Checksum(sha256));
+    pk.Set("licenseConcluded", JStr("NOASSERTION"));
+    pk.Set("licenseDeclared", JStr(license));
+    pk.Set("copyrightText", JStr("NOASSERTION"));
+    return pk;
+}
+
+json.Value Relationship(str a, str kind, str b) {
+    json.Value r = json.Value.NewObject();
+    r.Set("spdxElementId", JStr(a));
+    r.Set("relationshipType", JStr(kind));
+    r.Set("relatedSpdxElement", JStr(b));
+    return r;
+}
+
+// The module a library source belongs to: lib/envo/json/json.envo is envo.json; "" for
+// files outside lib/ and adapters/.
+string ModuleOf(str file) {
+    string m = string.New();
+    usize at = file.Len;
+    usize? l = ct.LastIndexOf(file, "lib/");
+    usize? a = ct.LastIndexOf(file, "adapters/");
+    if (l.IsSome()) at = l.Unwrap() + 4;
+    else if (a.IsSome()) at = a.Unwrap();
+    if (at >= file.Len) return m;
+    str rest = file[at..file.Len];
+    usize? slash = ct.LastIndexOf(rest, "/");
+    if (slash.IsNone()) return m;
+    str dir = rest[0..slash.Unwrap()];
+    foreach (var c in dir) {
+        if (c == '/') m.AppendByte('.');
+        else m.AppendByte(c);
+    }
+    return m;
+}
+
+string SbomFor(in Plan p, in Sources src, str image, in List<Dep> deps) {
+    string name = string.From(path.Stem(p.Output.AsStr()));
+    string progSha = crypto.Sha256(image).Hex();
+    json.Value doc = json.Value.NewObject();
+    doc.Set("spdxVersion", JStr("SPDX-2.3"));
+    doc.Set("dataLicense", JStr("CC0-1.0"));
+    doc.Set("SPDXID", JStr("SPDXRef-DOCUMENT"));
+    doc.Set("name", JStr(name.AsStr()));
+    string ns = string.From("https://spdx.envoscale.invalid/");
+    ns.Append(name.AsStr());
+    ns.AppendByte('-');
+    ns.Append(progSha.AsStr());
+    doc.Set("documentNamespace", JStr(ns.AsStr()));
+    json.Value info = json.Value.NewObject();
+    info.Set("created", JStr(Created().AsStr()));
+    json.Value creators = json.Value.NewArray();
+    string tool = string.From("Tool: envo-");
+    tool.Append(ENVO_VERSION);
+    creators.Push(JStr(tool.AsStr()));
+    info.Set("creators", creators);
+    doc.Set("creationInfo", info);
+    json.Value pkgs = json.Value.NewArray();
+    json.Value rels = json.Value.NewArray();
+    string progId = SpdxId("Program", name.AsStr());
+    pkgs.Push(SpdxPackage(progId.AsStr(), name.AsStr(), "", progSha.AsStr(), "NOASSERTION", "NOASSERTION"));
+    rels.Push(Relationship("SPDXRef-DOCUMENT", "DESCRIBES", progId.AsStr()));
+    // the standard platform's modules, each once, in order
+    List<string> seen = List<string>.New();
+    for (usize f = 0; f < src.Count(); f++) {
+        string mod = ModuleOf(src.Path(f));
+        if (mod.Len() == 0) continue;
+        bool dup = false;
+        foreach (var s in seen.AsSlice()) {
+            if (s.Equals(mod.AsStr())) dup = true;
+        }
+        if (dup) continue;
+        seen.Push(string.From(mod.AsStr()));
+        string id = SpdxId("EnvoScale", mod.AsStr());
+        string sha = crypto.Sha256(src.Text(f)).Hex();
+        string pname = string.From("envoscale:");
+        pname.Append(mod.AsStr());
+        pkgs.Push(SpdxPackage(id.AsStr(), pname.AsStr(), ENVO_VERSION, sha.AsStr(), ENVOSCALE_LICENSE, "Organization: EnvoScale"));
+        rels.Push(Relationship(progId.AsStr(), "DEPENDS_ON", id.AsStr()));
+    }
+    foreach (var d in deps.AsSlice()) {
+        string id = SpdxId("Package", d.Name.AsStr());
+        string version = string.From(d.Version.AsStr());
+        if (version.Len() == 0) version = PathVersion(d.Dir.AsStr());
+        pkgs.Push(SpdxPackage(id.AsStr(), d.Name.AsStr(), version.AsStr(), d.Sha256.AsStr(), "NOASSERTION", "NOASSERTION"));
+        rels.Push(Relationship(progId.AsStr(), "DEPENDS_ON", id.AsStr()));
+    }
+    doc.Set("packages", pkgs);
+    doc.Set("relationships", rels);
+    json.Value lic = json.Value.NewObject();
+    lic.Set("licenseId", JStr("LicenseRef-EnvoScale-Commercial"));
+    lic.Set("name", JStr("EnvoScale Commercial License"));
+    lic.Set("extractedText", JStr("The EnvoScale commercial license: see LICENSING.md in the EnvoScale distribution."));
+    json.Value lics = json.Value.NewArray();
+    lics.Push(lic);
+    doc.Set("hasExtractedLicensingInfos", lics);
+    string text0 = json.Write(doc);
+    text0.AppendByte('\n');
+    return text0;
+}
+
+// A path dependency's version from its manifest, or "".
+string PathVersion(str dir) {
+    string manifest = path.Join(dir, "envo.envon");
+    eon.Value doc = LoadManifest(manifest.AsStr());
+    eon.Value[] block = doc.Field("package");
+    if (block.Len == 0) return string.New();
+    str? v = block[0].GetStr("version");
+    if (v.IsNone()) return string.New();
+    return string.From(v.Unwrap());
+}
+
+// The creation time: SOURCE_DATE_EPOCH as an ISO 8601 UTC time, or the epoch.
+string Created() {
+    u64 secs = 0;
+    string? e = env.Var("SOURCE_DATE_EPOCH");
+    if (e.IsSome()) {
+        string v = e.Unwrap();
+        u64? n = fmt.ParseU64(ct.Trim(v.AsStr()));
+        if (n.IsSome()) secs = n.Unwrap();
+    }
+    // days to a civil date (Howard Hinnant's algorithm)
+    u64 days = secs / 86400;
+    u64 rem = secs % 86400;
+    i64 z = days as i64 + 719468;
+    i64 era = z / 146097;
+    i64 doe = z - era * 146097;
+    i64 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    i64 y = yoe + era * 400;
+    i64 doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    i64 mp = (5 * doy + 2) / 153;
+    i64 d = doy - (153 * mp + 2) / 5 + 1;
+    i64 mo = mp + 3;
+    if (mp >= 10) mo = mp - 9;
+    if (mo <= 2) y++;
+    string s = string.New();
+    s.Append(text.PadLeft(text.Int(y).AsStr(), 4, '0').AsStr());
+    s.AppendByte('-');
+    s.Append(text.PadLeft(text.Int(mo).AsStr(), 2, '0').AsStr());
+    s.AppendByte('-');
+    s.Append(text.PadLeft(text.Int(d).AsStr(), 2, '0').AsStr());
+    s.AppendByte('T');
+    s.Append(text.PadLeft(text.Uint(rem / 3600).AsStr(), 2, '0').AsStr());
+    s.AppendByte(':');
+    s.Append(text.PadLeft(text.Uint(rem % 3600 / 60).AsStr(), 2, '0').AsStr());
+    s.AppendByte(':');
+    s.Append(text.PadLeft(text.Uint(rem % 60).AsStr(), 2, '0').AsStr());
+    s.AppendByte('Z');
+    return s;
+}

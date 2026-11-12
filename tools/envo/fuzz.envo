@@ -175,7 +175,7 @@ string BytesText(u8[] b) {
 i32 CmdEnvoFuzz(usize from) {
     BuildOpts o = new BuildOpts {
         Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
-        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(),
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false,
     };
     usize runs = 10000;
     u64 seed = 1;

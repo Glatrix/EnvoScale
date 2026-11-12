@@ -6,10 +6,16 @@
 // RegistryFolder is the adapter for a folder (local, or a shared drive):
 //     <root>/<name>/<version>.envopkg
 //     <root>/<name>/<version>.sig
-// A network registry is another adapter of the same port; running one is the owner's
+// RegistryHttp (below) reaches the same layout over HTTP or HTTPS: a self-hosted or
+// private registry is any web server holding it. Running a public one is the owner's
 // decision (STATUS).
 use std.fs;
 use std.path;
+use std.env;
+use core.text as ct;
+use alloc.text;
+use envo.http;
+use platform;
 use ports.{IoError};
 
 interface IRegistry {
@@ -59,4 +65,111 @@ impl IRegistry for RegistryFolder {
         }
         return true;
     }
+}
+
+// RegistryHttp is the adapter for a registry served over HTTP or HTTPS: the same layout
+// as a folder (<base>/<name>/<version>.envopkg and .sig), so any web server holding a
+// folder registry is a read-only registry, and one that accepts PUT can take
+// publishes. Access control is the server's: when ENVO_REGISTRY_TOKEN is set, every
+// request carries `Authorization: Bearer <token>` (the token is never written to a file
+// by envo). HTTPS is verified against the system's trust anchors. Archives are still
+// checked against the lock and the trusted keys, so the server need not be trusted.
+struct RegistryHttp {
+    string Base;
+    string Token;
+}
+
+impl RegistryHttp {
+    static RegistryHttp At(str url) {
+        string root = string.From(url);
+        while (root.Len() > 0 && root.AsStr()[root.Len() - 1] == 0x2F) root = string.From(root.AsStr()[0..root.Len() - 1]);
+        string token = string.New();
+        string? t = env.Var("ENVO_REGISTRY_TOKEN");
+        if (t.IsSome()) token = t.Unwrap();
+        return new RegistryHttp { Base = root, Token = token };
+    }
+
+    string UrlOf(in this, str name, str version, str ext) {
+        string u = string.From(this.Base.AsStr());
+        u.AppendByte('/');
+        u.Append(name);
+        u.AppendByte('/');
+        u.Append(version);
+        u.Append(ext);
+        return u;
+    }
+
+    Result<string, IoError> Send(in this, str method, str url, str body) {
+        var net = platform.Net();
+        string host = string.New();
+        u16 port = 0;
+        string target = string.New();
+        if (!http.SplitUrl(url, ref host, ref port, ref target)) return Err(IoError.Invalid);
+        http.Request req = http.Request.New(method, target.AsStr());
+        if (this.Token.Len() > 0) {
+            string auth = string.From("Bearer ");
+            auth.Append(this.Token.AsStr());
+            req.SetHeader("Authorization", auth.AsStr());
+        }
+        if (body.Len > 0 || ct.Compare(method, "PUT") == 0) {
+            req.Body = string.From(body);
+            req.SetHeader("Content-Length", text.Uint(body.Len as u64).AsStr());
+        }
+        var r = http.SendWith(ref net, url, req);
+        if (r.IsErr()) return Err(r.UnwrapErr());
+        http.Response resp = r.Unwrap();
+        u32 status = resp.StatusCode();
+        if (status == 404) return Err(IoError.NotFound);
+        if (status == 401 || status == 403) return Err(IoError.Denied);
+        if (status < 200 || status > 299) return Err(IoError.Other);
+        return Ok(string.From(resp.BodyText()));
+    }
+}
+
+impl IRegistry for RegistryHttp {
+    Result<string, IoError> Archive(ref this, str name, str version) {
+        string u = this.UrlOf(name, version, ".envopkg");
+        return this.Send("GET", u.AsStr(), "");
+    }
+
+    Result<string, IoError> Signature(ref this, str name, str version) {
+        string u = this.UrlOf(name, version, ".sig");
+        return this.Send("GET", u.AsStr(), "");
+    }
+
+    bool Publish(ref this, str name, str version, str archive, str signature) {
+        // a version once published is never replaced: refuse if the server has it
+        string u = this.UrlOf(name, version, ".envopkg");
+        if (this.Send("GET", u.AsStr(), "").IsOk()) return false;
+        if (this.Send("PUT", u.AsStr(), archive).IsErr()) return false;
+        if (signature.Len > 0) {
+            string s = this.UrlOf(name, version, ".sig");
+            if (this.Send("PUT", s.AsStr(), signature).IsErr()) return false;
+        }
+        return true;
+    }
+}
+
+// Is the registry a URL (RegistryHttp) rather than a folder (RegistryFolder)?
+bool IsUrl(str registry) => ct.StartsWith(registry, "http://") || ct.StartsWith(registry, "https://");
+
+// The archive or (sig) signature of name@version from either kind of registry.
+Result<string, IoError> RegistryGet(str registry, str name, str version, bool sig) {
+    if (IsUrl(registry)) {
+        RegistryHttp h = RegistryHttp.At(registry);
+        if (sig) return h.Signature(name, version);
+        return h.Archive(name, version);
+    }
+    RegistryFolder f = RegistryFolder.At(registry);
+    if (sig) return f.Signature(name, version);
+    return f.Archive(name, version);
+}
+
+bool RegistryPut(str registry, str name, str version, str archive, str signature) {
+    if (IsUrl(registry)) {
+        RegistryHttp h = RegistryHttp.At(registry);
+        return h.Publish(name, version, archive, signature);
+    }
+    RegistryFolder f = RegistryFolder.At(registry);
+    return f.Publish(name, version, archive, signature);
 }

@@ -87,7 +87,8 @@ void Visit(str dir, ref List<Dep> got, ref List<string> seen, in eon.Value lock,
             str? reg = items[i].GetStr("registry");
             if (reg.IsNone()) DepFail(manifest.AsStr(), name, "needs `registry = \"…\"` (a folder) with its version");
             d.Version = string.From(v.Unwrap());
-            d.Registry = path.Join(dir, reg.Unwrap());
+            if (IsUrl(reg.Unwrap())) d.Registry = string.From(reg.Unwrap());
+            else d.Registry = path.Join(dir, reg.Unwrap());
             Fetch(ref d, lock, locked, root, doc);
         } else {
             DepFail(manifest.AsStr(), name, "needs `path = \"…\"`, or `version` and `registry`");
@@ -131,8 +132,7 @@ str Locked(in eon.Value lock, str name, str version) {
 
 // Gets d's archive from its registry, checks it, and unpacks it into build/deps.
 void Fetch(ref Dep d, in eon.Value lock, bool locked, str root, in eon.Value manifest) {
-    RegistryFolder reg = RegistryFolder.At(d.Registry.AsStr());
-    var r = reg.Archive(d.Name.AsStr(), d.Version.AsStr());
+    var r = RegistryGet(d.Registry.AsStr(), d.Name.AsStr(), d.Version.AsStr(), false);
     if (r.IsErr()) {
         string msg = string.From("cannot get ");
         msg.Append(d.Name.AsStr());
@@ -164,7 +164,7 @@ void Fetch(ref Dep d, in eon.Value lock, bool locked, str root, in eon.Value man
     // signatures, when the manifest trusts keys
     eon.Value[] trust = manifest.Field("trust");
     if (trust.Len == 1 && trust[0].IsBlock()) {
-        var sr = reg.Signature(d.Name.AsStr(), d.Version.AsStr());
+        var sr = RegistryGet(d.Registry.AsStr(), d.Name.AsStr(), d.Version.AsStr(), true);
         bool ok = false;
         if (sr.IsOk()) {
             string sig = sr.Unwrap();
@@ -379,9 +379,9 @@ i32 CmdEnvoPack(usize from) {
     return 0;
 }
 
-// `envo publish [dir] --registry <folder> [--key <file>]`: adds the package's archive to
-// a folder registry, signed when a key file (an Ed25519 secret key, 64 hex digits) is
-// given. A published version is never replaced.
+// `envo publish [dir] --registry <folder or URL> [--key <file>]`: adds the package's
+// archive to a registry (a folder, or a server that takes PUT), signed when a key file
+// (an Ed25519 secret key, 64 hex digits) is given. A published version is never replaced.
 i32 CmdEnvoPublish(usize from) {
     string reg = string.New();
     string key = string.New();
@@ -404,12 +404,11 @@ i32 CmdEnvoPublish(usize from) {
         curve25519.Ed25519Sign(secret.AsSlice(), msg.AsSlice(), s[0..64]);
         sig = HexBytes(s[0..64]);
     }
-    RegistryFolder r = RegistryFolder.At(reg.AsStr());
-    if (!r.Publish(pkg.Name.AsStr(), version.AsStr(), archive.AsStr(), sig.AsStr())) {
+    if (!RegistryPut(reg.AsStr(), pkg.Name.AsStr(), version.AsStr(), archive.AsStr(), sig.AsStr())) {
         string msg = string.From(pkg.Name.AsStr());
         msg.AppendByte('@');
         msg.Append(version.AsStr());
-        msg.Append(" is already in the registry (a published version is never replaced)");
+        msg.Append(" was not published: the registry has it already (a version is never replaced), or refused it");
         EnvoFail(msg.AsStr(), 1);
     }
     write(1, "published ");

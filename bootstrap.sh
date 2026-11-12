@@ -913,6 +913,10 @@ EOF_ERR
     printf ' ' >> "$erun/pk/reg/greet/1.0.0.envopkg"
     envo_do run pk/app2
     if [ "$rc" -eq 1 ] && grep -q 'the registry.s copy changed' "$TMP/err"; then pass; else bad 'packages: a changed archive' "exit $rc: $(cat "$TMP/err")"; fi
+    # envo build --sbom: an SPDX 2.3 SBOM beside the program, the same for the same build
+    SOURCE_DATE_EPOCH=1762905600 envo_do build --sbom pk/app
+    sb="$erun/pk/app/build/app$(host_suffix).spdx.json"
+    if [ "$rc" -eq 0 ] && [ -f "$sb" ] && grep -q '"spdxVersion": *"SPDX-2.3"' "$sb" && grep -q '"name": *"greet"' "$sb" && grep -q '2025-11-12T00:00:00Z' "$sb"; then pass; else bad 'envo build --sbom' "exit $rc: $(cat "$TMP/err")"; fi
     # fuzz targets (tests/fuzz): each parser of untrusted input takes a few hundred fuzzed
     # inputs without a panic
     say 'fuzz targets: tests/fuzz, 300 runs each'

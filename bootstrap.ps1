@@ -885,6 +885,14 @@ function Invoke-Test {
     [IO.File]::AppendAllText((Join-Path $pk 'reg\greet\1.0.0.envopkg'), ' ')
     $r = Invoke-Tool $envo @('run', 'pk/app2') $envoRun
     if ($r.Code -eq 1 -and $r.Err.Contains("the registry's copy changed")) { Pass 'packages: a changed archive' } else { Bad 'packages: a changed archive' "exit $($r.Code): $($r.Err.Trim())" }
+    # envo build --sbom: an SPDX 2.3 SBOM beside the program, the same for the same build
+    $env:SOURCE_DATE_EPOCH = '1762905600'
+    $r = Invoke-Tool $envo @('build', '--sbom', 'pk/app') $envoRun
+    Remove-Item Env:SOURCE_DATE_EPOCH
+    $sb = Join-Path $pk 'app\build\app.exe.spdx.json'
+    $sbText = ''
+    if (Test-Path -LiteralPath $sb) { $sbText = [IO.File]::ReadAllText($sb) }
+    if ($r.Code -eq 0 -and $sbText -match '"spdxVersion":\s*"SPDX-2.3"' -and $sbText -match '"name":\s*"greet"' -and $sbText.Contains('2025-11-12T00:00:00Z')) { Pass 'envo build --sbom' } else { Bad 'envo build --sbom' "exit $($r.Code): $($r.Err.Trim())" }
     # fuzz targets (tests\fuzz): each parser of untrusted input takes a few hundred fuzzed
     # inputs without a panic
     Say 'fuzz targets: tests/fuzz, 300 runs each'

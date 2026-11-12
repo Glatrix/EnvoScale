@@ -59,7 +59,7 @@ Plan PlanScript(in BuildOpts o) {
 i32 CmdEnvoScript(usize from) {
     BuildOpts o = new BuildOpts {
         Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
-        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(),
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false,
     };
     usize i = from;
     while (i < env.ArgCount()) {
