@@ -360,5 +360,13 @@ string ReadLine() {
         }
         if (b[0] != '\r') s.AppendByte(b[0]);
     }
+    // a byte order mark in front of the input (some hosts add one) is not a command
+    str t = s.AsStr();
+    if (t.Len >= 3 && t[0] == 0xEF && t[1] == 0xBB && t[2] == 0xBF) {
+        string rest = string.New();
+        for (usize i = 3; i < t.Len; i++) rest.AppendByte(t[i]);
+        if (rest.Len() == 0) rest.AppendByte(' ');
+        return rest;
+    }
     return s;
 }
