@@ -697,7 +697,7 @@ do_check() {
 
     for f in README.md CHARTER.md STATUS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md LICENSING.md CLA.md \
              TRADEMARKS.md LICENSES/PolyForm-Noncommercial-1.0.0.md LICENSES/LicenseRef-EnvoScale-Commercial.md \
-             LICENSE envo.eon bootstrap.sh bootstrap.ps1 docs/PLAN.md docs/rfcs/0000-template.md \
+             LICENSE envo.envon bootstrap.sh bootstrap.ps1 docs/PLAN.md docs/rfcs/0000-template.md \
              docs/porting/CHECKLIST.md; do
         [ -f "$ROOT/$f" ] || problem "missing file: $f"
     done

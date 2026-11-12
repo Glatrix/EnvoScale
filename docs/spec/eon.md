@@ -1,7 +1,10 @@
-# EON — Envo Object Notation (`.eon`)
+# EON — Envo Object Notation (`.envon`)
 
-> **Status:** Draft. First reader arrives with `envo.eon` (M5). The root `envo.eon` is
-> kept valid against this draft.
+> **Status:** Draft. The first reader arrives with the `envo.eon` library (M5). The root
+> `envo.envon` is kept valid against this draft.
+>
+> EON files use the extension `.envon`. It was `.eon` until it turned out several formats
+> already use that one, among them another configuration language.
 
 EON is EnvoScale's data and configuration format: manifests, Lumen design tokens,
 linker layouts, lockfiles. It is a **strict literal subset of Envo syntax**: an EON
@@ -9,7 +12,7 @@ document contains only literals, arrays and blocks, so it can never run code.
 
 ```eon
 #eon 1
-// envo.eon
+// envo.envon
 package {
     name    = "hello"
     version = "0.1.0"
@@ -81,5 +84,5 @@ valid layout.
 
 ## 6. Binary EON
 
-A compact binary encoding (for caches and wire formats) is planned with `envo.eon` (M5).
+A compact binary encoding (for caches and wire formats) is planned with the `envo.eon` library (M5).
 It will start with the magic bytes `EON\0` and a version byte.

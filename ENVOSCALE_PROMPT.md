@@ -43,7 +43,7 @@ This first repository is the foundation. It does not need to contain everything 
 | Unified CLI | `envo` | build, run, test, fmt, doc, pkg, repl… |
 | Intermediate representation | **EIR** (Envo IR) | Textual form: `.eir` |
 | Envo assembly | `.eas` | Intel-style syntax; used by bootstrap and `asm` blocks |
-| Data/config format | **EON** (Envo Object Notation) | `.eon`; a strict literal subset of Envo syntax |
+| Data/config format | **EON** (Envo Object Notation) | `.envon`; a strict literal subset of Envo syntax |
 | Design language | **Lumen** | The Mac-like visual system (§9) |
 | Standard modules | `envo.*` | e.g. `envo.gfx`, `envo.crypto` |
 
@@ -315,7 +315,7 @@ EnvoScale/
 ├── CHARTER.md                # The principles in §2, verbatim and binding
 ├── STATUS.md                 # Live status of every subsystem + stability tier
 ├── CONTRIBUTING.md  SECURITY.md  CODE_OF_CONDUCT.md  LICENSE
-├── envo.eon                  # Root workspace manifest
+├── envo.envon                # Root workspace manifest
 ├── bootstrap.sh / bootstrap.ps1
 │
 ├── bootstrap/
@@ -555,7 +555,7 @@ Landing, Docs (dogfooded for EnvoScale's own documentation site), Blog, Dashboar
 ## 11. Packages and Manifests
 
 ```eon
-// envo.eon
+// envo.envon
 package {
     name    = "hello"
     version = "0.1.0"
@@ -566,7 +566,7 @@ dependencies {
 }
 targets { default = ["native", "wasm"] }
 ```
-- Content-addressed, reproducible builds with a lockfile (`envo.lock.eon`).
+- Content-addressed, reproducible builds with a lockfile (`envo.lock.envon`).
 - Packages are signed with `envo.crypto` (Ed25519, with ML-DSA added as post-quantum support matures).
 - Registries are accessed through an adapter, so a self-hosted registry is a first-class option.
 - **The standard platform needs no packages at all.** The package manager exists for user code.

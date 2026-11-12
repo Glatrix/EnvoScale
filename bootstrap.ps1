@@ -686,7 +686,7 @@ function Invoke-Check {
 
     foreach ($f in @('README.md', 'CHARTER.md', 'STATUS.md', 'CONTRIBUTING.md', 'SECURITY.md',
                      'CODE_OF_CONDUCT.md', 'LICENSE', 'LICENSING.md', 'CLA.md', 'TRADEMARKS.md',
-                     'LICENSES/PolyForm-Noncommercial-1.0.0.md', 'LICENSES/LicenseRef-EnvoScale-Commercial.md', 'envo.eon', 'bootstrap.sh', 'bootstrap.ps1',
+                     'LICENSES/PolyForm-Noncommercial-1.0.0.md', 'LICENSES/LicenseRef-EnvoScale-Commercial.md', 'envo.envon', 'bootstrap.sh', 'bootstrap.ps1',
                      'docs/PLAN.md', 'docs/rfcs/0000-template.md', 'docs/porting/CHECKLIST.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $f))) { $problems.Add("missing file: $f") }
     }

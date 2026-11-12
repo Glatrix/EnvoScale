@@ -27,4 +27,4 @@ envo run examples/00-hello/main.envo     # script mode (M6)
 envo build examples/00-hello             # native executable (M3/M5)
 ```
 
-`envo.eon` is the package manifest (format: [`docs/spec/eon.md`](../../docs/spec/eon.md)).
+`envo.envon` is the package manifest (format: [`docs/spec/eon.md`](../../docs/spec/eon.md)).

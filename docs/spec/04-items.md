@@ -8,7 +8,7 @@ implementations and constants.
 
 ## 4.1 Files, modules and namespaces
 
-**[item.mod.1]** A **package** is a folder with an `envo.eon` manifest. Its **modules**
+**[item.mod.1]** A **package** is a folder with an `envo.envon` manifest. Its **modules**
 are named by `snake_case` dotted paths (`envo.math`, `shapes.geometry`).
 
 **[item.mod.2]** A file declares its module with a file-scoped namespace as its first

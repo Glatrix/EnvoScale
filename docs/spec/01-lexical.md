@@ -19,7 +19,7 @@ Tests: `tests/spec/01-lexical/e0001_invalid_utf8.bin.envo`, `e0001_surrogate.bin
 ignored. It is not part of the first line for column counting.
 Tests: `tests/golden/lexer/bom.envo`.
 
-**[lex.src.3]** Source files use the extension `.envo`. EON files (`.eon`) use the same
+**[lex.src.3]** Source files use the extension `.envo`. EON files (`.envon`) use the same
 lexical rules (see `eon.md`).
 
 **[lex.src.4] Positions.** Lines are numbered from 1 and end at LF (U+000A). A CR

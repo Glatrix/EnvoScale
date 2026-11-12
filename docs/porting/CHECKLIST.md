@@ -31,7 +31,7 @@ compiler core changes.
 
 ## 3. Calling convention (only if new)
 
-- [ ] ABI description in `compiler/backend/<arch>/abi/<name>.eon`: argument registers,
+- [ ] ABI description in `compiler/backend/<arch>/abi/<name>.envon`: argument registers,
       stack alignment, callee-saved registers, struct passing, varargs, red zone.
 - [ ] `extern "<abi>"` tests against hand-written assembly.
 

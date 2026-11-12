@@ -7,7 +7,7 @@ EON (Envo Object Notation) reader and writer, `[Derive(Eon)]`, and a compact bin
 ## Simple door
 
 ```envo
-var cfg = eon.Load<Config>("app.eon")?;
+var cfg = eon.Load<Config>("app.envon")?;
 ```
 
 ## Full-control door
