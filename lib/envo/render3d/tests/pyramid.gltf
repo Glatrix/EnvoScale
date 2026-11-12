@@ -1,0 +1,173 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "envoscale test (mkgltf)"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    2
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "root",
+   "translation": [
+    0,
+    -0.6,
+    0
+   ],
+   "children": [
+    1
+   ]
+  },
+  {
+   "name": "pyramid",
+   "mesh": 0,
+   "rotation": [
+    0,
+    0.3826834,
+    0,
+    0.9238795
+   ],
+   "scale": [
+    1.2,
+    1.2,
+    1.2
+   ]
+  },
+  {
+   "name": "floor",
+   "mesh": 1,
+   "translation": [
+    0,
+    -0.6,
+    0
+   ],
+   "scale": [
+    2,
+    1,
+    2
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0
+     },
+     "indices": 1,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 2,
+      "NORMAL": 3
+     },
+     "indices": 4,
+     "material": 1
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.9,
+     0.6,
+     0.1,
+     1
+    ],
+    "metallicFactor": 1.0,
+    "roughnessFactor": 0.3
+   }
+  },
+  {
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.5,
+     0.5,
+     0.55,
+     1
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 5,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5123,
+   "count": 18,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5121,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 60
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 60,
+   "byteLength": 36
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 144,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 192,
+   "byteLength": 6
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 200,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAAAAAAAAvwAAAAAAAAC/AAAAPwAAAAAAAAC/AAAAPwAAAAAAAAA/AAAAvwAAAAAAAAA/AAAEAAMAAAADAAIAAAACAAEAAAABAAQAAQACAAMAAQADAAQAAACAvwAAAAAAAIC/AACAvwAAAAAAAIA/AACAPwAAAAAAAIA/AACAPwAAAAAAAIC/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAECAAIDAAA="
+  }
+ ]
+}

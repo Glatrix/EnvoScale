@@ -50,6 +50,13 @@ public struct Value {
         return v;
     }
 
+    // A Number with up to 15 significant digits.
+    public static Value OfFloat(f64 x) {
+        Value v = Value.Make(JsonKind.Number);
+        v.Text = text.FloatShort(x);
+        return v;
+    }
+
     public static Value OfStr(str s) {
         Value v = Value.Make(JsonKind.Str);
         v.Text = string.From(s);
@@ -67,6 +74,13 @@ public struct Value {
     // Is this a Number that is an integer within i64?
     public bool HasInt(in this) => this.Kind == JsonKind.Number && this.IsInt;
     public i64 AsInt(in this) => this.Int;
+    // A Number's value as a float (RFC 0006): every number has one; 0 for other kinds.
+    public f64 AsFloat(in this) {
+        if (this.Kind != JsonKind.Number) return 0.0;
+        f64? f = ct.ParseFloat(this.Text.AsStr());
+        if (f.IsNone()) return 0.0;
+        return f.Unwrap();
+    }
     public usize Len(in this) => this.Items.Len();
     public Value[] Elements(in this) => this.Items.AsSlice();
     public str KeyAt(in this, usize i) => this.Keys.AsSlice()[i].AsStr();

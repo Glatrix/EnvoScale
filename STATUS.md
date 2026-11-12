@@ -24,8 +24,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M8 | Graphics and UI | **Done** (Experimental): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port (Win32), `envo.lumen` and `envo.ui` (desktop and terminal renderers), `envo.gpu` (software and Direct3D 12) (8.1–8.9) |
 | M9 | Web | **Done** (Experimental): the WebAssembly backend, the JS host and `os.wasm`, `envo.markdown`, `envo.web` with Lumen's Landing and Docs templates, the website and its in-browser sandbox, built by Envo programs (9.1–9.8) |
 | M10 | AArch64 and macOS | **Blocked** on test machines: no AArch64 or macOS hardware here, and GitHub's arm64 and macOS runners cost money for a private repository (an owner decision) |
-| M11 | 3D | **In progress** (ahead of M10, `docs/PLAN.md` §5): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR, the same frame bit for bit in every build), the 3D gallery program (11.1–11.3, 11.5) |
-| M12–M13 | | Not started |
+| M11 | 3D | **Done** (Experimental; ahead of M10): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR: the same frame bit for bit in every build), glTF 2.0 import, the 3D gallery program in a window (11.1–11.6) |
+| M12 | AI | **Next** |
+| M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -115,6 +116,15 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | SSG + SSR | one code path: `App.Handle` per request, `Build` to files | Done |
 | Lumen templates (Landing, Docs) | `envo.web.templates`, CSS from Lumen's tokens | Done |
 | The docs site built with EnvoScale | `website/site.envo` builds the site (with the sandbox) in CI; publishing is #61 | Done |
+
+### M11 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| ECS | `envo.ecs`: generational entities, sparse-set stores | Done |
+| PBR renderer | `envo.render3d`: Cook-Torrance (GGX, Smith-Schlick, Schlick), ACES, sRGB, in software; golden frames identical at -O0, -O2, in WebAssembly and the script runtime | Done (GPU drawing through `envo.gpu` follows) |
+| glTF import | `envo.render3d.gltf`: meshes, metallic-roughness factors, nodes; `.bin` and `data:` buffers; malformed input refused | Done (GLB, textures, skins follow) |
+| `scene { }` simple door | `render3d.Show(render3d.Scene.New().Cube().Spin().Sun(), "Hello")`, the gallery's 3D program | Done |
 
 ## Subsystems
 

@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M10 (AArch64 and macOS), blocked on test machines (§5). M0–M9 are done; their records are in §4.
+- **Current milestone:** M12 (AI); M10 (AArch64 and macOS) is blocked on test machines (§5). M0–M9 and M11 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -201,6 +201,10 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   with an in-browser sandbox, the compiler itself in WebAssembly (D52). Increments
   9.1–9.8.
 
+- **M11 — 3D.** Floats in Envo-S1 (RFC 0006) first; `envo.math` (D53), `envo.ecs`
+  (D54), a software PBR renderer whose frames are identical in every build (D55), glTF
+  2.0 import (D56), and the `scene` simple door. Increments 11.1–11.6.
+
 ## 5. M10 — AArch64 and macOS (blocked)
 
 **DoD (brief §16):** AArch64 backend, Mach-O linker, macOS OS/window/Metal adapters.
@@ -215,12 +219,12 @@ macOS runners are billed for private repositories, so how to test is the owner's
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| 11.1 | `envo.math`: vectors, matrices, quaternions (D53) | `lib/envo/math/tests/` | done |
-| 11.2 | `envo.ecs` (D54) | `lib/envo/ecs/tests/` || done |
-| 11.3 | `envo.render3d`: the software PBR renderer (D55) | golden frames || done |
-| 11.4 | glTF 2.0 import (D56) | a test asset | |
-| 11.5 | The `scene` simple door: a scene in a window in a few lines | the Hello World Gallery's 3D entry || done |
-| 11.6 | Docs and status; M11 complete | CI | |
+| [11.1](https://github.com/envoscale/EnvoScale/issues/128) | `envo.math`: vectors, matrices, quaternions (D53) | `lib/envo/math/tests/` | done |
+| [11.2](https://github.com/envoscale/EnvoScale/issues/129) | `envo.ecs` (D54) | `lib/envo/ecs/tests/` || done |
+| [11.3](https://github.com/envoscale/EnvoScale/issues/130) | `envo.render3d`: the software PBR renderer (D55) | golden frames || done |
+| [11.4](https://github.com/envoscale/EnvoScale/issues/131) | glTF 2.0 import (D56) | a test asset || done |
+| [11.5](https://github.com/envoscale/EnvoScale/issues/132) | The `scene` simple door: a scene in a window in a few lines | the Hello World Gallery's 3D entry || done |
+| [11.6](https://github.com/envoscale/EnvoScale/issues/133) | Docs and status; M11 complete | CI || done |
 
 ## 6. Risks
 

@@ -1,6 +1,6 @@
 # `envo.render3d`
 
-> **Status:** Experimental (M11.3, M11.5). Tests: `lib/envo/render3d/tests/`.
+> **Status:** Experimental (M11.3–M11.5). Tests: `lib/envo/render3d/tests/`.
 
 3D scenes, rendered in software (PLAN D55).
 - **Scene:** an `envo.ecs` world of objects with a transform, a mesh and a material, lit
@@ -34,9 +34,23 @@ render3d.Show(render3d.Scene.New().Cube().Spin().Sun(), "Hello");
 - `Render(scene, width, height)` gives an `envo.gfx` canvas. `Show(scene, title)` runs it
   in a window.
 
+## glTF 2.0 (`envo.render3d.gltf`)
+
+`gltf.Load(path)` reads a `.gltf` document with its buffers, from `.bin` files beside it
+or base64 `data:` URIs (D56). `gltf.Parse(text)` reads a document whose buffers are all
+`data:` URIs. Either gives an `Import`, and `AddTo(ref scene)` puts its parts in a scene.
+- **Meshes:** triangle primitives with positions, normals (computed from the faces when
+  absent) and 8-, 16- or 32-bit indices.
+- **Materials:** the metallic-roughness factors.
+- **Nodes:** the default scene's node hierarchy, with translation, rotation and scale, or a
+  matrix.
+
+A file is untrusted input. Every index and byte range is checked, and node nesting is
+limited, so a malformed document gives an error.
+
 ## Not yet
 
-glTF import (M11.4), textures and image-based lighting, shadows, anti-aliasing, skinning
+GLB files, textures and image-based lighting, shadows, anti-aliasing, skinning
 and animation, and drawing through `envo.gpu` (Direct3D 12).
 
 ## Ports used

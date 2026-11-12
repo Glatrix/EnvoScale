@@ -1,0 +1,393 @@
+// envo.render3d.gltf: glTF 2.0 import (PLAN D56). Reads a .gltf document (JSON) with its
+// buffers: .bin files beside it, or base64 `data:` URIs. Takes each mesh primitive's
+// triangles (POSITION, NORMAL when present, else normals from the faces; indices of any
+// width), the metallic-roughness material's factors, and the node hierarchy from the
+// default scene. A file is untrusted input: every index and range is checked, and a
+// malformed one gives an error, never a read outside the data.
+namespace envo.render3d.gltf;
+
+use envo.render3d;
+use envo.json;
+use envo.math;
+use std.fs;
+use std.path;
+
+// One mesh primitive placed in the world.
+public struct Part {
+    u32 MeshIndex;          // into Import.Meshes
+    u32 MaterialIndex;      // into Import.Materials
+    math.Mat4 World;
+}
+
+// What a document holds.
+public struct Import {
+    List<render3d.Mesh> Meshes;
+    List<render3d.Material> Materials;
+    List<Part> Parts;
+
+    public usize MeshCount(in this) => this.Meshes.Len();
+    public usize PartCount(in this) => this.Parts.Len();
+
+    // Adds every part to scene as an object; returns how many.
+    public usize AddTo(in this, ref render3d.Scene scene) {
+        Part[] ps = this.Parts.AsSlice();
+        render3d.Mesh[] ms = this.Meshes.AsSlice();
+        render3d.Material[] mats = this.Materials.AsSlice();
+        for (usize i = 0; i < ps.Len; i++) {
+            render3d.Mesh m = Transformed(ms[ps[i].MeshIndex as usize], ps[i].World);
+            scene.Add(m, mats[ps[i].MaterialIndex as usize], math.Vec3.Zero());
+        }
+        return ps.Len;
+    }
+}
+
+// mesh with its positions and normals moved into the world by m.
+render3d.Mesh Transformed(in render3d.Mesh mesh, in math.Mat4 m) {
+    render3d.Mesh r = render3d.Mesh.New();
+    math.Mat4 nm = m.Inverse().Transpose();
+    math.Vec3[] ps = mesh.Positions.AsSlice();
+    math.Vec3[] ns = mesh.Normals.AsSlice();
+    for (usize i = 0; i < ps.Len; i++) r.Vertex(m.TransformPoint(ps[i]), nm.TransformDir(ns[i]).Normalize());
+    u32[] ix = mesh.Indices.AsSlice();
+    for (usize i = 0; i + 2 < ix.Len; i += 3) r.Triangle(ix[i], ix[i + 1], ix[i + 2]);
+    return r;
+}
+
+// The document in file, its buffers read from beside it.
+public Result<Import, string> Load(str file) {
+    var r = fs.ReadText(file);
+    if (r.IsErr()) return Err(string.From("cannot read the document"));
+    string src = r.Unwrap();
+    return ParseWith(src.AsStr(), path.Parent(file));
+}
+
+// A document whose buffers are all data: URIs.
+public Result<Import, string> Parse(str src) => ParseWith(src, "");
+
+Result<Import, string> ParseWith(str src, str dir) {
+    Result<json.Value, json.JsonError> pr = json.Parse(src);
+    if (pr.IsErr()) return Err(string.From("the document is not JSON"));
+    json.Value doc = pr.Unwrap();
+    // buffers
+    List<List<u8>> buffers = List<List<u8>>.New();
+    json.Value[] bs = Array(doc, "buffers");
+    for (usize i = 0; i < bs.Len; i++) {
+        str? uri = bs[i].GetStr("uri");
+        if (uri.IsNone()) return Err(string.From("a buffer without a uri (GLB is not read yet)"));
+        str u = uri.Unwrap();
+        if (StartsWith(u, "data:")) {
+            usize comma = 0;
+            while (comma < u.Len && u[comma] != ',') comma++;
+            if (comma >= u.Len) return Err(string.From("a data URI without data"));
+            List<u8> bytes = List<u8>.New();
+            if (!Base64(u[comma + 1..u.Len], ref bytes)) return Err(string.From("bad base64 in a data URI"));
+            buffers.Push(bytes);
+        } else {
+            if (dir.Len == 0 || Contains(u, "..") || Contains(u, ":")) return Err(string.From("a buffer outside the document's folder"));
+            string bin = path.Join(dir, u);
+            var fr = fs.ReadText(bin.AsStr());
+            if (fr.IsErr()) return Err(string.From("cannot read a buffer"));
+            string data = fr.Unwrap();
+            List<u8> bytes = List<u8>.New();
+            str d = data.AsStr();
+            for (usize k = 0; k < d.Len; k++) bytes.Push(d[k]);
+            buffers.Push(bytes);
+        }
+    }
+    Import im = new Import { Meshes = List<render3d.Mesh>.New(), Materials = List<render3d.Material>.New(), Parts = List<Part>.New() };
+    // materials (index 0 of ours is the default)
+    im.Materials.Push(render3d.Material.Of(math.Vec3.Of(0.8, 0.8, 0.8), 0.0, 0.5));
+    json.Value[] mats = Array(doc, "materials");
+    for (usize i = 0; i < mats.Len; i++) {
+        math.Vec3 base0 = math.Vec3.One();
+        f32 metallic = 1.0;
+        f32 rough = 1.0;
+        json.Value[] pbr = mats[i].Field("pbrMetallicRoughness");
+        if (pbr.Len == 1) {
+            json.Value[] bc = pbr[0].Field("baseColorFactor");
+            if (bc.Len == 1 && bc[0].Len() >= 3) {
+                json.Value[] c = bc[0].Elements();
+                base0 = math.Vec3.Of(c[0].AsFloat() as f32, c[1].AsFloat() as f32, c[2].AsFloat() as f32);
+            }
+            json.Value[] mf = pbr[0].Field("metallicFactor");
+            if (mf.Len == 1) metallic = mf[0].AsFloat() as f32;
+            json.Value[] rf = pbr[0].Field("roughnessFactor");
+            if (rf.Len == 1) rough = rf[0].AsFloat() as f32;
+        }
+        im.Materials.Push(render3d.Material.Of(base0, metallic, rough));
+    }
+    // meshes: each primitive becomes one of ours; firstOf[i] is mesh i's first
+    List<u32> firstOf = List<u32>.New();
+    List<u32> countOf = List<u32>.New();
+    List<u32> materialOf = List<u32>.New();
+    json.Value[] meshes = Array(doc, "meshes");
+    for (usize i = 0; i < meshes.Len; i++) {
+        firstOf.Push(im.Meshes.Len() as u32);
+        json.Value[] prims = Array(meshes[i], "primitives");
+        for (usize k = 0; k < prims.Len; k++) {
+            i64? mode = prims[k].GetInt("mode");
+            if (mode.IsSome() && mode.Unwrap() != 4) continue;      // triangles only
+            Result<render3d.Mesh, string> m = Primitive(doc, buffers, prims[k]);
+            if (m.IsErr()) return Err(m.UnwrapErr());
+            im.Meshes.Push(m.Unwrap());
+            u32 mat = 0;
+            i64? mi = prims[k].GetInt("material");
+            if (mi.IsSome() && mi.Unwrap() >= 0 && mi.Unwrap() < mats.Len as i64) mat = (mi.Unwrap() + 1) as u32;
+            materialOf.Push(mat);
+        }
+        countOf.Push(im.Meshes.Len() as u32 - firstOf.Get(i));
+    }
+    // nodes from the scene's roots
+    json.Value[] nodes = Array(doc, "nodes");
+    List<i64> roots = List<i64>.New();
+    json.Value[] scenes = Array(doc, "scenes");
+    i64 si = 0;
+    i64? sc = doc.GetInt("scene");
+    if (sc.IsSome()) si = sc.Unwrap();
+    if (scenes.Len > 0 && si >= 0 && si < scenes.Len as i64) {
+        json.Value[] rs = Array(scenes[si as usize], "nodes");
+        for (usize k = 0; k < rs.Len; k++) roots.Push(rs[k].AsInt());
+    } else {
+        for (usize k = 0; k < nodes.Len; k++) roots.Push(k as i64);
+    }
+    i64[] rv = roots.AsSlice();
+    for (usize k = 0; k < rv.Len; k++) {
+        string? e = Walk(nodes, rv[k], math.Mat4.Identity(), 0, firstOf, countOf, materialOf, ref im);
+        if (e.IsSome()) return Err(e.Unwrap());
+    }
+    return Ok(im);
+}
+
+// Node n and its children, under parent's transform.
+string? Walk(json.Value[] nodes, i64 n, in math.Mat4 parent, u32 depth, in List<u32> firstOf, in List<u32> countOf, in List<u32> materialOf, ref Import im) {
+    if (n < 0 || n >= nodes.Len as i64) return Some(string.From("a node index out of range"));
+    if (depth > 64) return Some(string.From("nodes nested too deep (a cycle?)"));
+    var node = nodes[n as usize];
+    math.Mat4 local = math.Mat4.Identity();
+    json.Value[] mtx = node.Field("matrix");
+    if (mtx.Len == 1 && mtx[0].Len() == 16) {
+        json.Value[] e = mtx[0].Elements();
+        for (u32 k = 0; k < 16; k++) local.M[k as usize] = e[k as usize].AsFloat() as f32;
+    } else {
+        math.Vec3 t = math.Vec3.Zero();
+        math.Quat q = math.Quat.Identity();
+        math.Vec3 s = math.Vec3.One();
+        json.Value[] tr = node.Field("translation");
+        if (tr.Len == 1 && tr[0].Len() == 3) t = Vec(tr[0]);
+        json.Value[] ro = node.Field("rotation");
+        if (ro.Len == 1 && ro[0].Len() == 4) {
+            json.Value[] r = ro[0].Elements();
+            q = new math.Quat { X = r[0].AsFloat() as f32, Y = r[1].AsFloat() as f32, Z = r[2].AsFloat() as f32, W = r[3].AsFloat() as f32 };
+        }
+        json.Value[] sc = node.Field("scale");
+        if (sc.Len == 1 && sc[0].Len() == 3) s = Vec(sc[0]);
+        local = math.Mat4.Trs(t, q, s);
+    }
+    math.Mat4 world = parent.Mul(local);
+    i64? mesh = node.GetInt("mesh");
+    if (mesh.IsSome()) {
+        i64 mi = mesh.Unwrap();
+        if (mi < 0 || mi >= firstOf.Len() as i64) return Some(string.From("a mesh index out of range"));
+        u32 first = firstOf.Get(mi as usize);
+        for (u32 k = 0; k < countOf.Get(mi as usize); k++) {
+            im.Parts.Push(new Part { MeshIndex = first + k, MaterialIndex = materialOf.Get((first + k) as usize), World = world });
+        }
+    }
+    json.Value[] kids = node.Field("children");
+    if (kids.Len == 1) {
+        json.Value[] ks = kids[0].Elements();
+        for (usize k = 0; k < ks.Len; k++) {
+            string? e = Walk(nodes, ks[k].AsInt(), world, depth + 1, firstOf, countOf, materialOf, ref im);
+            if (e.IsSome()) return e;
+        }
+    }
+    return null;
+}
+
+math.Vec3 Vec(in json.Value a) {
+    json.Value[] e = a.Elements();
+    return math.Vec3.Of(e[0].AsFloat() as f32, e[1].AsFloat() as f32, e[2].AsFloat() as f32);
+}
+
+json.Value[] Array(in json.Value v, str key) {
+    json.Value[] f = v.Field(key);
+    if (f.Len != 1) return v.Field("");
+    return f[0].Elements();
+}
+
+// The triangles of one primitive.
+Result<render3d.Mesh, string> Primitive(in json.Value doc, in List<List<u8>> buffers, in json.Value prim) {
+    json.Value[] attrs = prim.Field("attributes");
+    if (attrs.Len != 1) return Err(string.From("a primitive without attributes"));
+    i64? pos = attrs[0].GetInt("POSITION");
+    if (pos.IsNone()) return Err(string.From("a primitive without positions"));
+    List<f32> p = List<f32>.New();
+    string? e1 = Floats(doc, buffers, pos.Unwrap(), 3, ref p);
+    if (e1.IsSome()) return Err(e1.Unwrap());
+    usize nv = p.Len() / 3;
+    List<f32> n = List<f32>.New();
+    i64? nor = attrs[0].GetInt("NORMAL");
+    if (nor.IsSome()) {
+        string? e2 = Floats(doc, buffers, nor.Unwrap(), 3, ref n);
+        if (e2.IsSome()) return Err(e2.Unwrap());
+        if (n.Len() != p.Len()) return Err(string.From("normals and positions differ in count"));
+    }
+    List<u32> ix = List<u32>.New();
+    i64? ind = prim.GetInt("indices");
+    if (ind.IsSome()) {
+        string? e3 = Indices(doc, buffers, ind.Unwrap(), ref ix);
+        if (e3.IsSome()) return Err(e3.Unwrap());
+    } else {
+        for (usize k = 0; k < nv; k++) ix.Push(k as u32);
+    }
+    u32[] iv = ix.AsSlice();
+    for (usize k = 0; k < iv.Len; k++) {
+        if (iv[k] as usize >= nv) return Err(string.From("an index past the vertices"));
+    }
+    render3d.Mesh m = render3d.Mesh.New();
+    f32[] pv = p.AsSlice();
+    f32[] nvals = n.AsSlice();
+    if (nvals.Len == pv.Len) {
+        for (usize k = 0; k < nv; k++) m.Vertex(math.Vec3.Of(pv[3 * k], pv[3 * k + 1], pv[3 * k + 2]), math.Vec3.Of(nvals[3 * k], nvals[3 * k + 1], nvals[3 * k + 2]));
+        for (usize k = 0; k + 2 < iv.Len; k += 3) m.Triangle(iv[k], iv[k + 1], iv[k + 2]);
+        return Ok(m);
+    }
+    // no normals: each triangle gets its own vertices with the face's normal
+    for (usize k = 0; k + 2 < iv.Len; k += 3) {
+        math.Vec3 a = math.Vec3.Of(pv[3 * iv[k] as usize], pv[3 * iv[k] as usize + 1], pv[3 * iv[k] as usize + 2]);
+        math.Vec3 b = math.Vec3.Of(pv[3 * iv[k + 1] as usize], pv[3 * iv[k + 1] as usize + 1], pv[3 * iv[k + 1] as usize + 2]);
+        math.Vec3 c = math.Vec3.Of(pv[3 * iv[k + 2] as usize], pv[3 * iv[k + 2] as usize + 1], pv[3 * iv[k + 2] as usize + 2]);
+        math.Vec3 fn0 = b.Sub(a).Cross(c.Sub(a)).Normalize();
+        u32 i0 = m.Vertex(a, fn0);
+        u32 i1 = m.Vertex(b, fn0);
+        u32 i2 = m.Vertex(c, fn0);
+        m.Triangle(i0, i1, i2);
+    }
+    return Ok(m);
+}
+
+// The bytes accessor a (count elements of width bytes each) reads: its buffer, the first
+// byte and the stride; or an error.
+string? Locate(in json.Value doc, in List<List<u8>> buffers, i64 a, ref usize buf, ref usize start, ref usize stride, ref usize count, ref i64 ctype, u32 comps) {
+    json.Value[] accs = Array(doc, "accessors");
+    if (a < 0 || a >= accs.Len as i64) return Some(string.From("an accessor index out of range"));
+    var acc = accs[a as usize];
+    i64? bv = acc.GetInt("bufferView");
+    i64? cnt = acc.GetInt("count");
+    i64? ct = acc.GetInt("componentType");
+    if (bv.IsNone() || cnt.IsNone() || ct.IsNone()) return Some(string.From("an accessor without a buffer view, count or type"));
+    json.Value[] views = Array(doc, "bufferViews");
+    i64 vi = bv.Unwrap();
+    if (vi < 0 || vi >= views.Len as i64) return Some(string.From("a buffer view index out of range"));
+    var view = views[vi as usize];
+    i64 b = view.GetInt("buffer") ?? -1;
+    if (b < 0 || b >= buffers.Len() as i64) return Some(string.From("a buffer index out of range"));
+    i64 vOff = view.GetInt("byteOffset") ?? 0;
+    i64 vLen = view.GetInt("byteLength") ?? -1;
+    i64 aOff = acc.GetInt("byteOffset") ?? 0;
+    i64 cty = ct.Unwrap();
+    i64 width = 4;
+    if (cty == 5121 || cty == 5120) width = 1;
+    if (cty == 5123 || cty == 5122) width = 2;
+    i64 elem = width * comps as i64;
+    i64 st = view.GetInt("byteStride") ?? elem;
+    i64 n = cnt.Unwrap();
+    if (vOff < 0 || vLen < 0 || aOff < 0 || n < 0 || st < elem) return Some(string.From("a negative offset, length or count"));
+    usize blen = buffers.AsSlice()[b as usize].Len();
+    if (vOff + vLen > blen as i64) return Some(string.From("a buffer view past its buffer"));
+    if (n > 0 && aOff + (n - 1) * st + elem > vLen) return Some(string.From("an accessor past its buffer view"));
+    buf = b as usize;
+    start = (vOff + aOff) as usize;
+    stride = st as usize;
+    count = n as usize;
+    ctype = cty;
+    return null;
+}
+
+string? Floats(in json.Value doc, in List<List<u8>> buffers, i64 a, u32 comps, ref List<f32> into) {
+    usize buf = 0;
+    usize start = 0;
+    usize stride = 0;
+    usize count = 0;
+    i64 ctype = 0;
+    string? e = Locate(doc, buffers, a, ref buf, ref start, ref stride, ref count, ref ctype, comps);
+    if (e.IsSome()) return e;
+    if (ctype != 5126) return Some(string.From("positions or normals that are not floats"));
+    u8[] d = buffers.AsSlice()[buf].AsSlice();
+    for (usize i = 0; i < count; i++) {
+        for (u32 k = 0; k < comps; k++) {
+            usize at = start + i * stride + (4 * k) as usize;
+            u32 bits = d[at] as u32 | (d[at + 1] as u32) << 8 | (d[at + 2] as u32) << 16 | (d[at + 3] as u32) << 24;
+            u32 v = bits;
+            unsafe { into.Push((&v as *f32)[0]); }
+        }
+    }
+    return null;
+}
+
+string? Indices(in json.Value doc, in List<List<u8>> buffers, i64 a, ref List<u32> into) {
+    usize buf = 0;
+    usize start = 0;
+    usize stride = 0;
+    usize count = 0;
+    i64 ctype = 0;
+    string? e = Locate(doc, buffers, a, ref buf, ref start, ref stride, ref count, ref ctype, 1);
+    if (e.IsSome()) return e;
+    u8[] d = buffers.AsSlice()[buf].AsSlice();
+    for (usize i = 0; i < count; i++) {
+        usize at = start + i * stride;
+        u32 v = 0;
+        if (ctype == 5121) v = d[at] as u32;
+        else if (ctype == 5123) v = d[at] as u32 | (d[at + 1] as u32) << 8;
+        else if (ctype == 5125) v = d[at] as u32 | (d[at + 1] as u32) << 8 | (d[at + 2] as u32) << 16 | (d[at + 3] as u32) << 24;
+        else return Some(string.From("indices of a type glTF does not allow"));
+        into.Push(v);
+    }
+    return null;
+}
+
+// Decodes base64 text into bytes; false on a character outside the alphabet.
+bool Base64(str s, ref List<u8> into) {
+    u32 acc = 0;
+    u32 bits = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        u8 c = s[i];
+        u32 v = 0;
+        if (c >= 'A' && c <= 'Z') v = (c - 'A') as u32;
+        else if (c >= 'a' && c <= 'z') v = (c - 'a') as u32 + 26;
+        else if (c >= '0' && c <= '9') v = (c - '0') as u32 + 52;
+        else if (c == '+' || c == '-') v = 62;
+        else if (c == '/' || c == '_') v = 63;
+        else if (c == '=') break;
+        else return false;
+        acc = (acc << 6 | v) & 0xFFFFFF;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            into.Push((acc >> bits & 0xFF) as u8);
+        }
+    }
+    return true;
+}
+
+bool StartsWith(str s, str p) {
+    if (s.Len < p.Len) return false;
+    for (usize i = 0; i < p.Len; i++) {
+        if (s[i] != p[i]) return false;
+    }
+    return true;
+}
+
+bool Contains(str s, str t) {
+    for (usize i = 0; i + t.Len <= s.Len; i++) {
+        bool all = true;
+        for (usize k = 0; k < t.Len; k++) {
+            if (s[i + k] != t[k]) {
+                all = false;
+                break;
+            }
+        }
+        if (all) return true;
+    }
+    return false;
+}

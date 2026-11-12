@@ -20,9 +20,10 @@ print(json.Write(msg).AsStr());
   wrong. It checks escapes, surrogate pairs, number syntax and duplicate keys, and
   limits nesting to 512 levels.
 - A `Value` is `Null`, `Bool`, `Number` (its text kept; `HasInt`/`AsInt` for integers
-  that fit in `i64`), `Str`, `Array` or `Object` (members in order). Read it with
+  that fit in `i64`, `AsFloat` for any number), `Str`, `Array` or `Object` (members in
+  order). Read it with
   `Type`, `AsBool`, `AsStr`, `Elements`, `Len`, `KeyAt`, `Field`, `Has`, `GetStr`,
-  `GetInt`; build it with `Value.Null`, `OfBool`, `OfInt`, `OfStr`, `NewArray` (`Push`)
+  `GetInt`; build it with `Value.Null`, `OfBool`, `OfInt`, `OfFloat`, `OfStr`, `NewArray` (`Push`)
   and `NewObject` (`Set`); `Clone` copies one.
 - `json.Write(v)` gives compact text; `json.Quote` appends one string literal.
 
