@@ -7,9 +7,10 @@
 // share it (the heap never frees in Envo-S1, so nothing is lost).
 namespace os.none;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, IoError};
 use alloc.map.{Map};
 use alloc.set.{Set};
+use alloc.text;
 
 // ------------------------------------------------------------------ console
 
@@ -239,6 +240,37 @@ impl IFileSystem for FileSystem {
         }
         return Ok(true);
     }
+
+    Result<List<string>, IoError> List(ref this, str path) {
+        if (BadPath(path)) return Err(IoError.Invalid);
+        string p = Clean(path);
+        unsafe {
+            if (p.Len() > 0 && !this.State[0].Dirs.Has(p)) {
+                if (this.State[0].Files.Has(p)) return Err(IoError.Invalid);
+                return Err(IoError.NotFound);
+            }
+            List<string> names = List<string>.New();
+            List<string> files = KeysOf(this.State[0].Files);
+            foreach (var f in files.AsSlice()) {
+                string fp = Parent(f.AsStr());
+                if (fp.Equals(p.AsStr())) names.Push(LastPart(f.AsStr()));
+            }
+            List<string> dirs = DirsOf(this.State[0].Dirs);
+            foreach (var d in dirs.AsSlice()) {
+                string dp = Parent(d.AsStr());
+                if (dp.Equals(p.AsStr())) names.Push(LastPart(d.AsStr()));
+            }
+            text.Sort(ref names);
+            return Ok(names);
+        }
+    }
+}
+
+// The part of path after its last `/`.
+string LastPart(str path) {
+    usize i = path.Len;
+    while (i > 0 && path[i - 1] != '/') i--;
+    return string.From(path[i..path.Len]);
 }
 
 // Copies of the paths a table holds.
@@ -341,6 +373,7 @@ impl IEntropy for Entropy {
 
 struct EnvState {
     List<string> Args;
+    Map<string, string> Vars;
 }
 
 // A fixed set of arguments.
@@ -351,7 +384,7 @@ public struct Environment {
     public static Environment Of(str program) {
         unsafe {
             *EnvState p = alloc(sizeof(EnvState)) as *EnvState;
-            p[0] = new EnvState { Args = List<string>.New() };
+            p[0] = new EnvState { Args = List<string>.New(), Vars = Map<string, string>.New() };
             p[0].Args.Push(string.From(program));
             return new Environment { State = p };
         }
@@ -359,6 +392,11 @@ public struct Environment {
 
     public void Add(ref this, str arg) {
         unsafe { this.State[0].Args.Push(string.From(arg)); }
+    }
+
+    // Sets the environment variable name to value.
+    public void SetVar(ref this, str name, str value) {
+        unsafe { this.State[0].Vars.Set(string.From(name), string.From(value)); }
     }
 }
 
@@ -370,6 +408,94 @@ impl IEnvironment for Environment {
     str Arg(ref this, usize i) {
         unsafe { return this.State[0].Args.AsSlice()[i].AsStr(); }
     }
+
+    string? Var(ref this, str name) {
+        string key = string.From(name);
+        unsafe {
+            string[] v = this.State[0].Vars.View(key);
+            if (v.Len == 0) return null;
+            return Some(string.From(v[0].AsStr()));
+        }
+    }
+}
+
+// ------------------------------------------------------------------ process
+
+struct ProcState {
+    *FsState Fs;
+    Set<string> Programs;
+    string Runs;
+}
+
+// Programs that exist only by name. Each one echoes: it writes each of its arguments
+// and a newline to standard output, "err" and a newline to standard error, and exits
+// with its number of arguments. Their output files are written to a FileSystem of this
+// module; output not sent to a file goes to this process's own streams.
+public struct Process {
+    *ProcState State;
+
+    public static Process On(FileSystem fs) {
+        unsafe {
+            *ProcState p = alloc(sizeof(ProcState)) as *ProcState;
+            p[0] = new ProcState { Fs = fs.State, Programs = Set<string>.New(), Runs = string.New() };
+            return new Process { State = p };
+        }
+    }
+
+    // Makes program (a name or a path) one that Run can start.
+    public void Add(ref this, str program) {
+        unsafe { this.State[0].Programs.Add(string.From(program)); }
+    }
+
+    // Every run so far, a line each: the program and its arguments, between spaces.
+    public str Runs(in this) {
+        unsafe { return this.State[0].Runs.AsStr(); }
+    }
+}
+
+impl IProcess for Process {
+    Result<i32, IoError> Run(ref this, str program, str[] args, str outPath, str errPath) {
+        if (BadPath(program) || BadPath(outPath) || BadPath(errPath)) return Err(IoError.Invalid);
+        foreach (var a in args) {
+            if (BadPath(a)) return Err(IoError.Invalid);
+        }
+        string echo = string.New();
+        foreach (var a in args) {
+            echo.Append(a);
+            echo.AppendByte('\n');
+        }
+        str err = "err\n";
+        unsafe {
+            string name = string.From(program);
+            if (!this.State[0].Programs.Has(name)) return Err(IoError.NotFound);
+            FileSystem fs = new FileSystem { State = this.State[0].Fs };
+            string o = Clean(outPath);
+            string e = Clean(errPath);
+            if (outPath.Len > 0 && errPath.Len > 0 && o.Equals(e.AsStr())) {
+                string both = string.From(echo.AsStr());
+                both.Append(err);
+                usize w = fs.Write(outPath, both.AsStr())?;
+            } else {
+                if (outPath.Len > 0) {
+                    usize w = fs.Write(outPath, echo.AsStr())?;
+                } else {
+                    write(1, echo.AsStr());
+                }
+                if (errPath.Len > 0) {
+                    usize w = fs.Write(errPath, err)?;
+                } else {
+                    write(2, err);
+                }
+            }
+            this.State[0].Runs.Append(program);
+            foreach (var a in args) {
+                this.State[0].Runs.AppendByte(' ');
+                this.State[0].Runs.Append(a);
+            }
+            this.State[0].Runs.AppendByte('\n');
+        }
+        return Ok(args.Len as i32);
+    }
 }
 
 // ------------------------------------------------------------------ shared instances
@@ -379,6 +505,7 @@ static usize SharedFs = 0;
 static usize SharedClockState = 0;
 static usize SharedEntropyState = 0;
 static usize SharedEnvState = 0;
+static usize SharedProcState = 0;
 
 // 2026-01-01 00:00:00 UTC, where the shared clock starts.
 public const i64 START_NANOS = 1767225600000000000;
@@ -420,5 +547,18 @@ public Environment SharedEnvironment() {
             SharedEnvState = e.State as usize;
         }
         return new Environment { State = SharedEnvState as *EnvState };
+    }
+}
+
+// The shared process knows one program, "program": the name the shared environment
+// gives as argument 0, so a program can start itself.
+public Process SharedProcess() {
+    unsafe {
+        if (SharedProcState == 0) {
+            Process p = Process.On(SharedFileSystem());
+            p.Add("program");
+            SharedProcState = p.State as usize;
+        }
+        return new Process { State = SharedProcState as *ProcState };
     }
 }

@@ -53,6 +53,12 @@ public Result<bool, IoError> RemoveDir(str path) {
     return fs.RemoveDir(path);
 }
 
+// The names of the entries in the directory path, in byte order.
+public Result<List<string>, IoError> ListDir(str path) {
+    var fs = platform.FileSystem();
+    return fs.List(path);
+}
+
 public bool ExistsWith<F>(ref F fs, str path) where F : IFileSystem => fs.IsFile(path) || fs.IsDir(path);
 
 public Result<bool, IoError> CreateDirAllWith<F>(ref F fs, str path) where F : IFileSystem {

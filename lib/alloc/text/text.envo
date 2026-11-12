@@ -5,6 +5,24 @@ namespace alloc.text;
 use core.fmt;
 use core.text as ct;
 
+// Sorts items into byte order (core.text.Compare). Stable; an insertion sort, for the
+// short lists of names it is used on (directory entries).
+public void Sort(ref List<string> items) {
+    unsafe {
+        *string d = items.Data;
+        for (usize i = 1; i < items.Count; i++) {
+            usize j = i;
+            while (j > 0 && ct.Compare(d[j - 1].AsStr(), d[j].AsStr()) > 0) {
+                // a raw swap: neither value is dropped
+                string t = d[j];
+                d[j] = d[j - 1];
+                d[j - 1] = t;
+                j--;
+            }
+        }
+    }
+}
+
 // v in decimal.
 public string Int(i64 v) {
     u8[24] buf;

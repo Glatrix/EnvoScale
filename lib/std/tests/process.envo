@@ -1,0 +1,29 @@
+// std.process and std.fs.List on the reference adapters: "program" is the one program
+// os.none knows, and it echoes its arguments.
+// os: none
+// expect: code 2 [a
+// expect: b c
+// expect: err
+// expect: ] missing
+// expect: list [out.txt]
+// expect: var none
+use std.process;
+use std.fs;
+use std.env;
+use ports.{IoError};
+
+List<str> args = List<str>.New();
+args.Push("a");
+args.Push("b c");
+Result<i32, IoError> r = process.RunTo("program", args.AsSlice(), "out.txt");
+write(1, "code ");
+if (r.IsOk() && r.Unwrap() == 2) write(1, "2 ");
+write(1, "[");
+write(1, fs.ReadText("out.txt").Unwrap().AsStr());
+write(1, "] ");
+if (process.Run("other", args.AsSlice()).IsErr()) print("missing");
+write(1, "list [");
+List<string> names = fs.ListDir("").Unwrap();
+foreach (var n in names.AsSlice()) write(1, n.AsStr());
+print("]");
+if (env.Var("PATH").IsNone()) print("var none");

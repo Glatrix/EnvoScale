@@ -19,6 +19,22 @@ bool IsErr<T>(Result<T, IoError> r, IoError e) {
     }
 }
 
+// Does List(path) give exactly want, the names joined by "|"?
+bool ListsAs<F>(ref F fs, str path, str want) where F : IFileSystem {
+    Result<List<string>, IoError> r = fs.List(path);
+    match r {
+        Ok(names) => {
+            string all = string.New();
+            foreach (var n in names.AsSlice()) {
+                if (all.Len() > 0) all.AppendByte('|');
+                all.Append(n.AsStr());
+            }
+            return all.Equals(want);
+        }
+        Err(_) => { return false; }
+    }
+}
+
 bool ReadsAs<F>(ref F fs, str path, str want) where F : IFileSystem {
     Result<string, IoError> r = fs.Read(path);
     match r {
@@ -34,6 +50,7 @@ void Run<F>(ref F fs) where F : IFileSystem {
     // leftovers of a run that stopped early
     fs.Delete(a);
     fs.Delete(uni);
+    fs.Delete("conformance-fs/sub/z.txt");
     fs.RemoveDir("conformance-fs/sub");
     fs.RemoveDir(dir);
 
@@ -56,11 +73,22 @@ void Run<F>(ref F fs) where F : IFileSystem {
     Check(IsErr(fs.Write("conformance-fs/bad\x00.txt", "x"), IoError.Invalid), "a path with a NUL byte is Invalid");
     Check(!fs.IsFile("conformance-fs/bad\x00.txt"), "a path with a NUL byte names nothing");
 
+    Check(ListsAs(ref fs, dir, "a.txt|caf\u{e9} \u{1f600}.txt"), "List gives the names in byte order");
+    Check(fs.CreateDir("conformance-fs/sub").IsOk(), "CreateDir of a subdirectory");
+    Check(fs.Write("conformance-fs/sub/z.txt", "z").IsOk(), "Write in a subdirectory");
+    Check(ListsAs(ref fs, dir, "a.txt|caf\u{e9} \u{1f600}.txt|sub"), "List gives directories too");
+    Check(ListsAs(ref fs, "conformance-fs/sub/", "z.txt"), "List of a path ending in /");
+    Check(fs.List("").IsOk(), "List of the working directory");
+    Check(IsErr(fs.List(a), IoError.Invalid), "List of a file is Invalid");
+    Check(IsErr(fs.List("conformance-fs/missing"), IoError.NotFound), "List of a missing directory is NotFound");
+    Check(fs.Delete("conformance-fs/sub/z.txt").IsOk() && fs.RemoveDir("conformance-fs/sub").IsOk(), "remove the subdirectory");
+
     Check(IsErr(fs.RemoveDir(dir), IoError.NotEmpty), "RemoveDir of a directory with files is NotEmpty");
     Check(IsErr(fs.Delete(dir), IoError.Invalid), "Delete of a directory is Invalid");
     Check(fs.Delete(a).IsOk() && !fs.IsFile(a), "Delete");
     Check(IsErr(fs.Delete(a), IoError.NotFound), "Delete of a missing file is NotFound");
     Check(fs.Delete(uni).IsOk(), "Delete of a UTF-8 name");
+    Check(ListsAs(ref fs, dir, ""), "List of an empty directory");
     Check(fs.RemoveDir(dir).IsOk() && !fs.IsDir(dir), "RemoveDir of an empty directory");
     Check(IsErr(fs.RemoveDir(dir), IoError.NotFound), "RemoveDir of a missing directory is NotFound");
 }

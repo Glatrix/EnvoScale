@@ -2,8 +2,8 @@
 // (docs/architecture/bootstrap.md, "Executable layout"). Windows images import from
 // KERNEL32.dll and ADVAPI32.dll; the runtime and the native adapters reach import k
 // through `wincall`, where k is the import's slot in the address table: KERNEL32's
-// functions are 0-18, slot 19 ends them, and ADVAPI32's SystemFunction036 (RtlGenRandom)
-// is slot 20 (PLAN D25). Stage 2 writes the same tables.
+// functions are 0-26, slot 27 ends them, and ADVAPI32's SystemFunction036 (RtlGenRandom)
+// is slot 28 (PLAN D25, D28). Stage 2 writes the same tables.
 
 const u64 IMAGE_BASE = 0x400000;
 const u64 ELF_HEADERS = 176;        // ELF header (64) + 2 program headers (56 each)
@@ -12,7 +12,7 @@ const u64 PE_SECTION_RVA = 0x1000;
 const u32 TARGET_LINUX = 1;
 const u32 TARGET_WINDOWS = 2;
 
-const u32 WIN_IMPORTS = 19;        // from KERNEL32.dll; then ADVAPI32's one, at slot 20
+const u32 WIN_IMPORTS = 27;        // from KERNEL32.dll; then ADVAPI32's one, at slot 28
 
 // The KERNEL32.dll functions, by wincall index.
 str WinImport(u32 k) {
@@ -35,7 +35,15 @@ str WinImport(u32 k) {
         15 => { return "DeleteFileW"; }
         16 => { return "CreateDirectoryW"; }
         17 => { return "RemoveDirectoryW"; }
-        _ => { return "GetFileAttributesW"; }
+        18 => { return "GetFileAttributesW"; }
+        19 => { return "CreateProcessW"; }
+        20 => { return "WaitForSingleObject"; }
+        21 => { return "GetExitCodeProcess"; }
+        22 => { return "FindFirstFileW"; }
+        23 => { return "FindNextFileW"; }
+        24 => { return "FindClose"; }
+        25 => { return "SetHandleInformation"; }
+        _ => { return "GetEnvironmentVariableW"; }
     }
 }
 
@@ -48,7 +56,7 @@ struct WinImports {
 // the data. Returns the labels the PE header and wincall need.
 WinImports EmitImports(*Asm a) {
     WinImports w;
-    u32[19] names;
+    u32[27] names;
     u32 ilt = NewLabel(a);
     u32 dll = NewLabel(a);
     u32 ilt2 = NewLabel(a);
@@ -81,8 +89,8 @@ WinImports EmitImports(*Asm a) {
         BufRepeat(&a.Data, 0, 8);
         BindData(a, w.Iat);
         for (u32 k = 0; k < WIN_IMPORTS; k++) DataRva(a, names[k], 8);
-        BufRepeat(&a.Data, 0, 8);   // slot 19 ends KERNEL32's
-        BindData(a, iat2);          // slot 20
+        BufRepeat(&a.Data, 0, 8);   // slot 27 ends KERNEL32's
+        BindData(a, iat2);          // slot 28
         DataRva(a, name2, 8);
         BufRepeat(&a.Data, 0, 8);
         for (u32 k = 0; k < WIN_IMPORTS; k++) {

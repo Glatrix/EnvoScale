@@ -1,0 +1,87 @@
+// Process conformance: what every IProcess adapter promises (lib/ports). The suite runs
+// itself as the child, so it needs no other program: started with "child" as its first
+// argument it echoes, as os.none.Process's programs do (each argument and a newline to
+// standard output, "err" and a newline to standard error, its number of arguments as
+// the exit code). Output files go to a directory it makes and removes under the working
+// directory.
+// expect: process: done
+use ports.{IProcess, IFileSystem, IEnvironment, IoError};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+bool IsErr<T>(Result<T, IoError> r, IoError e) {
+    match r {
+        Ok(_) => { return false; }
+        Err(x) => { return x == e; }
+    }
+}
+
+bool ReadsAs<F>(ref F fs, str path, str want) where F : IFileSystem {
+    Result<string, IoError> r = fs.Read(path);
+    match r {
+        Ok(s) => { return s.Equals(want); }
+        Err(_) => { return false; }
+    }
+}
+
+// The echo: what the child does.
+void Echo<E>(ref E env) where E : IEnvironment {
+    for (usize i = 1; i < env.ArgCount(); i++) {
+        write(1, env.Arg(i));
+        write(1, "\n");
+    }
+    write(2, "err\n");
+    exit((env.ArgCount() - 1) as i32);
+}
+
+void Run<P, F>(ref P proc, ref F fs, str self) where P : IProcess, F : IFileSystem {
+    str dir = "conformance-proc";
+    str outFile = "conformance-proc/out.txt";
+    str errFile = "conformance-proc/err.txt";
+    fs.Delete(outFile);
+    fs.Delete(errFile);
+    fs.RemoveDir(dir);
+    Check(fs.CreateDir(dir).IsOk(), "CreateDir");
+
+    List<str> args = List<str>.New();
+    args.Push("child");
+    args.Push("two words");
+    args.Push("");
+    args.Push("a \"quoted\" word");
+    args.Push("back\\slash\\");
+    args.Push("tab\there");
+    args.Push("caf\u{e9}");
+    Result<i32, IoError> r = proc.Run(self, args.AsSlice(), outFile, errFile);
+    Check(r.IsOk(), "Run");
+    if (r.IsOk()) Check(r.Unwrap() == 7, "the exit code");
+    Check(ReadsAs(ref fs, outFile, "child\ntwo words\n\na \"quoted\" word\nback\\slash\\\ntab\there\ncaf\u{e9}\n"), "standard output goes to its file, the arguments as given");
+    Check(ReadsAs(ref fs, errFile, "err\n"), "standard error goes to its file");
+
+    List<str> one = List<str>.New();
+    one.Push("child");
+    Result<i32, IoError> both = proc.Run(self, one.AsSlice(), outFile, outFile);
+    Check(both.IsOk() && both.Unwrap() == 1, "Run with one argument");
+    Check(ReadsAs(ref fs, outFile, "child\nerr\n"), "both streams to one file, the file replaced");
+
+    List<str> none = List<str>.New();
+    Check(IsErr(proc.Run("conformance-no-such-program", none.AsSlice(), outFile, ""), IoError.NotFound), "a missing program is NotFound");
+    Check(IsErr(proc.Run(self, one.AsSlice(), "conformance-proc/missing/out.txt", ""), IoError.NotFound), "an output file without its directory is NotFound");
+    Check(IsErr(proc.Run("bad\x00name", none.AsSlice(), "", ""), IoError.Invalid), "a program name with a NUL byte is Invalid");
+
+    Check(fs.Delete(outFile).IsOk() && fs.Delete(errFile).IsOk() && fs.RemoveDir(dir).IsOk(), "clean up");
+}
+
+var env = platform.Environment();
+if (env.ArgCount() >= 2 && env.Arg(1).Len == 5 && env.Arg(1)[0] == 'c') {
+    Echo(ref env);
+}
+var proc = platform.Process();
+var fs = platform.FileSystem();
+Run(ref proc, ref fs, env.Arg(0));
+print("process: done");

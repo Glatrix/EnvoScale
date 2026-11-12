@@ -4,6 +4,7 @@
 // expect: a, b, c
 // expect: x-y-z abcabc envo ENVO
 // expect: [   7] [7...]
+// expect: sorted [B][a][ab][b][é]
 use alloc.text;
 
 write(1, text.Int(-42));
@@ -42,3 +43,17 @@ write(1, text.PadLeft("7", 4, ' '));
 write(1, "] [");
 write(1, text.PadRight("7", 4, '.'));
 print("]");
+List<string> names = List<string>.New();
+names.Push(string.From("b"));
+names.Push(string.From("\u{e9}"));
+names.Push(string.From("ab"));
+names.Push(string.From("a"));
+names.Push(string.From("B"));
+text.Sort(ref names);
+write(1, "sorted ");
+foreach (var n in names.AsSlice()) {
+    write(1, "[");
+    write(1, n.AsStr());
+    write(1, "]");
+}
+print("");

@@ -16,8 +16,8 @@ general shape; this page records how M4 builds it. Decisions D21–D25 are in
 | `lib/core/hash` | `core.hash` | FNV-1a, SplitMix mixing, the `IKey` interface for hash tables | none |
 | `lib/alloc/map`, `set`, `box` | `alloc.map`, … | `Map<K, V>`, `Set<T>`, `Box<T>` | none |
 | `lib/alloc/text` | `alloc.text` | text helpers that build a `string` or a `List<str>` | none |
-| `lib/ports` | `ports` | `IConsole`, `IFileSystem`, `IClock`, `IEntropy`, `IEnvironment`, `IoError` | defines them |
-| `lib/std/io`, `fs`, `path`, `time`, `env`, `random` | `std.io`, … | the OS-level services | Console, FileSystem, Clock, Entropy, Environment |
+| `lib/ports` | `ports` | `IConsole`, `IFileSystem`, `IClock`, `IEntropy`, `IEnvironment`, `IProcess`, `IoError` | defines them |
+| `lib/std/io`, `fs`, `path`, `time`, `env`, `random`, `process` | `std.io`, … | the OS-level services | Console, FileSystem, Clock, Entropy, Environment, Process |
 
 `core` allocates nothing. `alloc` adds the heap. The S1 prelude (`List`, `string`,
 `Option`, `Result`) is still the one Stage 1 embeds; it moves into `lib/prelude` once
@@ -42,7 +42,7 @@ values (D13, D22). Each adapter is a struct that implements the port:
 
 | Namespace | Folder | Adapters |
 |---|---|---|
-| `os.none` | `adapters/os/none` | reference: captured `Console`, pass-through `Terminal`, in-memory `FileSystem`, manual `Clock`, seeded `Entropy`, fixed `Environment` |
+| `os.none` | `adapters/os/none` | reference: captured `Console`, pass-through `Terminal`, in-memory `FileSystem`, manual `Clock`, seeded `Entropy`, fixed `Environment`, scripted `Process` (echoing programs known by name) |
 | `os.windows` | `adapters/os/windows` | KERNEL32 and ADVAPI32 through `__wincall` |
 | `os.linux` | `adapters/os/linux` | system calls through `__syscall` |
 
@@ -50,7 +50,7 @@ values (D13, D22). Each adapter is a struct that implements the port:
 one place where `lib/` meets an adapter. It loads `adapters/os/<os>/platform.envo`, where
 `<os>` is the target's operating system or `none` with `--os none`. Every binding
 provides the same constructors: `platform.Console()`, `FileSystem()`, `Clock()`,
-`Entropy()`, `Environment()`. Code that uses them writes `var fs = platform.FileSystem();`
+`Entropy()`, `Environment()`, `Process()`. Code that uses them writes `var fs = platform.FileSystem();`
 and works with any binding.
 
 Each `std` module has two doors. The simple door (`fs.ReadText(path)`) uses the platform
@@ -79,9 +79,14 @@ M4 grew the Windows import table, identically in Stage 1 and Stage 2, so their
 executables stay byte-identical:
 - KERNEL32 slots 0–18 (12–18 are new: the precise system time, the performance counter,
   `DeleteFileW`, `CreateDirectoryW`, `RemoveDirectoryW`, `GetFileAttributesW`);
-- slot 19 ends KERNEL32's;
-- slot 20 is ADVAPI32's `SystemFunction036` (RtlGenRandom), the system's random
+- M5 (D28) added slots 19–26: `CreateProcessW`, `WaitForSingleObject`,
+  `GetExitCodeProcess`, `FindFirstFileW`, `FindNextFileW`, `FindClose`,
+  `SetHandleInformation`, `GetEnvironmentVariableW`;
+- slot 27 ends KERNEL32's;
+- slot 28 is ADVAPI32's `SystemFunction036` (RtlGenRandom), the system's random
   generator.
+
+`__wincall` takes the slot and up to 10 arguments (`CreateProcessW` has 10).
 
 Paths reach Windows as UTF-16 and Linux as NUL-terminated copies. Both refuse a path that
 holds a NUL byte.

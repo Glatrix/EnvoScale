@@ -1,7 +1,7 @@
 # `adapters/os/windows`
 
-> **Status:** Experimental (M4): Console, FileSystem, Clock, Entropy, Environment. Passes
-> every conformance suite.
+> **Status:** Experimental (M4, M5): Console, FileSystem, Clock, Entropy, Environment,
+> Process. Passes every conformance suite.
 
 Windows adapters over KERNEL32.dll and ADVAPI32.dll, called through the `__wincall`
 intrinsic: `__wincall(k, …)` calls the import in slot `k` of the executable's address

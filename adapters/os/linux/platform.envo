@@ -8,3 +8,4 @@ public linux.FileSystem FileSystem() => linux.FileSystem.New();
 public linux.Clock Clock() => linux.Clock.New();
 public linux.Entropy Entropy() => linux.Entropy.New();
 public linux.Environment Environment() => linux.Environment.New();
+public linux.Process Process() => linux.Process.New();

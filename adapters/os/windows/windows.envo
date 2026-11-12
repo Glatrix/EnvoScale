@@ -4,10 +4,16 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, IoError};
+use core.text as ct;
+use alloc.text;
 
+const i64 W_GETSTDHANDLE = 0;
+const i64 W_CREATEFILEW = 2;
+const i64 W_CLOSEHANDLE = 5;
 const i64 W_GETLASTERROR = 8;
 const i64 W_MULTIBYTETOWIDECHAR = 10;
+const i64 W_WIDECHARTOMULTIBYTE = 11;
 const i64 W_GETSYSTEMTIMEPRECISE = 12;
 const i64 W_QUERYPERFCOUNTER = 13;
 const i64 W_QUERYPERFFREQUENCY = 14;
@@ -15,7 +21,15 @@ const i64 W_DELETEFILEW = 15;
 const i64 W_CREATEDIRECTORYW = 16;
 const i64 W_REMOVEDIRECTORYW = 17;
 const i64 W_GETFILEATTRIBUTESW = 18;
-const i64 W_RTLGENRANDOM = 20;
+const i64 W_CREATEPROCESSW = 19;
+const i64 W_WAITFORSINGLEOBJECT = 20;
+const i64 W_GETEXITCODEPROCESS = 21;
+const i64 W_FINDFIRSTFILEW = 22;
+const i64 W_FINDNEXTFILEW = 23;
+const i64 W_FINDCLOSE = 24;
+const i64 W_SETHANDLEINFORMATION = 25;
+const i64 W_GETENVIRONMENTVARIABLEW = 26;
+const i64 W_RTLGENRANDOM = 28;
 
 const u32 ATTR_DIRECTORY = 0x10;
 
@@ -27,6 +41,19 @@ i64 Call(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __wincall(k, a, b, 
 
 u32 LastError() => Call(W_GETLASTERROR, 0, 0, 0, 0, 0, 0) as u32;
 
+// UTF-16 text ending in 0, as UTF-8.
+string Narrow(*u8 wide) {
+    string s = string.New();
+    i64 n = __wincall(W_WIDECHARTOMULTIBYTE, 65001, 0, Ptr(wide), -1, 0, 0, 0, 0, 0, 0) as i32 as i64;
+    if (n <= 1) return s;
+    unsafe {
+        *u8 buf = alloc(n as usize);
+        __wincall(W_WIDECHARTOMULTIBYTE, 65001, 0, Ptr(wide), -1, Ptr(buf), n, 0, 0, 0, 0);
+        for (usize i = 0; i + 1 < n as usize; i++) s.AppendByte(buf[i]);
+    }
+    return s;
+}
+
 // path as UTF-16 with a terminating 0, or null for one the system cannot take (a NUL
 // byte, invalid UTF-8, too long).
 *u8 Wide(str path) {
@@ -37,6 +64,7 @@ u32 LastError() => Call(W_GETLASTERROR, 0, 0, 0, 0, 0, 0) as u32;
             if (path[i] == 0) return 0 as usize as *u8;
             z[i] = path[i];
         }
+        z[path.Len] = 0;
         *u8 wide = alloc((path.Len + 1) * 2);
         i64 n = Call(W_MULTIBYTETOWIDECHAR, 65001, 8, Ptr(z), -1, Ptr(wide), (path.Len + 1) as i64);
         if (n as i32 == 0) return 0 as usize as *u8;
@@ -173,6 +201,39 @@ impl IFileSystem for FileSystem {
         if (Call(W_REMOVEDIRECTORYW, Ptr(w), 0, 0, 0, 0, 0) as i32 == 0) return Err(ErrorOf(LastError()));
         return Ok(true);
     }
+
+    Result<List<string>, IoError> List(ref this, str path) {
+        unsafe {
+            if (Wide(path) as usize == 0) return Err(IoError.Invalid);
+        }
+        if (!this.IsDir(path)) {
+            if (this.IsFile(path)) return Err(IoError.Invalid);
+            return Err(IoError.NotFound);
+        }
+        string pattern = string.From(path);
+        if (path.Len > 0 && path[path.Len - 1] != '/' && path[path.Len - 1] != 0x5C) pattern.AppendByte('/');
+        pattern.AppendByte('*');
+        *u8 w = Wide(pattern.AsStr());
+        List<string> names = List<string>.New();
+        unsafe {
+            if (w as usize == 0) return Err(IoError.Invalid);
+            *u8 found = alloc(592);         // WIN32_FIND_DATAW; the name is at 44
+            i64 h = Call(W_FINDFIRSTFILEW, Ptr(w), Ptr(found), 0, 0, 0, 0);
+            if (h == -1) {
+                u32 e = LastError();
+                if (e == 2 || e == 18) return Ok(names);    // FILE_NOT_FOUND, NO_MORE_FILES
+                return Err(ErrorOf(e));
+            }
+            while (true) {
+                string name = Narrow(&found[44]);
+                if (!name.Equals(".") && !name.Equals("..")) names.Push(name);
+                if (Call(W_FINDNEXTFILEW, h, Ptr(found), 0, 0, 0, 0) as i32 == 0) break;
+            }
+            Call(W_FINDCLOSE, h, 0, 0, 0, 0, 0);
+        }
+        text.Sort(ref names);
+        return Ok(names);
+    }
 }
 
 // ------------------------------------------------------------------ clock
@@ -240,4 +301,156 @@ public struct Environment {
 impl IEnvironment for Environment {
     usize ArgCount(ref this) => argc();
     str Arg(ref this, usize i) => arg(i);
+
+    string? Var(ref this, str name) {
+        if (name.Len == 0) return null;
+        *u8 w = Wide(name);
+        unsafe {
+            if (w as usize == 0) return null;
+            i64 cap = 256;
+            while (true) {
+                *u8 buf = alloc((cap * 2) as usize);
+                i64 n = Call(W_GETENVIRONMENTVARIABLEW, Ptr(w), Ptr(buf), cap, 0, 0, 0) as u32 as i64;
+                if (n == 0) return null;
+                if (n < cap) return Some(Narrow(buf));
+                cap = n;        // the size it needs, its 0 included
+            }
+        }
+        return null;
+    }
+}
+
+// ------------------------------------------------------------------ process
+
+// Programs started with CreateProcessW. The command line is built so the C runtime's
+// rules (CommandLineToArgvW) split it back into the same arguments; a program without a
+// path is looked up as CreateProcessW does (its own directory, the working directory,
+// the system directories, then PATH; ".exe" is added when the name has no extension).
+public struct Process {
+    u8 Unused;
+
+    public static Process New() => new Process { Unused = 0 };
+}
+
+// Appends a to cmd, quoted when it must be; false if a holds a NUL byte.
+bool Quote(ref string cmd, str a) {
+    bool needs = a.Len == 0;
+    for (usize i = 0; i < a.Len; i++) {
+        u8 c = a[i];
+        if (c == 0) return false;
+        if (c == ' ' || c == 9 || c == 10 || c == 11 || c == 0x22) needs = true;
+    }
+    if (!needs) {
+        cmd.Append(a);
+        return true;
+    }
+    cmd.AppendByte(0x22);
+    usize i = 0;
+    while (i < a.Len) {
+        usize slashes = 0;
+        while (i < a.Len && a[i] == 0x5C) {
+            slashes++;
+            i++;
+        }
+        if (i == a.Len) {
+            for (usize k = 0; k < slashes * 2; k++) cmd.AppendByte(0x5C);
+            break;
+        }
+        if (a[i] == 0x22) {
+            for (usize k = 0; k < slashes * 2 + 1; k++) cmd.AppendByte(0x5C);
+        } else {
+            for (usize k = 0; k < slashes; k++) cmd.AppendByte(0x5C);
+        }
+        cmd.AppendByte(a[i]);
+        i++;
+    }
+    cmd.AppendByte(0x22);
+    return true;
+}
+
+// A handle the child inherits, for writing the file at path (replaced).
+Result<i64, IoError> OpenForChild(str path) {
+    *u8 w = Wide(path);
+    unsafe {
+        if (w as usize == 0) return Err(IoError.Invalid);
+        *u8 sa = alloc(24);             // SECURITY_ATTRIBUTES, bInheritHandle set
+        for (usize i = 0; i < 24; i++) sa[i] = 0;
+        sa[0] = 24;
+        sa[16] = 1;
+        // GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, CREATE_ALWAYS, NORMAL
+        i64 h = __wincall(W_CREATEFILEW, Ptr(w), 0x40000000, 3, Ptr(sa), 2, 0x80, 0, 0, 0, 0);
+        if (h == -1) return Err(ErrorOf(LastError()));
+        return Ok(h);
+    }
+}
+
+// Lets a child inherit h, one of this process's standard handles (0 if there is none).
+void Inheritable(i64 h) {
+    if (h != 0 && h != -1) Call(W_SETHANDLEINFORMATION, h, 1, 1, 0, 0, 0);
+}
+
+impl IProcess for Process {
+    Result<i32, IoError> Run(ref this, str program, str[] args, str outPath, str errPath) {
+        string cmd = string.New();
+        if (!Quote(ref cmd, program)) return Err(IoError.Invalid);
+        foreach (var a in args) {
+            cmd.AppendByte(' ');
+            if (!Quote(ref cmd, a)) return Err(IoError.Invalid);
+        }
+        *u8 wcmd = Wide(cmd.AsStr());
+        unsafe {
+            if (wcmd as usize == 0) return Err(IoError.Invalid);
+        }
+        i64 hin = Call(W_GETSTDHANDLE, -10, 0, 0, 0, 0, 0);
+        i64 hout = Call(W_GETSTDHANDLE, -11, 0, 0, 0, 0, 0);
+        i64 herr = Call(W_GETSTDHANDLE, -12, 0, 0, 0, 0, 0);
+        i64 fout = 0;
+        i64 ferr = 0;
+        if (outPath.Len > 0) {
+            fout = OpenForChild(outPath)?;
+            hout = fout;
+        }
+        if (errPath.Len > 0) {
+            if (outPath.Len > 0 && ct.Compare(outPath, errPath) == 0) {
+                herr = fout;
+            } else {
+                Result<i64, IoError> r = OpenForChild(errPath);
+                if (r.IsErr()) {
+                    if (fout != 0) Call(W_CLOSEHANDLE, fout, 0, 0, 0, 0, 0);
+                    return Err(r.UnwrapErr());
+                }
+                ferr = r.Unwrap();
+                herr = ferr;
+            }
+        }
+        Inheritable(hin);
+        Inheritable(hout);
+        Inheritable(herr);
+        i64 ok = 0;
+        u32 code = 0;
+        unsafe {
+            *u8 si = alloc(104);            // STARTUPINFOW
+            for (usize i = 0; i < 104; i++) si[i] = 0;
+            *u32 si32 = si as *u32;
+            si32[0] = 104;                  // cb
+            si32[15] = 0x100;               // dwFlags: STARTF_USESTDHANDLES
+            *i64 si64 = si as *i64;
+            si64[10] = hin;
+            si64[11] = hout;
+            si64[12] = herr;
+            *u8 pi = alloc(24);             // PROCESS_INFORMATION
+            for (usize i = 0; i < 24; i++) pi[i] = 0;
+            ok = __wincall(W_CREATEPROCESSW, 0, Ptr(wcmd), 0, 0, 1, 0, 0, 0, Ptr(si), Ptr(pi));
+            u32 e = LastError();
+            if (fout != 0) Call(W_CLOSEHANDLE, fout, 0, 0, 0, 0, 0);
+            if (ferr != 0) Call(W_CLOSEHANDLE, ferr, 0, 0, 0, 0, 0);
+            if (ok as i32 == 0) return Err(ErrorOf(e));
+            *i64 pi64 = pi as *i64;
+            Call(W_WAITFORSINGLEOBJECT, pi64[0], 0xFFFFFFFF, 0, 0, 0, 0);
+            Call(W_GETEXITCODEPROCESS, pi64[0], &code as isize as i64, 0, 0, 0, 0);
+            Call(W_CLOSEHANDLE, pi64[0], 0, 0, 0, 0, 0);
+            Call(W_CLOSEHANDLE, pi64[1], 0, 0, 0, 0, 0);
+        }
+        return Ok(code as i32);
+    }
 }

@@ -5,6 +5,7 @@
 // expect: key=[name] value=[ envo ]
 // expect: chars 5 bytes 6
 // expect: case ok
+// expect: compare ok
 use core.text;
 use core.fmt;
 
@@ -50,3 +51,4 @@ write(1, Num(text.CharCount("héllo") as u64));
 write(1, " bytes ");
 print(Num(word.Len as u64));
 if (text.EqualsIgnoreCase("EnVo", "envo") && !text.EqualsIgnoreCase("envo", "envy") && text.ToUpper('q') == 'Q' && text.IsSpace(9) && !text.IsDigit('x')) print("case ok");
+if (text.Compare("a", "b") < 0 && text.Compare("b", "a") > 0 && text.Compare("ab", "ab") == 0 && text.Compare("a", "ab") < 0 && text.Compare("\u{e9}", "z") > 0) print("compare ok");

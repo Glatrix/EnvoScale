@@ -4,7 +4,14 @@
 // expect: clock 1000 2500
 // expect: entropy same, differs by seed
 // expect: env 2 program --flag
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+// expect: var [1] none
+// expect: list [a.txt|d] []
+// expect: process 2 [x
+// expect: y
+// expect: err
+// expect: ] [prog x y
+// expect: ] missing
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, IoError};
 use os.none;
 
 none.Console c = none.Console.WithInput("abc");
@@ -69,3 +76,45 @@ if (env.ArgCount() == 2) write(1, "2 ");
 write(1, env.Arg(0));
 write(1, " ");
 print(env.Arg(1));
+
+env.SetVar("ENVO_X", "1");
+write(1, "var [");
+write(1, env.Var("ENVO_X").Unwrap().AsStr());
+write(1, "] ");
+if (env.Var("ENVO_Y").IsNone()) print("none");
+
+none.FileSystem lfs = none.FileSystem.New();
+lfs.CreateDir("d");
+lfs.Write("d/z.txt", "z");
+lfs.Write("a.txt", "a");
+write(1, "list [");
+List<string> top = lfs.List("").Unwrap();
+for (usize i = 0; i < top.Len(); i++) {
+    if (i > 0) write(1, "|");
+    write(1, top.AsSlice()[i].AsStr());
+}
+write(1, "] [");
+if (!lfs.List("d/z.txt").IsErr()) write(1, "?");
+print("]");
+
+none.Process proc = none.Process.On(lfs);
+proc.Add("prog");
+List<str> pargs = List<str>.New();
+pargs.Push("x");
+pargs.Push("y");
+Result<i32, IoError> pr = proc.Run("prog", pargs.AsSlice(), "d/out.txt", "d/out.txt");
+write(1, "process ");
+if (pr.IsOk() && pr.Unwrap() == 2) write(1, "2 ");
+write(1, "[");
+write(1, lfs.Read("d/out.txt").Unwrap().AsStr());
+write(1, "] [");
+write(1, proc.Runs());
+write(1, "] ");
+if (IsNotFound(proc.Run("other", pargs.AsSlice(), "", ""))) print("missing");
+
+bool IsNotFound(Result<i32, IoError> r) {
+    match r {
+        Ok(_) => { return false; }
+        Err(e) => { return e == IoError.NotFound; }
+    }
+}

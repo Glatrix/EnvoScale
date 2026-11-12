@@ -1,0 +1,24 @@
+// std.process: running other programs (PLAN D28). The simple door uses the platform's
+// Process port; the full-control door (…With) takes any IProcess, such as
+// os.none.Process in a test.
+namespace std.process;
+
+use ports.{IProcess, IoError};
+use platform;
+
+// Runs program with args, its output on this program's streams, and gives its exit code.
+public Result<i32, IoError> Run(str program, str[] args) {
+    var p = platform.Process();
+    return p.Run(program, args, "", "");
+}
+
+// Runs program with args, its standard output and standard error both written to the
+// file at outPath, and gives its exit code.
+public Result<i32, IoError> RunTo(str program, str[] args, str outPath) {
+    var p = platform.Process();
+    return p.Run(program, args, outPath, outPath);
+}
+
+public Result<i32, IoError> RunWith<P>(ref P proc, str program, str[] args, str outPath, str errPath) where P : IProcess {
+    return proc.Run(program, args, outPath, errPath);
+}

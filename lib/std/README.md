@@ -1,6 +1,7 @@
 # `std`
 
-> **Status:** Experimental (M4): `io`, `fs`, `path`, `time`, `env`, `random`. Written in
+> **Status:** Experimental (M4, M5): `io`, `fs`, `path`, `time`, `env`, `random`,
+> `process`. Written in
 > Envo-S1. Tests: `lib/std/tests/`.
 
 OS-level services built on ports, with no platform code
@@ -8,11 +9,12 @@ OS-level services built on ports, with no platform code
 
 - `std.io`: `Print`, `Write`, `Error`, `ReadAll`.
 - `std.fs`: `ReadText`, `WriteText`, `Exists`, `IsFile`, `IsDir`, `Delete`, `CreateDir`,
-  `CreateDirAll`, `RemoveDir`.
+  `CreateDirAll`, `RemoveDir`, `ListDir`.
 - `std.path`: `Join`, `FileName`, `Stem`, `Extension`, `Parent`, `IsAbsolute` (text only).
 - `std.time`: `NowNanos`, `MonoNanos`, `Now` (a UTC `Date`), `FromUnixNanos`,
   `FromUnixSeconds`, `Iso`, `Stopwatch`.
-- `std.env`: `ArgCount`, `Arg`, `Args`.
+- `std.env`: `ArgCount`, `Arg`, `Args`, `Var`.
+- `std.process`: `Run`, `RunTo` (output to a file), `RunWith`.
 - `std.random`: `Fill`, `U64`, `Below` (the system's generator) and `Rng` (seeded).
 
 ## Simple door
@@ -32,5 +34,5 @@ The same operations take the port explicitly (`…With`, `…To`, `…From`):
 
 ## Ports used
 
-Console, FileSystem, Clock, Entropy, Environment. `thread`, `sync` and `async` wait
+Console, FileSystem, Clock, Entropy, Environment, Process. `thread`, `sync` and `async` wait
 for the Threads and Executor ports (M6).
