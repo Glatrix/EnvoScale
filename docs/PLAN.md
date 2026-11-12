@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M13 (Ecosystem); M10 (AArch64 and macOS) is blocked on test machines (§5). M0–M9, M11 and M12 are done; their records are in §4.
+- **Current milestone:** none open: M0–M9 and M11–M13 are done (records in §4); M10 (AArch64 and macOS) is blocked on test machines, an owner decision (§5).
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -98,6 +98,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D60 | **Local inference runs the Llama architecture** on the CPU: RMSNorm, rotary positions, grouped-query attention with a KV cache, SwiGLU, greedy or seeded sampling. `ai.Load(path).Ask(prompt)` is the simple door. No model ships with Envo: which model to point to is the owner's decision. | `lib/envo/ai/README.md` |
 | D61 | **GPU kernels go through `IGpu`**: a compute entry (matrix multiply first) that the software adapter runs in Envo and the D3D12 adapter runs as a compute shader. GPU results match the CPU's within a stated tolerance, not bit for bit. | `docs/architecture/graphics.md` |
 | D62 | **Embeddings and vector search**: cosine similarity, an exact index, and HNSW for approximate nearest neighbours, deterministic for a given seed. | `lib/envo/ai/README.md` |
+| D63 | **`envo prof` counts in the script runtime**: calls and EIR instructions per function, exact and the same on every machine, so profiles compare across changes and can be tested. A sampling profiler for native code follows the debug-information emitters. | `tools/prof/README.md` |
+| D64 | **`envo fuzz` is coverage-guided in the VM**: the target reads the file named by its first argument; every input runs in one VM (exits and panics end the run, globals are reset, the input is served from memory) that notes the EIR blocks run; new coverage joins the corpus; mutations include a dictionary of the constants the target's own code compares with. Seeded and deterministic per host. | `tools/fuzz/README.md` |
+| D65 | **`envo dbg` debugs in the VM at source level**: every EIR instruction carries its statement's file and line (`EInst.Src`) and modules list named locals (`Module.Locals`); breakpoints, step, next, finish, backtrace and locals; commands on stdin so sessions are scripted. Native debugging (DWARF, CodeView) and the Debug Adapter Protocol follow. | `tools/dbg/README.md` |
+| D66 | **Packages have dependencies** by path or from a registry, compiled with the package's sources. `envo.lock.envon` records each registry archive's SHA-256; a canonical archive format (`.envopkg`) makes packing reproducible; Ed25519 signatures are checked against `trust` keys. Registries are an `IRegistry` port with a folder adapter; a network registry is the owner's decision. | `tools/pkg/README.md` |
+| D67 | **The hex seed is asm0**, an assembler for the Stage 0 subset written in that subset on Stage 0's own runtime block, recorded as commented hex (`seed-linux.hex`, `seed-windows.hex`) that `hex2bin.sh`/`hex2bin.ps1` turn into the program with OS tools alone. It assembles Stage 0 to NASM's exact bytes; the build uses it when NASM is missing. | `bootstrap/seed/README.md` |
 
 ## 3. Open questions
 
@@ -217,6 +222,11 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   the GPU through `IGpu` (D61); a nomic-bert text encoder, exact and HNSW search (D62).
   Increments 12.1–12.7.
 
+- **M13 — Ecosystem.** `envo prof` (D63), `envo fuzz` (D64) and `envo dbg` (D65) in
+  the script runtime; package dependencies, the lock, signed archives and the registry
+  port (D66); the hex seed, asm0, which builds Stage 0 to NASM's exact bytes from
+  commented hex and the OS alone (D67). Increments 13.1–13.6.
+
 ## 5. M10 — AArch64 and macOS (blocked)
 
 **DoD (brief §16):** AArch64 backend, Mach-O linker, macOS OS/window/Metal adapters.
@@ -249,6 +259,17 @@ macOS runners are billed for private repositories, so how to test is the owner's
 | [12.5](https://github.com/envoscale/EnvoScale/issues/138) | GPU kernels through `IGpu` (D61) | software against D3D12 | done |
 | [12.6](https://github.com/envoscale/EnvoScale/issues/139) | Embeddings and a vector index (D62) | recall against the exact index | done |
 | [12.7](https://github.com/envoscale/EnvoScale/issues/140) | Docs and status; M12 complete | CI | done |
+
+- **M13 (Ecosystem)** follows M12:
+
+| # | Increment | Tested by | State |
+|---|---|---|---|
+| [13.1](https://github.com/envoscale/EnvoScale/issues/141) | `envo prof` (D63) | `tests/envo/prof` | done |
+| [13.2](https://github.com/envoscale/EnvoScale/issues/142) | `envo fuzz` (D64) | `tests/envo/fuzz`: finds a 4-byte magic input | done |
+| [13.3](https://github.com/envoscale/EnvoScale/issues/143) | `envo dbg` (D65) | `tests/envo/dbg`: a scripted session | done |
+| [13.4](https://github.com/envoscale/EnvoScale/issues/144) | Dependencies, lock, signed archives, registry adapter (D66) | `tests/envo/pkg` | done |
+| [13.5](https://github.com/envoscale/EnvoScale/issues/145) | The hex seed (D67) | asm0 from the hex rebuilds both asm0s and both envoc0s byte for byte | done |
+| [13.6](https://github.com/envoscale/EnvoScale/issues/146) | Docs and status; M13 complete | CI | done |
 
 ## 6. Risks
 

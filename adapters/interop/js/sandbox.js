@@ -1,6 +1,8 @@
 // sandbox.js: the website's sandbox page (website/PLAN.md, phase 3b; PLAN D52). The
 // compiler itself, built for WebAssembly (envoc.wasm), compiles the program in the page,
 // and the program runs in the page: nothing is sent anywhere. Uses envo.js (EnvoWeb).
+// Share links carry the program in the URL fragment (#code=…, base64url of its UTF-8),
+// which browsers never send to a server, so nothing is stored anywhere either.
 'use strict';
 
 (async () => {
@@ -8,6 +10,7 @@
   const out = document.getElementById('out');
   const run = document.getElementById('run');
   const pick = document.getElementById('example');
+  const share = document.getElementById('share');
   const examples = {
     hello: 'print("Hello, World!");\n',
     fizzbuzz: 'for (i32 i = 1; i <= 15; i++) {\n    if (i % 15 == 0) print("FizzBuzz");\n    else if (i % 3 == 0) print("Fizz");\n    else if (i % 5 == 0) print("Buzz");\n    else {\n        string s = string.New();\n        i32 n = i;\n        if (n >= 10) s.AppendByte((48 + n / 10) as u8);\n        s.AppendByte((48 + n % 10) as u8);\n        print(s.AsStr());\n    }\n}\n',
@@ -18,7 +21,40 @@
   const decoder = new TextDecoder();
   const say = (text) => { out.textContent = text; };
   pick.addEventListener('change', () => { code.value = examples[pick.value] || ''; });
+  // the program in a link: UTF-8, base64url, no padding
+  const encode = (text) => {
+    const bytes = new TextEncoder().encode(text);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
+  const decode = (b64) => {
+    const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  };
   code.value = examples.hello;
+  if (location.hash.startsWith('#code=')) {
+    try {
+      code.value = decode(location.hash.slice(6));
+      pick.value = '';
+    } catch (e) {
+      code.value = examples.hello;
+    }
+  }
+  if (share) {
+    share.addEventListener('click', async () => {
+      const link = location.origin + location.pathname + '#code=' + encode(code.value);
+      history.replaceState(null, '', link);
+      try {
+        await navigator.clipboard.writeText(link);
+        say('The link to this program is in the clipboard (and the address bar).');
+      } catch (e) {
+        say('The link to this program is in the address bar.');
+      }
+    });
+  }
   let envoc = null;
   try {
     const r = await fetch('envoc.wasm');

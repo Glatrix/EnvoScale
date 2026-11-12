@@ -71,6 +71,10 @@ there is no server to secure or pay for.
   page so they run at near-native speed.
 - Share links encode the program in the URL fragment, so nothing is stored.
 
+State (M13): 3b is live in `build/site/sandbox/` with share links (`#code=`, base64url of
+the program's UTF-8); it covers 3a's aims (no server, no file or network access), so the
+EIR interpreter is not needed in the page.
+
 ### Phase 4: enterprise portal
 
 After editions and prices are set (#36): pricing, the support policy, security

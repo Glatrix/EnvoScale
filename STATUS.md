@@ -26,7 +26,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M10 | AArch64 and macOS | **Blocked** on test machines: no AArch64 or macOS hardware here, and GitHub's arm64 and macOS runners cost money for a private repository (an owner decision) |
 | M11 | 3D | **Done** (Experimental; ahead of M10): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR: the same frame bit for bit in every build), glTF 2.0 import, the 3D gallery program in a window (11.1–11.6) |
 | M12 | AI | **Done** (Experimental): `envo.ai` tensors, autograd and optimizers; BPE, SentencePiece and WordPiece tokenizers; GGUF loading (11 tensor types); local inference for the Llama family; a text encoder (nomic-bert), exact and HNSW vector search; a matrix product on the GPU through `IGpu` (12.1–12.7) |
-| M13 | Ecosystem | **Next** |
+| M13 | Ecosystem | **Done** (Experimental): `envo prof`, `envo fuzz` (coverage-guided), `envo dbg` (source-level), package dependencies with a lock, signed archives and a registry adapter, and the hex seed: Stage 0 built from commented hex with the OS alone, byte-identical to NASM (13.1–13.6) |
 
 ### M0 Definition of Done
 
@@ -136,6 +136,16 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | Tokenizer | `envo.ai.tokenizer`: byte-level BPE (with training), SentencePiece-style, WordPiece | Done |
 | Model loading | `envo.ai.gguf`: GGUF v2/v3, F32/F16/BF16/Q8_0/Q4_0/Q4_1/Q5_0/Q5_1/Q4_K/Q5_K/Q6_K; read on a real Q4_K_M model | Done (safetensors, `.envomodel` follow) |
 | Local inference | `envo.ai.Model` (llama, mistral, qwen2, qwen3) and `Encoder` (nomic-bert): two tiny models match a numpy reference; a real embedding model ranks texts sensibly | Done (checking a real chat model needs a model file: owner) |
+
+### M13 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| Package manager and registry adapter | `envo fetch`, `pack`, `publish`, `key`; `envo.lock.envon` with SHA-256; Ed25519-signed archives; `IRegistry` with a folder adapter | Done (a network registry is the owner's decision) |
+| Debugger | `envo dbg`: breakpoints, stepping, backtrace, locals, from source lines and locals in EIR | Done in the script runtime (native DWARF/CodeView and DAP follow) |
+| Profiler | `envo prof`: exact calls and instructions per function | Done in the script runtime (native sampling follows) |
+| Fuzzer | `envo fuzz`: coverage-guided, with a dictionary of compared constants | Done |
+| Seed ladder (Phase B), byte-identical in CI | `bootstrap/seed`: asm0 from commented hex (`hex2bin.sh`/`.ps1`) rebuilds both asm0s and both envoc0s byte for byte, on both CI hosts | Done (16 KB, not the 4 KB first hoped for: see its README) |
 
 ## Subsystems
 
