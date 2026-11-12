@@ -1,0 +1,23 @@
+eir 1 target "x86_64-linux"
+
+type $Pair = { i64, i64 }
+
+; a small single-block function is inlined; its slot moves to the caller's entry block
+; and is zeroed where the call was
+func @Second(%0: ptr) -> i64 {
+^bb0:
+  %1 = slot $Pair
+  %2 = const u64 16
+  copy %1, %0, %2
+  %3 = fieldaddr $Pair %1, 1
+  %4 = load i64 %3
+  ret %4
+}
+
+func @Use(%0: ptr) -> i64 {
+^bb0:
+  %1 = call @Second(%0)
+  %2 = call @Second(%0)
+  %3 = add.wrap i64 %1, %2
+  ret %3
+}

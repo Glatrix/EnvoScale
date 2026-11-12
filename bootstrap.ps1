@@ -263,6 +263,15 @@ function Invoke-Test {
             if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
             if ($r.Code -ne $wantCode) { Bad $name "exit code $($r.Code), expected $wantCode; stderr: $($r.Err.Trim())"; continue }
             if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value)")) { Bad $name "stderr: $($r.Err.Trim())"; continue }
+            if ($compiler -eq 'envoc') {
+                # -O2 (M3.8): the same output, exit code and panic
+                $fast = Join-Path $runDir ($f.BaseName + '-O2.exe')
+                $r = Invoke-Tool $exe @('build', '-O2', $f.FullName, '-o', $fast) $runDir
+                if ($r.Code -ne 0) { Bad $name "-O2 build failed: $($r.Err.Trim())"; continue }
+                $r = Invoke-Tool $fast @() $runDir
+                if (-not [string]::Equals($wantOut, (Normalize $r.Out)) -or $r.Code -ne $wantCode) { Bad $name "-O2: stdout or exit code ($($r.Code)) differs"; continue }
+                if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value)")) { Bad $name "-O2 stderr: $($r.Err.Trim())"; continue }
+            }
             Pass $name
         }
         }
@@ -302,6 +311,13 @@ function Invoke-Test {
             $out = Normalize $r.Out
             if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
             if ($r.Code -ne 0) { Bad $name "exit code $($r.Code); stderr: $($r.Err.Trim())"; continue }
+            if ($compiler -eq 'envoc') {
+                $fast = Join-Path $runDir ("$msuite-" + $d.Name + '-O2.exe')
+                $r = Invoke-Tool $exe (@('build', '-O2') + $files + @('-o', $fast)) $d.FullName
+                if ($r.Code -ne 0) { Bad $name "-O2 build failed: $($r.Err.Trim())"; continue }
+                $r = Invoke-Tool $fast @() $runDir
+                if (-not [string]::Equals($wantOut, (Normalize $r.Out)) -or $r.Code -ne 0) { Bad $name "-O2: stdout or exit code ($($r.Code)) differs"; continue }
+            }
             Pass $name
         }
         }
@@ -523,6 +539,16 @@ function Invoke-Test {
         if ($r.Code -eq 0 -and [string]::Equals($expected, $actual) -and (Test-SameBytes $b1 $b2)) { Pass "$($f.Name) (binary)" }
         else { Bad "stage2 golden/eir/$($f.Name) (binary)" "exit $($r.Code), stderr: $($r.Err.Trim())" }
     }
+    # -O2's EIR passes (M3.8)
+    Say 'stage 2 golden tests: tests/golden/opt'
+    $dir = Join-Path $Root 'tests\golden\opt'
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.eir' | Sort-Object Name) {
+        $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.eir$', '.out'), $Utf8))
+        $r = Invoke-Tool $envoc @('eir-check', $f.Name, '-O2') $dir
+        $actual = Normalize $r.Out
+        if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass $f.Name }
+        else { Bad "stage2 golden/opt/$($f.Name)" "exit $($r.Code), stderr: $($r.Err.Trim())"; Show-Diff $expected $actual }
+    }
     Say 'stage 2 spec tests: tests/spec/eir'
     $dir = Join-Path $Root 'tests\spec\eir'
     foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.eir' | Sort-Object Name) {
@@ -581,6 +607,18 @@ function Invoke-Test {
         if ($r.Code -eq 0 -and (Test-SameBytes $want $self)) { Pass $what }
         else { Bad $what "exit $($r.Code), or the executable differs from envoc1's" }
     }
+    # Stage 2 at -O2 (M3.8): it builds Stage 2 into the same bytes as envoc1's build at
+    # -O0, and into itself at -O2
+    $dir = Join-Path $Root 'compiler'
+    $files = @(Get-Content -LiteralPath (Join-Path $dir 'files.txt') | Where-Object { $_.Trim() -ne '' })
+    $fast = Join-Path $selfDir 'envoc-O2.exe'
+    $byFast = Join-Path $selfDir 'by-O2.exe'
+    $byFast2 = Join-Path $selfDir 'by-O2-O2.exe'
+    $r = Invoke-Tool $envoc (@('build', '-O2') + $files + @('-o', $fast)) $dir
+    if ($r.Code -eq 0) { $r = Invoke-Tool $fast (@('build') + $files + @('-o', $byFast)) $dir }
+    if ($r.Code -eq 0) { $r = Invoke-Tool $fast (@('build', '-O2') + $files + @('-o', $byFast2)) $dir }
+    if ($r.Code -eq 0 -and (Test-SameBytes $byFast (Join-Path $Build2 'envoc.exe')) -and (Test-SameBytes $fast $byFast2)) { Pass 'stage2 -O2 self-build' }
+    else { Bad 'stage2 -O2 self-build' "exit $($r.Code), or the -O2 compiler's output differs" }
     # Stage 2 through an object of itself (M3.7), and link errors
     $dir = Join-Path $Root 'compiler'
     $files = @(Get-Content -LiteralPath (Join-Path $dir 'files.txt') | Where-Object { $_.Trim() -ne '' })

@@ -1,0 +1,9 @@
+eir 1 target "x86_64-linux"
+
+func @Dead(%0: ptr, %1: i64) -> void {
+^bb0:
+  %2 = const i64 3
+  %3 = add.chk i64 %1, %2
+  store i64 %1, %0
+  ret
+}

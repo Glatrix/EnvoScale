@@ -252,6 +252,19 @@ do_test() {
             if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
             if [ "$rc" -ne "$want_code" ]; then bad "$name" "exit code $rc, expected $want_code: $(cat "$TMP/err")"; continue; fi
             if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "stderr: $(cat "$TMP/err")"; continue; fi
+            if [ "$compiler" = envoc ]; then
+                # -O2 (M3.8): the same output, exit code and panic
+                fast="$rundir/$base-O2$(host_suffix)"
+                run "$rundir" build -O2 "$f" -o "$fast"
+                if [ "$rc" -ne 0 ]; then bad "$name" "-O2 build failed: $(cat "$TMP/err")"; continue; fi
+                set +e
+                (cd "$rundir" && "$fast") > "$TMP/out" 2> "$TMP/err"
+                rc=$?
+                set -e
+                tr -d '\r' < "$TMP/out" > "$TMP/actual"
+                if ! cmp -s "$TMP/expected" "$TMP/actual" || [ "$rc" -ne "$want_code" ]; then bad "$name" "-O2: stdout or exit code ($rc) differs"; continue; fi
+                if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "-O2 stderr: $(cat "$TMP/err")"; continue; fi
+            fi
             pass
         done
         done
@@ -299,6 +312,17 @@ do_test() {
             tr -d '\r' < "$TMP/out" > "$TMP/actual"
             if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
             if [ "$rc" -ne 0 ]; then bad "$name" "exit code $rc: $(cat "$TMP/err")"; continue; fi
+            if [ "$compiler" = envoc ]; then
+                fast="$rundir/$msuite-$base-O2$(host_suffix)"
+                run "$d" build -O2 "$@" -o "$fast"
+                if [ "$rc" -ne 0 ]; then bad "$name" "-O2 build failed: $(cat "$TMP/err")"; continue; fi
+                set +e
+                (cd "$rundir" && "$fast") > "$TMP/out" 2> "$TMP/err"
+                rc=$?
+                set -e
+                tr -d '\r' < "$TMP/out" > "$TMP/actual"
+                if ! cmp -s "$TMP/expected" "$TMP/actual" || [ "$rc" -ne 0 ]; then bad "$name" "-O2: stdout or exit code ($rc) differs"; continue; fi
+            fi
             pass
         done
         done
@@ -520,6 +544,17 @@ do_test() {
         if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual" && cmp -s "$TMP/1.eirb" "$TMP/2.eirb"; then pass
         else bad "stage2 golden/eir/$base (binary)" "exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
     done
+    # -O2's EIR passes (M3.8)
+    say 'stage 2 golden tests: tests/golden/opt'
+    dir="$ROOT/tests/golden/opt"
+    for f in "$dir"/*.eir; do
+        base=$(basename "$f")
+        tr -d '\r' < "${f%.eir}.out" > "$TMP/expected"
+        run "$dir" eir-check "$base" -O2
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+        else bad "stage2 golden/opt/$base" "exit $rc: $(tr -d '\r' < "$TMP/err")"; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+    done
     say 'stage 2 spec tests: tests/spec/eir'
     dir="$ROOT/tests/spec/eir"
     for f in "$dir"/*.eir; do
@@ -601,6 +636,22 @@ do_test() {
         if [ "$rc" -eq 0 ] && cmp -s "$want" "$selfdir/self-$target"; then pass
         else bad "$what" "exit $rc, or the executable differs from envoc1's"; fi
     done
+    # Stage 2 at -O2 (M3.8): it builds Stage 2 into the same bytes as envoc1's build at
+    # -O0, and into itself at -O2
+    set -- build
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$ROOT/compiler/files.txt"
+    fast="$selfdir/envoc-O2$(host_suffix)"
+    run "$ROOT/compiler" "$@" -O2 -o "$fast"
+    saved=$EXE
+    EXE=$fast
+    [ "$rc" -eq 0 ] && run "$ROOT/compiler" "$@" -o "$selfdir/by-O2$(host_suffix)"
+    [ "$rc" -eq 0 ] && run "$ROOT/compiler" "$@" -O2 -o "$selfdir/by-O2-O2$(host_suffix)"
+    EXE=$saved
+    if [ "$rc" -eq 0 ] && cmp -s "$selfdir/by-O2$(host_suffix)" "$BUILD2/envoc$(host_suffix)" && cmp -s "$fast" "$selfdir/by-O2-O2$(host_suffix)"; then pass
+    else bad 'stage2 -O2 self-build' "exit $rc, or the -O2 compiler's output differs"; fi
     # Stage 2 through an object of itself (M3.7), and link errors
     set -- compile
     while IFS= read -r f || [ -n "$f" ]; do

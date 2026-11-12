@@ -1,0 +1,691 @@
+// -O2's SSA simplification (PLAN D20), one function at a time:
+//
+// - constant folding, mirroring the backend's arithmetic exactly; checked operations fold
+//   only when they cannot panic
+// - `select` and branches on a known condition, block parameters that receive a single
+//   value (copy propagation)
+// - dead-code elimination of pure instructions whose results are unused
+// - CFG simplification: unreachable blocks go, and a block whose only predecessor jumps
+//   to it unconditionally is merged into that predecessor
+//
+// The function is rebuilt at the end of the module's lists with its values renumbered;
+// the old body becomes garbage. Every value is canonical: signed integers sign-extended
+// to 64 bits, unsigned zero-extended (as the backend keeps them).
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u32 NONE = 0xFFFFFFFF;
+
+const u16 OP_ADDR = 2;
+const u16 OP_BR = 55;
+const u16 OP_CONDBR = 56;
+const u16 OP_SWITCH = 57;
+
+// v as a value of size bytes: sign- or zero-extended from that width (the backend's Extend).
+u64 Ext(u64 v, u32 size, bool signed) {
+    if (size >= 8) return v;
+    u64 bits = (size * 8) as u64;
+    if (signed) {
+        u64 shift = 64 - bits;
+        return ((v << shift) as i64 >> shift) as u64;
+    }
+    return v & (((1 as u64) << bits) - 1);
+}
+
+// Can instruction op be removed when its result is unused (no effect, cannot panic)?
+bool IsPure(u16 op) {
+    if (op >= 1 && op <= 3) return true;            // const, addr, slot
+    if (op >= 5 && op <= 7) return true;            // wrapping arithmetic
+    if (op >= 14 && op <= 17) return true;          // bitwise
+    if (op >= 20 && op <= 34) return true;          // compare, select, float arithmetic, trunc, zext, sext
+    if (op >= 35 && op <= 42) return true;          // conversions, load
+    if (op >= 44 && op <= 46) return true;          // addresses
+    return false;
+}
+
+struct Simplifier {
+    u32 Func;
+    u32 FirstValue;
+    u32 NValues;
+    u32 FirstBlock;
+    u32 NBlocks;
+    List<u32> Repl;         // per value: the value it equals (itself if none)
+    List<bool> Known;       // per value: a known constant
+    List<u64> Const;
+    List<bool> Reach;       // per block
+    bool Changed;
+
+    u32 Find(in this, u32 k) {
+        u32 v = k;
+        while (this.Repl.Get(v as usize) != v) v = this.Repl.Get(v as usize);
+        return v;
+    }
+
+    // Relative value of operand o, after replacement.
+    u32 OpValue(in this, in Module m, u32 o) => this.Find(m.Op(o).Ref - this.FirstValue);
+
+    void Reachable(ref this, in Module m) {
+        this.Reach = List<bool>.New();
+        for (u32 b = 0; b < this.NBlocks; b++) this.Reach.Push(false);
+        List<u32> stack = List<u32>.New();
+        stack.Push(0);
+        this.Reach.Set(0, true);
+        while (stack.Len() > 0) {
+            u32 b = stack.Pop().Unwrap();
+            EBlock blk = m.Block(this.FirstBlock + b);
+            EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+            for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind != OK_TARGET) continue;
+                u32 s = op.Ref - this.FirstBlock;
+                if (!this.Reach.Get(s as usize)) {
+                    this.Reach.Set(s as usize, true);
+                    stack.Push(s);
+                }
+            }
+        }
+    }
+
+    // Rewrites operands and branch arguments through Repl.
+    void Substitute(in this, ref Module m, u32 i) {
+        EInst inst = m.Inst(i);
+        for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind == OK_VALUE) {
+                u32 v = this.FirstValue + this.Find(op.Ref - this.FirstValue);
+                if (v != op.Ref) {
+                    op.Ref = v;
+                    m.Ops.Set(o as usize, op);
+                }
+            } else if (op.Kind == OK_TARGET) {
+                for (u32 a = 0; a < op.NArgs; a++) {
+                    u32 old = m.Arg(op.Args + a);
+                    u32 v = this.FirstValue + this.Find(old - this.FirstValue);
+                    if (v != old) m.Args.Set((op.Args + a) as usize, v);
+                }
+            }
+        }
+    }
+
+    bool KnownOp(in this, in Module m, u32 o) => this.Known.Get(this.OpValue(m, o) as usize);
+    u64 ConstOp(in this, in Module m, u32 o) => this.Const.Get(this.OpValue(m, o) as usize);
+
+    // Turns instruction i into `const t v`.
+    void MakeConst(ref this, ref Module m, u32 i, u32 t, u64 v) {
+        EInst inst = m.Inst(i);
+        inst.Op = OP_CONST;
+        inst.Ty = t;
+        inst.Ty2 = 0;
+        inst.Imm = v;
+        inst.NOps = 0;
+        m.Insts.Set(i as usize, inst);
+        u32 r = inst.Result - this.FirstValue;
+        this.Known.Set(r as usize, true);
+        this.Const.Set(r as usize, v);
+        this.Changed = true;
+    }
+
+    // Turns terminator i into `br` to its target operand o.
+    void MakeBr(ref this, ref Module m, u32 i, u32 o) {
+        EInst inst = m.Inst(i);
+        inst.Op = OP_BR;
+        inst.FirstOp = o;
+        inst.NOps = 1;
+        m.Insts.Set(i as usize, inst);
+        this.Changed = true;
+    }
+
+    // Folds instruction i if its operands are known.
+    void Fold(ref this, ref Module m, u32 i) {
+        EInst inst = m.Inst(i);
+        u16 op = inst.Op;
+        u32 f = inst.FirstOp;
+        u32 t = inst.Ty;
+        if (op == OP_CONST) {
+            u32 r = inst.Result - this.FirstValue;
+            if (!this.Known.Get(r as usize)) {
+                this.Known.Set(r as usize, true);
+                this.Const.Set(r as usize, inst.Imm);
+            }
+            return;
+        }
+        if (op == OP_CONDBR) {
+            if (this.KnownOp(m, f)) {
+                if (this.ConstOp(m, f) != 0) this.MakeBr(ref m, i, f + 1);
+                else this.MakeBr(ref m, i, f + 2);
+            }
+            return;
+        }
+        if (op == OP_SWITCH) {
+            if (!this.KnownOp(m, f)) return;
+            u64 key = this.ConstOp(m, f);
+            u32 k = 1;
+            while (k + 1 < inst.NOps) {
+                if (m.Op(f + k).Int == key) {
+                    this.MakeBr(ref m, i, f + k + 1);
+                    return;
+                }
+                k += 2;
+            }
+            this.MakeBr(ref m, i, f + inst.NOps - 1);
+            return;
+        }
+        if (inst.Result == 0 || m.IsFloat(t)) return;
+        if (op == 26) {
+            // select: a known condition picks an operand
+            if (this.KnownOp(m, f)) {
+                u32 pick = f + 2;
+                if (this.ConstOp(m, f) != 0) pick = f + 1;
+                u32 r = inst.Result - this.FirstValue;
+                u32 v = this.OpValue(m, pick);
+                if (v != r) {
+                    this.Repl.Set(r as usize, v);
+                    this.Changed = true;
+                }
+            }
+            return;
+        }
+        ETy ty = m.Ty(t);
+        bool signed = m.IsSigned(t);
+        u32 size = ty.Size;
+        if (op == 32 || op == 33 || op == 34 || op == 41) {
+            u32 t2 = inst.Ty2;
+            if (m.IsFloat(t2) || !this.KnownOp(m, f)) return;
+            ETy to = m.Ty(t2);
+            bool toSigned = m.IsSigned(t2);
+            u64 a = this.ConstOp(m, f);
+            if (op == 33) a = Ext(a, size, false);
+            if (op == 34) a = Ext(a, size, true);
+            this.MakeConst(ref m, i, t2, Ext(a, to.Size, toSigned));
+            return;
+        }
+        if (op == 11 || op == 17) {
+            if (!this.KnownOp(m, f)) return;
+            u64 a = this.ConstOp(m, f);
+            if (op == 17) {
+                if (t == ET_BOOL) this.MakeConst(ref m, i, t, a ^ 1);
+                else this.MakeConst(ref m, i, t, Ext(~a, size, signed));
+                return;
+            }
+            // neg.chk
+            if (!signed) {
+                if (a == 0) this.MakeConst(ref m, i, t, 0);
+                return;
+            }
+            u64 r = 0 -% a;
+            if (size == 8) {
+                if (a != 0x8000000000000000) this.MakeConst(ref m, i, t, r);
+            } else if (Ext(r, size, true) == r) {
+                this.MakeConst(ref m, i, t, r);
+            }
+            return;
+        }
+        bool bin = (op >= 5 && op <= 10) || (op >= 12 && op <= 16) || op == 18 || op == 19 || (op >= 20 && op <= 25);
+        if (!bin || !this.KnownOp(m, f) || !this.KnownOp(m, f + 1)) return;
+        u64 a = this.ConstOp(m, f);
+        u64 b = this.ConstOp(m, f + 1);
+        if (op >= 20) {
+            bool res = false;
+            if (op == 20) res = a == b;
+            else if (op == 21) res = a != b;
+            else if (signed) {
+                i64 x = a as i64;
+                i64 y = b as i64;
+                if (op == 22) res = x < y;
+                if (op == 23) res = x <= y;
+                if (op == 24) res = x > y;
+                if (op == 25) res = x >= y;
+            } else {
+                if (op == 22) res = a < b;
+                if (op == 23) res = a <= b;
+                if (op == 24) res = a > b;
+                if (op == 25) res = a >= b;
+            }
+            u64 rv = 0;
+            if (res) rv = 1;
+            this.MakeConst(ref m, i, ET_BOOL, rv);
+            return;
+        }
+        if (op == 14 || op == 15 || op == 16) {
+            u64 r = a & b;
+            if (op == 15) r = a | b;
+            if (op == 16) r = a ^ b;
+            this.MakeConst(ref m, i, t, r);
+            return;
+        }
+        if (op == 5 || op == 6 || op == 7) {
+            u64 r = a +% b;
+            if (op == 6) r = a -% b;
+            if (op == 7) r = a *% b;
+            if (t != ET_BOOL) r = Ext(r, size, signed);
+            this.MakeConst(ref m, i, t, r);
+            return;
+        }
+        if (op == 8 || op == 9 || op == 10) {
+            u64 r = 0;
+            bool ok = false;
+            if (op == 8) {
+                r = a +% b;
+                if (size < 8) ok = Ext(r, size, signed) == r;
+                else if (signed) ok = ((a ^ r) & (b ^ r)) >> 63 == 0;
+                else ok = r >= a;
+            } else if (op == 9) {
+                r = a -% b;
+                if (size < 8) ok = Ext(r, size, signed) == r;
+                else if (signed) ok = ((a ^ b) & (a ^ r)) >> 63 == 0;
+                else ok = a >= b;
+            } else {
+                r = a *% b;
+                if (size < 8) {
+                    ok = Ext(r, size, signed) == r;
+                } else if (signed) {
+                    ok = Ext(a, 4, true) == a && Ext(b, 4, true) == b;
+                } else {
+                    ok = a >> 32 == 0 && b >> 32 == 0;
+                }
+            }
+            if (ok) this.MakeConst(ref m, i, t, r);
+            return;
+        }
+        if (op == 12 || op == 13) {
+            if (b == 0) return;
+            u64 r = 0;
+            if (signed) {
+                i64 x = a as i64;
+                i64 y = b as i64;
+                if (y == -1) {
+                    // MIN / -1 overflows; otherwise x / -1 = -x and x % -1 = 0
+                    if (size == 8 && a == 0x8000000000000000) return;
+                    r = 0 -% a;
+                    if (op == 13) r = 0;
+                } else if (op == 12) {
+                    r = (x / y) as u64;
+                } else {
+                    r = (x % y) as u64;
+                }
+                if (Ext(r, size, true) != r) return;
+            } else {
+                r = a / b;
+                if (op == 13) r = a % b;
+            }
+            this.MakeConst(ref m, i, t, r);
+            return;
+        }
+        // shl, shr
+        if (signed && (b as i64) < 0) return;
+        if (b >= (size * 8) as u64) return;
+        u64 r = 0;
+        if (op == 18) r = Ext(a << b, size, signed);
+        else if (signed) r = ((a as i64) >> b) as u64;
+        else r = a >> b;
+        this.MakeConst(ref m, i, t, r);
+    }
+
+    // Block parameters that receive one value on every edge (or themselves) become it.
+    void Params(ref this, in Module m) {
+        // the incoming branch targets of each block
+        List<u32> count = List<u32>.New();
+        for (u32 b = 0; b <= this.NBlocks; b++) count.Push(0);
+        for (u32 b = 0; b < this.NBlocks; b++) {
+            if (!this.Reach.Get(b as usize)) continue;
+            EBlock blk = m.Block(this.FirstBlock + b);
+            EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+            for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_TARGET) {
+                    usize s = (op.Ref - this.FirstBlock + 1) as usize;
+                    count.Set(s, count.Get(s) + 1);
+                }
+            }
+        }
+        for (u32 b = 0; b < this.NBlocks; b++) count.Set((b + 1) as usize, count.Get((b + 1) as usize) + count.Get(b as usize));
+        List<u32> edges = List<u32>.New();
+        List<u32> fill = List<u32>.New();
+        for (u32 b = 0; b < this.NBlocks; b++) fill.Push(count.Get(b as usize));
+        for (u32 e = 0; e < count.Get(this.NBlocks as usize); e++) edges.Push(0);
+        for (u32 b = 0; b < this.NBlocks; b++) {
+            if (!this.Reach.Get(b as usize)) continue;
+            EBlock blk = m.Block(this.FirstBlock + b);
+            EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+            for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind != OK_TARGET) continue;
+                u32 s = op.Ref - this.FirstBlock;
+                u32 at = fill.Get(s as usize);
+                edges.Set(at as usize, o);
+                fill.Set(s as usize, at + 1);
+            }
+        }
+        for (u32 b = 1; b < this.NBlocks; b++) {
+            if (!this.Reach.Get(b as usize)) continue;
+            EBlock blk = m.Block(this.FirstBlock + b);
+            for (u32 j = 0; j < blk.NParams; j++) {
+                u32 p = blk.FirstParam + j - this.FirstValue;
+                if (this.Find(p) != p) continue;
+                u32 only = NONE;
+                bool one = true;
+                for (u32 e = count.Get(b as usize); e < count.Get((b + 1) as usize) && one; e++) {
+                    EOp op = m.Op(edges.Get(e as usize));
+                    u32 a = this.Find(m.Arg(op.Args + j) - this.FirstValue);
+                    if (a == p) continue;
+                    if (only == NONE) only = a;
+                    else if (only != a) one = false;
+                }
+                if (one && only != NONE) {
+                    this.Repl.Set(p as usize, only);
+                    this.Changed = true;
+                }
+            }
+        }
+    }
+
+    void Round(ref this, ref Module m) {
+        this.Reachable(m);
+        for (u32 b = 0; b < this.NBlocks; b++) {
+            if (!this.Reach.Get(b as usize)) continue;
+            EBlock blk = m.Block(this.FirstBlock + b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                this.Substitute(ref m, i);
+                this.Fold(ref m, i);
+            }
+        }
+        this.Params(m);
+    }
+}
+
+// Simplifies function fi of m in place.
+void SimplifyFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    Simplifier s = new Simplifier {
+        Func = fi, FirstValue = f.FirstValue, NValues = f.NValues, FirstBlock = f.FirstBlock, NBlocks = f.NBlocks,
+        Repl = List<u32>.New(), Known = List<bool>.New(), Const = List<u64>.New(), Reach = List<bool>.New(), Changed = true
+    };
+    for (u32 k = 0; k < f.NValues; k++) {
+        s.Repl.Push(k);
+        s.Known.Push(false);
+        s.Const.Push(0);
+    }
+    u32 rounds = 0;
+    while (s.Changed && rounds < 8) {
+        s.Changed = false;
+        s.Round(ref m);
+        rounds++;
+    }
+    s.Reachable(m);
+    // final substitution, so operands are representatives
+    for (u32 b = 0; b < s.NBlocks; b++) {
+        if (!s.Reach.Get(b as usize)) continue;
+        EBlock blk = m.Block(s.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) s.Substitute(ref m, i);
+    }
+    Rebuild(ref m, fi, s);
+}
+
+// Dead-code elimination, block merging and renumbering: a new body for function fi at
+// the end of the module's lists.
+void Rebuild(ref Module m, u32 fi, in Simplifier s) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    u32 nb = f.NBlocks;
+    // uses of each value from reachable code
+    List<u32> uses = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) uses.Push(0);
+    List<u32> preds = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) preds.Push(0);
+    for (u32 b = 0; b < nb; b++) {
+        if (!s.Reach.Get(b as usize)) continue;
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) {
+                    usize v = (op.Ref - f.FirstValue) as usize;
+                    uses.Set(v, uses.Get(v) + 1);
+                } else if (op.Kind == OK_TARGET) {
+                    usize t = (op.Ref - f.FirstBlock) as usize;
+                    preds.Set(t, preds.Get(t) + 1);
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        usize v = (m.Arg(op.Args + a) - f.FirstValue) as usize;
+                        uses.Set(v, uses.Get(v) + 1);
+                    }
+                }
+            }
+        }
+    }
+    // dead instructions: pure, result unused; their operands lose a use
+    List<bool> dead = List<bool>.New();         // per instruction of the old body, by offset
+    u32 firstInst = m.Block(f.FirstBlock).FirstInst;
+    u32 lastInst = firstInst;
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        if (blk.FirstInst < firstInst) firstInst = blk.FirstInst;
+        if (blk.FirstInst + blk.NInsts > lastInst) lastInst = blk.FirstInst + blk.NInsts;
+    }
+    for (u32 i = firstInst; i < lastInst; i++) dead.Push(false);
+    List<u32> work = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) {
+        if (!s.Reach.Get(b as usize)) continue;
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Result != 0 && IsPure(inst.Op) && uses.Get((inst.Result - f.FirstValue) as usize) == 0) work.Push(i);
+        }
+    }
+    while (work.Len() > 0) {
+        u32 i = work.Pop().Unwrap();
+        if (dead.Get((i - firstInst) as usize)) continue;
+        dead.Set((i - firstInst) as usize, true);
+        EInst inst = m.Inst(i);
+        for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind != OK_VALUE) continue;
+            usize v = (op.Ref - f.FirstValue) as usize;
+            u32 left = uses.Get(v) - 1;
+            uses.Set(v, left);
+            EVal val = m.Val(op.Ref);
+            if (left == 0 && val.Inst != 0 && IsPure(m.Inst(val.Inst).Op)) work.Push(val.Inst);
+        }
+    }
+    // merges: a block reached only by an unconditional branch joins its predecessor
+    List<u32> mergeNext = List<u32>.New();      // per block: the block merged after it, or NONE
+    List<bool> merged = List<bool>.New();
+    List<u32> repl = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) repl.Push(s.Find(k));
+    for (u32 b = 0; b < nb; b++) {
+        mergeNext.Push(NONE);
+        merged.Push(false);
+    }
+    for (u32 b = 0; b < nb; b++) {
+        if (!s.Reach.Get(b as usize)) continue;
+        EBlock blk = m.Block(f.FirstBlock + b);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        if (term.Op != OP_BR) continue;
+        EOp op = m.Op(term.FirstOp);
+        u32 t = op.Ref - f.FirstBlock;
+        if (t == 0 || t == b || preds.Get(t as usize) != 1) continue;
+        mergeNext.Set(b as usize, t);
+        merged.Set(t as usize, true);
+        EBlock tb = m.Block(op.Ref);
+        for (u32 j = 0; j < tb.NParams; j++) {
+            u32 p = tb.FirstParam + j - f.FirstValue;
+            repl.Set(p as usize, repl.Get((m.Arg(op.Args + j) - f.FirstValue) as usize));
+        }
+    }
+    // a chain that loops back to its head (a cycle of merges) would never be emitted;
+    // break it at the head
+    for (u32 b = 0; b < nb; b++) {
+        if (!s.Reach.Get(b as usize) || !merged.Get(b as usize)) continue;
+        u32 c = mergeNext.Get(b as usize);
+        u32 steps = 0;
+        while (c != NONE && c != b && steps <= nb) {
+            c = mergeNext.Get(c as usize);
+            steps++;
+        }
+        if (c == b) {
+            // b is on a cycle: un-merge it (its params keep their own values)
+            merged.Set(b as usize, false);
+            for (u32 p = 0; p < nb; p++) {
+                if (mergeNext.Get(p as usize) == b) mergeNext.Set(p as usize, NONE);
+            }
+            EBlock blk = m.Block(f.FirstBlock + b);
+            for (u32 j = 0; j < blk.NParams; j++) {
+                u32 pv = blk.FirstParam + j - f.FirstValue;
+                repl.Set(pv as usize, s.Find(pv));
+            }
+        }
+    }
+    // resolve chains of replacements made by merging
+    for (u32 k = 0; k < nv; k++) {
+        u32 v = repl.Get(k as usize);
+        u32 guard = 0;
+        while (repl.Get(v as usize) != v && guard < nv) {
+            v = repl.Get(v as usize);
+            guard++;
+        }
+        repl.Set(k as usize, v);
+    }
+    // numbering: function parameters, then per emitted block its kept parameters and results
+    List<u32> newId = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) newId.Push(NONE);
+    u32 next = 0;
+    for (u32 k = 0; k < f.NParams; k++) {
+        newId.Set(k as usize, next);
+        next++;
+    }
+    List<u32> headIndex = List<u32>.New();      // per old block: its new block offset (chain heads)
+    for (u32 b = 0; b < nb; b++) headIndex.Push(NONE);
+    u32 nheads = 0;
+    for (u32 b = 0; b < nb; b++) {
+        if (!s.Reach.Get(b as usize) || merged.Get(b as usize)) continue;
+        headIndex.Set(b as usize, nheads);
+        nheads++;
+        u32 c = b;
+        while (c != NONE) {
+            EBlock blk = m.Block(f.FirstBlock + c);
+            if (c == b && c != 0) {
+                for (u32 j = 0; j < blk.NParams; j++) {
+                    u32 p = blk.FirstParam + j - f.FirstValue;
+                    if (repl.Get(p as usize) == p) {
+                        newId.Set(p as usize, next);
+                        next++;
+                    }
+                }
+            }
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                if (dead.Get((i - firstInst) as usize)) continue;
+                EInst inst = m.Inst(i);
+                if (inst.Result != 0) {
+                    u32 r = inst.Result - f.FirstValue;
+                    if (repl.Get(r as usize) == r) {
+                        newId.Set(r as usize, next);
+                        next++;
+                    }
+                }
+            }
+            c = mergeNext.Get(c as usize);
+        }
+    }
+    // emit
+    u32 v0 = m.Vals.Len() as u32;
+    u32 b0 = m.Blocks.Len() as u32;
+    for (u32 k = 0; k < next; k++) m.Vals.Push(new EVal { Type = 0, Block = 0, Inst = 0, Pos = 0 });
+    for (u32 k = 0; k < nv; k++) {
+        u32 id = newId.Get(k as usize);
+        if (id == NONE) continue;
+        EVal val = m.Val(v0 + id);
+        val.Type = m.Val(f.FirstValue + k).Type;
+        if (k < f.NParams) val.Block = b0;
+        m.Vals.Set((v0 + id) as usize, val);
+    }
+    for (u32 b = 0; b < nb; b++) {
+        if (!s.Reach.Get(b as usize) || merged.Get(b as usize)) continue;
+        u32 nbi = b0 + headIndex.Get(b as usize);
+        EBlock head = m.Block(f.FirstBlock + b);
+        u32 firstParam = 0;
+        u32 np = 0;
+        if (b != 0) {
+            for (u32 j = 0; j < head.NParams; j++) {
+                u32 p = head.FirstParam + j - f.FirstValue;
+                if (repl.Get(p as usize) != p) continue;
+                u32 id = v0 + newId.Get(p as usize);
+                if (np == 0) firstParam = id;
+                np++;
+                EVal pv = m.Val(id);
+                pv.Block = nbi;
+                m.Vals.Set(id as usize, pv);
+            }
+        } else {
+            firstParam = head.FirstParam;
+            if (head.NParams > 0) firstParam = v0 + (head.FirstParam - f.FirstValue);
+            np = head.NParams;
+        }
+        u32 first = m.Insts.Len() as u32;
+        u32 c = b;
+        while (c != NONE) {
+            EBlock blk = m.Block(f.FirstBlock + c);
+            u32 nextBlock = mergeNext.Get(c as usize);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                if (dead.Get((i - firstInst) as usize)) continue;
+                bool last = i == blk.FirstInst + blk.NInsts - 1;
+                if (last && nextBlock != NONE) continue;      // the branch into the merged block
+                EInst inst = m.Inst(i);
+                u32 id = m.Insts.Len() as u32;
+                u32 firstOp = m.Ops.Len() as u32;
+                for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                    EOp op = m.Op(o);
+                    op.Pos = 0;
+                    if (op.Kind == OK_VALUE) {
+                        op.Ref = v0 + newId.Get(repl.Get((op.Ref - f.FirstValue) as usize) as usize);
+                    } else if (op.Kind == OK_TARGET) {
+                        u32 t = op.Ref - f.FirstBlock;
+                        EBlock tb = m.Block(op.Ref);
+                        op.Ref = b0 + headIndex.Get(t as usize);
+                        u32 args = m.Args.Len() as u32;
+                        u32 n = 0;
+                        for (u32 a = 0; a < op.NArgs; a++) {
+                            u32 p = tb.FirstParam + a - f.FirstValue;
+                            if (repl.Get(p as usize) != p) continue;
+                            u32 av = m.Arg(op.Args + a) - f.FirstValue;
+                            m.Args.Push(v0 + newId.Get(repl.Get(av as usize) as usize));
+                            n++;
+                        }
+                        op.Args = args;
+                        op.NArgs = n;
+                    }
+                    m.Ops.Push(op);
+                }
+                inst.FirstOp = firstOp;
+                inst.Block = nbi;
+                inst.Pos = 0;
+                if (inst.Result != 0) {
+                    u32 r = inst.Result - f.FirstValue;
+                    inst.Result = v0 + newId.Get(r as usize);
+                    EVal rv = m.Val(inst.Result);
+                    rv.Block = nbi;
+                    rv.Inst = id;
+                    m.Vals.Set(inst.Result as usize, rv);
+                }
+                m.Insts.Push(inst);
+            }
+            c = nextBlock;
+        }
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = firstParam, NParams = np, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+    }
+    EFunc nf = m.Func(fi);
+    nf.FirstValue = v0;
+    nf.NValues = next;
+    nf.FirstBlock = b0;
+    nf.NBlocks = nheads;
+    m.Funcs.Set(fi as usize, nf);
+}
+
+// -O2's EIR passes over every function definition of m.
+public void Optimize(ref Module m) {
+    InlineSmall(ref m);
+    for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
+        if (!m.Func(fi).Extern) SimplifyFunc(ref m, fi);
+    }
+}

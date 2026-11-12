@@ -1,0 +1,14 @@
+eir 1 target "x86_64-linux"
+
+; unused pure results go, together with what only they used; stores, calls and checked
+; arithmetic stay
+func @Dead(%0: ptr, %1: i64) -> void {
+^bb0:
+  %2 = const i64 3
+  %3 = mul.wrap i64 %1, %2
+  %4 = load i64 %0
+  %5 = add.wrap i64 %3, %4
+  %6 = add.chk i64 %1, %2
+  store i64 %1, %0
+  ret
+}

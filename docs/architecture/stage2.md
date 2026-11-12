@@ -123,6 +123,30 @@ each multi-file program linked unit by unit, and for Stage 2 itself.
 Interface files, which let a unit compile without the other units' sources, come with
 the build system (M5).
 
+## -O2 (M3.8)
+
+`-O2` (for `build`, `compile`, `link`, `eir` and `eir-check`) runs EIR passes and a
+better backend. The passes are inlining of small functions, constant folding, branch
+folding, copy propagation, dead-code elimination and block merging; see
+`compiler/opt/README.md`. The backend adds rematerialization, linear-scan register
+allocation and unrolled small copies; see `compiler/backend/x86_64/README.md`. The
+verifier checks the result.
+
+The tests build and run every run and multi-file program at `-O2` as well and expect the
+same output, exit code and panic. They also build Stage 2 at `-O2` and use that compiler
+to build Stage 2 again: at `-O0` it must write the same bytes as `envoc1`, and at `-O2`
+it must reproduce itself.
+
+The `-O2` compiler builds Stage 2 in about 2.3 s, against 3.9 s for the `-O0` one, on
+the development machine. Most of what remains is the checker: name lookup scans every
+`use` declaration and builds a joined name per scope it tries, as Stage 1's does. That is
+an algorithm to change later, not something `-O2` can fix.
+
+`ComputeDoms` in the verifier, a port of Stage 1's, recomputed every block's successors
+for every pair of blocks on each pass. Stage 2 now builds the predecessor lists once,
+which took a self-build from 6.5 s to 3.9 s. The dominator sets, and therefore the
+results, are the same.
+
 ## Stage 1 bugs found by Stage 2
 
 Stage 2 is the largest Envo-S1 program, so it finds `envoc1` bugs. Each is fixed in

@@ -1,0 +1,245 @@
+// -O2 inlining (PLAN D20): calls to small single-block functions are replaced by a copy
+// of the callee's instructions. The callee's slots move to the caller's entry block, and
+// each inlined copy zeroes its slots first, as a call would get them. Simplification runs
+// afterwards and cleans up the copies.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u32 INLINE_MAX = 16;      // instructions, the `ret` included
+const u16 OP_ZERO = 48;
+const u16 OP_RET = 58;
+
+// Can calls to function c be inlined into function f?
+bool Inlinable(in Module m, u32 f, u32 c) {
+    if (c == f) return false;
+    EFunc cf = m.Func(c);
+    if (cf.Extern || cf.NBlocks != 1) return false;
+    EBlock blk = m.Block(cf.FirstBlock);
+    if (blk.NInsts > INLINE_MAX) return false;
+    return m.Inst(blk.FirstInst + blk.NInsts - 1).Op == OP_RET;
+}
+
+// One inlined call: where its callee's values start in the caller.
+struct Site {
+    u32 Inst;           // the call
+    u32 Callee;
+    u32 First;          // new relative id of the callee's first non-parameter value
+    u32 Sizes;          // new relative id of the first `const u64` slot size
+}
+
+void InlineFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    List<Site> sites = List<Site>.New();
+    List<u32> repl = List<u32>.New();       // per caller value: what it becomes (itself if nothing)
+    for (u32 k = 0; k < f.NValues; k++) repl.Push(k);
+    u32 next = f.NValues;
+    // phase 1: the sites, and new value ids for each copy
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op != OP_CALL) continue;
+            u32 c = m.Op(inst.FirstOp).Ref;
+            if (!Inlinable(m, fi, c)) continue;
+            EFunc cf = m.Func(c);
+            u32 slots = 0;
+            EBlock cb = m.Block(cf.FirstBlock);
+            for (u32 k = cb.FirstInst; k < cb.FirstInst + cb.NInsts; k++) {
+                if (m.Inst(k).Op == OP_SLOT) slots++;
+            }
+            Site s = new Site { Inst = i, Callee = c, First = next, Sizes = next + cf.NValues - cf.NParams };
+            next = s.Sizes + slots;
+            if (inst.Result != 0) {
+                EInst ret = m.Inst(cb.FirstInst + cb.NInsts - 1);
+                u32 rv = m.Op(ret.FirstOp).Ref - cf.FirstValue;
+                u32 mapped = 0;
+                if (rv < cf.NParams) mapped = m.Op(inst.FirstOp + 1 + rv).Ref - f.FirstValue;
+                else mapped = s.First + rv - cf.NParams;
+                repl.Set((inst.Result - f.FirstValue) as usize, mapped);
+            }
+            sites.Push(s);
+        }
+    }
+    if (sites.Len() == 0) return;
+    // a call's result may be another inlined call's result or argument: follow the chain
+    for (u32 k = 0; k < f.NValues; k++) {
+        u32 v = repl.Get(k as usize);
+        u32 guard = 0;
+        while (v < f.NValues && repl.Get(v as usize) != v && guard < f.NValues) {
+            v = repl.Get(v as usize);
+            guard++;
+        }
+        repl.Set(k as usize, v);
+    }
+
+    // phase 2: the new body
+    u32 v0 = m.Vals.Len() as u32;
+    u32 b0 = m.Blocks.Len() as u32;
+    for (u32 k = 0; k < next; k++) m.Vals.Push(new EVal { Type = 0, Block = 0, Inst = 0, Pos = 0 });
+    for (u32 k = 0; k < f.NValues; k++) {
+        EVal old = m.Val(f.FirstValue + k);
+        EVal nv = m.Val(v0 + k);
+        nv.Type = old.Type;
+        if (k < f.NParams) nv.Block = b0;
+        m.Vals.Set((v0 + k) as usize, nv);
+    }
+    foreach (var s in sites.AsSlice()) {
+        EFunc cf = m.Func(s.Callee);
+        for (u32 k = cf.NParams; k < cf.NValues; k++) {
+            EVal nv = m.Val(v0 + s.First + k - cf.NParams);
+            nv.Type = m.Val(cf.FirstValue + k).Type;
+            m.Vals.Set((v0 + s.First + k - cf.NParams) as usize, nv);
+        }
+        EBlock cb = m.Block(cf.FirstBlock);
+        u32 n = 0;
+        for (u32 k = cb.FirstInst; k < cb.FirstInst + cb.NInsts; k++) {
+            if (m.Inst(k).Op != OP_SLOT) continue;
+            EVal nv = m.Val(v0 + s.Sizes + n);
+            nv.Type = ET_U64;
+            m.Vals.Set((v0 + s.Sizes + n) as usize, nv);
+            n++;
+        }
+    }
+    u32 site = 0;
+    for (u32 bi = 0; bi < f.NBlocks; bi++) {
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        u32 nb = b0 + bi;
+        u32 first = m.Insts.Len() as u32;
+        u32 i = blk.FirstInst;
+        if (bi == 0) {
+            // the caller's slots, then every inlined copy's
+            while (i < blk.FirstInst + blk.NInsts && m.Inst(i).Op == OP_SLOT) {
+                CopyInst(ref m, i, nb, f, v0, b0, repl);
+                i++;
+            }
+            foreach (var s in sites.AsSlice()) {
+                EFunc cf = m.Func(s.Callee);
+                EBlock cb = m.Block(cf.FirstBlock);
+                for (u32 k = cb.FirstInst; k < cb.FirstInst + cb.NInsts; k++) {
+                    if (m.Inst(k).Op == OP_SLOT) CopyCallee(ref m, k, nb, cf, v0, s, f, repl);
+                }
+            }
+        }
+        while (i < blk.FirstInst + blk.NInsts) {
+            if (site < sites.Len() as u32 && sites.Get(site as usize).Inst == i) {
+                Site s = sites.Get(site as usize);
+                EFunc cf = m.Func(s.Callee);
+                EBlock cb = m.Block(cf.FirstBlock);
+                // zero the copy's slots, then its instructions without the `ret`
+                u32 n = 0;
+                for (u32 k = cb.FirstInst; k < cb.FirstInst + cb.NInsts; k++) {
+                    EInst ci = m.Inst(k);
+                    if (ci.Op != OP_SLOT) continue;
+                    u32 sizeVal = v0 + s.Sizes + n;
+                    m.Insts.Push(new EInst {
+                        Op = OP_CONST, Ty = ET_U64, Ty2 = 0, Result = sizeVal, FirstOp = m.Ops.Len() as u32, NOps = 0,
+                        Block = nb, Imm = m.Ty(ci.Ty).Size as u64, Str = TextOf(""), Pos = 0
+                    });
+                    SetDef(ref m, sizeVal, nb);
+                    u32 zop = m.Ops.Len() as u32;
+                    u32 slotVal = v0 + s.First + ci.Result - cf.FirstValue - cf.NParams;
+                    m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = slotVal, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+                    m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = sizeVal, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+                    m.Insts.Push(new EInst {
+                        Op = OP_ZERO, Ty = 0, Ty2 = 0, Result = 0, FirstOp = zop, NOps = 2,
+                        Block = nb, Imm = 0, Str = TextOf(""), Pos = 0
+                    });
+                    n++;
+                }
+                for (u32 k = cb.FirstInst; k + 1 < cb.FirstInst + cb.NInsts; k++) {
+                    if (m.Inst(k).Op != OP_SLOT) CopyCallee(ref m, k, nb, cf, v0, s, f, repl);
+                }
+                site++;
+            } else {
+                CopyInst(ref m, i, nb, f, v0, b0, repl);
+            }
+            i++;
+        }
+        u32 fp = 0;
+        if (blk.NParams > 0) fp = v0 + blk.FirstParam - f.FirstValue;
+        for (u32 k = 0; k < blk.NParams; k++) {
+            EVal pv = m.Val(fp + k);
+            pv.Block = nb;
+            m.Vals.Set((fp + k) as usize, pv);
+        }
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = blk.NParams, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+    }
+    EFunc nf = m.Func(fi);
+    nf.FirstValue = v0;
+    nf.NValues = next;
+    nf.FirstBlock = b0;
+    m.Funcs.Set(fi as usize, nf);
+}
+
+void SetDef(ref Module m, u32 v, u32 b) {
+    EVal val = m.Val(v);
+    val.Block = b;
+    val.Inst = m.Insts.Len() as u32 - 1;
+    m.Vals.Set(v as usize, val);
+}
+
+// Copies caller instruction i into new block nb: values renumbered from v0 through repl,
+// blocks from b0.
+void CopyInst(ref Module m, u32 i, u32 nb, in EFunc f, u32 v0, u32 b0, in List<u32> repl) {
+    EInst inst = m.Inst(i);
+    u32 firstOp = m.Ops.Len() as u32;
+    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        op.Pos = 0;
+        if (op.Kind == OK_VALUE) {
+            op.Ref = v0 + repl.Get((op.Ref - f.FirstValue) as usize);
+        } else if (op.Kind == OK_TARGET) {
+            op.Ref = b0 + op.Ref - f.FirstBlock;
+            u32 args = m.Args.Len() as u32;
+            for (u32 k = 0; k < op.NArgs; k++) {
+                u32 av = m.Arg(op.Args + k);
+                m.Args.Push(v0 + repl.Get((av - f.FirstValue) as usize));
+            }
+            op.Args = args;
+        }
+        m.Ops.Push(op);
+    }
+    inst.FirstOp = firstOp;
+    inst.Block = nb;
+    inst.Pos = 0;
+    if (inst.Result != 0) inst.Result = v0 + inst.Result - f.FirstValue;
+    m.Insts.Push(inst);
+    if (inst.Result != 0) SetDef(ref m, inst.Result, nb);
+}
+
+// Copies callee instruction k (of cf) for site s into new block nb: the callee's
+// parameters become the call's arguments (caller values, through repl).
+void CopyCallee(ref Module m, u32 k, u32 nb, in EFunc cf, u32 v0, in Site s, in EFunc f, in List<u32> repl) {
+    EInst inst = m.Inst(k);
+    EInst call = m.Inst(s.Inst);
+    u32 firstOp = m.Ops.Len() as u32;
+    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        op.Pos = 0;
+        if (op.Kind == OK_VALUE) {
+            u32 rv = op.Ref - cf.FirstValue;
+            if (rv < cf.NParams) {
+                u32 arg = m.Op(call.FirstOp + 1 + rv).Ref - f.FirstValue;
+                op.Ref = v0 + repl.Get(arg as usize);
+            } else {
+                op.Ref = v0 + s.First + rv - cf.NParams;
+            }
+        }
+        m.Ops.Push(op);
+    }
+    inst.FirstOp = firstOp;
+    inst.Block = nb;
+    inst.Pos = 0;
+    if (inst.Result != 0) inst.Result = v0 + s.First + inst.Result - cf.FirstValue - cf.NParams;
+    m.Insts.Push(inst);
+    if (inst.Result != 0) SetDef(ref m, inst.Result, nb);
+}
+
+// Inlines small functions into their callers, one level, in function order.
+public void InlineSmall(ref Module m) {
+    for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
+        if (!m.Func(fi).Extern) InlineFunc(ref m, fi);
+    }
+}

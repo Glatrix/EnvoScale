@@ -19,6 +19,13 @@ const u64 TRAP_UTF8 = 6;
 
 void Bug(str msg) => ToolFail(msg, EXIT_INTERNAL);
 
+// At -O2, values recomputed where they are used instead of kept (D20).
+const u8 REMAT_CONST = 1;      // const: the immediate
+const u8 REMAT_FRAME = 2;      // slot: rbp + the offset
+const u8 REMAT_LABEL = 3;      // addr: the label's address
+const u64 SMALL_BYTES = 128;
+const u64 NOT_SMALL = 0xFFFFFFFFFFFFFFFF;
+
 struct Gen {
     Asm A;
     u32 Target;
@@ -30,6 +37,12 @@ struct Gen {
     u32 FirstValue;
     u32 NParams;
     WinImports Imports;
+    bool Opt;               // -O2: registers and rematerialization (regalloc.envo)
+    List<u8> Regs;          // per value of the function: its register, or NOREG
+    List<u8> RematKind;     // per value of the function: REMAT_*, or 0
+    List<u64> RematImm;
+    List<bool> Saved;       // the callee-saved registers the function uses (AllocReg order)
+    u32 SaveArea;           // their bytes, just below the saved rbp
 
     // ------------------------------------------------------------------ helpers
 
@@ -38,15 +51,43 @@ struct Gen {
     i32 VOff(in this, u32 v) {
         u32 k = v - this.FirstValue;
         if (k < this.NParams) return (16 + 8 * k) as i32;
-        return 0 - (8 * (k + 1)) as i32;
+        return 0 - (this.SaveArea + 8 * (k + 1)) as i32;
     }
 
     void LoadV(ref this, u8 r, u32 v) {
+        if (this.Opt) {
+            usize k = (v - this.FirstValue) as usize;
+            u8 rk = this.RematKind.Get(k);
+            if (rk == REMAT_CONST) {
+                this.A.MovRI(r, this.RematImm.Get(k));
+                return;
+            }
+            if (rk == REMAT_FRAME) {
+                this.A.LeaRM(r, RBP, this.RematImm.Get(k) as i32);
+                return;
+            }
+            if (rk == REMAT_LABEL) {
+                this.A.LeaLabel(r, this.RematImm.Get(k) as u32);
+                return;
+            }
+            u8 reg = this.Regs.Get(k);
+            if (reg != NOREG) {
+                if (reg != r) this.A.MovRR(r, reg);
+                return;
+            }
+        }
         i32 off = this.VOff(v);
         this.A.Load(r, RBP, off, 8, false);
     }
 
     void StoreV(ref this, u32 v, u8 r) {
+        if (this.Opt) {
+            u8 reg = this.Regs.Get((v - this.FirstValue) as usize);
+            if (reg != NOREG) {
+                if (reg != r) this.A.MovRR(reg, r);
+                return;
+            }
+        }
         i32 off = this.VOff(v);
         this.A.Store(RBP, off, r, 8);
     }
@@ -120,6 +161,7 @@ struct Gen {
         u32 t = inst.Ty;
         ETy ty = m.Ty(t);
         bool signed = m.IsSigned(t);
+        if (this.Opt && inst.Result != 0 && this.RematKind.Get((inst.Result - this.FirstValue) as usize) != 0) return;
         if (sh == SH_CONST) {
             this.A.MovRI(RAX, inst.Imm);
             this.StoreV(inst.Result, RAX);
@@ -293,13 +335,24 @@ struct Gen {
             if (op == 47) {
                 this.LoadOp(m, RDI, f);
                 this.LoadOp(m, RSI, f + 1);
-                this.LoadOp(m, RCX, f + 2);
-                this.A.RepMovsb();
+                u64 size = this.SmallConst(m, f + 2);
+                if (size != NOT_SMALL) {
+                    this.MoveBytes(RDI, 0, RSI, 0, size);
+                } else {
+                    this.LoadOp(m, RCX, f + 2);
+                    this.A.RepMovsb();
+                }
             } else if (op == 48) {
                 this.LoadOp(m, RDI, f);
-                this.LoadOp(m, RCX, f + 1);
-                this.A.Alu(ALU_XOR, RAX, RAX);
-                this.A.RepStosb();
+                u64 size = this.SmallConst(m, f + 1);
+                if (size != NOT_SMALL) {
+                    this.A.Alu(ALU_XOR, RAX, RAX);
+                    this.ZeroBytes(RDI, 0, size);
+                } else {
+                    this.LoadOp(m, RCX, f + 1);
+                    this.A.Alu(ALU_XOR, RAX, RAX);
+                    this.A.RepStosb();
+                }
             } else if (op == 50) {
                 this.LoadOp(m, RAX, f);
                 this.LoadOp(m, RCX, f + 1);
@@ -386,7 +439,16 @@ struct Gen {
             this.Jump(m, f + n - 1);
         } else if (sh == SH_RET) {
             if (n == 1) this.LoadOp(m, RAX, f);
-            this.A.MovRR(RSP, RBP);
+            if (this.SaveArea > 0) {
+                this.A.LeaRM(RSP, RBP, 0 - this.SaveArea as i32);
+                u32 r = NREGS;
+                while (r > 0) {
+                    r--;
+                    if (this.Saved.Get(r as usize)) this.A.Pop(AllocReg(r));
+                }
+            } else {
+                this.A.MovRR(RSP, RBP);
+            }
             this.A.Pop(RBP);
             this.A.RetNear();
         } else if (sh == SH_PANIC) {
@@ -454,7 +516,13 @@ struct Gen {
         this.FirstValue = f.FirstValue;
         this.NParams = f.NParams;
         this.A.Bind(this.FuncLabels.Get(fi as usize));
-        // frame: value slots, then the storage of `slot` instructions (zeroed on entry)
+        // -O2: what to recompute, then registers for the rest
+        this.SaveArea = 0;
+        this.Saved = List<bool>.New();
+        if (this.Opt) this.Plan(m, fi);
+        // frame: saved registers, value slots, then the storage of `slot` instructions
+        // (zeroed on entry)
+        u64 save = this.SaveArea as u64;
         u64 valueArea = 8 * f.NValues as u64;
         u64 slotArea = 0;
         EBlock entry = m.Block(f.FirstBlock);
@@ -465,24 +533,111 @@ struct Gen {
             u64 align = st.Align as u64;
             if (align < 8) align = 8;
             slotArea = (slotArea + st.Size as u64 + align - 1) & ~(align - 1);
-            inst.Imm = 0 -% (valueArea + slotArea);     // rbp offset of the storage
+            inst.Imm = 0 -% (save + valueArea + slotArea);      // rbp offset of the storage
             m.Insts.Set(i as usize, inst);
+            if (this.Opt) this.RematImm.Set((inst.Result - f.FirstValue) as usize, inst.Imm);
         }
-        u64 frame = (valueArea + slotArea + 15) & ~15;
+        u64 frame = ((save + valueArea + slotArea + 15) & ~15) - save;
         this.A.Push(RBP);
         this.A.MovRR(RBP, RSP);
+        for (u32 r = 0; r < this.Saved.Len() as u32; r++) {
+            if (this.Saved.Get(r as usize)) this.A.Push(AllocReg(r));
+        }
         if (frame > 0) this.A.AluImm(5, RSP, frame as i32);
-        if (slotArea > 0) {
-            this.A.LeaRM(RDI, RBP, (0 -% (valueArea + slotArea)) as i32);
+        if (slotArea > 0 && this.Opt && slotArea <= SMALL_BYTES) {
+            this.A.Alu(ALU_XOR, RAX, RAX);
+            this.ZeroBytes(RBP, (0 -% (save + valueArea + slotArea)) as i32, slotArea);
+        } else if (slotArea > 0) {
+            this.A.LeaRM(RDI, RBP, (0 -% (save + valueArea + slotArea)) as i32);
             this.A.MovRI(RCX, slotArea);
             this.A.Alu(ALU_XOR, RAX, RAX);
             this.A.RepStosb();
+        }
+        if (this.Opt) {
+            for (u32 k = 0; k < f.NParams; k++) {
+                u8 reg = this.Regs.Get(k as usize);
+                if (reg != NOREG) this.A.Load(reg, RBP, (16 + 8 * k) as i32, 8, false);
+            }
         }
         for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
             EBlock blk = m.Block(b);
             this.A.Bind(this.BlockLabels.Get(b as usize));
             for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) this.Inst(m, i);
         }
+    }
+
+    // -O2: the value of operand o if it is a constant of at most SMALL_BYTES, else
+    // NOT_SMALL. Copies and zeroing that small are unrolled.
+    u64 SmallConst(in this, in Module m, u32 o) {
+        if (!this.Opt) return NOT_SMALL;
+        EOp op = m.Op(o);
+        if (op.Kind != OK_VALUE) return NOT_SMALL;
+        usize k = (op.Ref - this.FirstValue) as usize;
+        if (this.RematKind.Get(k) != REMAT_CONST || this.RematImm.Get(k) > SMALL_BYTES) return NOT_SMALL;
+        return this.RematImm.Get(k);
+    }
+
+    // Copies n bytes from [src + so] to [dst + do] through rax, widest moves first.
+    void MoveBytes(ref this, u8 dst, i32 dOff, u8 src, i32 sOff, u64 n) {
+        u64 at = 0;
+        while (at < n) {
+            u32 w = 8;
+            while (at + w as u64 > n) w = w / 2;
+            this.A.Load(RAX, src, sOff + at as i32, w, false);
+            this.A.Store(dst, dOff + at as i32, RAX, w);
+            at += w as u64;
+        }
+    }
+
+    // Stores n zero bytes at [dst + off]; rax is zero.
+    void ZeroBytes(ref this, u8 dst, i32 off, u64 n) {
+        u64 at = 0;
+        while (at < n) {
+            u32 w = 8;
+            while (at + w as u64 > n) w = w / 2;
+            this.A.Store(dst, off + at as i32, RAX, w);
+            at += w as u64;
+        }
+    }
+
+    // -O2: which values are recomputed where used, and the registers of the others.
+    void Plan(ref this, in Module m, u32 fi) {
+        EFunc f = m.Func(fi);
+        this.RematKind = List<u8>.New();
+        this.RematImm = List<u64>.New();
+        for (u32 k = 0; k < f.NValues; k++) {
+            this.RematKind.Push(0);
+            this.RematImm.Push(0);
+        }
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                if (inst.Result == 0) continue;
+                usize k = (inst.Result - f.FirstValue) as usize;
+                if (inst.Op == OP_CONST) {
+                    this.RematKind.Set(k, REMAT_CONST);
+                    this.RematImm.Set(k, inst.Imm);
+                } else if (inst.Op == OP_SLOT) {
+                    this.RematKind.Set(k, REMAT_FRAME);     // the offset is set with the frame
+                } else if (inst.Op == 2) {
+                    EOp rf = m.Op(inst.FirstOp);
+                    u32 l = 0;
+                    if (rf.Int == NAME_FUNC) l = this.FuncLabels.Get(rf.Ref as usize);
+                    else l = this.GlobalLabels.Get(rf.Ref as usize);
+                    this.RematKind.Set(k, REMAT_LABEL);
+                    this.RematImm.Set(k, l as u64);
+                }
+            }
+        }
+        List<bool> saved = List<bool>.New();
+        this.Regs = AllocateRegs(m, fi, this.RematKind, ref saved);
+        this.Saved = saved;
+        u32 n = 0;
+        for (u32 r = 0; r < this.Saved.Len() as u32; r++) {
+            if (this.Saved.Get(r as usize)) n++;
+        }
+        this.SaveArea = 8 * n;
     }
 
     // ------------------------------------------------------------------ data
@@ -522,11 +677,13 @@ struct Gen {
 }
 
 // Generates module m (verified and laid out) for target into a complete executable image.
-public string GenModule(ref Module m, u32 target) {
+// opt: -O2 code (registers and rematerialization) instead of -O0's.
+public string GenModule(ref Module m, u32 target, bool opt) {
     Gen g = new Gen {
         A = Asm.New(), Target = target, FuncLabels = List<u32>.New(), GlobalLabels = List<u32>.New(),
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
-        Imports = new WinImports { Dir = 0, Iat = 0 }
+        Imports = new WinImports { Dir = 0, Iat = 0 }, Opt = opt, Regs = List<u8>.New(),
+        RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0
     };
     for (usize i = 0; i < m.Funcs.Len(); i++) g.FuncLabels.Push(0);
     for (usize i = 0; i < m.Globals.Len(); i++) g.GlobalLabels.Push(0);

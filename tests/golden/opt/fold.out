@@ -1,0 +1,17 @@
+eir 1 target "x86_64-linux"
+
+func @Fold() -> i32 {
+^bb0:
+  %0 = const i32 6
+  ret %0
+}
+
+func @Overflow() -> u8 {
+^bb0:
+  %0 = const u8 255
+  %1 = const u8 1
+  %2 = add.chk u8 %0, %1
+  %3 = const u8 0
+  %4 = div u8 %1, %3
+  ret %2
+}

@@ -252,7 +252,29 @@ impl Module {
             }
         }
         d.Bits.Set(0, 1);
-        // predecessors: recompute from successors on each pass
+        // the reachable predecessors of each block, found once (Stage 1 recomputes them on
+        // every pass; the sets are the same)
+        List<u32> predCount = List<u32>.New();
+        for (u32 b = 0; b <= nb; b++) predCount.Push(0);
+        for (u32 p = 0; p < nb; p++) {
+            if (d.Reach.Get(p as usize) == 0) continue;
+            this.Successors(f.FirstBlock + p, f.FirstBlock, ref succ);
+            foreach (var s in succ.AsSlice()) predCount.Set((s + 1) as usize, predCount.Get((s + 1) as usize) + 1);
+        }
+        for (u32 b = 0; b < nb; b++) predCount.Set((b + 1) as usize, predCount.Get((b + 1) as usize) + predCount.Get(b as usize));
+        List<u32> preds = List<u32>.New();
+        List<u32> fill = List<u32>.New();
+        for (u32 b = 0; b < nb; b++) fill.Push(predCount.Get(b as usize));
+        for (u32 i = 0; i < predCount.Get(nb as usize); i++) preds.Push(0);
+        for (u32 p = 0; p < nb; p++) {
+            if (d.Reach.Get(p as usize) == 0) continue;
+            this.Successors(f.FirstBlock + p, f.FirstBlock, ref succ);
+            foreach (var s in succ.AsSlice()) {
+                u32 at = fill.Get(s as usize);
+                preds.Set(at as usize, p);
+                fill.Set(s as usize, at + 1);
+            }
+        }
         bool changed = true;
         List<u64> fresh = List<u64>.New();
         for (usize w = 0; w < words; w++) fresh.Push(0);
@@ -261,14 +283,8 @@ impl Module {
             for (u32 b = 1; b < nb; b++) {
                 if (d.Reach.Get(b as usize) == 0) continue;
                 for (usize w = 0; w < words; w++) fresh.Set(w, 18446744073709551615);
-                for (u32 p = 0; p < nb; p++) {
-                    if (d.Reach.Get(p as usize) == 0) continue;
-                    this.Successors(f.FirstBlock + p, f.FirstBlock, ref succ);
-                    bool pred = false;
-                    foreach (var s in succ.AsSlice()) {
-                        if (s == b as u64) pred = true;
-                    }
-                    if (!pred) continue;
+                for (u32 pi = predCount.Get(b as usize); pi < predCount.Get((b + 1) as usize); pi++) {
+                    u32 p = preds.Get(pi as usize);
                     for (usize w = 0; w < words; w++) {
                         u64 both = fresh.Get(w) & d.Bits.Get((p as usize) * words + w);
                         fresh.Set(w, both);

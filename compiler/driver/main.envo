@@ -8,6 +8,7 @@ use envoc.sema;
 use envoc.eir;
 use envoc.lower;
 use envoc.x64;
+use envoc.opt;
 
 const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
 
@@ -21,17 +22,18 @@ void Usage(i32 fd) {
     write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
     write(fd, "  check <file.envo>...\n");
     write(fd, "                      check names and types; print the typed syntax tree\n");
-    write(fd, "  build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]\n");
+    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [--target x86_64-windows|x86_64-linux]\n");
     write(fd, "                      compile a program to an executable\n");
     write(fd, "  compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(fd, "                      compile to an EIR object: the code of one file (--unit)\n");
     write(fd, "                      or of all of them; the others are read for their declarations\n");
-    write(fd, "  link <file.eo>... -o <output>\n");
+    write(fd, "  link <file.eo>... -o <output> [-O0|-O2]\n");
     write(fd, "                      link EIR objects of one program into an executable\n");
     write(fd, "  eir <file.envo>... [--target x86_64-windows|x86_64-linux]\n");
     write(fd, "                      print the program's EIR, runtime included (-o: binary EIR)\n");
-    write(fd, "  eir-check <file.eir|file.eirb> [-o <out.eirb>]\n");
-    write(fd, "                      read and verify EIR, text or binary; print it as text\n");
+    write(fd, "  eir-check <file.eir|file.eirb> [-O2] [-o <out.eirb>]\n");
+    write(fd, "                      read and verify EIR, text or binary (-O2: and optimize it);\n");
+    write(fd, "                      print it as text\n");
     write(fd, "                      or (-o) write it in the binary form\n");
     write(fd, "  version             print the version\n");
     write(fd, "  help                print this message\n");
@@ -162,9 +164,23 @@ i32 CmdCheck(usize argi, bool core) {
 // `envoc eir-check <file.eir>`: reads and verifies EIR text, then prints it in canonical
 // form ([eir.text.4]).
 i32 CmdEirCheck(usize argi) {
+    // eir-check <file> [-O2] [-o <out.eirb>]
     str output = "";
-    if (argc() == argi + 3 && Same(arg(argi + 1), "-o")) output = arg(argi + 2);
-    else if (argc() != argi + 1) {
+    bool opt = false;
+    bool bad = argc() <= argi;
+    usize i = argi + 1;
+    while (i < argc() && !bad) {
+        if (Same(arg(i), "-O2")) {
+            opt = true;
+            i++;
+        } else if (Same(arg(i), "-o") && i + 1 < argc()) {
+            output = arg(i + 1);
+            i += 2;
+        } else {
+            bad = true;
+        }
+    }
+    if (bad) {
         Usage(2);
         return EXIT_USAGE;
     }
@@ -174,6 +190,10 @@ i32 CmdEirCheck(usize argi) {
     if (IsBinaryEir(src.Text(f))) DecodeEir(ref m, src.Path(f), src.Text(f));
     else ReadEir(ref m, src.Path(f), src.Text(f));
     m.Verify();
+    if (opt) {
+        Optimize(ref m);
+        m.Verify();
+    }
     if (output.Len > 0) {
         string bytes = m.Encode();
         return WriteOut(output, bytes, false);
@@ -185,9 +205,9 @@ i32 CmdEirCheck(usize argi) {
 }
 
 void BuildUsage() {
-    write(2, "usage: envoc build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]\n");
+    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [--target x86_64-windows|x86_64-linux]\n");
     write(2, "       envoc compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
-    write(2, "       envoc link <file.eo>... -o <output>\n");
+    write(2, "       envoc link <file.eo>... -o <output> [-O0|-O2]\n");
     exit(EXIT_USAGE);
 }
 
@@ -208,11 +228,12 @@ struct BuildArgs {
     str Output;
     u32 Target;
     bool TargetSet;
+    bool Opt;               // -O2
     str Unit;               // compile: the file whose code the object holds
 }
 
 BuildArgs ParseBuildArgs(usize argi) {
-    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX, TargetSet = false, Unit = "" };
+    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX, TargetSet = false, Unit = "", Opt = false };
     if (Same(HostTarget(), "x86_64-windows")) b.Target = TARGET_WINDOWS;
     usize i = argi;
     while (i < argc()) {
@@ -229,6 +250,9 @@ BuildArgs ParseBuildArgs(usize argi) {
             else BuildUsage();
             b.TargetSet = true;
             i += 2;
+        } else if (Same(a, "-O2") || Same(a, "-O0")) {
+            b.Opt = Same(a, "-O2");
+            i++;
         } else if (Same(a, "--unit")) {
             if (i + 1 >= argc()) BuildUsage();
             b.Unit = arg(i + 1);
@@ -244,7 +268,7 @@ BuildArgs ParseBuildArgs(usize argi) {
 // Compiles the program in the given files, with the runtime for target, to an EIR module.
 // With a unit (an index into files), the module is that file's object: other files'
 // functions are only declared, and the runtime goes with the entry file (unit 0).
-Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool core, bool verify, i32 unit) {
+Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool core, bool verify, i32 unit, bool opt) {
     foreach (var i in files.AsSlice()) Load(ref src, arg(i));
     src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
     if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
@@ -266,6 +290,10 @@ Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool co
     }
     Module m = l.TakeModule();
     if (verify) m.Verify();
+    if (opt) {
+        Optimize(ref m);
+        m.Verify();
+    }
     return m;
 }
 
@@ -274,8 +302,8 @@ i32 CmdBuild(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Output.Len == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, -1);
-    string image = GenModule(ref m, b.Target);
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, -1, b.Opt);
+    string image = GenModule(ref m, b.Target, b.Opt);
     return WriteOut(b.Output, image, true);
 }
 
@@ -291,7 +319,7 @@ i32 CmdCompile(usize argi, bool core) {
         if (unit < 0) ToolFail("--unit must name one of the files", EXIT_USAGE);
     }
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, unit);
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, unit, b.Opt);
     string bytes = m.Encode();
     return WriteOut(b.Output, bytes, false);
 }
@@ -328,7 +356,7 @@ i32 CmdLink(usize argi) {
     else if (!TextIs(m.Target, "x86_64-linux")) ToolFail("the objects are for an unknown target", EXIT_ERRORS);
     if (b.TargetSet && b.Target != target) ToolFail("--target differs from the objects' target", EXIT_ERRORS);
     m.Verify();
-    string image = GenModule(ref m, target);
+    string image = GenModule(ref m, target, b.Opt);
     return WriteOut(b.Output, image, true);
 }
 
@@ -337,7 +365,7 @@ i32 CmdEir(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, false, -1);     // eir-check the output to verify it
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, false, -1, b.Opt);     // eir-check the output to verify it
     if (b.Output.Len > 0) {
         string bytes = m.Encode();
         return WriteOut(b.Output, bytes, false);
