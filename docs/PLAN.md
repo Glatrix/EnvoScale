@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M4 (foundations). M0–M3 are done; their records are in §4.
+- **Current milestone:** M5 (daily tooling). M0–M4 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -61,6 +61,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D23 | The simple door reaches the target's adapters through one namespace, **`platform`**, which the build binds: `adapters/os/<os>/platform.envo` for the target's OS, or `adapters/os/none` with `--os none`. `lib/` names `platform` but never an adapter namespace (`os.*`); the compiler enforces it (E0213). | `docs/architecture/library.md` |
 | D24 | M4's ports are the ones the runtime can serve today: `Console`, `FileSystem`, `Clock`, `Entropy` and `Environment`. `Threads`, `Executor`, `NetStack` and the device ports come with the milestones that need them (M6, M7, M8); `std.thread`, `sync` and `async` wait for them. | `docs/PLAN.md` §5 |
 | D25 | Native adapters call the OS directly through the target intrinsics (`__syscall`, `__wincall`). The Windows import table grows in both Stage 1 and Stage 2, so their executables stay byte-identical (D17), and gains a second DLL for the system's random generator. | `docs/architecture/library.md` |
+| D26 | **`envo` contains the compiler.** The brief puts every tool in one `envo` binary, so `envo` is built from `compiler/` (minus its entry file) plus `tools/`, and calls the compiler as a library (`envoc.build`). `envoc` stays, as the compiler on its own and the stage the fixed point checks. | `tools/envo/README.md` |
+| D27 | **Packages replace the one-file rule** (D21) where a manifest exists: a package is a folder with `envo.envon`; its root module is its `.envo` files outside `tests/`, and a library module is every `.envo` file in its folder. Listing a folder needs `FileSystem.List`, a new port operation. Without a manifest, D21 still applies. | `docs/architecture/tooling.md` |
+| D28 | **Running programs** goes through a new port, `Process`: start a program with arguments, wait for it, get its exit code, with its output sent to a file when asked. `envo run`, `envo test` and the language server use it. Windows gets its functions in both stages' import tables (D25). | `docs/architecture/tooling.md` |
+| D29 | **The bootstrap scripts stay** for building and testing Stages 0–2: they must work without `envo`. CI calls `envo test` for what `envo` can run (the library, the conformance suites, the examples) in place of the scripts' library block (D8, read for a self-hosting toolchain). | `adapters/ci/github/README.md` |
+| D30 | The **language server** is basic in M5: diagnostics only (`textDocument/publishDiagnostics` on open, change and save), computed by running `envo check` on the document as a child process. Hover, completion and go-to-definition need the query-based compiler (brief §8) and come later. | `tools/lsp/README.md` |
 
 ## 3. Open questions
 
@@ -133,24 +138,30 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   performance sweep. Design in [`architecture/stage2.md`](architecture/stage2.md);
   follow-ups #79, #80.
 
-## 5. M4 — Foundations
+- **M4 — Foundations.** `lib/core`, `alloc`, `ports` and `std` in Envo-S1, compiled by
+  `envoc --lib` (module resolution D21, the `platform` binding D23); reference adapters
+  (`os.none`) and native ones for Windows and Linux; one conformance suite per port,
+  passing against all three on both hosts. Increments 4.1–4.7; design in
+  [`architecture/library.md`](architecture/library.md).
 
-**DoD (brief §16):** `core`, `alloc`, `std`, `lib/ports`, OS adapters for Windows and
-Linux, plus the `none`/in-memory reference adapters. Port conformance suite exists.
-Read here as: the layers are Envo-S1 code that `envoc` compiles (D16); every port has a
-reference adapter in `adapters/os/none` and native adapters for Windows and Linux, and
-one conformance suite per port passes against all three on both hosts in CI. Library
-resolution and the platform binding follow D21–D25.
+## 5. M5 — Daily tooling
+
+**DoD (brief §16):** `envo` CLI with `new`, `build`, `run`, `test`, `fmt`; diagnostics
+with error codes; basic LSP. Read here as: one `envo` binary (D26), written in Envo-S1,
+that creates, builds, runs and tests packages (D27), formats Envo source canonically,
+explains error codes, prints errors with a labelled source line, and serves
+diagnostics to editors over LSP (D30); CI uses it for the package tests (D29).
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [4.1](https://github.com/envoscale/EnvoScale/issues/81) | Library resolution: `--lib`, `use` loads modules by path (D21), `platform` binding and `--os` (D23), the lib→adapters rule in the compiler | `tests/spec/lib/` | done: `--lib`, `--os`, `platform`, E0214, E0215; `use a.b;` names `b` in types too |
-| [4.2](https://github.com/envoscale/EnvoScale/issues/82) | `core`: integer formatting and parsing, `str` searching and splitting, math helpers, hashing | `lib/core/tests/` | done: `core.text`, `core.fmt`, `core.math`, `core.hash` (with `IKey`) |
-| [4.3](https://github.com/envoscale/EnvoScale/issues/83) | `alloc`: `Map<K, V>`, `Set<T>`, `Box<T>`, text helpers | `lib/alloc/tests/` | done: `string` stays the builder; `alloc.text` builds on it |
-| [4.4](https://github.com/envoscale/EnvoScale/issues/84) | `ports` and the reference adapters (`os.none`): in-memory file system, captured console, manual clock, seeded entropy, fixed environment | `tests/conformance/` against `os.none` | done: five ports, five suites |
-| [4.5](https://github.com/envoscale/EnvoScale/issues/85) | Native adapters `os.windows` and `os.linux` (D25), Windows import table grown in both stages | `tests/conformance/` against each OS, in CI | done: KERNEL32 slots 12-18 and ADVAPI32's random generator in both stages; every suite passes natively |
-| [4.6](https://github.com/envoscale/EnvoScale/issues/86) | `std`: `io`, `fs`, `path`, `time`, `env`, `random`, each with a simple door through `platform` and a full-control door taking the port | `lib/std/tests/` | done |
-| [4.7](https://github.com/envoscale/EnvoScale/issues/87) | M4 complete: docs, examples, `STATUS.md` | the whole suite | |
+| [5.1](https://github.com/envoscale/EnvoScale/issues/88) | `FileSystem.List` and the `Process` port (D28), with reference and native adapters and conformance suites | `tests/conformance/` | |
+| [5.2](https://github.com/envoscale/EnvoScale/issues/89) | `envo.eon`: EON reader and writer for manifests | `lib/envo/eon/tests/` | |
+| [5.3](https://github.com/envoscale/EnvoScale/issues/90) | The compiler as a library (`envoc.build`) and packages (D27) | `tests/packages/` | |
+| [5.4](https://github.com/envoscale/EnvoScale/issues/91) | `envo`: `new`, `build`, `run`, `test`, `check`, `explain`, `version` | `tests/envo/` | |
+| [5.5](https://github.com/envoscale/EnvoScale/issues/92) | Diagnostics with a labelled source line and `help:` notes; `envo explain` | the spec suites | |
+| [5.6](https://github.com/envoscale/EnvoScale/issues/93) | `envo fmt`: one canonical format, comments kept | `tests/golden/fmt/` | |
+| [5.7](https://github.com/envoscale/EnvoScale/issues/94) | `envo lsp`: diagnostics over JSON-RPC (D30), with `envo.json` | `tests/lsp/` | |
+| [5.8](https://github.com/envoscale/EnvoScale/issues/95) | CI on `envo test` (D29); M5 complete | CI | |
 
 ## 6. Risks
 

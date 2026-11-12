@@ -17,7 +17,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M1 | Stage 0 | **Done** |
 | M2 | Stage 1 | **Done**: `envoc1`, written in Envo-Core, compiles Envo-Core and Envo-S1 |
 | M3 | Self-hosting | **Done**: `envoc`, written in Envo-S1, compiles itself at `-O2` to a fixed point, checked in CI on both hosts; objects and linking; ownership beyond Stage 1 (3.1–3.10, `docs/PLAN.md` §5) |
-| M4–M13 | | Not started |
+| M4 | Foundations | **Done**: `core`, `alloc`, `ports`, `std` in Envo-S1 through `envoc --lib`; reference, Windows and Linux adapters; conformance suites passing on both hosts (4.1–4.7) |
+| M5 | Daily tooling | **In progress**: the `envo` CLI, formatter, diagnostics and LSP (`docs/PLAN.md` §5) |
+| M6–M13 | | Not started |
 
 ### M0 Definition of Done
 

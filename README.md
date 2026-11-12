@@ -7,9 +7,10 @@ EnvoScale is one language (**Envo**), one toolchain (`envo`) and one standard pl
 crypto and networking. It has no third-party dependencies, and its compiler is
 bootstrapped from assembly so the whole chain can be audited.
 
-> **Status: early.** M0–M3 are done. `envoc0` (assembly) and `envoc1` (Envo) bootstrap
-> `envoc`, the compiler that compiles itself, for Windows and Linux. M4, the standard
-> library foundations, is next.
+> **Status: early.** M0–M4 are done. `envoc0` (assembly) and `envoc1` (Envo) bootstrap
+> `envoc`, the compiler that compiles itself, for Windows and Linux, and the standard
+> platform's foundations (`core`, `alloc`, `std`, ports and adapters) are in place. M5,
+> the `envo` tool, is next.
 > See [`STATUS.md`](STATUS.md) for details.
 
 ## Goals
