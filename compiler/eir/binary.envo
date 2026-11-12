@@ -1,0 +1,542 @@
+// The binary form of EIR (docs/spec/eir.md section 7): `.eirb` modules and `.eo` objects.
+// It stores the module's lists as they are, each function's values, blocks and operands
+// numbered from the function's first, so decoding gives back the same module: the same
+// types, globals and functions at the same indexes, and the same text when printed.
+namespace envoc.eir;
+
+use envoc.util;
+use envoc.diag;
+
+public const u32 EIR_VERSION = 1;
+
+const u8 SEC_STRINGS = 1;
+const u8 SEC_TARGET = 2;
+const u8 SEC_TYPES = 3;
+const u8 SEC_GLOBALS = 4;
+const u8 SEC_FUNCS = 5;
+
+// ------------------------------------------------------------------ LEB128
+
+void PutU(ref string b, u64 v) {
+    while (true) {
+        u8 byte = (v & 0x7F) as u8;
+        v = v >> 7;
+        if (v == 0) {
+            b.AppendByte(byte);
+            return;
+        }
+        b.AppendByte(byte | 0x80);
+    }
+}
+
+// Signed LEB128 of the 64 bits of v read as two's complement.
+void PutS(ref string b, u64 v) {
+    while (true) {
+        u8 byte = (v & 0x7F) as u8;
+        bool negative = v >> 63 != 0;
+        v = v >> 7;
+        if (negative) v = v | 0xFE00000000000000;
+        bool sign = byte & 0x40 != 0;
+        if ((v == 0 && !sign) || (v == 0xFFFFFFFFFFFFFFFF && sign)) {
+            b.AppendByte(byte);
+            return;
+        }
+        b.AppendByte(byte | 0x80);
+    }
+}
+
+void PutSection(ref string image, u8 id, in string body) {
+    image.AppendByte(id);
+    PutU(ref image, body.Len() as u64);
+    image.Append(body);
+}
+
+// ------------------------------------------------------------------ encoder
+
+// The string section: each distinct string once, by index; index 0 is "".
+struct Strings {
+    string Body;
+    u32 Count;
+    StrMap<u32> Index;
+
+    static Strings New() {
+        Strings s = new Strings { Body = string.New(), Count = 0, Index = StrMap<u32>.New() };
+        s.Of(TextOf(""));
+        return s;
+    }
+
+    u32 Of(ref this, Text t) {
+        str s = TextStr(t);
+        u32? found = this.Index.Get(s);
+        if (found.IsSome()) return found.Unwrap();
+        u32 i = this.Count;
+        this.Count++;
+        PutU(ref this.Body, s.Len as u64);
+        this.Body.Append(s);
+        this.Index.Put(s, i);
+        return i;
+    }
+}
+
+impl Module {
+    // The module in the binary form.
+    public string Encode(in this) {
+        Strings strs = Strings.New();
+        string target = string.New();
+        u32 ti = strs.Of(this.Target);
+        PutU(ref target, ti as u64);
+
+        string types = string.New();
+        u32 first = ET_PTR + 1;
+        PutU(ref types, (this.Types.Len() as u32 - first) as u64);
+        for (u32 t = first; t < this.Types.Len() as u32; t++) {
+            ETy ty = this.Ty(t);
+            types.AppendByte(ty.Kind);
+            if (ty.Kind == EK_STRUCT) {
+                u32 ni = strs.Of(ty.Name);
+                PutU(ref types, ni as u64);
+                u8 flags = 0;
+                if (ty.Packed) flags = flags | 1;
+                if (ty.Defined) flags = flags | 2;
+                types.AppendByte(flags);
+                PutU(ref types, ty.NFields as u64);
+                for (u32 k = 0; k < ty.NFields; k++) PutU(ref types, this.Field(ty.Fields + k) as u64);
+            } else {
+                PutU(ref types, ty.Elem as u64);
+                PutU(ref types, ty.Count as u64);
+            }
+        }
+
+        string globals = string.New();
+        PutU(ref globals, (this.Globals.Len() - 1) as u64);
+        for (u32 g = 1; g < this.Globals.Len() as u32; g++) {
+            EGlobal gl = this.Global(g);
+            u32 ni = strs.Of(gl.Name);
+            PutU(ref globals, ni as u64);
+            PutU(ref globals, gl.Type as u64);
+            u8 ro = 0;
+            if (gl.ReadOnly) ro = 1;
+            globals.AppendByte(ro);
+            this.EncodeInit(ref strs, ref globals, gl.Init);
+        }
+
+        string funcs = string.New();
+        PutU(ref funcs, (this.Funcs.Len() - 1) as u64);
+        for (u32 f = 1; f < this.Funcs.Len() as u32; f++) this.EncodeFunc(ref strs, ref funcs, f);
+
+        string strings = string.New();
+        PutU(ref strings, strs.Count as u64);
+        strings.Append(strs.Body);
+
+        string bin = string.New();
+        bin.Append("EIR");
+        bin.AppendByte(0);
+        bin.AppendByte((EIR_VERSION & 0xFF) as u8);
+        bin.AppendByte((EIR_VERSION >> 8) as u8);
+        PutSection(ref bin, SEC_STRINGS, strings);
+        PutSection(ref bin, SEC_TARGET, target);
+        PutSection(ref bin, SEC_TYPES, types);
+        PutSection(ref bin, SEC_GLOBALS, globals);
+        PutSection(ref bin, SEC_FUNCS, funcs);
+        return bin;
+    }
+
+    void EncodeInit(in this, ref Strings strs, ref string b, u32 i) {
+        EInit init = this.Init(i);
+        b.AppendByte(init.Kind);
+        if (init.Kind == EI_BYTES || init.Kind == EI_ADDR) {
+            u32 si = strs.Of(init.Bytes);
+            PutU(ref b, si as u64);
+        } else if (init.Kind == EI_INT) {
+            PutS(ref b, init.Int);
+        } else if (init.Kind == EI_LIST) {
+            u32 n = 0;
+            u32 e = init.First;
+            while (e != 0) {
+                n++;
+                e = this.Init(e).Next;
+            }
+            PutU(ref b, n as u64);
+            e = init.First;
+            while (e != 0) {
+                this.EncodeInit(ref strs, ref b, e);
+                e = this.Init(e).Next;
+            }
+        }
+    }
+
+    // name, flags (1: extern), abi, result type, parameter count, then the types of all
+    // the function's values (parameters first); a definition adds its blocks.
+    void EncodeFunc(in this, ref Strings strs, ref string b, u32 fi) {
+        EFunc f = this.Func(fi);
+        u32 ni = strs.Of(f.Name);
+        PutU(ref b, ni as u64);
+        u8 flags = 0;
+        if (f.Extern) flags = 1;
+        b.AppendByte(flags);
+        u32 ai = strs.Of(f.Abi);
+        PutU(ref b, ai as u64);
+        PutU(ref b, f.Ret as u64);
+        PutU(ref b, f.NParams as u64);
+        u32 nvalues = f.NValues;
+        if (f.Extern) nvalues = f.NParams;
+        PutU(ref b, nvalues as u64);
+        for (u32 v = 0; v < nvalues; v++) PutU(ref b, this.Val(f.FirstValue + v).Type as u64);
+        if (f.Extern) return;
+        PutU(ref b, f.NBlocks as u64);
+        for (u32 bi = f.FirstBlock; bi < f.FirstBlock + f.NBlocks; bi++) {
+            EBlock blk = this.Block(bi);
+            u32 fp = 0;
+            if (blk.NParams > 0) fp = blk.FirstParam - f.FirstValue;
+            PutU(ref b, fp as u64);
+            PutU(ref b, blk.NParams as u64);
+            PutU(ref b, blk.NInsts as u64);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = this.Inst(i);
+                PutU(ref b, inst.Op as u64);
+                u32 result = 0;
+                if (inst.Result != 0) result = inst.Result - f.FirstValue + 1;
+                PutU(ref b, result as u64);
+                PutU(ref b, inst.Ty as u64);
+                PutU(ref b, inst.Ty2 as u64);
+                PutS(ref b, inst.Imm);
+                u32 si = strs.Of(inst.Str);
+                PutU(ref b, si as u64);
+                PutU(ref b, inst.NOps as u64);
+                for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                    EOp op = this.Op(o);
+                    b.AppendByte(op.Kind);
+                    if (op.Kind == OK_VALUE) {
+                        PutU(ref b, (op.Ref - f.FirstValue) as u64);
+                    } else if (op.Kind == OK_INT || op.Kind == OK_CASE) {
+                        PutS(ref b, op.Int);
+                    } else if (op.Kind == OK_GLOBAL) {
+                        u32 gi = strs.Of(op.Str);
+                        PutU(ref b, gi as u64);
+                    } else {
+                        PutU(ref b, (op.Ref - f.FirstBlock) as u64);
+                        PutU(ref b, op.NArgs as u64);
+                        for (u32 a = 0; a < op.NArgs; a++) PutU(ref b, (this.Arg(op.Args + a) - f.FirstValue) as u64);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ decoder
+
+struct Decoder {
+    Text Path;
+    Text Data;
+    usize Pos;
+    List<Text> Strs;
+
+    void Fail(in this, str msg) {
+        string e = string.From(TextStr(this.Path));
+        e.Append(": ");
+        e.Append(msg);
+        ToolFail(e, EXIT_ERRORS);
+    }
+
+    void Corrupt(in this) => this.Fail("truncated or corrupt binary EIR");
+
+    u8 Byte(ref this) {
+        if (this.Pos >= this.Data.Len) this.Corrupt();
+        *u8 p = this.Data.Ptr;
+        u8 b = 0;
+        unsafe { b = p[this.Pos]; }
+        this.Pos++;
+        return b;
+    }
+
+    u64 U(ref this) {
+        u64 r = 0;
+        u64 shift = 0;
+        while (true) {
+            u8 b = this.Byte();
+            if (shift >= 64) this.Corrupt();
+            r = r | ((b & 0x7F) as u64 << shift);
+            if (b & 0x80 == 0) return r;
+            shift += 7;
+        }
+        return r;
+    }
+
+    u64 S(ref this) {
+        u64 r = 0;
+        u64 shift = 0;
+        while (true) {
+            u8 b = this.Byte();
+            if (shift >= 64) this.Corrupt();
+            r = r | ((b & 0x7F) as u64 << shift);
+            shift += 7;
+            if (b & 0x80 == 0) {
+                if (shift < 64 && b & 0x40 != 0) r = r | (0xFFFFFFFFFFFFFFFF << shift);
+                return r;
+            }
+        }
+        return r;
+    }
+
+    // An unsigned number below limit.
+    u32 Below(ref this, u64 limit) {
+        u64 v = this.U();
+        if (v >= limit) this.Corrupt();
+        return v as u32;
+    }
+
+    Text Str(ref this) {
+        u32 i = this.Below(this.Strs.Len() as u64);
+        return this.Strs.Get(i as usize);
+    }
+
+    // The start of section id; returns where it ends.
+    usize Section(ref this, u8 id) {
+        if (this.Byte() != id) this.Corrupt();
+        u64 len = this.U();
+        if (len > (this.Data.Len - this.Pos) as u64) this.Corrupt();
+        return this.Pos + len as usize;
+    }
+
+    void End(in this, usize end) {
+        if (this.Pos != end) this.Corrupt();
+    }
+
+    u32 Init(ref this, ref Module m, u32 depth) {
+        if (depth > 64) this.Corrupt();
+        u8 kind = this.Byte();
+        EInit init = new EInit { Kind = kind, Int = 0, Bytes = TextOf(""), First = 0, Next = 0 };
+        u32 id = m.Inits.Len() as u32;
+        m.Inits.Push(init);
+        if (kind == EI_BYTES || kind == EI_ADDR) {
+            init.Bytes = this.Str();
+        } else if (kind == EI_INT) {
+            init.Int = this.S();
+        } else if (kind == EI_LIST) {
+            u64 n = this.U();
+            u32 prev = 0;
+            for (u64 k = 0; k < n; k++) {
+                u32 e = this.Init(ref m, depth + 1);
+                if (prev == 0) init.First = e;
+                else {
+                    EInit p = m.Init(prev);
+                    p.Next = e;
+                    m.Inits.Set(prev as usize, p);
+                }
+                prev = e;
+            }
+        } else if (kind != EI_ZERO) {
+            this.Corrupt();
+        }
+        EInit done = m.Init(id);
+        done.Bytes = init.Bytes;
+        done.Int = init.Int;
+        done.First = init.First;
+        m.Inits.Set(id as usize, done);
+        return id;
+    }
+
+    void Name(ref this, ref Module m, Text name, u64 kind, u32 index) {
+        if (m.Names.Has(TextStr(name))) this.Fail("a name is defined twice");
+        m.Names.Put(TextStr(name), (kind << 32) | index as u64);
+    }
+
+    void Func(ref this, ref Module m, u32 ntypes) {
+        u32 fi = m.Funcs.Len() as u32;
+        Text name = this.Str();
+        u8 flags = this.Byte();
+        if (flags > 1) this.Corrupt();
+        Text abi = this.Str();
+        u32 ret = this.Below(ntypes as u64);
+        u32 nparams = this.Below(0x10000);
+        u32 nvalues = this.Below(0x10000000);
+        if (nvalues < nparams) this.Corrupt();
+        u32 firstValue = m.Vals.Len() as u32;
+        for (u32 v = 0; v < nvalues; v++) {
+            u32 t = this.Below(ntypes as u64);
+            m.Vals.Push(new EVal { Type = t, Block = 0, Inst = 0, Pos = 0 });
+        }
+        EFunc f = new EFunc {
+            Name = name, Extern = flags == 1, Abi = abi, Ret = ret, NParams = nparams,
+            FirstBlock = m.Blocks.Len() as u32, NBlocks = 0, FirstValue = firstValue, NValues = nvalues, Pos = 0
+        };
+        m.Funcs.Push(f);
+        this.Name(ref m, name, NAME_FUNC, fi);
+        if (f.Extern) return;
+        u32 nblocks = this.Below(0x10000000);
+        if (nblocks == 0) this.Corrupt();
+        f.NBlocks = nblocks;
+        m.Funcs.Set(fi as usize, f);
+        for (u32 v = 0; v < nparams; v++) {
+            EVal pv = m.Val(firstValue + v);
+            pv.Block = f.FirstBlock;
+            m.Vals.Set((firstValue + v) as usize, pv);
+        }
+        for (u32 bi = 0; bi < nblocks; bi++) {
+            u32 b = m.Blocks.Len() as u32;
+            u32 fp = this.Below(nvalues as u64 + 1);
+            u32 np = this.Below(nvalues as u64 + 1);
+            if (fp + np > nvalues) this.Corrupt();
+            u32 ninsts = this.Below(0x10000000);
+            u32 firstParam = 0;
+            if (np > 0) firstParam = firstValue + fp;
+            m.Blocks.Push(new EBlock { Func = fi, FirstParam = firstParam, NParams = np, FirstInst = m.Insts.Len() as u32, NInsts = ninsts, Pos = 0 });
+            for (u32 k = 0; k < np; k++) {
+                EVal pv = m.Val(firstParam + k);
+                pv.Block = b;
+                m.Vals.Set((firstParam + k) as usize, pv);
+            }
+            for (u32 k = 0; k < ninsts; k++) {
+                u32 id = m.Insts.Len() as u32;
+                u16 op = this.Below(OP_LAST as u64 + 1) as u16;
+                if (op == 0) this.Corrupt();
+                u32 result = this.Below(nvalues as u64 + 1);
+                if (result != 0) {
+                    result = firstValue + result - 1;
+                    EVal rv = m.Val(result);
+                    rv.Block = b;
+                    rv.Inst = id;
+                    m.Vals.Set(result as usize, rv);
+                }
+                u32 ty = this.Below(ntypes as u64);
+                u32 ty2 = this.Below(ntypes as u64);
+                u64 imm = this.S();
+                Text s = this.Str();
+                u32 nops = this.Below(0x10000000);
+                u32 firstOp = m.Ops.Len() as u32;
+                for (u32 o = 0; o < nops; o++) {
+                    u8 kind = this.Byte();
+                    EOp eo = new EOp { Kind = kind, Ref = 0, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 };
+                    if (kind == OK_VALUE) {
+                        eo.Ref = firstValue + this.Below(nvalues as u64);
+                    } else if (kind == OK_INT || kind == OK_CASE) {
+                        eo.Int = this.S();
+                    } else if (kind == OK_GLOBAL) {
+                        eo.Str = this.Str();
+                    } else if (kind == OK_TARGET) {
+                        eo.Ref = f.FirstBlock + this.Below(nblocks as u64);
+                        u32 nargs = this.Below(0x10000000);
+                        eo.Args = m.Args.Len() as u32;
+                        eo.NArgs = nargs;
+                        for (u32 a = 0; a < nargs; a++) {
+                            u32 av = firstValue + this.Below(nvalues as u64);
+                            m.Args.Push(av);
+                        }
+                    } else {
+                        this.Corrupt();
+                    }
+                    m.Ops.Push(eo);
+                }
+                m.Insts.Push(new EInst {
+                    Op = op, Ty = ty, Ty2 = ty2, Result = result, FirstOp = firstOp, NOps = nops,
+                    Block = b, Imm = imm, Str = s, Pos = 0
+                });
+            }
+        }
+    }
+}
+
+// True if bytes start like a binary EIR module.
+public bool IsBinaryEir(str bytes) {
+    if (bytes.Len < 4) return false;
+    return bytes[0] == 0x45 && bytes[1] == 0x49 && bytes[2] == 0x52 && bytes[3] == 0;
+}
+
+// Reads a binary EIR module (from path) into m, a new module. The bytes must outlive m.
+// Stops at the first error.
+public void DecodeEir(ref Module m, str path, str bytes) {
+    Decoder d = new Decoder { Path = TextOf(path), Data = TextOf(bytes), Pos = 0, Strs = List<Text>.New() };
+    if (!IsBinaryEir(bytes)) d.Fail("not a binary EIR module");
+    d.Pos = 4;
+    u64 version = d.Byte() as u64;
+    version = version | (d.Byte() as u64 << 8);
+    if (version != EIR_VERSION as u64) {
+        string msg = string.From("binary EIR version ");
+        AppendDecimal(ref msg, version);
+        msg.Append("; this envoc reads version ");
+        AppendDecimal(ref msg, EIR_VERSION as u64);
+        d.Fail(msg);
+    }
+    usize end = d.Section(SEC_STRINGS);
+    u64 nstrs = d.U();
+    for (u64 i = 0; i < nstrs; i++) {
+        u64 len = d.U();
+        if (len > (end - d.Pos) as u64) d.Corrupt();
+        *u8 p = d.Data.Ptr;
+        unsafe { d.Strs.Push(new Text { Ptr = &p[d.Pos], Len = len as usize }); }
+        d.Pos += len as usize;
+    }
+    d.End(end);
+    if (d.Strs.Len() == 0) d.Corrupt();
+
+    end = d.Section(SEC_TARGET);
+    m.Target = d.Str();
+    d.End(end);
+
+    end = d.Section(SEC_TYPES);
+    u64 ntypes = d.U();
+    if (ntypes > 0x10000000) d.Corrupt();
+    u64 total = ET_PTR as u64 + 1 + ntypes;
+    for (u64 k = 0; k < ntypes; k++) {
+        u32 t = m.Types.Len() as u32;
+        u8 kind = d.Byte();
+        if (kind == EK_STRUCT) {
+            Text name = d.Str();
+            u8 flags = d.Byte();
+            if (flags > 3) d.Corrupt();
+            u32 nfields = d.Below(0x10000000);
+            u32 firstField = m.Fields.Len() as u32;
+            for (u32 i = 0; i < nfields; i++) {
+                u32 ft = d.Below(total);
+                if (ft == 0) d.Corrupt();
+                m.Fields.Push(ft);
+            }
+            m.Types.Push(new ETy {
+                Kind = EK_STRUCT, Packed = flags & 1 != 0, Defined = flags & 2 != 0, LState = 0, Size = 0, Align = 0,
+                Elem = 0, Count = 0, Fields = firstField, NFields = nfields, Name = name
+            });
+            if (m.TypeNames.Has(TextStr(name))) d.Fail("a struct type is defined twice");
+            m.TypeNames.Put(TextStr(name), t);
+        } else if (kind == EK_ARRAY) {
+            u32 elem = d.Below(total);
+            if (elem == 0) d.Corrupt();
+            u32 count = d.Below(0x100000000);
+            m.Types.Push(new ETy {
+                Kind = EK_ARRAY, Packed = false, Defined = true, LState = 0, Size = 0, Align = 0,
+                Elem = elem, Count = count, Fields = 0, NFields = 0, Name = TextOf("")
+            });
+            string key = Decimal(elem as u64);
+            key.AppendByte(':');
+            AppendDecimal(ref key, count as u64);
+            m.Arrays.Put(key, t);
+        } else {
+            d.Corrupt();
+        }
+    }
+    d.End(end);
+
+    end = d.Section(SEC_GLOBALS);
+    u64 nglobals = d.U();
+    for (u64 k = 0; k < nglobals; k++) {
+        u32 g = m.Globals.Len() as u32;
+        Text name = d.Str();
+        u32 t = d.Below(total);
+        u8 ro = d.Byte();
+        if (ro > 1) d.Corrupt();
+        u32 init = d.Init(ref m, 0);
+        m.Globals.Push(new EGlobal { Name = name, Type = t, ReadOnly = ro == 1, Init = init, Pos = 0 });
+        d.Name(ref m, name, NAME_GLOBAL, g);
+    }
+    d.End(end);
+
+    end = d.Section(SEC_FUNCS);
+    u64 nfuncs = d.U();
+    for (u64 k = 0; k < nfuncs; k++) d.Func(ref m, total as u32);
+    d.End(end);
+    if (d.Pos != d.Data.Len) d.Corrupt();
+
+    m.SrcPath = TextOf(path);
+    m.SrcText = TextOf("");
+    m.ResolveNames();
+}

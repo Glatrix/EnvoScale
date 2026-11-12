@@ -1,0 +1,117 @@
+// Linking EIR objects (PLAN D19). Every object of a program is that program's whole
+// module, lowered from the same files; it defines the functions of its own unit and
+// declares the others (`extern` with the Envo convention). The first object is the base:
+// each of its declarations takes the body that another object defines. The result is the
+// module `envoc build` would make, so the executable is the same too.
+namespace envoc.eir;
+
+use envoc.util;
+
+impl Module {
+    // A declaration that an object of this program defines.
+    public bool IsDeclaration(in this, u32 f) {
+        EFunc e = this.Func(f);
+        return e.Extern && e.Abi.Len == 0;
+    }
+
+    // Do this module and o come from the same program: the same target, types, globals and
+    // function signatures, at the same indexes?
+    public bool SameProgram(in this, in Module o) {
+        if (!Same(TextStr(this.Target), TextStr(o.Target))) return false;
+        if (this.Types.Len() != o.Types.Len() || this.Globals.Len() != o.Globals.Len() || this.Funcs.Len() != o.Funcs.Len()) return false;
+        for (u32 t = ET_PTR + 1; t < this.Types.Len() as u32; t++) {
+            ETy a = this.Ty(t);
+            ETy b = o.Ty(t);
+            if (a.Kind != b.Kind || a.Packed != b.Packed || a.Elem != b.Elem || a.Count != b.Count || a.NFields != b.NFields) return false;
+            if (!Same(TextStr(a.Name), TextStr(b.Name))) return false;
+            for (u32 k = 0; k < a.NFields; k++) {
+                if (this.Field(a.Fields + k) != o.Field(b.Fields + k)) return false;
+            }
+        }
+        for (u32 g = 1; g < this.Globals.Len() as u32; g++) {
+            EGlobal a = this.Global(g);
+            EGlobal b = o.Global(g);
+            if (a.Type != b.Type || !Same(TextStr(a.Name), TextStr(b.Name))) return false;
+        }
+        for (u32 f = 1; f < this.Funcs.Len() as u32; f++) {
+            EFunc a = this.Func(f);
+            EFunc b = o.Func(f);
+            if (a.Ret != b.Ret || a.NParams != b.NParams || !Same(TextStr(a.Name), TextStr(b.Name))) return false;
+            for (u32 k = 0; k < a.NParams; k++) {
+                if (this.Val(a.FirstValue + k).Type != o.Val(b.FirstValue + k).Type) return false;
+            }
+        }
+        return true;
+    }
+
+    // Gives each of this module's declarations the body o defines for it, if any. The
+    // modules come from the same program (SameProgram), so types, globals and functions
+    // have the same indexes in both and only values, blocks and operands move.
+    public void FillFrom(ref this, in Module o) {
+        for (u32 f = 1; f < this.Funcs.Len() as u32; f++) {
+            if (this.IsDeclaration(f) && !o.Func(f).Extern) this.CopyBody(o, f);
+        }
+    }
+
+    void CopyBody(ref this, in Module o, u32 fi) {
+        EFunc sf = o.Func(fi);
+        u32 v0 = this.Vals.Len() as u32;
+        u32 b0 = this.Blocks.Len() as u32;
+        for (u32 k = 0; k < sf.NValues; k++) {
+            u32 block = 0;
+            if (k < sf.NParams) block = b0;
+            this.Vals.Push(new EVal { Type = o.Val(sf.FirstValue + k).Type, Block = block, Inst = 0, Pos = 0 });
+        }
+        for (u32 bi = 0; bi < sf.NBlocks; bi++) {
+            EBlock sb = o.Block(sf.FirstBlock + bi);
+            u32 b = b0 + bi;
+            u32 fp = 0;
+            if (sb.NParams > 0) fp = sb.FirstParam - sf.FirstValue + v0;
+            this.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = sb.NParams, FirstInst = this.Insts.Len() as u32, NInsts = sb.NInsts, Pos = 0 });
+            for (u32 k = 0; k < sb.NParams; k++) {
+                EVal pv = this.Val(fp + k);
+                pv.Block = b;
+                this.Vals.Set((fp + k) as usize, pv);
+            }
+            for (u32 i = sb.FirstInst; i < sb.FirstInst + sb.NInsts; i++) {
+                EInst inst = o.Inst(i);
+                u32 id = this.Insts.Len() as u32;
+                if (inst.Result != 0) {
+                    inst.Result = inst.Result - sf.FirstValue + v0;
+                    EVal rv = this.Val(inst.Result);
+                    rv.Block = b;
+                    rv.Inst = id;
+                    this.Vals.Set(inst.Result as usize, rv);
+                }
+                u32 firstOp = this.Ops.Len() as u32;
+                for (u32 k = inst.FirstOp; k < inst.FirstOp + inst.NOps; k++) {
+                    EOp op = o.Op(k);
+                    op.Pos = 0;
+                    if (op.Kind == OK_VALUE) {
+                        op.Ref = op.Ref - sf.FirstValue + v0;
+                    } else if (op.Kind == OK_TARGET) {
+                        op.Ref = op.Ref - sf.FirstBlock + b0;
+                        u32 args = this.Args.Len() as u32;
+                        for (u32 a = 0; a < op.NArgs; a++) {
+                            u32 av = o.Arg(op.Args + a) - sf.FirstValue + v0;
+                            this.Args.Push(av);
+                        }
+                        op.Args = args;
+                    }
+                    this.Ops.Push(op);
+                }
+                inst.FirstOp = firstOp;
+                inst.Block = b;
+                inst.Pos = 0;
+                this.Insts.Push(inst);
+            }
+        }
+        EFunc df = this.Func(fi);
+        df.Extern = false;
+        df.FirstValue = v0;
+        df.NValues = sf.NValues;
+        df.FirstBlock = b0;
+        df.NBlocks = sf.NBlocks;
+        this.Funcs.Set(fi as usize, df);
+    }
+}

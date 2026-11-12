@@ -29,6 +29,8 @@ sema/dump.envo
 eir/ir.envo
 eir/print.envo
 eir/verify.envo
+eir/binary.envo
+eir/link.envo
 eir/read.envo
 eir/lower.envo
 eir/lower_stmt.envo

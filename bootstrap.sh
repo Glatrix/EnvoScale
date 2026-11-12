@@ -100,6 +100,25 @@ bad() { failed=$((failed + 1)); say "FAIL  $1"; [ -n "${2:-}" ] && say "      $2
 
 # run <dir> <args...>: runs the native envoc0 in <dir>; sets rc, and leaves
 # stdout/stderr in $TMP/out and $TMP/err.
+# Stage 2 only (M3.7): compiles each of the files to an object (--unit), links the objects
+# and prints a problem unless the result is the executable `build` wrote. $1: the
+# directory, $2: that executable, then the files.
+objects() {
+    odir=$1
+    oprog=$2
+    shift 2
+    rm -f "$oprog".*.eo
+    k=0
+    for u in "$@"; do
+        run "$odir" compile "$@" --unit "$u" -o "$oprog.$k.eo"
+        if [ "$rc" -ne 0 ]; then echo "compile --unit $u failed: $(cat "$TMP/err")"; return; fi
+        k=$((k + 1))
+    done
+    run "$odir" link "$oprog".*.eo -o "$oprog.linked"
+    if [ "$rc" -ne 0 ]; then echo "link failed: $(cat "$TMP/err")"; return; fi
+    if ! cmp -s "$oprog" "$oprog.linked"; then echo 'the linked executable differs from the build'; fi
+}
+
 run() {
     dir=$1; shift
     set +e
@@ -215,8 +234,15 @@ do_test() {
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$rundir" build "$f" -o "$program"
             if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
-            if [ "$compiler" = envoc ] && ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then
-                bad "$name" 'the executable differs from the envoc1 build'; continue
+            if [ "$compiler" = envoc ]; then
+                if ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then bad "$name" 'the executable differs from the envoc1 build'; continue; fi
+                problem=$(objects "$rundir" "$program" "$f")
+                if [ -n "$problem" ]; then bad "$name" "$problem"; continue; fi
+                # the object holds the program's EIR, in the binary form
+                run "$rundir" eir "$f"
+                mv "$TMP/out" "$TMP/eir"
+                run "$rundir" eir-check "$program.0.eo"
+                if [ "$rc" -ne 0 ] || ! cmp -s "$TMP/eir" "$TMP/out"; then bad "$name" "eir-check of the object differs from eir: exit $rc"; continue; fi
             fi
             set +e
             (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
@@ -261,8 +287,10 @@ do_test() {
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$d" build "$@" -o "$program"
             if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
-            if [ "$compiler" = envoc ] && ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then
-                bad "$name" 'the executable differs from the envoc1 build'; continue
+            if [ "$compiler" = envoc ]; then
+                if ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then bad "$name" 'the executable differs from the envoc1 build'; continue; fi
+                problem=$(objects "$d" "$program" "$@")
+                if [ -n "$problem" ]; then bad "$name" "$problem"; continue; fi
             fi
             set +e
             (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
@@ -484,6 +512,13 @@ do_test() {
             if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
             else bad "stage2 golden/eir/$input" "exit $rc: $(tr -d '\r' < "$TMP/err")"; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
         done
+        # the binary form (M3.7): text -> binary -> text, and binary -> binary
+        run "$dir" eir-check "$base" -o "$TMP/1.eirb"
+        [ "$rc" -eq 0 ] && run "$dir" eir-check "$TMP/1.eirb"
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        [ "$rc" -eq 0 ] && run "$dir" eir-check "$TMP/1.eirb" -o "$TMP/2.eirb"
+        if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual" && cmp -s "$TMP/1.eirb" "$TMP/2.eirb"; then pass
+        else bad "stage2 golden/eir/$base (binary)" "exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
     done
     say 'stage 2 spec tests: tests/spec/eir'
     dir="$ROOT/tests/spec/eir"
@@ -566,6 +601,23 @@ do_test() {
         if [ "$rc" -eq 0 ] && cmp -s "$want" "$selfdir/self-$target"; then pass
         else bad "$what" "exit $rc, or the executable differs from envoc1's"; fi
     done
+    # Stage 2 through an object of itself (M3.7), and link errors
+    set -- compile
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$ROOT/compiler/files.txt"
+    run "$ROOT/compiler" "$@" -o "$selfdir/self.eo"
+    [ "$rc" -eq 0 ] && run "$ROOT/compiler" link "$selfdir/self.eo" -o "$selfdir/self-linked"
+    if [ "$rc" -eq 0 ] && cmp -s "$selfdir/self-linked" "$BUILD2/envoc$(host_suffix)"; then pass
+    else bad 'stage2 compile and link compiler' "exit $rc, or the executable differs from build/stage2"; fi
+    run "$ROOT" link "$selfdir/core-multi-program$(host_suffix).0.eo" -o "$selfdir/none"
+    if [ "$rc" -eq 1 ] && grep -q 'no object defines @' "$TMP/err"; then pass; else bad 'stage2 link with a unit missing' "exit $rc: $(cat "$TMP/err")"; fi
+    run "$ROOT" link "$selfdir/core-multi-program$(host_suffix).0.eo" "$selfdir/s1-multi-namespaces$(host_suffix).0.eo" -o "$selfdir/none"
+    if [ "$rc" -eq 1 ] && grep -q 'compiled from different programs' "$TMP/err"; then pass; else bad 'stage2 link of two programs' "exit $rc: $(cat "$TMP/err")"; fi
+    printf 'EIR\000\002\000' > "$selfdir/v2.eo"
+    run "$ROOT" link "$selfdir/v2.eo" -o "$selfdir/none"
+    if [ "$rc" -eq 1 ] && grep -q 'binary EIR version 2; this envoc reads version 1' "$TMP/err"; then pass; else bad 'stage2 link of an unknown version' "exit $rc: $(cat "$TMP/err")"; fi
     EXE=$stage0_exe
 
     say ''

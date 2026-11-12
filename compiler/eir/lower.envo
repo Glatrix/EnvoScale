@@ -361,6 +361,34 @@ public struct Lower {
         this.DrainThunks();
     }
 
+    // Keeps only one unit's code, for an object (D19): the functions declared in files
+    // not in `owned` become declarations, and so does __main unless main. Instances,
+    // closures and thunks stay defined in every object; the linker takes one copy.
+    public void KeepUnit(ref this, in List<bool> owned, bool main) {
+        u32 n = this.C.NodeAt(this.C.T.Root).A;
+        while (n != 0) {
+            if (this.C.NKind(n) == NK_FN && !this.C.NeedsInst(this.C.NSym(n))) {
+                u32 file = this.C.TokFile(this.C.NTok(n));
+                u32 f = this.FuncIds.Get(this.C.NSym(n) as usize);
+                if (f != 0 && !owned.Get(file as usize)) this.Declare(f);
+            }
+            n = this.C.NNext(n);
+        }
+        if (!main) {
+            u64? named = this.M.Names.Get("__main");
+            if (named.IsSome()) this.Declare((named.Unwrap() & 0xFFFFFFFF) as u32);
+        }
+    }
+
+    // Function f becomes a declaration: `extern` with the Envo convention.
+    void Declare(ref this, u32 f) {
+        EFunc e = this.M.Func(f);
+        e.Extern = true;
+        e.NBlocks = 0;
+        e.NValues = e.NParams;
+        this.M.Funcs.Set(f as usize, e);
+    }
+
     // The EIR function of instance i, named after its type arguments.
     void DeclareInst(ref this, u32 i) {
         Inst inst = this.C.Insts.Get(i as usize);

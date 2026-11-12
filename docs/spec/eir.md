@@ -2,8 +2,8 @@
 
 > **Status:** Specified by [RFC 0005](../rfcs/0005-eir-v1.md) (accepted 2026-11-11).
 > Stage 1 implements the in-memory form, the text form and the verifier
-> (`envoc1 eir-check`, M2.6); lowering and the x86-64 backend follow in M2.7. The binary
-> form (§7) is implemented by Stage 2. Tests: `tests/golden/eir/` (round trips) and
+> (`envoc1 eir-check`, M2.6) and lowering and the x86-64 backend (M2.7). Stage 2 adds
+> the binary form and objects (§7, M3.7). Tests: `tests/golden/eir/` (round trips) and
 > `tests/spec/eir/` (verifier and syntax errors).
 
 EIR is the compiler's middle layer: every front end lowers to it, every optimization
@@ -263,17 +263,43 @@ tests include one invalid module per rule.
 **[eir.bin.1]** A binary module (`.eirb`) is: the magic bytes `45 49 52 00` (`EIR\0`), the
 format version as a `u16` little-endian (`1`), then sections in this order, each a
 section id byte followed by its byte length as an unsigned LEB128: 1 strings, 2 target,
-3 types, 4 globals, 5 functions. Integers inside sections are LEB128 (signed for signed
-constants); names and string data are indexes into the string section.
+3 types, 4 globals, 5 functions. Numbers inside sections are unsigned LEB128, except
+integer constants, `switch` keys and immediates, which are signed LEB128 of their 64 bits.
+Names and string data are indexes into the string section.
 
-**[eir.bin.2]** Instructions are encoded as an opcode byte followed by their operands in
-text order; values are numbered as the printer numbers them ([eir.text.1]), so a module
-printed, parsed, encoded and decoded yields the same bytes and the same text. The opcode
-numbering is part of the version: adding an opcode at the end is a minor change, and
-changing an existing one needs a new version and a migration in `envo eir upgrade`.
+**[eir.bin.2]** The sections:
 
-**[eir.bin.3]** `envo eir` converts between the forms; both round-trips are exact, and
-M2.6's golden tests check them byte for byte.
+- **strings**: a count, then each string as its byte length and bytes. String 0 is empty.
+- **target**: the target's string.
+- **types**: the types after the primitives, in id order (primitives have fixed ids,
+  `void` = 1 to `ptr` = 13). A struct is `14`, its name, flags (1 packed, 2 defined) and
+  its field type ids; an array is `15`, its element type id and length.
+- **globals**: a count, then each global's name, type id, a read-only byte and its
+  initializer: a kind byte (1 zero, 2 bytes, 3 list, 4 integer, 5 address) followed by
+  the string, the element count and elements, the integer or the name.
+- **functions**: a count, then each function's name, flags (1 `extern`), ABI string,
+  result type, parameter count, and the types of all its values, parameters first. A
+  definition adds its blocks: each block's first parameter (as a value number), parameter
+  count and instructions. An instruction is its opcode, its result (value number + 1, or
+  0), its type operands (two type ids, 0 if unused), its immediate, a string (intrinsic,
+  ABI) and its operands, each a kind byte (1 value, 2 integer, 3 global name, 4 branch
+  target with its arguments, 5 `switch` key) and its payload.
+
+Values and blocks are numbered from the function's first, so the encoding of a module
+does not depend on where its functions sit in memory. Decoding gives back the same types,
+globals and functions, and printing the result gives the same text. The opcode numbering
+is part of the version: adding an opcode at the end is a minor change, and changing an
+existing one needs a new version and a migration in `envo eir upgrade`.
+
+**[eir.bin.3]** `envoc eir-check` reads either form and prints text, or writes the binary
+form with `-o`. Both round trips are exact; the tests check them on the EIR goldens and
+on every run program.
+
+**[eir.bin.4] Objects.** An EIR object (`.eo`, PLAN D19) is a binary module of a whole
+program in which only one unit's functions (one file's, or the runtime's) have bodies;
+the others are `extern` declarations with the Envo convention. `envoc link` fills each
+declaration with the body another object of the same program defines and generates code
+from the result.
 
 ## 8. Versioning
 

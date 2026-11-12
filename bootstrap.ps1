@@ -99,6 +99,22 @@ function Invoke-Tool([string]$exe, [string[]]$argv, [string]$cwd) {
     return [pscustomobject]@{ Code = $p.ExitCode; Out = $out; Err = $err }
 }
 
+# Stage 2 only (M3.7): compiles each of the files to an object (--unit), links the objects
+# and returns a problem unless the result is the executable `build` wrote, or $null.
+function Test-Objects([string]$exe, [string]$dir, [string]$program, [string[]]$files) {
+    $objs = @()
+    for ($k = 0; $k -lt $files.Count; $k++) {
+        $obj = "$program.$k.eo"
+        $r = Invoke-Tool $exe (@('compile') + $files + @('--unit', $files[$k], '-o', $obj)) $dir
+        if ($r.Code -ne 0) { return "compile --unit $($files[$k]) failed: $($r.Err.Trim())" }
+        $objs += $obj
+    }
+    $r = Invoke-Tool $exe (@('link') + $objs + @('-o', "$program.linked")) $dir
+    if ($r.Code -ne 0) { return "link failed: $($r.Err.Trim())" }
+    if (-not (Test-SameBytes $program "$program.linked")) { return 'the linked executable differs from the build' }
+    return $null
+}
+
 # True if the files at a and b hold the same bytes.
 function Test-SameBytes([string]$a, [string]$b) {
     if (-not (Test-Path -LiteralPath $a) -or -not (Test-Path -LiteralPath $b)) { return $false }
@@ -233,8 +249,14 @@ function Invoke-Test {
             $program = Join-Path $runDir ($f.BaseName + '.exe')
             $r = Invoke-Tool $exe @('build', $f.FullName, '-o', $program) $runDir
             if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
-            if ($compiler -eq 'envoc' -and -not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) {
-                Bad $name 'the executable differs from the envoc1 build'; continue
+            if ($compiler -eq 'envoc') {
+                if (-not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) { Bad $name 'the executable differs from the envoc1 build'; continue }
+                $problem = Test-Objects $exe $runDir $program @($f.FullName)
+                if ($problem) { Bad $name $problem; continue }
+                # the object holds the program's EIR, in the binary form
+                $r1 = Invoke-Tool $exe @('eir', $f.FullName) $runDir
+                $r2 = Invoke-Tool $exe @('eir-check', "$program.0.eo") $runDir
+                if ($r2.Code -ne 0 -or -not [string]::Equals($r1.Out, $r2.Out)) { Bad $name "eir-check of the object differs from eir: exit $($r2.Code)"; continue }
             }
             $r = Invoke-Tool $program @() $runDir
             $out = Normalize $r.Out
@@ -271,8 +293,10 @@ function Invoke-Test {
             $program = Join-Path $runDir ("$msuite-" + $d.Name + '.exe')
             $r = Invoke-Tool $exe (@('build') + $files + @('-o', $program)) $d.FullName
             if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
-            if ($compiler -eq 'envoc' -and -not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) {
-                Bad $name 'the executable differs from the envoc1 build'; continue
+            if ($compiler -eq 'envoc') {
+                if (-not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) { Bad $name 'the executable differs from the envoc1 build'; continue }
+                $problem = Test-Objects $exe $d.FullName $program $files
+                if ($problem) { Bad $name $problem; continue }
             }
             $r = Invoke-Tool $program @() $runDir
             $out = Normalize $r.Out
@@ -489,6 +513,15 @@ function Invoke-Test {
             if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass $input }
             else { Bad "stage2 golden/eir/$input" "exit $($r.Code), stderr: $($r.Err.Trim())"; Show-Diff $expected $actual }
         }
+        # the binary form (M3.7): text -> binary -> text, and binary -> binary
+        $b1 = Join-Path $Build2 'golden-1.eirb'
+        $b2 = Join-Path $Build2 'golden-2.eirb'
+        $r = Invoke-Tool $envoc @('eir-check', $f.Name, '-o', $b1) $dir
+        if ($r.Code -eq 0) { $r = Invoke-Tool $envoc @('eir-check', $b1) $dir }
+        $actual = Normalize $r.Out
+        if ($r.Code -eq 0) { $r = Invoke-Tool $envoc @('eir-check', $b1, '-o', $b2) $dir }
+        if ($r.Code -eq 0 -and [string]::Equals($expected, $actual) -and (Test-SameBytes $b1 $b2)) { Pass "$($f.Name) (binary)" }
+        else { Bad "stage2 golden/eir/$($f.Name) (binary)" "exit $($r.Code), stderr: $($r.Err.Trim())" }
     }
     Say 'stage 2 spec tests: tests/spec/eir'
     $dir = Join-Path $Root 'tests\spec\eir'
@@ -548,6 +581,24 @@ function Invoke-Test {
         if ($r.Code -eq 0 -and (Test-SameBytes $want $self)) { Pass $what }
         else { Bad $what "exit $($r.Code), or the executable differs from envoc1's" }
     }
+    # Stage 2 through an object of itself (M3.7), and link errors
+    $dir = Join-Path $Root 'compiler'
+    $files = @(Get-Content -LiteralPath (Join-Path $dir 'files.txt') | Where-Object { $_.Trim() -ne '' })
+    $obj = Join-Path $selfDir 'self.eo'
+    $linked = Join-Path $selfDir 'self-linked.exe'
+    $r = Invoke-Tool $envoc (@('compile') + $files + @('-o', $obj)) $dir
+    if ($r.Code -eq 0) { $r = Invoke-Tool $envoc @('link', $obj, '-o', $linked) $dir }
+    if ($r.Code -eq 0 -and (Test-SameBytes $linked (Join-Path $Build2 'envoc.exe'))) { Pass 'stage2 compile and link compiler' }
+    else { Bad 'stage2 compile and link compiler' "exit $($r.Code), or the executable differs from build\stage2" }
+    $none = Join-Path $selfDir 'none.exe'
+    $r = Invoke-Tool $envoc @('link', (Join-Path $selfDir 'core-multi-program.exe.0.eo'), '-o', $none) $Root
+    if ($r.Code -eq 1 -and $r.Err.Contains('no object defines @')) { Pass 'stage2 link with a unit missing' } else { Bad 'stage2 link with a unit missing' "exit $($r.Code): $($r.Err)" }
+    $r = Invoke-Tool $envoc @('link', (Join-Path $selfDir 'core-multi-program.exe.0.eo'), (Join-Path $selfDir 's1-multi-namespaces.exe.0.eo'), '-o', $none) $Root
+    if ($r.Code -eq 1 -and $r.Err.Contains('compiled from different programs')) { Pass 'stage2 link of two programs' } else { Bad 'stage2 link of two programs' "exit $($r.Code): $($r.Err)" }
+    $v2 = Join-Path $selfDir 'v2.eo'
+    [IO.File]::WriteAllBytes($v2, [byte[]](0x45, 0x49, 0x52, 0, 2, 0))
+    $r = Invoke-Tool $envoc @('link', $v2, '-o', $none) $Root
+    if ($r.Code -eq 1 -and $r.Err.Contains('binary EIR version 2; this envoc reads version 1')) { Pass 'stage2 link of an unknown version' } else { Bad 'stage2 link of an unknown version' "exit $($r.Code): $($r.Err)" }
 
     Say ''
     Say "$($script:passed) passed, $($script:failed) failed"

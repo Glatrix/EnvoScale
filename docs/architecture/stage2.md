@@ -97,7 +97,31 @@ Stage 2 also builds Stage 1 and itself exactly as `envoc1` does. So `envoc` buil
 `envoc` is already byte-identical to `envoc` built by `envoc1`. That holds until the two
 start to differ, which they will with `-O2` (3.8). The fixed point in CI is 3.9.
 
-The binary form of EIR moves to 3.7, where `.eo` objects need it.
+## Objects and linking (M3.7)
+
+`binary.envo` reads and writes the binary form of EIR ([eir.bin]). `envoc eir-check`
+reads either form; `-o` writes binary, and so does `envoc eir -o`.
+
+An object (`.eo`) is the binary EIR of the whole program, in which only its own unit's
+functions have bodies:
+
+```
+envoc compile a.envo b.envo --unit a.envo -o a.eo     # a's code; the runtime goes with the entry file
+envoc compile a.envo b.envo --unit b.envo -o b.eo
+envoc link a.eo b.eo -o program
+```
+
+Each object still checks every file, because Stage 2 has no interface files yet; it
+lowers the whole program and turns the other units' functions into declarations.
+Generic instances, closures and thunks stay in every object. `envoc link` takes the
+first object and gives each declaration the body another object defines. All objects
+come from the same lowering, so types, globals and functions have the same indexes in
+each, and the linker checks that they do. The result is the module `envoc build` makes,
+so the executable is byte-identical. The tests check that for every run program, for
+each multi-file program linked unit by unit, and for Stage 2 itself.
+
+Interface files, which let a unit compile without the other units' sources, come with
+the build system (M5).
 
 ## Stage 1 bugs found by Stage 2
 
