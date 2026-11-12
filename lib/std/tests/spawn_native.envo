@@ -2,6 +2,7 @@
 // that reads its input to the end and writes it back in capitals, exiting with 3; the
 // parent sends, reads the output without waiting, and sees the exit code.
 // vm: skip (the child is this program as a native executable)
+// wasm: skip (a browser page has no processes)
 // expect: child said: HELLO, PIPES
 // expect: exit code 3
 use std.process;

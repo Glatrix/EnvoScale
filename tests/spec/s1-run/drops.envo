@@ -1,7 +1,8 @@
 // Drops and moves ([own.move.2], [own.drop.1], [s1.own.2]): `Drop` runs when the owner's
 // scope ends, newest first; a moved value is dropped by its new owner instead, also when
 // the move happens on one path only; reassignment drops the old value; a temporary drops
-// at the end of its statement; fields drop after their struct, in declaration order;
+// at the end of its statement, or with its block when a view local may borrow it
+// ([own.temp.1]); fields drop after their struct, in declaration order;
 // `break`, `continue` and `return` drop what they leave.
 // expect: scope: drop b
 // expect: drop a
@@ -16,8 +17,8 @@
 // expect: assign: drop old
 // expect: assign: end
 // expect: drop new
-// expect: temp: drop t
-// expect: temp: end
+// expect: temp: temp: end
+// expect: drop t
 // expect: fields: drop pair
 // expect: drop left
 // expect: drop right
