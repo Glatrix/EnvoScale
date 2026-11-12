@@ -205,6 +205,17 @@ impl Checker {
         u32 s = 0;
         if (quals != 0) s = this.QualifiedType(quals, tok);
         else s = this.GFindAt(tok);
+        if (s == 0 && quals == 0 && !this.Core) {
+            str name = this.TokText(tok);
+            if (Same(name, "f32") || Same(name, "float")) {
+                if (have != 0) this.TypeArgCount(tok, 0, have);
+                return this.FloatType(4);
+            }
+            if (Same(name, "f64") || Same(name, "double")) {
+                if (have != 0) this.TypeArgCount(tok, 0, have);
+                return this.FloatType(8);
+            }
+        }
         if (s == 0) this.FailName(tok, E_UNKNOWN_TYPE, "unknown type `", tok, "`");
         Sym sym = this.SymAt(s);
         u8 k = sym.Kind;

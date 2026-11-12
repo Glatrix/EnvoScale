@@ -889,6 +889,8 @@ function Invoke-Test {
         $rel = $f.FullName.Substring($Root.Length + 1)
         if ($rel -match '^tests\\golden\\') { $cmds = @('lex', 'parse', 'check') }
         if ($rel -match '^tests\\spec\\(core|s1)-run\\') { $cmds = @('lex', 'parse', 'check', 'eir') }
+        # a program Stage 1 cannot parse (E0950, such as floats: RFC 0006) is compared as tokens
+        if ([IO.File]::ReadAllText($f.FullName) -match '(?m)^// stage1-error: E0950') { $cmds = @('lex') }
         foreach ($cmd in $cmds) {
             $r1 = Invoke-Tool $envoc1 @($cmd, $f.Name) $f.DirectoryName
             $r2 = Invoke-Tool $envoc @($cmd, $f.Name) $f.DirectoryName

@@ -994,6 +994,7 @@ struct Parser {
         }
         u16 leaf = NK_NONE;
         if (k == TK_INT) leaf = NK_INT;
+        else if (k == TK_FLOAT && !this.Core) leaf = NK_FLOAT;
         else if (k == TK_CHAR) leaf = NK_CHAR;
         else if (k == TK_STRING) leaf = NK_STRING;
         else if (k == TK_IDENT) leaf = NK_NAME;

@@ -127,6 +127,14 @@ impl Checker {
             if (this.CharValue(node.Tok) > 0x7F) this.NotCore("non-ASCII character literals", node.Tok);
             return T_U8;
         }
+        if (k == NK_FLOAT) {
+            // [type.lit.2]: the suffix's type, else the expected float type, else f64
+            str text = this.TokText(node.Tok);
+            if (text.Len > 3 && text[text.Len - 3] == 'f' && text[text.Len - 2] == '3' && text[text.Len - 1] == '2') return this.FloatType(4);
+            if (text.Len > 3 && text[text.Len - 3] == 'f' && text[text.Len - 2] == '6' && text[text.Len - 1] == '4') return this.FloatType(8);
+            if (this.IsFloatType(expected)) return expected;
+            return this.FloatType(8);
+        }
         if (k == NK_STRING) return T_STR;
         if (k == NK_BOOL) return T_BOOL;
         if (k == NK_NAME) {
@@ -206,7 +214,7 @@ impl Checker {
             if (node.Op == TK_MINUS) {
                 u32 t = this.CheckValue(node.A, expected);
                 Type ty = this.TypeAt(t);
-                if (ty.Kind != TYK_INT || !ty.Signed) this.BadOperand(t, op);
+                if ((ty.Kind != TYK_INT || !ty.Signed) && ty.Kind != TYK_FLOAT) this.BadOperand(t, op);
                 return t;
             }
             if (node.Op == TK_TILDE) {
@@ -581,6 +589,9 @@ impl Checker {
     u32 CastKind(in this, u32 from, u32 to) {
         u8 fk = this.TyKind(from);
         u8 tk = this.TyKind(to);
+        // floats ([type.conv.1]): to and from any integer or float
+        if (tk == TYK_FLOAT && (fk == TYK_INT || fk == TYK_FLOAT)) return 1;
+        if (fk == TYK_FLOAT && tk == TYK_INT) return 1;
         if (tk == TYK_INT) {
             if (fk == TYK_INT || fk == TYK_BOOL || fk == TYK_ENUM) return 1;
             if (fk == TYK_PTR && (to == T_USIZE || to == T_ISIZE)) return 2;
@@ -635,6 +646,9 @@ impl Checker {
                 this.TypeUntyped(node.A, t);
                 this.ConstEval(node.A);
             }
+        } else if (this.NKind(node.A) == NK_FLOAT && this.NKind(node.B) != NK_FLOAT) {
+            t = this.CheckValue(node.B, expected);
+            this.ExpectType(node.A, t);
         } else {
             t = this.CheckValue(node.A, expected);
             this.ExpectType(node.B, t);
@@ -642,11 +656,17 @@ impl Checker {
         if (compare) {
             u8 k = this.TyKind(t);
             if (op == TK_EQ_EQ || op == TK_NOT_EQ) {
-                if (k != TYK_INT && k != TYK_BOOL && k != TYK_ENUM && k != TYK_PTR) this.BadOperand(t, node.Tok);
-            } else if (k != TYK_INT) {
+                if (k != TYK_INT && k != TYK_FLOAT && k != TYK_BOOL && k != TYK_ENUM && k != TYK_PTR) this.BadOperand(t, node.Tok);
+            } else if (k != TYK_INT && k != TYK_FLOAT) {
                 this.BadOperand(t, node.Tok);
             }
             return T_BOOL;
+        }
+        if (this.IsFloatType(t)) {
+            // + - * / only: no %, bit operators or wrapping forms on floats
+            str ops = this.TokText(node.Tok);
+            if (!Same(ops, "+") && !Same(ops, "-") && !Same(ops, "*") && !Same(ops, "/")) this.BadOperand(t, node.Tok);
+            return t;
         }
         if (!this.IsIntType(t)) this.BadOperand(t, node.Tok);
         return t;
@@ -787,6 +807,14 @@ impl Checker {
 
     void ConstFailed(in this, u32 n) => this.Error(E_CONST_FAILED, this.NTok(n));
 
+    // The IEEE bits of float literal node n in its type (RFC 0006).
+    public u64 FloatBits(in this, u32 n) {
+        str text = this.TokText(this.NTok(n));
+        u32 size = this.TypeAt(this.NType(n)).Size;
+        if (text.Len > 3 && text[text.Len - 3] == 'f') text = text[0..text.Len - 3];
+        return FloatLiteralBits(text, size);
+    }
+
     void NotConstant(in this, u32 n) => this.Error(E_NOT_CONSTANT, this.NTok(n));
 
     u64 ConstEvalInner(ref this, u32 n) {
@@ -798,6 +826,7 @@ impl Checker {
             return this.LiteralValue(node.Tok, ref overflow);
         }
         if (k == NK_STRING) return 0;
+        if (k == NK_FLOAT) return this.FloatBits(n);
         if (k == NK_CHAR) return this.CharValue(node.Tok);
         if (k == NK_BOOL) {
             if (Same(this.TokText(node.Tok), "true")) return 1;
@@ -836,6 +865,11 @@ impl Checker {
                     return 0 -% lit;
                 }
                 u64 x = this.ConstEval(node.A);
+                if (this.IsFloatType(t)) {
+                    // flip the sign bit
+                    if (this.TypeAt(t).Size == 4) return x ^ 0x80000000;
+                    return x ^ 0x8000000000000000;
+                }
                 if (x == 0x8000000000000000) this.ConstFailed(n);      // -(-2^63)
                 u64 r = 0 -% x;
                 if (!this.ValueFits(r, t)) this.ConstFailed(n);
@@ -861,6 +895,7 @@ impl Checker {
     u64 ConstBinary(ref this, u32 n, Node node, u32 t) {
         u16 op = node.Op;
         if (op == TK_AND_AND || op == TK_OR_OR) this.NotConstant(n);
+        if (this.IsFloatType(this.NType(node.A))) this.NotConstant(n);
         u64 a = this.ConstEval(node.A);
         u64 b = this.ConstEval(node.B);
         bool signed = this.TypeAt(this.NType(node.A)).Signed;      // the operands' type decides

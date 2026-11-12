@@ -1,0 +1,267 @@
+// Float literals to IEEE 754 bits (RFC 0006), with integers only: the compiler is written
+// in Envo-S1. A literal is m × 10^e, exact as a fraction of big integers; its binary
+// value is found by long division and rounded to nearest, ties to even, with subnormals
+// and overflow to infinity as IEEE 754 says. Every literal converts to the same bits on
+// every machine.
+namespace envoc.sema;
+
+// A big unsigned integer: 32-bit limbs, least significant first, no leading zero limbs.
+struct Big {
+    List<u32> L;
+
+    static Big Of(u64 v) {
+        Big b = new Big { L = List<u32>.New() };
+        if (v != 0) b.L.Push((v & 0xFFFFFFFF) as u32);
+        if (v >> 32 != 0) b.L.Push((v >> 32) as u32);
+        return b;
+    }
+
+    Big Copy(in this) {
+        Big b = new Big { L = List<u32>.New() };
+        u32[] l = this.L.AsSlice();
+        for (usize i = 0; i < l.Len; i++) b.L.Push(l[i]);
+        return b;
+    }
+
+    void Trim(ref this) {
+        while (this.L.Len() > 0 && this.L.Get(this.L.Len() - 1) == 0) this.L.Pop();
+    }
+
+    void MulSmall(ref this, u32 k) {
+        u64 carry = 0;
+        mut u32[] l = this.L.AsMutSlice();
+        for (usize i = 0; i < l.Len; i++) {
+            u64 p = l[i] as u64 * k as u64 + carry;
+            l[i] = (p & 0xFFFFFFFF) as u32;
+            carry = p >> 32;
+        }
+        if (carry != 0) this.L.Push(carry as u32);
+    }
+
+    void Shl(ref this, u32 n) {
+        if (this.L.Len() == 0) return;
+        u32 words = n / 32;
+        u32 bits = n % 32;
+        List<u32> r = List<u32>.New();
+        for (u32 i = 0; i < words; i++) r.Push(0);
+        u32 carry = 0;
+        u32[] l = this.L.AsSlice();
+        for (usize i = 0; i < l.Len; i++) {
+            if (bits == 0) {
+                r.Push(l[i]);
+            } else {
+                r.Push(l[i] << bits | carry);
+                carry = l[i] >> (32 - bits);
+            }
+        }
+        if (carry != 0) r.Push(carry);
+        this.L = r;
+    }
+
+    u32 BitLen(in this) {
+        usize n = this.L.Len();
+        if (n == 0) return 0;
+        u32 top = this.L.Get(n - 1);
+        u32 b = 0;
+        while (top != 0) {
+            b++;
+            top = top >> 1;
+        }
+        return ((n - 1) * 32) as u32 + b;
+    }
+
+    // -1, 0 or 1 as this is less than, equal to or greater than o.
+    i32 Cmp(in this, in Big o) {
+        usize a = this.L.Len();
+        usize b = o.L.Len();
+        if (a != b) {
+            if (a < b) return -1;
+            return 1;
+        }
+        usize i = a;
+        while (i > 0) {
+            i--;
+            u32 x = this.L.Get(i);
+            u32 y = o.L.Get(i);
+            if (x != y) {
+                if (x < y) return -1;
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // this -= o (o must not be larger).
+    void Sub(ref this, in Big o) {
+        i64 borrow = 0;
+        mut u32[] l = this.L.AsMutSlice();
+        for (usize i = 0; i < l.Len; i++) {
+            i64 y = 0;
+            if (i < o.L.Len()) y = o.L.Get(i) as i64;
+            i64 d = l[i] as i64 - y - borrow;
+            borrow = 0;
+            if (d < 0) {
+                d += 0x100000000;
+                borrow = 1;
+            }
+            l[i] = d as u32;
+        }
+        this.Trim();
+    }
+
+    bool IsZero(in this) => this.L.Len() == 0;
+}
+
+// The IEEE bits of decimal mantissa digits (no point) times 10^exp10, for a format with
+// mbits mantissa bits (52 or 23) and ebits exponent bits (11 or 8).
+u64 DecimalBits(str digits, i64 exp10, u32 mbits, u32 ebits) {
+    Big num = Big.Of(0);
+    bool any = false;
+    for (usize i = 0; i < digits.Len; i++) {
+        num.MulSmall(10);
+        u32 d = (digits[i] - '0') as u32;
+        if (num.IsZero()) num = Big.Of(d as u64);
+        else {
+            Big dd = Big.Of(d as u64);
+            Add(ref num, dd);
+        }
+        if (d != 0) any = true;
+    }
+    if (!any) return 0;
+    i64 bias = (1 << (ebits - 1)) as i64 - 1;
+    // absurd exponents: certainly infinity or zero
+    if (exp10 > 400) return Inf(mbits, ebits);
+    if (exp10 < -400 - digits.Len as i64) return 0;
+    Big den = Big.Of(1);
+    if (exp10 >= 0) {
+        for (i64 k = 0; k < exp10; k++) num.MulSmall(10);
+    } else {
+        for (i64 k = 0; k < 0 - exp10; k++) den.MulSmall(10);
+    }
+    // scale so that 2^mbits <= num/den < 2^(mbits+1); the value is that times 2^-shift
+    i64 shift = (mbits + 1) as i64 - (num.BitLen() as i64 - den.BitLen() as i64);
+    if (shift > 0) num.Shl(shift as u32);
+    else if (shift < 0) den.Shl((0 - shift) as u32);
+    Big top = Big.Of(1);
+    top.Shl(mbits);
+    Big scaled = den.Copy();
+    scaled.Shl(mbits);
+    // num/den >= 2^mbits?
+    if (num.Cmp(scaled) < 0) {
+        num.Shl(1);
+        shift++;
+    }
+    scaled.Shl(1);
+    if (num.Cmp(scaled) >= 0) {
+        den.Shl(1);
+        shift--;
+    }
+    // the binary exponent of the leading bit: value = q × 2^-shift with q in [2^mbits, 2^(mbits+1))
+    i64 e = mbits as i64 - shift;
+    i64 extra = 0;      // subnormal: drop more bits
+    if (e < 1 - bias) {
+        extra = (1 - bias) - e;
+        if (extra > mbits as i64 + 1) return 0;
+        den.Shl(extra as u32);
+        e = 1 - bias;
+    }
+    // q = num / den, bit by bit (q < 2^(mbits+1))
+    u64 q = 0;
+    i32 b = (mbits + 1) as i32;
+    while (b >= 0) {
+        Big part = den.Copy();
+        part.Shl(b as u32);
+        if (num.Cmp(part) >= 0) {
+            num.Sub(part);
+            q = q | (1 << b as u64);
+        }
+        b--;
+    }
+    // round to nearest, ties to even: compare 2 × remainder with den
+    num.Shl(1);
+    i32 c = num.Cmp(den);
+    if (c > 0 || (c == 0 && q & 1 == 1)) q++;
+    if (q >> (mbits + 1) != 0) {
+        q = q >> 1;
+        e++;
+    }
+    if (extra > 0) {
+        // subnormal, or rounded up into the normal range
+        if (q >> mbits != 0) return ((1) << mbits as u64) | (q & ((1 << mbits as u64) - 1));
+        return q;
+    }
+    if (e > bias) return Inf(mbits, ebits);
+    u64 biased = (e + bias) as u64;
+    return biased << mbits as u64 | (q & ((1 << mbits as u64) - 1));
+}
+
+u64 Inf(u32 mbits, u32 ebits) => ((1 << ebits as u64) - 1) << mbits as u64;
+
+void Add(ref Big a, in Big b) {
+    u64 carry = 0;
+    usize n = a.L.Len();
+    if (b.L.Len() > n) n = b.L.Len();
+    while (a.L.Len() < n) a.L.Push(0);
+    mut u32[] l = a.L.AsMutSlice();
+    for (usize i = 0; i < n; i++) {
+        u64 y = 0;
+        if (i < b.L.Len()) y = b.L.Get(i) as u64;
+        u64 s = l[i] as u64 + y + carry;
+        l[i] = (s & 0xFFFFFFFF) as u32;
+        carry = s >> 32;
+    }
+    if (carry != 0) a.L.Push(carry as u32);
+}
+
+// The bits of float literal text (digits, `_`, an optional fraction and exponent, an
+// optional f32/f64 suffix already removed) in the format of size bytes (4 or 8).
+public u64 FloatLiteralBits(str text, u32 size) {
+    string digits = string.New();
+    i64 exp10 = 0;
+    bool frac = false;
+    usize i = 0;
+    while (i < text.Len) {
+        u8 c = text[i];
+        if (c == '_') {
+            i++;
+            continue;
+        }
+        if (c == '.') {
+            frac = true;
+            i++;
+            continue;
+        }
+        if (c == 'e' || c == 'E') break;
+        digits.AppendByte(c);
+        if (frac) exp10--;
+        i++;
+    }
+    if (i < text.Len) {
+        i++;
+        bool neg = false;
+        if (i < text.Len && (text[i] == '+' || text[i] == '-')) {
+            neg = text[i] == '-';
+            i++;
+        }
+        i64 x = 0;
+        while (i < text.Len) {
+            if (text[i] != '_') {
+                if (x < 100000) x = x * 10 + (text[i] - '0') as i64;
+            }
+            i++;
+        }
+        if (neg) exp10 -= x;
+        else exp10 += x;
+    }
+    // leading zeros do not matter; trailing zeros of the mantissa move into the exponent
+    str d = digits.AsStr();
+    usize a = 0;
+    while (a < d.Len && d[a] == '0') a++;
+    usize b = d.Len;
+    while (b > a && d[b - 1] == '0') {
+        b--;
+        exp10++;
+    }
+    if (size == 4) return DecimalBits(d[a..b], exp10, 23, 8);
+    return DecimalBits(d[a..b], exp10, 52, 11);
+}

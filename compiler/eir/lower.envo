@@ -42,6 +42,12 @@ EInst NoInst(u16 op) => new EInst {
     Str = TextOf(""), Pos = 0
 };
 
+// The EIR float type of size bytes: f32 (EK_F32) or f64 (EK_F64) (RFC 0006).
+public u32 EFloatType(u32 size) {
+    if (size == 4) return EK_F32 as u32;
+    return EK_F64 as u32;
+}
+
 public u32 EIntType(u32 size, bool signed) {
     if (signed) {
         if (size == 1) return 3;
@@ -254,6 +260,7 @@ public struct Lower {
         else if (ty.Kind == TYK_UNION) r = this.TaggedEType(t);
         else if (ty.Kind == TYK_STR || ty.Kind == TYK_SLICE) r = this.StrType;
         else if (ty.Kind == TYK_INT) r = EIntType(ty.Size, ty.Signed);
+        else if (ty.Kind == TYK_FLOAT) r = EFloatType(ty.Size);
         else if (ty.Kind == TYK_ENUM) {
             this.C.EnumDeclare(ty.Sym);
             r = this.LType(this.C.SymAt(ty.Sym).Aux);

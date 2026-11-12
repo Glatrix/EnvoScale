@@ -36,6 +36,7 @@ struct Pre {
     u16 Op;
     bool Signed;    // the type operand is a signed integer
     bool IsBool;    // the type operand is bool
+    bool IsFloat;   // the type operand is f32 or f64 (RFC 0006)
     u32 Size;       // the type operand's size
     u32 FirstOp;    // operands, in OpV and OpIsVal
     u32 NOps;
@@ -142,7 +143,7 @@ public struct Vm {
             u32 result = NO_RESULT;
             if (inst.Result != 0) result = inst.Result - first;
             Pre p = new Pre {
-                Op = inst.Op, Signed = this.M.IsSigned(inst.Ty), IsBool = inst.Ty == ET_BOOL, Size = ty.Size,
+                Op = inst.Op, Signed = this.M.IsSigned(inst.Ty), IsBool = inst.Ty == ET_BOOL, IsFloat = this.M.IsFloat(inst.Ty), Size = ty.Size,
                 FirstOp = inst.FirstOp, NOps = inst.NOps, Result = result, Imm = inst.Imm, Aux = 0,
             };
             if (inst.Op == 2) {
@@ -350,6 +351,32 @@ public struct Vm {
                     u64 c = 0;
                     if (op != 11 && op != 17) c = this.Operand(fb, first, o + 1);
                     result = this.Arith(op, a, c, size, signed, pre.IsBool);
+                } else if (op >= 20 && op <= 25 && pre.IsFloat) {
+                    u64 a = this.Operand(fb, first, o);
+                    u64 c = this.Operand(fb, first, o + 1);
+                    bool r = false;
+                    f64 x = D(a);
+                    f64 y = D(c);
+                    if (size == 4) {
+                        x = S(a) as f64;
+                        y = S(c) as f64;
+                    }
+                    if (op == 20) r = x == y;
+                    else if (op == 21) r = x != y;
+                    else if (op == 22) r = x < y;
+                    else if (op == 23) r = x <= y;
+                    else if (op == 24) r = x > y;
+                    else r = x >= y;
+                    if (r) result = 1;
+                } else if (op >= 27 && op <= 31) {
+                    u64 a = this.Operand(fb, first, o);
+                    if (op == 31) {
+                        if (size == 8) result = a ^ 0x8000000000000000;
+                        else result = a ^ 0x80000000;
+                    } else {
+                        u64 c = this.Operand(fb, first, o + 1);
+                        result = FloatArith(op, a, c, size == 8);
+                    }
                 } else if (op >= 20 && op <= 25) {
                     u64 a = this.Operand(fb, first, o);
                     u64 c = this.Operand(fb, first, o + 1);
@@ -460,7 +487,7 @@ public struct Vm {
                     else if (op == 33) result = Norm(Norm(a, size, false), toSize, toSigned);
                     else if (op == 34) result = Norm(Norm(a, size, true), toSize, toSigned);
                     else if (op == 39 || op == 40) result = a;
-                    else this.NoFloats();
+                    else result = FloatConv(op, a, size, signed, toSize, toSigned);
                 } else if (op == 26) {
                     if (this.Operand(fb, first, o) != 0) result = this.Operand(fb, first, o + 1);
                     else result = this.Operand(fb, first, o + 2);
@@ -514,6 +541,7 @@ public struct Vm {
         }
     }
 
+    // The NoFloats exit is for what remains: an instruction the runtime does not know.
     void NoFloats(ref this) {
         write(2, "envo: error: the script runtime does not run floating-point code yet\n");
         exit(70);
@@ -628,6 +656,76 @@ u64 DeniedWin(u64 k) {
     if (k == 32) return 0xFFFFFFFFFFFFFFFF;      // INVALID_SOCKET
     if (k == 40) return 10013;                   // getaddrinfo: WSAEACCES
     return 0;
+}
+
+// ------------------------------------------------------------------ floats (RFC 0006)
+
+// Float arithmetic with Envo's own floats, so the script runtime computes what native
+// code and WebAssembly do; every NaN it makes is the canonical one.
+f64 D(u64 bits) {
+    u64 b = bits;
+    unsafe { return (&b as *f64)[0]; }
+}
+
+u64 DBits(f64 x) {
+    f64 v = x;
+    if (v != v) return 0x7FF8000000000000;
+    unsafe { return (&v as *u64)[0]; }
+}
+
+f32 S(u64 bits) {
+    u32 b = bits as u32;
+    unsafe { return (&b as *f32)[0]; }
+}
+
+u64 SBits(f32 x) {
+    f32 v = x;
+    if (v != v) return 0x7FC00000;
+    unsafe { return (&v as *u32)[0] as u64; }
+}
+
+u64 FloatArith(u16 op, u64 a, u64 c, bool dbl) {
+    if (dbl) {
+        f64 x = D(a);
+        f64 y = D(c);
+        if (op == 27) return DBits(x + y);
+        if (op == 28) return DBits(x - y);
+        if (op == 29) return DBits(x * y);
+        return DBits(x / y);
+    }
+    f32 x = S(a);
+    f32 y = S(c);
+    if (op == 27) return SBits(x + y);
+    if (op == 28) return SBits(x - y);
+    if (op == 29) return SBits(x * y);
+    return SBits(x / y);
+}
+
+// itof (35), ftoi (36), fext (37), ftrunc (38): the source has size bytes (and signed,
+// for an integer), the result toSize (and toSigned).
+u64 FloatConv(u16 op, u64 a, u32 size, bool signed, u32 toSize, bool toSigned) {
+    if (op == 37) return DBits(S(a) as f64);
+    if (op == 38) return SBits(D(a) as f32);
+    if (op == 35) {
+        if (toSize == 8) {
+            if (signed) return DBits((a as i64) as f64);
+            return DBits(a as f64);
+        }
+        if (signed) return SBits((a as i64) as f32);
+        return SBits(a as f32);
+    }
+    f64 x = D(a);
+    if (size == 4) x = S(a) as f64;
+    if (toSigned) {
+        if (toSize == 1) return Norm((x as i8) as u64, 1, true);
+        if (toSize == 2) return Norm((x as i16) as u64, 2, true);
+        if (toSize == 4) return Norm((x as i32) as u64, 4, true);
+        return (x as i64) as u64;
+    }
+    if (toSize == 1) return (x as u8) as u64;
+    if (toSize == 2) return (x as u16) as u64;
+    if (toSize == 4) return (x as u32) as u64;
+    return x as u64;
 }
 
 // x normalized to an integer of size bytes: sign- or zero-extended from its low bits.

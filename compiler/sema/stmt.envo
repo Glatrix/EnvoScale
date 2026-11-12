@@ -135,6 +135,13 @@ impl Checker {
                 this.ExpectType(node.B, target);    // '=' is the only one-byte assignment
                 return false;
             }
+            if (this.IsFloatType(target)) {
+                // RFC 0006: += -= *= /= on floats
+                str ot = TextStr(opText);
+                if (!Same(ot, "+=") && !Same(ot, "-=") && !Same(ot, "*=") && !Same(ot, "/=")) this.BadOperand(target, op);
+                this.ExpectType(node.B, target);
+                return false;
+            }
             if (!this.IsIntType(target)) this.BadOperand(target, op);
             u8 first = TextStr(opText)[0];
             if (first == '<' || first == '>') {

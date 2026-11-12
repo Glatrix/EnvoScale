@@ -1,0 +1,119 @@
+// RFC 0006: f32 and f64. Literals (their exact bits), arithmetic, NaN and infinity,
+// comparisons with NaN, conversions in every direction (toward zero, saturating, NaN to 0),
+// f32 rounding, compound assignment, and floats in structs, arrays and functions. Stage 1
+// has no floats.
+// stage1-error: E0950
+// expect: literals ok
+// expect: arithmetic ok
+// expect: nan and infinity ok
+// expect: comparisons ok
+// expect: to integers ok
+// expect: from integers ok
+// expect: f32 ok
+// expect: aggregates ok
+// expect: all 8 groups passed
+
+u64 Bits(f64 x) {
+    f64 v = x;
+    unsafe {
+        *u64 p = &v as *u64;
+        return p[0];
+    }
+}
+
+u32 Bits32(f32 x) {
+    f32 v = x;
+    unsafe {
+        *u32 p = &v as *u32;
+        return p[0];
+    }
+}
+
+// Prints the group's result; 1 if it passed.
+i32 Report(str name, bool ok) {
+    write(1, name);
+    if (ok) {
+        print(" ok");
+        return 1;
+    }
+    print(" FAILED");
+    return 0;
+}
+
+i32 passed = 0;
+
+// literals: the nearest double, ties to even
+bool lit = Bits(1.5) == 0x3FF8000000000000 && Bits(0.1) == 0x3FB999999999999A && Bits(1e300) == 0x7E37E43C8800759C
+    && Bits(5e-324) == 1 && Bits(2.2250738585072014e-308) == 0x0010000000000000 && Bits(1.7976931348623157e308) == 0x7FEFFFFFFFFFFFFF
+    && Bits(123_456.789e3) == Bits(123456789.0) && Bits(0.0) == 0 && Bits(-0.0) == 0x8000000000000000;
+passed += Report("literals", lit);
+
+f64 a = 7.5;
+f64 b = 2.0;
+f64 c = a * b - a / b + 0.25;
+c += 1.0;
+c -= 0.5;
+c *= 2.0;
+c /= 4.0;
+passed += Report("arithmetic", c == 6.0 && a + b == 9.5 && -a == -7.5 && Bits(0.1 + 0.2) == 0x3FD3333333333334);
+
+f64 zero = 0.0;
+f64 inf = 1.0 / zero;
+f64 nan = zero / zero;
+bool special = Bits(inf) == 0x7FF0000000000000 && Bits(-inf) == 0xFFF0000000000000 && Bits(nan) == 0x7FF8000000000000
+    && Bits(inf - inf) == 0x7FF8000000000000 && Bits(1e308 * 10.0) == 0x7FF0000000000000;
+passed += Report("nan and infinity", special);
+
+bool cmp = !(nan == nan) && nan != nan && !(nan < 1.0) && !(nan > 1.0) && !(nan <= nan) && !(nan >= 1.0)
+    && 1.0 < 2.0 && 2.0 <= 2.0 && -1.0 < 0.0 && 0.0 == -0.0 && inf > 1e308;
+passed += Report("comparisons", cmp);
+
+f64 big = 1e30;
+f64 neg = -1e30;
+bool toInt = (2.9 as i32) == 2 && (-2.9 as i32) == -2 && (big as i32) == 2147483647 && (neg as i32) == -2147483648
+    && (nan as i64) == 0 && (big as i64) == 9223372036854775807 && (neg as i64) == -9223372036854775807 - 1
+    && (300.7 as u8) == 255 && (-5.0 as u8) == 0 && (big as u64) == 18446744073709551615
+    && (1e19 as u64) == 10000000000000000000 && (inf as u32) == 4294967295 && (-0.5 as i8) == 0;
+passed += Report("to integers", toInt);
+
+u64 huge = 18446744073709551615;
+i64 most = -9223372036854775807 - 1;
+bool fromInt = (3 as f64) == 3.0 && (-7 as f64) == -7.0 && Bits(huge as f64) == 0x43F0000000000000
+    && Bits(most as f64) == 0xC3E0000000000000 && (9007199254740993i64 as f64) == 9007199254740992.0 && (200 as u8 as f64) == 200.0;
+passed += Report("from integers", fromInt);
+
+f32 third = 1.0f32 / 3.0f32;
+f64 wide = third as f64;
+f32 back = wide as f32;
+bool single = Bits32(third) == 0x3EAAAAAB && Bits32(0.1f32) == 0x3DCCCCCD && back == third && Bits32(1e39 as f32) == 0x7F800000
+    && (third * 3.0f32) == 1.0f32 && (16777217i32 as f32) == 16777216.0f32 && (2.5f32 as i32) == 2;
+passed += Report("f32", single);
+
+struct Point {
+    f64 X;
+    f64 Y;
+
+    f64 Dot(in this, in Point o) => this.X * o.X + this.Y * o.Y;
+}
+
+f64 Sum(f64[] xs) {
+    f64 s = 0.0;
+    for (usize i = 0; i < xs.Len; i++) s += xs[i];
+    return s;
+}
+
+Point p = new Point { X = 3.0, Y = 4.0 };
+f64[4] arr;
+arr[0] = 0.5;
+arr[1] = 1.5;
+arr[2] = 2.5;
+arr[3] = p.Dot(p);
+List<f32> fs = List<f32>.New();
+fs.Push(1.25f32);
+fs.Push(2.5f32);
+passed += Report("aggregates", Sum(arr[0..4]) == 29.5 && fs.Get(1) == 2.5f32 && p.Dot(new Point { X = 1.0, Y = 0.0 }) == 3.0);
+
+write(1, "all ");
+if (passed == 8) write(1, "8");
+else write(1, "some");
+print(" groups passed");

@@ -22,8 +22,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M6 | Script runtime | **Done**: `envo run` interprets the program's EIR, sandboxed with `--allow` permissions; scripts and `#!/usr/bin/env envo`; `envo repl`; every spec run test and library test passes in both modes (6.1–6.7) |
 | M7 | Crypto and network | **Done** (Experimental, not audited): `envo.crypto` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, a CSPRNG; RSA, ECDSA and X.509 verification), the Net and Trust ports, `envo.http` (HTTP/1.1 client and server), `envo.tls` (a verifying TLS 1.3 client) (7.1–7.8) |
 | M8 | Graphics and UI | **Done** (Experimental): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port (Win32), `envo.lumen` and `envo.ui` (desktop and terminal renderers), `envo.gpu` (software and Direct3D 12) (8.1–8.9) |
-| M9 | Web | **In progress** (`docs/PLAN.md` §5): the WebAssembly backend (`--target wasm32-web`), the JS host and the `os.wasm` adapters, `envo.markdown`, `envo.web` (routing, static files, SSR and SSG) with Lumen's Landing and Docs templates, the website built by an Envo program, and its sandbox: the compiler built for WebAssembly, compiling and running programs in the browser (9.1–9.7) |
-| M10–M13 | | Not started |
+| M9 | Web | **Done** (Experimental): the WebAssembly backend, the JS host and `os.wasm`, `envo.markdown`, `envo.web` with Lumen's Landing and Docs templates, the website and its in-browser sandbox, built by Envo programs (9.1–9.8) |
+| M10 | AArch64 and macOS | **Blocked** on test machines: no AArch64 or macOS hardware here, and GitHub's arm64 and macOS runners cost money for a private repository (an owner decision) |
+| M11–M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -102,6 +103,17 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | `envo.ui` with desktop and terminal renderers | `envo.ui`: one layout for pixels and cells, focus and input | Done |
 | Lumen tokens | `docs/lumen/`, `lib/envo/lumen/tokens.eon`, `envo.lumen` (WCAG 2.2 AA pairs) | Done |
 | `envo.cli` / `envo.term` | `envo.cli`; `ports.ITerminal` and `envo.term` | Done |
+
+### M9 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| WASM backend | `compiler/backend/wasm`: every spec run program and library test under Node.js; `envoc` itself built as WebAssembly rebuilds itself to the same bytes | Done |
+| JS interop adapter | `adapters/interop/js/envo.js` (Node.js and browsers), `adapters/os/wasm` | Done |
+| `envo.web` server/router | `envo.web`: routes with parameters, static files, `Serve` | Done |
+| SSG + SSR | one code path: `App.Handle` per request, `Build` to files | Done |
+| Lumen templates (Landing, Docs) | `envo.web.templates`, CSS from Lumen's tokens | Done |
+| The docs site built with EnvoScale | `website/site.envo` builds the site (with the sandbox) in CI; publishing is #61 | Done |
 
 ## Subsystems
 

@@ -33,4 +33,5 @@ none
 
 ## Not yet
 
-Floats and formatting with `$"…"` interpolation wait for `envoc` to compile them.
+Formatting with `$"…"` interpolation. (Floats arrived with RFC 0006: `core.math` has the
+float functions, `core.text.ParseFloat` reads them, `alloc.text.Float` writes them.)

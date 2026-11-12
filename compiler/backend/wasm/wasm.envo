@@ -215,7 +215,16 @@ struct Gen {
         u32 t = inst.Ty;
         ETy ty = m.Ty(t);
         bool signed = m.IsSigned(t);
-        if (sh == SH_CONST) {
+        if ((sh == SH_BIN || sh == SH_CMP) && m.IsFloat(t) || (sh == SH_CONV && op >= 35 && op <= 38)) {
+            this.FloatInst(m, inst);
+        } else if (sh == SH_UN && op == 31) {
+            // fneg: flip the sign bit
+            this.LoadOp(m, f);
+            if (ty.Size == 8) this.I64C(0x8000000000000000);
+            else this.I64C(0x80000000);
+            this.Op(0x85);
+            this.SetV(inst.Result);
+        } else if (sh == SH_CONST) {
             this.I64C(inst.Imm);
             this.SetV(inst.Result);
         } else if (sh == SH_ADDR) {
@@ -488,6 +497,141 @@ struct Gen {
             this.U(this.Trap as u64);
             this.Op(0x00);
         }
+    }
+
+    // ------------------------------------------------------------------ floats (RFC 0006)
+
+    // The float in operand o, from its i64 local's bits.
+    void FloatOp(ref this, in Module m, u32 o, bool dbl) {
+        this.LoadOp(m, o);
+        if (dbl) {
+            this.Op(0xBF);          // f64.reinterpret_i64
+        } else {
+            this.Op(0xA7);          // i32.wrap_i64
+            this.Op(0xBE);          // f32.reinterpret_i32
+        }
+    }
+
+    // The float on the stack as i64 bits in local t0, a NaN made canonical, then pushed.
+    void FloatOut(ref this, bool dbl) {
+        if (dbl) {
+            this.Op(0xBD);          // i64.reinterpret_f64
+        } else {
+            this.Op(0xBC);          // i32.reinterpret_f32
+            this.Op(0xAD);
+        }
+        this.Set(this.LocalT0);
+        if (dbl) this.I64C(0x7FF8000000000000);
+        else this.I64C(0x7FC00000);
+        this.Get(this.LocalT0);
+        for (u32 k = 0; k < 2; k++) {
+            this.Get(this.LocalT0);
+            if (dbl) {
+                this.Op(0xBF);
+            } else {
+                this.Op(0xA7);
+                this.Op(0xBE);
+            }
+        }
+        if (dbl) this.Op(0x62);     // x != x: NaN
+        else this.Op(0x5C);
+        this.Op(0x1B);              // select
+    }
+
+    void FloatInst(ref this, in Module m, EInst inst) {
+        u16 op = inst.Op;
+        u32 f = inst.FirstOp;
+        ETy ty = m.Ty(inst.Ty);
+        bool dbl = ty.Size == 8;
+        if (op >= 27 && op <= 30) {
+            this.FloatOp(m, f, dbl);
+            this.FloatOp(m, f + 1, dbl);
+            u8 code = 0x92 + (op - 27) as u8;
+            if (dbl) code = 0xA0 + (op - 27) as u8;
+            this.Op(code);
+            this.FloatOut(dbl);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (op >= 20 && op <= 25) {
+            this.FloatOp(m, f, dbl);
+            this.FloatOp(m, f + 1, dbl);
+            // eq ne lt gt le ge, as EIR's order eq ne lt le gt ge
+            u8 k = 0;
+            if (op == 21) k = 1;
+            if (op == 22) k = 2;
+            if (op == 23) k = 4;
+            if (op == 24) k = 3;
+            if (op == 25) k = 5;
+            if (dbl) this.Op(0x61 + k);
+            else this.Op(0x5B + k);
+            this.Op(0xAD);
+            this.SetV(inst.Result);
+            return;
+        }
+        ETy to = m.Ty(inst.Ty2);
+        if (op == 37 || op == 38) {
+            this.FloatOp(m, f, op == 38);
+            if (op == 37) this.Op(0xBB);    // f64.promote_f32
+            else this.Op(0xB6);             // f32.demote_f64
+            this.FloatOut(op == 37);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (op == 35) {
+            bool toDbl = to.Size == 8;
+            this.LoadOp(m, f);
+            bool unsigned = ty.Size == 8 && !m.IsSigned(inst.Ty);
+            if (toDbl) {
+                if (unsigned) this.Op(0xBA);
+                else this.Op(0xB9);
+                this.Op(0xBD);
+            } else {
+                if (unsigned) this.Op(0xB5);
+                else this.Op(0xB4);
+                this.Op(0xBC);
+                this.Op(0xAD);
+            }
+            this.SetV(inst.Result);
+            return;
+        }
+        // ftoi: saturating, NaN to 0 (the non-trapping truncations)
+        bool toSigned = m.IsSigned(inst.Ty2);
+        this.FloatOp(m, f, dbl);
+        this.Op(0xFC);
+        u64 sat = 6;                // i64.trunc_sat_f64_s
+        if (!dbl) sat = 4;          // i64.trunc_sat_f32_s
+        if (to.Size == 8 && !toSigned) sat++;
+        this.U(sat);
+        if (to.Size < 8 || !toSigned) {
+            if (to.Size < 8) {
+                u64 hi = 0;
+                u64 lo = 0;
+                if (toSigned) {
+                    hi = (1 << (to.Size as u64 * 8 - 1)) - 1;
+                    lo = 0 -% (1 << (to.Size as u64 * 8 - 1));
+                } else {
+                    hi = (1 << (to.Size as u64 * 8)) - 1;
+                }
+                this.Set(this.LocalT0);
+                // min(t0, hi), then max(that, lo), signed
+                this.I64C(hi);
+                this.Get(this.LocalT0);
+                this.Get(this.LocalT0);
+                this.I64C(hi);
+                this.Op(0x55);      // i64.gt_s
+                this.Op(0x1B);
+                this.Set(this.LocalT0);
+                this.I64C(lo);
+                this.Get(this.LocalT0);
+                this.Get(this.LocalT0);
+                this.I64C(lo);
+                this.Op(0x53);      // i64.lt_s
+                this.Op(0x1B);
+                this.Norm(to.Size, toSigned);
+            }
+        }
+        this.SetV(inst.Result);
     }
 
     // Two-operand integer instructions, with their checks.

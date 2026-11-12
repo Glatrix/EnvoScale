@@ -16,6 +16,7 @@ syntax/parser.envo
 syntax/parser_s1.envo
 sema/types.envo
 sema/checker.envo
+sema/floatlit.envo
 sema/decl.envo
 sema/stmt.envo
 sema/expr.envo

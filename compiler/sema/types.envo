@@ -33,6 +33,7 @@ public const u8 TYK_PARAM = 10;     // a generic type parameter
 public const u8 TYK_IFACE = 11;     // an interface, only as a bound or in `impl`
 public const u8 TYK_FN = 12;        // a function type
 public const u8 TYK_UNION = 13;     // a tagged enum: payloads or type parameters
+public const u8 TYK_FLOAT = 14;     // f32, f64 (RFC 0006), interned when first named
 
 // Fixed type indices. 0 means "no type".
 public const u32 T_VOID = 1;

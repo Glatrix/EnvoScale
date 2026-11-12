@@ -3,6 +3,7 @@
 namespace alloc.text;
 
 use core.fmt;
+use core.math;
 use core.text as ct;
 
 // Sorts items into byte order (core.text.Compare). Stable; an insertion sort, for the
@@ -164,5 +165,91 @@ public string PadRight(str s, usize width, u8 fill) {
         r.AppendByte(fill);
         n++;
     }
+    return r;
+}
+
+// v with digits digits after the point (at most 17): "19.635", "-0.50", "1.000e+20" for
+// magnitudes of 10^15 and up, "NaN", "inf", "-inf" (RFC 0006). The last digit is
+// rounded, halves away from zero.
+public string Float(f64 v, u32 digits) {
+    string s = string.New();
+    if (v != v) return string.From("NaN");
+    f64 x = v;
+    if (math.Bits(x) >> 63 == 1) {
+        s.AppendByte('-');
+        x = 0.0 - x;
+    }
+    if (math.IsInfinite(x)) {
+        s.Append("inf");
+        return s;
+    }
+    u32 d = digits;
+    if (d > 17) d = 17;
+    if (x >= 1e15) {
+        // scientific: one digit, the point, d digits, the exponent
+        i64 e = 0;
+        f64 m = x;
+        while (m >= 10.0) {
+            m = m / 10.0;
+            e++;
+        }
+        AppendFixed(ref s, m, d);
+        s.Append("e+");
+        s.Append(Int(e).AsStr());
+        return s;
+    }
+    AppendFixed(ref s, x, d);
+    return s;
+}
+
+// x (0 <= x < 10^15) with d digits after the point.
+void AppendFixed(ref string s, f64 x, u32 d) {
+    u64 scale = 1;
+    for (u32 k = 0; k < d; k++) scale = scale * 10;
+    f64 whole = math.Floor(x);
+    f64 frac = math.Round((x - whole) * (scale as f64));
+    u64 w = whole as u64;
+    u64 f = frac as u64;
+    if (f >= scale) {
+        // the fraction rounded up to the next whole number
+        w++;
+        f -= scale;
+    }
+    s.Append(Uint(w).AsStr());
+    if (d == 0) return;
+    s.AppendByte('.');
+    string fs = Uint(f);
+    for (usize k = fs.Len(); k < d as usize; k++) s.AppendByte('0');
+    s.Append(fs.AsStr());
+}
+
+// v with up to 15 significant digits and no trailing zeros: "0.1", "19.635", "3", "1e+20".
+public string FloatShort(f64 v) {
+    if (v != v || math.IsInfinite(v)) return Float(v, 0);
+    f64 a = math.FAbs(v);
+    u32 digits = 15;
+    if (a >= 1e15) {
+        digits = 14;
+    } else if (a >= 1.0) {
+        // 15 significant digits: fewer after the point as the whole part grows
+        f64 p = 1.0;
+        while (p * 10.0 <= a && digits > 1) {
+            p = p * 10.0;
+            digits--;
+        }
+        digits--;
+    }
+    string s = Float(v, digits);
+    // drop trailing zeros after the point (not in an exponent)
+    str t = s.AsStr();
+    if (!ct.Contains(t, ".")) return s;
+    usize ePos = t.Len;
+    usize? ei = ct.IndexOfByte(t, 'e');
+    if (ei.IsSome()) ePos = ei.Unwrap();
+    usize end = ePos;
+    while (end > 0 && t[end - 1] == '0') end--;
+    if (end > 0 && t[end - 1] == '.') end--;
+    string r = string.From(t[0..end]);
+    r.Append(t[ePos..t.Len]);
     return r;
 }

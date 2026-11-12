@@ -94,7 +94,8 @@ public const u16 NK_TRY = 56;          // postfix ?; A operand
 public const u16 NK_COND = 57;         // c ? a : b
 public const u16 NK_RANGE = 58;        // lo .. hi; A lo, B hi (either may be empty)
 public const u16 NK_FOREACH = 59;      // A variable (name), B sequence, C body
-public const u16 NK_COUNT = 60;
+public const u16 NK_FLOAT = 60;        // a float literal (RFC 0006)
+public const u16 NK_COUNT = 61;
 
 // The dump name of a kind, how many child slots the dump prints, and whether it prints
 // the node's token text (Stage 0's node_table).
@@ -159,6 +160,7 @@ public str NodeName(u16 kind) {
         NK_COND => { return "cond"; }
         NK_RANGE => { return "range"; }
         NK_FOREACH => { return "foreach"; }
+        NK_FLOAT => { return "float"; }
         _ => { return "none"; }
     }
 }
@@ -181,7 +183,7 @@ public u32 NodeSlots(u16 kind) {
 public bool NodeHasText(u16 kind) {
     match kind {
         NK_FN | NK_PARAM | NK_STRUCT | NK_FIELD | NK_ENUM | NK_VARIANT | NK_CONST | NK_STATIC |
-            NK_TNAME | NK_VAR | NK_ASSIGN | NK_INT | NK_CHAR | NK_STRING | NK_BOOL | NK_NAME |
+            NK_TNAME | NK_VAR | NK_ASSIGN | NK_INT | NK_FLOAT | NK_CHAR | NK_STRING | NK_BOOL | NK_NAME |
             NK_MEMBER | NK_UNARY | NK_BINARY | NK_INIT | NK_INTERFACE | NK_TPARAM | NK_WHERE |
             NK_RANGE => { return true; }
         _ => { return false; }

@@ -178,6 +178,19 @@ struct Gen {
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_UNARY_V) {
             // slot.end: storage is never reused at -O0
+        } else if (sh == SH_BIN && m.IsFloat(t)) {
+            this.FloatBin(m, inst);
+        } else if (sh == SH_CMP && m.IsFloat(t)) {
+            this.FloatCmp(m, inst);
+        } else if (sh == SH_CONV && op >= 35 && op <= 38) {
+            this.FloatConv(m, inst);
+        } else if (sh == SH_UN && op == 31) {
+            // fneg: flip the sign bit
+            this.LoadOp(m, RAX, f);
+            if (ty.Size == 8) this.A.MovRI(RCX, 0x8000000000000000);
+            else this.A.MovRI(RCX, 0x80000000);
+            this.A.Alu(ALU_XOR, RAX, RCX);
+            this.StoreV(inst.Result, RAX);
         } else if (sh == SH_BIN) {
             this.LoadOp(m, RAX, f);
             this.LoadOp(m, RCX, f + 1);
@@ -460,6 +473,187 @@ struct Gen {
             u32 trap = this.TrapLabel(TRAP_UNREACHABLE);
             this.A.Jmp(trap);
         }
+    }
+
+    // ------------------------------------------------------------------ floats (RFC 0006)
+
+    // A float's bits live where an integer's do; each operation moves them through xmm0
+    // and xmm1. Every NaN a computation makes is the canonical quiet NaN, so results are the
+    // same as in WebAssembly and the script runtime (EIR section 5.3).
+
+    // rax = xmm0's bits, with a NaN made canonical.
+    void FloatResult(ref this, bool dbl) {
+        this.A.MovRX(RAX, 0, dbl);
+        this.A.Ucomis(dbl, 0, 0);
+        u32 ok = this.A.NewLabel();
+        this.A.Jcc(CC_NP, ok);
+        if (dbl) this.A.MovRI(RAX, 0x7FF8000000000000);
+        else this.A.MovRI(RAX, 0x7FC00000);
+        this.A.Bind(ok);
+    }
+
+    void FloatBin(ref this, in Module m, EInst inst) {
+        u32 f = inst.FirstOp;
+        bool dbl = m.Ty(inst.Ty).Size == 8;
+        u8 prefix = 0xF3;
+        if (dbl) prefix = 0xF2;
+        this.LoadOp(m, RAX, f);
+        this.LoadOp(m, RCX, f + 1);
+        this.A.MovXR(0, RAX, dbl);
+        this.A.MovXR(1, RCX, dbl);
+        u8 code = 0x58;
+        if (inst.Op == 28) code = 0x5C;
+        if (inst.Op == 29) code = 0x59;
+        if (inst.Op == 30) code = 0x5E;
+        this.A.Sse(prefix, code, 0, 1);
+        this.FloatResult(dbl);
+        this.StoreV(inst.Result, RAX);
+    }
+
+    void FloatCmp(ref this, in Module m, EInst inst) {
+        u32 f = inst.FirstOp;
+        u16 op = inst.Op;
+        bool dbl = m.Ty(inst.Ty).Size == 8;
+        this.LoadOp(m, RAX, f);
+        this.LoadOp(m, RCX, f + 1);
+        this.A.MovXR(0, RAX, dbl);
+        this.A.MovXR(1, RCX, dbl);
+        if (op == 20 || op == 21) {
+            this.A.Ucomis(dbl, 0, 1);
+            if (op == 20) {
+                this.A.SetCC(CC_E, RAX);
+                this.A.SetCC(CC_NP, RCX);
+                this.A.Alu(ALU_AND, RAX, RCX);
+            } else {
+                this.A.SetCC(CC_NE, RAX);
+                this.A.SetCC(CC_P, RCX);
+                this.A.Alu(ALU_OR, RAX, RCX);
+            }
+        } else if (op == 22 || op == 23) {
+            // a < b is b > a; unordered gives false
+            this.A.Ucomis(dbl, 1, 0);
+            if (op == 22) this.A.SetCC(CC_A, RAX);
+            else this.A.SetCC(CC_AE, RAX);
+        } else {
+            this.A.Ucomis(dbl, 0, 1);
+            if (op == 24) this.A.SetCC(CC_A, RAX);
+            else this.A.SetCC(CC_AE, RAX);
+        }
+        this.StoreV(inst.Result, RAX);
+    }
+
+    // Conversions with a float on one side: itof, ftoi, fext, ftrunc.
+    void FloatConv(ref this, in Module m, EInst inst) {
+        u16 op = inst.Op;
+        ETy from = m.Ty(inst.Ty);
+        ETy to = m.Ty(inst.Ty2);
+        this.LoadOp(m, RAX, inst.FirstOp);
+        if (op == 37) {
+            this.A.MovXR(0, RAX, false);
+            this.A.Sse(0xF3, 0x5A, 0, 0);       // cvtss2sd
+            this.FloatResult(true);
+        } else if (op == 38) {
+            this.A.MovXR(0, RAX, true);
+            this.A.Sse(0xF2, 0x5A, 0, 0);       // cvtsd2ss
+            this.FloatResult(false);
+        } else if (op == 35) {
+            bool dbl = to.Size == 8;
+            u8 prefix = 0xF3;
+            if (dbl) prefix = 0xF2;
+            if (from.Size == 8 && !m.IsSigned(inst.Ty)) {
+                // u64 at 2^63 and above: halve (keeping the low bit for rounding), double
+                u32 big = this.A.NewLabel();
+                u32 done = this.A.NewLabel();
+                this.A.TestRR(RAX, RAX);
+                this.A.Jcc(CC_L, big);
+                this.A.CvtI2F(prefix, 0, RAX);
+                this.A.Jmp(done);
+                this.A.Bind(big);
+                this.A.MovRR(RDX, RAX);
+                this.A.MovRI(RCX, 1);
+                this.A.ShiftCl(5, RDX);
+                this.A.AluImm(4, RAX, 1);
+                this.A.Alu(ALU_OR, RDX, RAX);
+                this.A.CvtI2F(prefix, 0, RDX);
+                this.A.Sse(prefix, 0x58, 0, 0);
+                this.A.Bind(done);
+            } else {
+                this.A.CvtI2F(prefix, 0, RAX);
+            }
+            this.A.MovRX(RAX, 0, dbl);
+        } else {
+            this.FloatToInt(from.Size == 8, to.Size, m.IsSigned(inst.Ty2));
+        }
+        this.StoreV(inst.Result, RAX);
+    }
+
+    // rax (a float's bits) to an integer of size bytes: toward zero, saturating, NaN to 0.
+    void FloatToInt(ref this, bool dbl, u32 size, bool signed) {
+        this.A.MovXR(0, RAX, dbl);
+        if (!dbl) this.A.Sse(0xF3, 0x5A, 0, 0);    // to double: exact
+        u32 done = this.A.NewLabel();
+        this.A.Ucomis(true, 0, 0);
+        this.A.MovRI(RAX, 0);
+        this.A.Jcc(CC_P, done);
+        if (size == 8 && !signed) {
+            this.A.MovRI(RCX, 0x43F0000000000000);     // 2^64
+            this.A.MovXR(1, RCX, true);
+            this.A.Ucomis(true, 0, 1);
+            this.A.MovRI(RAX, 0xFFFFFFFFFFFFFFFF);
+            this.A.Jcc(CC_AE, done);
+            this.A.MovRI(RCX, 0);
+            this.A.MovXR(1, RCX, true);
+            this.A.Ucomis(true, 0, 1);
+            this.A.MovRI(RAX, 0);
+            this.A.Jcc(CC_B, done);
+            u32 big = this.A.NewLabel();
+            this.A.MovRI(RCX, 0x43E0000000000000);     // 2^63
+            this.A.MovXR(1, RCX, true);
+            this.A.Ucomis(true, 0, 1);
+            this.A.Jcc(CC_AE, big);
+            this.A.CvtF2I(0xF2, RAX, 0);
+            this.A.Jmp(done);
+            this.A.Bind(big);
+            this.A.Sse(0xF2, 0x5C, 0, 1);              // subsd
+            this.A.CvtF2I(0xF2, RAX, 0);
+            this.A.MovRI(RCX, 0x8000000000000000);
+            this.A.Alu(ALU_ADD, RAX, RCX);
+            this.A.Bind(done);
+            return;
+        }
+        // at 2^63 and above: i64's largest; below -2^63 cvttsd2si gives i64's smallest
+        u32 clamp = this.A.NewLabel();
+        this.A.MovRI(RCX, 0x43E0000000000000);
+        this.A.MovXR(1, RCX, true);
+        this.A.Ucomis(true, 0, 1);
+        this.A.MovRI(RAX, 0x7FFFFFFFFFFFFFFF);
+        this.A.Jcc(CC_AE, clamp);
+        this.A.CvtF2I(0xF2, RAX, 0);
+        this.A.Bind(clamp);
+        if (size < 8 || !signed) {
+            u64 hi = 0;
+            u64 lo = 0;
+            if (signed) {
+                hi = (1 << (size as u64 * 8 - 1)) - 1;
+                lo = 0 -% (1 << (size as u64 * 8 - 1));
+            } else {
+                hi = (1 << (size as u64 * 8)) - 1;
+            }
+            u32 ok1 = this.A.NewLabel();
+            this.A.MovRI(RCX, hi);
+            this.A.Alu(ALU_CMP, RAX, RCX);
+            this.A.Jcc(CC_LE, ok1);
+            this.A.MovRR(RAX, RCX);
+            this.A.Bind(ok1);
+            u32 ok2 = this.A.NewLabel();
+            this.A.MovRI(RCX, lo);
+            this.A.Alu(ALU_CMP, RAX, RCX);
+            this.A.Jcc(CC_GE, ok2);
+            this.A.MovRR(RAX, RCX);
+            this.A.Bind(ok2);
+        }
+        this.A.Bind(done);
+        this.A.Extend(RAX, size, signed);
     }
 
     // Target intrinsics: `syscall` on Linux, `wincall` on Windows.

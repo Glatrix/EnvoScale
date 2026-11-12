@@ -27,6 +27,8 @@ public const u8 CC_E = 4;
 public const u8 CC_NE = 5;
 public const u8 CC_BE = 6;      // unsigned <=
 public const u8 CC_A = 7;       // unsigned >
+public const u8 CC_P = 10;      // parity: an unordered float compare
+public const u8 CC_NP = 11;
 public const u8 CC_L = 12;      // signed <
 public const u8 CC_GE = 13;
 public const u8 CC_LE = 14;
@@ -329,6 +331,62 @@ public struct Asm {
     }
 
     public void RetNear(ref this) => this.B(0xC3);
+
+    // ------------------------------------------------------------------ SSE2 (RFC 0006)
+
+    // movq xmm, r64 (wide) or movd xmm, r32
+    public void MovXR(ref this, u8 x, u8 r, bool wide) {
+        this.B(0x66);
+        this.Rex(wide, x, r, false);
+        this.B(0x0F);
+        this.B(0x6E);
+        this.ModRR(x, r);
+    }
+
+    // movq r64, xmm (wide) or movd r32, xmm
+    public void MovRX(ref this, u8 r, u8 x, bool wide) {
+        this.B(0x66);
+        this.Rex(wide, x, r, false);
+        this.B(0x0F);
+        this.B(0x7E);
+        this.ModRR(x, r);
+    }
+
+    // A scalar SSE instruction xmm, xmm: prefix (F2 double, F3 single), 0F, op.
+    public void Sse(ref this, u8 prefix, u8 op, u8 dst, u8 src) {
+        this.B(prefix);
+        this.Rex(false, dst, src, false);
+        this.B(0x0F);
+        this.B(op);
+        this.ModRR(dst, src);
+    }
+
+    // cvtsi2sd (F2) / cvtsi2ss (F3) xmm, r64
+    public void CvtI2F(ref this, u8 prefix, u8 x, u8 r) {
+        this.B(prefix);
+        this.Rex(true, x, r, false);
+        this.B(0x0F);
+        this.B(0x2A);
+        this.ModRR(x, r);
+    }
+
+    // cvttsd2si (F2) / cvttss2si (F3) r64, xmm: toward zero
+    public void CvtF2I(ref this, u8 prefix, u8 r, u8 x) {
+        this.B(prefix);
+        this.Rex(true, r, x, false);
+        this.B(0x0F);
+        this.B(0x2C);
+        this.ModRR(r, x);
+    }
+
+    // ucomisd (double) / ucomiss xmm a, xmm b: the flags of a compared with b
+    public void Ucomis(ref this, bool dbl, u8 a, u8 b) {
+        if (dbl) this.B(0x66);
+        this.Rex(false, a, b, false);
+        this.B(0x0F);
+        this.B(0x2E);
+        this.ModRR(a, b);
+    }
 
     public void Push(ref this, u8 r) {
         this.Rex(false, 0, r, false);

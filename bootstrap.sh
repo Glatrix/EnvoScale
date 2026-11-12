@@ -905,6 +905,8 @@ EOF_ERR
             tests/spec/core-run/*|tests/spec/s1-run/*) cmds='lex parse check eir' ;;
             tests/golden/*) cmds='lex parse check' ;;
         esac
+        # a program Stage 1 cannot parse (E0950, such as floats: RFC 0006) is compared as tokens
+        if grep -q '^// stage1-error: E0950' "$ROOT/$f"; then cmds='lex'; fi
         for cmd in $cmds; do
             EXE=$ENVOC1
             run "$dir" "$cmd" "$base"

@@ -55,6 +55,8 @@ public struct Checker {
     List<u32> Captures;     // each lambda's, contiguous (its NValue: first | count << 32)
     // the prelude and ownership (own.envo)
     u32 PreludeFile;        // 0xFFFFFFFF: none
+    u32 F32;                // the float types, 0 until a program names one (RFC 0006)
+    u32 F64;
     u32 CopySym;
     u32 DropSym;
     u32 OptionSym;
@@ -85,7 +87,7 @@ public struct Checker {
             MainCalls = List<u32>.New(), Insts = List<Inst>.New(), InstMap = StrMap<u32>.New(),
             Scope1 = 0, Scope2 = 0, CurFn = 0, CurBounds = 0, NCurBounds = 0,
             LamStack = List<u32>.New(), CapTmp = List<u32>.New(), Captures = List<u32>.New(),
-            PreludeFile = 0xFFFFFFFF, CopySym = 0, DropSym = 0, OptionSym = 0, ResultSym = 0,
+            PreludeFile = 0xFFFFFFFF, F32 = 0, F64 = 0, CopySym = 0, DropSym = 0, OptionSym = 0, ResultSym = 0,
             StringSym = 0, PreludeScope = StrMap<u32>.New(),
             FileNs = List<Text>.New(), NsSet = StrMap<u32>.New(), Uses = List<u32>.New(),
             TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New()
@@ -161,6 +163,25 @@ public struct Checker {
     }
     u8 TyKind(in this, u32 t) => this.Types.Get(t as usize).Kind;
     bool IsIntType(in this, u32 t) => this.TyKind(t) == TYK_INT;
+    public bool IsFloatType(in this, u32 t) => t != 0 && this.TyKind(t) == TYK_FLOAT;
+
+    // f32 (size 4) or f64 (size 8), interned the first time a program needs it: programs
+    // without floats keep Stage 1's type numbering (D17).
+    public u32 FloatType(ref this, u32 size) {
+        if (size == 4 && this.F32 != 0) return this.F32;
+        if (size == 8 && this.F64 != 0) return this.F64;
+        u32 t = this.TypeNew(TYK_FLOAT);
+        Type ty = this.TypeAt(t);
+        ty.Signed = true;
+        ty.Size = size;
+        ty.Align = size;
+        if (size == 4) ty.Name = TextOf("f32");
+        else ty.Name = TextOf("f64");
+        this.PutType(t, ty);
+        if (size == 4) this.F32 = t;
+        else this.F64 = t;
+        return t;
+    }
 
     u32 TypeNew(ref this, u8 kind) {
         u32 t = this.Types.Len() as u32;

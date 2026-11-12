@@ -34,7 +34,7 @@ struct Two {
     Res B;
 }
 
-void Take(Res r) { }
+void Take(Res r) {}
 
 {
     Two t = new Two { A = Res.Of("a"), B = Res.Of("b") };

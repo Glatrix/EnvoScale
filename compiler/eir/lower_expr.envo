@@ -39,6 +39,7 @@ impl Lower {
             u64 v = this.C.LiteralValue(node.Tok, ref overflow);
             return this.Const(this.LType(t), v);
         }
+        if (k == NK_FLOAT) return this.Const(this.LType(t), this.C.FloatBits(n));
         if (k == NK_CHAR) return this.Const(ET_U8, this.C.CharValue(node.Tok));
         if (k == NK_BOOL) {
             if (Same(this.C.TokText(node.Tok), "true")) return this.Const(ET_BOOL, 1);
@@ -134,6 +135,7 @@ impl Lower {
             if (op == TK_AMP) return this.LowerPlace(node.A);
             u32 v = this.LowerExpr(node.A);
             u32 et = this.LType(t);
+            if (op == TK_MINUS && this.C.IsFloatType(t)) return this.Emit(31, et, 0, 0, et, 1, OpV(v), OpNone(), OpNone());
             if (op == TK_MINUS) return this.Emit(11, et, 0, 0, et, 1, OpV(v), OpNone(), OpNone());
             return this.Emit(17, et, 0, 0, et, 1, OpV(v), OpNone(), OpNone());     // ~ and !
         }
@@ -323,6 +325,7 @@ impl Lower {
             if (op == TK_GT_EQ) cmp = 25;
             return this.Bin(cmp, et, a, b);
         }
+        if (this.C.IsFloatType(lt)) return this.Bin(FloatOp(ArithOp(this.C.TokText(node.Tok))), et, a, b);
         return this.Bin(ArithOp(this.C.TokText(node.Tok)), et, a, b);
     }
 
@@ -367,6 +370,16 @@ impl Lower {
         u32 et = this.LType(to);
         u8 fk = this.C.TyKind(from);
         u8 tk = this.C.TyKind(to);
+        if (fk == TYK_FLOAT || tk == TYK_FLOAT) {
+            // RFC 0006: fext, ftrunc, itof (from the integer as is), ftoi (saturating)
+            if (fk == TYK_FLOAT && tk == TYK_FLOAT) {
+                if (ef == et) return v;
+                if (this.M.Ty(ef).Size < this.M.Ty(et).Size) return this.Conv(37, ef, et, v);
+                return this.Conv(38, ef, et, v);
+            }
+            if (tk == TYK_FLOAT) return this.Conv(35, ef, et, v);
+            return this.Conv(36, ef, et, v);
+        }
         if (tk == TYK_PTR) {
             if (fk == TYK_PTR) return v;
             u32 w = this.ConvTo(ef, ET_U64, false, v);

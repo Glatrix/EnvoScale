@@ -49,7 +49,14 @@ Everything in Envo-Core (`envo-core.md` §3), plus:
   separately. A generic body may use only what its constraints provide, checked once at
   the definition ([type.gen.2]). Instantiation deeper than 64 nested levels is **E0350**
   "generic instantiation too deep".
-- **[s1.type.3]** Not in S1: floats, `char`, `i128`/`u128`, tuples, classes and `weak`,
+- **[s1.type.4]** Floats (RFC 0006): `f32` and `f64` (`float`, `double`) with float
+  literals ([lex.float.1]–[lex.float.3], [type.lit.2]), `+ - * /`, unary `-`,
+  comparisons, `+= -= *= /=` and `as` to and from every integer and float type
+  ([type.conv.1]), in Stage 2 only: Stage 1, the bootstrap compiler, rejects them
+  (**E0950**). An unsuffixed float literal takes the expected float type, else `f64`;
+  an integer literal is never a float. Float arithmetic never panics, and every NaN it
+  makes is the canonical quiet NaN (EIR §5.3).
+- **[s1.type.3]** Not in S1: `char`, `i128`/`u128`, tuples, classes and `weak`,
   dynamic interface values (`in IShape`, `Box<I>`), associated types and constants,
   const generics, `extern "C" fn`, generic functions, methods and built-ins used as
   values (wrap the call in a lambda), arrays of values with a drop (use `List<T>`; array

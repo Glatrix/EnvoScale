@@ -1,0 +1,108 @@
+// core.math's float functions, alloc.text's float formatting and core.text's float
+// parsing (RFC 0006): exact results where the function is exact (square roots, rounding,
+// whole powers), and agreement to 12 decimal places elsewhere (the functions are within
+// a few units in the last place).
+// expect: sqrt exact yes
+// expect: sqrt2 1.4142135623731
+// expect: rounding -3 -2 3 -3 2
+// expect: sin(pi/6) 0.5 cos(pi/3) 0.5 tan(pi/4) 1
+// expect: sin(1) 0.841470984808 cos(1) 0.540302305868
+// expect: exp(1) 2.718281828459 ln(10) 2.302585092994 log10(1000) 3
+// expect: pow 1024 0.125 1.414213562373 -8 NaN
+// expect: atan2 0.785398163397 2.356194490192 -1.570796326795
+// expect: asin(0.5) 0.523598775598 acos(0) 1.570796326795
+// expect: format 3.14159 -0.50 1.000e+20 0.1 19.635 3 inf NaN
+// expect: parse -2500 0.001 1e+22 none none
+// expect: parse exact yes
+use core.math;
+use core.text as ct;
+use alloc.text;
+
+void Out(str s) {
+    write(1, " ");
+    write(1, s);
+}
+
+void F(f64 v) => Out(text.FloatShort(v).AsStr());
+
+// 12 decimal places: for functions whose last place may differ by a unit
+void G(f64 v) => Out(text.Float(v, 12).AsStr());
+
+bool exact = true;
+for (u64 i = 1; i < 2000; i++) {
+    f64 x = i as f64;
+    if (math.Sqrt(x * x) != x) exact = false;
+}
+exact = exact && math.Bits(math.Sqrt(2.0)) == 0x3FF6A09E667F3BCD && math.Bits(math.Sqrt(1e-310)) == 0x1FC1297872D9CBAE
+    && math.Bits(math.Sqrt(1.7976931348623157e308)) == 0x5FEFFFFFFFFFFFFF && math.IsNaN(math.Sqrt(-1.0));
+write(1, "sqrt exact");
+if (exact) print(" yes");
+else print(" no");
+write(1, "sqrt2");
+F(math.Sqrt(2.0));
+print("");
+write(1, "rounding");
+F(math.Floor(-2.5));
+F(math.Ceil(-2.5));
+F(math.Round(2.5));
+F(math.Round(-2.5));
+F(math.Trunc(2.9));
+print("");
+write(1, "sin(pi/6)");
+F(math.Sin(math.PI / 6.0));
+write(1, " cos(pi/3)");
+F(math.Cos(math.PI / 3.0));
+write(1, " tan(pi/4)");
+F(math.Tan(math.PI / 4.0));
+print("");
+write(1, "sin(1)");
+G(math.Sin(1.0));
+write(1, " cos(1)");
+G(math.Cos(1.0));
+print("");
+write(1, "exp(1)");
+G(math.Exp(1.0));
+write(1, " ln(10)");
+G(math.Ln(10.0));
+write(1, " log10(1000)");
+F(math.Log10(1000.0));
+print("");
+write(1, "pow");
+F(math.PowF(2.0, 10.0));
+F(math.PowF(2.0, -3.0));
+G(math.PowF(2.0, 0.5));
+F(math.PowF(-2.0, 3.0));
+F(math.PowF(-2.0, 0.5));
+print("");
+write(1, "atan2");
+G(math.Atan2(1.0, 1.0));
+G(math.Atan2(1.0, -1.0));
+G(math.Atan2(-1.0, 0.0));
+print("");
+write(1, "asin(0.5)");
+G(math.Asin(0.5));
+write(1, " acos(0)");
+G(math.Acos(0.0));
+print("");
+write(1, "format");
+Out(text.Float(math.PI, 5).AsStr());
+Out(text.Float(-0.5, 2).AsStr());
+Out(text.Float(1e20, 3).AsStr());
+F(0.1);
+F(19.635);
+F(3.0);
+F(math.Infinity());
+F(math.NaN());
+print("");
+write(1, "parse");
+F(ct.ParseFloat("-2.5e3").Unwrap());
+F(ct.ParseFloat("1e-3").Unwrap());
+F(ct.ParseFloat("1e22").Unwrap());
+if (ct.ParseFloat("1.x").IsNone()) Out("none");
+if (ct.ParseFloat("e5").IsNone()) Out("none");
+print("");
+bool parsed = math.Bits(ct.ParseFloat("0.1").Unwrap()) == math.Bits(0.1) && math.Bits(ct.ParseFloat("123.456").Unwrap()) == math.Bits(123.456)
+    && math.Bits(ct.ParseFloat("-0.0").Unwrap()) == 0x8000000000000000;
+write(1, "parse exact");
+if (parsed) print(" yes");
+else print(" no");

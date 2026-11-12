@@ -189,3 +189,85 @@ public usize CharCount(str s) {
     }
     return n;
 }
+
+// The number in decimal text s ("1.5", "-2e10", ".5", "3."), or None (RFC 0006). Up to 19
+// significant digits are used. The result is correctly rounded when the digits fit in 2^53
+// and the exponent is within ±22; otherwise it is within a few units in the last place.
+public f64? ParseFloat(str s) {
+    usize i = 0;
+    bool neg = false;
+    if (i < s.Len && (s[i] == '+' || s[i] == '-')) {
+        neg = s[i] == '-';
+        i++;
+    }
+    u64 m = 0;
+    i64 e = 0;
+    u32 sig = 0;
+    bool any = false;
+    while (i < s.Len && IsDigit(s[i])) {
+        any = true;
+        if (sig < 19) {
+            m = m * 10 + (s[i] - '0') as u64;
+            if (m != 0) sig++;
+        } else {
+            e++;
+        }
+        i++;
+    }
+    if (i < s.Len && s[i] == '.') {
+        i++;
+        while (i < s.Len && IsDigit(s[i])) {
+            any = true;
+            if (sig < 19) {
+                m = m * 10 + (s[i] - '0') as u64;
+                if (m != 0) sig++;
+                e--;
+            }
+            i++;
+        }
+    }
+    if (!any) return null;
+    if (i < s.Len && (s[i] == 'e' || s[i] == 'E')) {
+        i++;
+        bool eneg = false;
+        if (i < s.Len && (s[i] == '+' || s[i] == '-')) {
+            eneg = s[i] == '-';
+            i++;
+        }
+        if (i >= s.Len || !IsDigit(s[i])) return null;
+        i64 x = 0;
+        while (i < s.Len && IsDigit(s[i])) {
+            if (x < 100000) x = x * 10 + (s[i] - '0') as i64;
+            i++;
+        }
+        if (eneg) e -= x;
+        else e += x;
+    }
+    if (i != s.Len) return null;
+    f64 v = m as f64;
+    if (m != 0) {
+        if (e > 0) {
+            while (e > 22) {
+                v = v * 1e22;
+                e -= 22;
+            }
+            v = v * TenTo(e as u32);
+        } else if (e < 0) {
+            i64 k = 0 - e;
+            while (k > 22) {
+                v = v / 1e22;
+                k -= 22;
+            }
+            v = v / TenTo(k as u32);
+        }
+    }
+    if (neg) return Some(-v);
+    return Some(v);
+}
+
+// 10^n for n <= 22: exact in a double.
+f64 TenTo(u32 n) {
+    f64 r = 1.0;
+    for (u32 k = 0; k < n; k++) r = r * 10.0;
+    return r;
+}

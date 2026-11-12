@@ -1,0 +1,39 @@
+// envo.math: vector products, a quaternion rotation, a translate-rotate-scale matrix and
+// its inverse, and a perspective projection's depth range (near to 0, far to 1).
+// expect: dot 32.0000
+// expect: cross.x -3.0000
+// expect: len 5.0000
+// expect: rot.z -1.0000
+// expect: trs.x 1.0000
+// expect: trs.z 1.0000
+// expect: inv.x 1.0000
+// expect: far z 1.0000
+// expect: near z 0.0000
+use envo.math;
+use alloc.text;
+void P(str l, f32 v) {
+    write(1, l);
+    write(1, " ");
+    print(text.Float(v as f64, 4).AsStr());
+}
+math.Vec3 a = math.Vec3.Of(1.0, 2.0, 3.0);
+math.Vec3 b = math.Vec3.Of(4.0, 5.0, 6.0);
+P("dot", a.Dot(b));
+math.Vec3 c = a.Cross(b);
+P("cross.x", c.X);
+P("len", math.Vec3.Of(3.0, 4.0, 0.0).Length());
+math.Quat q = math.Quat.Axis(math.Vec3.Up(), math.Radians(90.0));
+math.Vec3 r = q.Rotate(math.Vec3.Of(1.0, 0.0, 0.0));
+P("rot.z", r.Z);
+math.Mat4 m = math.Mat4.Trs(math.Vec3.Of(1.0, 2.0, 3.0), q, math.Vec3.Of(2.0, 2.0, 2.0));
+math.Vec3 p = m.TransformPoint(math.Vec3.Of(1.0, 0.0, 0.0));
+P("trs.x", p.X);
+P("trs.z", p.Z);
+math.Mat4 inv = m.Inverse();
+math.Vec3 back = inv.TransformPoint(p);
+P("inv.x", back.X);
+math.Mat4 pr = math.Mat4.Perspective(math.Radians(60.0), 1.5, 0.1, 100.0);
+math.Vec3 ndc = pr.TransformPoint(math.Vec3.Of(0.0, 0.0, -100.0));
+P("far z", ndc.Z);
+math.Vec3 near = pr.TransformPoint(math.Vec3.Of(0.0, 0.0, -0.1));
+P("near z", near.Z);

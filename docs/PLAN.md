@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M9 (web). M0–M8 are done; their records are in §4.
+- **Current milestone:** M10 (AArch64 and macOS), blocked on test machines (§5). M0–M9 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -191,22 +191,24 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   desktop and terminal renderers (D47). Increments 8.1–8.9; design in
   [`architecture/graphics.md`](architecture/graphics.md).
 
-## 5. M9 — Web
+- **M9 — Web.** A WebAssembly backend in Stage 2 keeping the front end's layout (D48),
+  one host import and `envo.js` (D49), `envo.web` with SSR and SSG as one code path
+  (D50), `envo.markdown` and Lumen's templates (D51), and the website as an Envo program
+  with an in-browser sandbox, the compiler itself in WebAssembly (D52). Increments
+  9.1–9.8.
 
-**DoD (brief §16):** WASM backend, JS interop adapter, `envo.web` server/router, SSG +
-SSR, Lumen templates (Landing and Docs at minimum). The EnvoScale docs site is built
-with EnvoScale.
+## 5. M10 — AArch64 and macOS (blocked)
 
-| # | Increment | Tested by | State |
-|---|---|---|---|
-| [9.1](https://github.com/envoscale/EnvoScale/issues/120) | The WebAssembly backend (D48) | spec run programs under Node.js, -O0 and -O2 || done |
-| [9.2](https://github.com/envoscale/EnvoScale/issues/121) | The host (`envo.js`) and the `os.wasm` adapters (D49) | library tests and conformance suites under Node.js || done |
-| [9.3](https://github.com/envoscale/EnvoScale/issues/122) | `envo.web`: router, static files, HTML building (D50) | `lib/envo/web/tests/` || done |
-| [9.4](https://github.com/envoscale/EnvoScale/issues/123) | `envo.markdown` and Lumen templates (D51) | `lib/envo/markdown/tests/`, golden pages || done |
-| [9.5](https://github.com/envoscale/EnvoScale/issues/124) | SSG and SSR from the same pages (D50) | golden sites || done |
-| [9.6](https://github.com/envoscale/EnvoScale/issues/126) | The website and docs site built with Envo (D52) | `website/`, CI builds it || done |
-| [9.7](https://github.com/envoscale/EnvoScale/issues/125) | The sandbox: `envoc` in the browser (D52) | `envoc` built for `wasm32-web` compiles and runs a program under Node.js || done |
-| [9.8](https://github.com/envoscale/EnvoScale/issues/127) | Docs and status; M9 complete | CI | |
+**DoD (brief §16):** AArch64 backend, Mach-O linker, macOS OS/window/Metal adapters.
+
+M10 needs machines to test on: an AArch64 Linux machine or runner for the backend, and a
+Mac for Mach-O and the macOS adapters. None is available here, and GitHub's arm64 and
+macOS runners are billed for private repositories, so how to test is the owner's decision
+(STATUS). Until then, work moves to what M11 and M12 need first:
+
+- **Floats in Envo-S1** (RFC 0006): `f32` and `f64` through the front end, EIR, both
+  backends and the script runtime, with formatting and parsing in `core.text`. The 3D
+  renderer (M11) and the tensors (M12) are float code.
 
 ## 6. Risks
 

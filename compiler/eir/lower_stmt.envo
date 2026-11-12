@@ -277,7 +277,8 @@ impl Lower {
             if (Same(opBase, "<<") || Same(opBase, ">>")) {
                 u32 rt = this.LNType(node.B);
                 v = this.LowerShift(Same(opBase, "<<"), t, old, r, rt);
-            } else v = this.Bin(ArithOp(opBase), et, old, r);
+            } else if (this.C.IsFloatType(t)) v = this.Bin(FloatOp(ArithOp(opBase)), et, old, r);
+            else v = this.Bin(ArithOp(opBase), et, old, r);
             this.Store(et, v, p);
             return;
         }
@@ -375,6 +376,14 @@ impl Lower {
 }
 
 // The EIR opcode of an arithmetic or bitwise operator spelling.
+// The float instruction for an integer arithmetic one (RFC 0006): fadd, fsub, fmul, fdiv.
+u16 FloatOp(u16 op) {
+    if (op == 8 || op == 5) return 27;
+    if (op == 9 || op == 6) return 28;
+    if (op == 10 || op == 7) return 29;
+    return 30;
+}
+
 u16 ArithOp(str op) {
     if (Same(op, "+")) return 8;
     if (Same(op, "-")) return 9;
