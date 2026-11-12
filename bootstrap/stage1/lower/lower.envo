@@ -35,6 +35,7 @@ struct Lower {
     Vec DropFlags;      // u32 per checker symbol: a local's drop flag slot
     Vec Drops;          // u32: the locals with a drop flag, in scope order
     Vec Temps;          // u32 pairs (type, address): the statement's temporaries to drop
+    Vec FlagSyms;       // u32: the locals given a drop flag in the current function
 }
 
 // The type of checked node n in the function being lowered (its type arguments
@@ -335,6 +336,7 @@ void LowerProgram(*Lower l, u32 program) {
         l.DropFlags = VecNew(4, 64);
         l.Drops = VecNew(4, 16);
         l.Temps = VecNew(4, 8);
+        l.FlagSyms = VecNew(4, 16);
     }
     // declare every function and static first, so calls can refer forward; generic
     // functions and methods are declared once per instance
@@ -654,7 +656,7 @@ void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
     u32 first = EFuncGet(m, f).FirstValue;
     u32 k = 0;
     u32 ret = LSubst(l, sym.Type);
-    unsafe { VecClear(&l.Drops); }
+    ResetDropFlags(l);
     unsafe {
         l.Top = false;
         l.RetType = ret;
@@ -737,7 +739,7 @@ void LowerMain(*Lower l, u32 f, u32 items) {
         l.RetType = T_I32;
         l.RetSlot = 0;
     }
-    unsafe { VecClear(&l.Drops); }
+    ResetDropFlags(l);
     u32 n = items;
     while (n != 0) {
         if (!NodeIsItem(NKind(c, n))) LowerStmt(l, n);

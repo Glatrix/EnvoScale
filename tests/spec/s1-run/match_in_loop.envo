@@ -1,0 +1,40 @@
+// A `match` binding that takes a value is a new local each time its arm runs, also in a
+// loop ([s1.expr.1], [own.move.2]). Found while building Stage 2 (M3.1).
+// expect: 1 2 3
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    u64 n = v as u64;
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+
+struct Box { i64 N; fn() Hook; }
+void Hi() { }
+
+void Take(Box b, bool last) {
+    write(1, Num(b.N));
+    if (last) print("");
+    else write(1, " ");
+}
+
+List<Box?> items = List<Box?>.New();
+items.Push(Some(new Box { N = 3, Hook = Hi }));
+items.Push(Some(new Box { N = 2, Hook = Hi }));
+items.Push(Some(new Box { N = 1, Hook = Hi }));
+while (true) {
+    Option<Box?> next = items.Pop();
+    if (next.IsNone()) break;
+    Box? item = next.Unwrap();
+    match item {
+        Some(value) => { Take(value, items.Len() == 0); }
+        None => { }
+    }
+}

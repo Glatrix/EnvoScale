@@ -17,6 +17,8 @@ $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 $Build = Join-Path $Root 'build\stage0'
 $Build1 = Join-Path $Root 'build\stage1'
+$Build2 = Join-Path $Root 'build\stage2'
+$Stage2 = Join-Path $Root 'compiler'
 $Stage0 = Join-Path $Root 'bootstrap\stage0'
 $Stage1 = Join-Path $Root 'bootstrap\stage1'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -52,6 +54,20 @@ function Invoke-Build {
         Say "build     bootstrap/stage1 -> build/stage1/$($u.Out)"
         $r = Invoke-Tool $envoc0 (@('build') + $files + @('-o', $out, '--target', $u.Target)) $Stage1
         if ($r.Code -ne 0) { Fail "building Stage 1 ($($u.Target)) failed: $($r.Err.Trim())" }
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
+        $size = (Get-Item -LiteralPath $out).Length
+        Say ("          {0,8} bytes  sha256 {1}" -f $size, $hash)
+    }
+
+    # Stage 2 is an Envo-S1 program (PLAN D16); envoc1 builds it for both OSes.
+    New-Item -ItemType Directory -Force $Build2 | Out-Null
+    $envoc1 = Join-Path $Build1 'envoc1.exe'
+    $files = @(Get-Content -LiteralPath (Join-Path $Stage2 'files.txt') | Where-Object { $_.Trim() -ne '' })
+    foreach ($u in @(@{ Target = 'x86_64-windows'; Out = 'envoc.exe' }, @{ Target = 'x86_64-linux'; Out = 'envoc' })) {
+        $out = Join-Path $Build2 $u.Out
+        Say "build     compiler -> build/stage2/$($u.Out)"
+        $r = Invoke-Tool $envoc1 (@('build') + $files + @('-o', $out, '--target', $u.Target)) $Stage2
+        if ($r.Code -ne 0) { Fail "building Stage 2 ($($u.Target)) failed: $($r.Err.Trim())" }
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
         $size = (Get-Item -LiteralPath $out).Length
         Say ("          {0,8} bytes  sha256 {1}" -f $size, $hash)
@@ -373,6 +389,18 @@ function Invoke-Test {
     $files = @(Get-Content -LiteralPath (Join-Path $Stage1 'files.txt') | Where-Object { $_.Trim() -ne '' })
     $r = Invoke-Tool $envoc1 (@('--core', 'check') + $files) $Stage1
     if ($r.Code -eq 0) { Pass 'stage1 self-check' } else { Bad 'stage1 self-check' "exit $($r.Code), stderr: $($r.Err.Trim())" }
+
+    Say ''
+    Say 'stage 2 smoke tests'
+    $envoc = Join-Path $Build2 'envoc.exe'
+    $r = Invoke-Tool $envoc @('version') $Root
+    if ($r.Code -eq 0 -and $r.Out.StartsWith('envoc ')) { Pass 'envoc version' } else { Bad 'envoc version' "exit $($r.Code)" }
+    $r = Invoke-Tool $envoc @('selftest') $Root
+    if ($r.Code -eq 0 -and $r.Out.StartsWith('selftest: ok')) { Pass 'envoc selftest' } else { Bad 'envoc selftest' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    $r = Invoke-Tool $envoc @() $Root
+    if ($r.Code -eq 2 -and $r.Err.StartsWith('usage: envoc')) { Pass 'envoc no arguments' } else { Bad 'envoc no arguments' "exit $($r.Code)" }
+    $r = Invoke-Tool $envoc @('frobnicate') $Root
+    if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc: error: unknown command 'frobnicate'")) { Pass 'envoc unknown command' } else { Bad 'envoc unknown command' "exit $($r.Code)" }
 
     Say ''
     Say "$($script:passed) passed, $($script:failed) failed"

@@ -57,6 +57,7 @@ struct Checker {
     Map NsSet;          // every namespace and namespace prefix
     Vec Uses;           // u32: the `use` items
     Map TokSym;         // token index -> the item a qualified name resolved to
+    Map Summaries;      // function symbol -> its storage summary (check/views.envo)
 }
 
 // ------------------------------------------------------------------ side tables

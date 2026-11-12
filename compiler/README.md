@@ -1,8 +1,10 @@
 # `compiler/` — Stage 2 `envoc`
 
-> **Status:** Not started. Planned for **M3** (self-hosting). Until then, compiler work
-> happens in [`bootstrap/stage0`](../bootstrap/stage0/README.md) and, from M2,
-> [`bootstrap/stage1`](../bootstrap/stage1/README.md).
+> **Status:** Being built in **M3** (self-hosting), increment by increment
+> ([`docs/PLAN.md`](../docs/PLAN.md) §5): written in Envo-S1, built by `envoc1` from
+> [`files.txt`](files.txt) (PLAN D16). Today: the driver (`envoc version`, `help`,
+> `selftest`), the support library and diagnostics. Design:
+> [`docs/architecture/stage2.md`](../docs/architecture/stage2.md).
 
 The real Envo compiler, written in idiomatic full Envo. Once it compiles itself to a
 byte-identical fixed point, **all compiler development happens here** (brief §5.5).

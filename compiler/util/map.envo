@@ -1,0 +1,86 @@
+// A hash map from strings to values (compiler/util/README.md).
+namespace envoc.util;
+
+// Open addressing with linear probing; the map owns copies of its keys. The table's size
+// is a power of two and stays at most half full.
+public struct StrMap<V> {
+    List<string> Keys;
+    List<V?> Values;
+    usize Count;
+
+    public static StrMap<V> New() {
+        StrMap<V> m = new StrMap<V> { Keys = List<string>.New(), Values = List<V?>.New(), Count = 0 };
+        m.Fill(16);
+        return m;
+    }
+
+    public usize Len() => this.Count;
+
+    // Sets key's value (replacing an earlier one).
+    public void Put(ref this, str key, V value) {
+        if ((this.Count + 1) * 2 > this.Keys.Len()) this.Grow();
+        usize i = this.Slot(key);
+        if (this.Values.AsSlice()[i].IsNone()) {
+            this.Keys.Set(i, string.From(key));
+            this.Count++;
+        }
+        this.Values.Set(i, Some(value));
+    }
+
+    public bool Has(str key) => this.Values.AsSlice()[this.Slot(key)].IsSome();
+
+    // key's value, if it has one.
+    public V? Get(str key) where V : Copy => this.Values.Get(this.Slot(key));
+
+    // The slot holding key, or the empty slot where it would go.
+    usize Slot(str key) {
+        usize mask = this.Keys.Len() - 1;
+        usize i = (Hash(key) as usize) & mask;
+        while (true) {
+            if (this.Values.AsSlice()[i].IsNone()) return i;
+            if (Same(this.Keys.AsSlice()[i].AsStr(), key)) return i;
+            i = (i + 1) & mask;
+        }
+        return 0;
+    }
+
+    void Fill(ref this, usize n) {
+        for (usize i = 0; i < n; i++) {
+            this.Keys.Push(string.New());
+            this.Values.Push(null);
+        }
+    }
+
+    // Twice the slots; every entry is placed again. (A field cannot be moved out of
+    // `ref this`, so the old lists are emptied into new ones, then replaced.)
+    void Grow(ref this) {
+        usize size = this.Keys.Len() * 2;
+        List<string> keys = List<string>.New();
+        List<V?> values = List<V?>.New();
+        for (usize i = 0; i < size; i++) {
+            keys.Push(string.New());
+            values.Push(null);
+        }
+        while (true) {
+            string? k = this.Keys.Pop();
+            // the lists are as long as each other: a key comes with its slot
+            Option<V?> slot = this.Values.Pop();
+            if (k.IsNone()) break;
+            V? v = slot.Unwrap();
+            match v {
+                Some(value) => { StrMap<V>.Place(ref keys, ref values, k.Unwrap(), value); }
+                None => { }
+            }
+        }
+        this.Keys = keys;
+        this.Values = values;
+    }
+
+    static void Place(ref List<string> keys, ref List<V?> values, string key, V value) {
+        usize mask = keys.Len() - 1;
+        usize i = (Hash(key) as usize) & mask;
+        while (values.AsSlice()[i].IsSome()) i = (i + 1) & mask;
+        keys.Set(i, key);
+        values.Set(i, Some(value));
+    }
+}

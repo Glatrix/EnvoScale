@@ -28,6 +28,7 @@ void TrackDrop(*Lower l, u32 s, u32 t, bool init, u32 tok) {
         while (VecLen(&l.DropFlags) <= s as usize) MemStoreU32(VecPush(&l.DropFlags), 0);
         MemStoreU32(VecAt(&l.DropFlags, s as usize), flag);
         MemStoreU32(VecPush(&l.Drops), s);
+        MemStoreU32(VecPush(&l.FlagSyms), s);
     }
 }
 
@@ -38,6 +39,16 @@ void SetDropFlag(*Lower l, u32 s, bool live) {
     u64 v = 0;
     if (live) v = 1;
     LStore(l, ET_BOOL, LConst(l, ET_BOOL, v), flag);
+}
+
+// A new function: no local has a drop flag yet. (Flags are kept per symbol, and one
+// generic body is lowered once per instance, so the last instance's must go.)
+void ResetDropFlags(*Lower l) {
+    unsafe {
+        for (usize i = 0; i < VecLen(&l.FlagSyms); i++) MemStoreU32(VecAt(&l.DropFlags, MemLoadU32(VecAt(&l.FlagSyms, i)) as usize), 0);
+        VecClear(&l.FlagSyms);
+        VecClear(&l.Drops);
+    }
 }
 
 usize DropMark(*Lower l) {

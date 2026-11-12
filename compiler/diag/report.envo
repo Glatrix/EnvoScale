@@ -1,0 +1,78 @@
+// Source files and diagnostics (compiler/diag/README.md). Messages use the format every
+// stage shares: "path:line:col: error[E####]: message" on stderr, then exit code 1;
+// problems with the command line are "envoc: error: message" with exit code 2.
+namespace envoc.diag;
+
+use envoc.util;
+
+public const i32 EXIT_OK = 0;
+public const i32 EXIT_ERRORS = 1;
+public const i32 EXIT_USAGE = 2;
+public const i32 EXIT_INTERNAL = 70;
+
+public struct SourceFile {
+    string Path;
+    string Text;
+}
+
+// Every source file the compiler has read, in the order read; a token refers to its file
+// by index.
+public struct Sources {
+    List<SourceFile> Files;
+
+    public static Sources New() => new Sources { Files = List<SourceFile>.New() };
+
+    public usize Add(ref this, str path, string text) {
+        this.Files.Push(new SourceFile { Path = string.From(path), Text = text });
+        return this.Files.Len() - 1;
+    }
+
+    public str Path(usize file) => this.Files.AsSlice()[file].Path.AsStr();
+    public str Text(usize file) => this.Files.AsSlice()[file].Text.AsStr();
+}
+
+// Line and column (both from 1; columns count characters, not bytes) of byte offset off.
+public void Position(str text, usize off, ref u32 line, ref u32 col) {
+    line = 1;
+    col = 1;
+    for (usize i = 0; i < off && i < text.Len; i++) {
+        u8 b = text[i];
+        if (b == 10) {
+            line++;
+            col = 1;
+        } else if (b & 0xC0 != 0x80) {
+            col++;
+        }
+    }
+}
+
+// Reports an error at byte offset off of a source file and exits.
+public void Fail(in Sources src, usize file, usize off, u32 code, str msg) {
+    u32 line = 0;
+    u32 col = 0;
+    Position(src.Text(file), off, ref line, ref col);
+    string e = string.From(src.Path(file));
+    e.AppendByte(':');
+    AppendDecimal(ref e, line as u64);
+    e.AppendByte(':');
+    AppendDecimal(ref e, col as u64);
+    e.Append(": error[E");
+    if (code < 1000) e.AppendByte('0');
+    if (code < 100) e.AppendByte('0');
+    if (code < 10) e.AppendByte('0');
+    AppendDecimal(ref e, code as u64);
+    e.Append("]: ");
+    e.Append(msg);
+    e.AppendByte(10);
+    write(2, e);
+    exit(EXIT_ERRORS);
+}
+
+// A problem with the command line or the environment: "envoc: error: msg", then exit.
+public void ToolFail(str msg, i32 code) {
+    string e = string.From("envoc: error: ");
+    e.Append(msg);
+    e.AppendByte(10);
+    write(2, e);
+    exit(code);
+}

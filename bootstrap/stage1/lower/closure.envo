@@ -158,8 +158,8 @@ void LowerLambdaFunc(*Lower l, u32 n, u32 f, u32 envT, u32 env, u32 ne) {
     unsafe { first = EFuncGet(m, f).FirstValue; }
     Type fty = TypeGet(c, LNType(l, n));
     u32 k = 0;
+    ResetDropFlags(l);
     unsafe {
-        VecClear(&l.Drops);
         l.Top = false;
         l.RetType = fty.Elem;
         l.RetSlot = 0;

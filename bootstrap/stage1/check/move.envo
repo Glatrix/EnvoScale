@@ -28,10 +28,8 @@ struct MoveCx {
     u32 Caps;       // in a lambda body: its captures (in Checker.Captures)
     u32 NCaps;
     Vec Frozen;     // u32 locals that a match arm's bindings borrow: no changes or moves
-    Vec Viewed;     // u32 local arrays a kept view borrows, from there on (check/views.envo)
-    Vec ViewLocals; // u32 pairs (local, the local array its view borrows)
+    Vec ViewLocals; // u32 pairs (a local in scope, the local whose storage it views)
     u32 DirectArg;  // the argument node being checked as a call's direct argument
-    Vec Exclusive;  // u32 locals a kept `mut T[]` borrows exclusively: no other use at all
 }
 
 MoveSnap SnapNew() {
@@ -106,9 +104,7 @@ MoveCx MoveCxNew() {
     x.St = SnapNew();
     x.Loops = VecNew(sizeof(LoopFrame), 4);
     x.Frozen = VecNew(4, 4);
-    x.Viewed = VecNew(4, 4);
     x.ViewLocals = VecNew(4, 4);
-    x.Exclusive = VecNew(4, 4);
     return x;
 }
 
@@ -117,8 +113,9 @@ bool IsFrozen(*MoveCx x, u32 s) {
         for (usize i = 0; i < VecLen(&x.Frozen); i++) {
             if (MemLoadU32(VecAt(&x.Frozen, i)) == s) return true;
         }
-        for (usize i = 0; i < VecLen(&x.Viewed); i++) {
-            if (MemLoadU32(VecAt(&x.Viewed, i)) == s) return true;
+        // a local holding a view of s, while it is in scope
+        for (usize i = 0; i < VecLen(&x.ViewLocals); i += 2) {
+            if (MemLoadU32(VecAt(&x.ViewLocals, i + 1)) == s) return true;
         }
     }
     return false;
@@ -162,22 +159,37 @@ u32 ViewOfLocal(*Checker c, *MoveCx x, u32 e) {
         return ViewOfLocal(c, x, node.C);
     }
     if (k == NK_CALL) {
-        if (NKind(c, node.A) == NK_MEMBER) {
-            u32 obj = CNode(c, node.A).A;
-            u32 r = ViewOfLocal(c, x, obj);
-            if (r != 0) return r;
-            // a method borrowing a local receiver may return a borrow of it
-            u32 cs = NSym(c, e);
-            if (cs != 0 && SymGet(c, cs).Kind == SK_FN && SymGet(c, cs).Flags & (SF_RECV_IN | SF_RECV_REF) != 0) {
-                u32 root = PlaceRoot(c, obj);
-                if (root != 0 && NSym(c, root) != 0 && SymGet(c, NSym(c, root)).Kind == SK_LOCAL && SymGet(c, NSym(c, root)).Flags & SF_BYREF == 0) return NSym(c, root);
+        // what the callee's result may view: its storage summary (check/views.envo); a
+        // built-in or a function value may view any argument
+        u32 cs = NSym(c, e);
+        u64 sum = 0xFFFFFFFFFFFFFFFF;
+        if (cs != 0 && SymGet(c, cs).Kind == SK_FN) sum = StorageSummary(c, cs);
+        // a variant takes its payload: it holds what the payload views, nothing more
+        if (cs != 0 && SymGet(c, cs).Kind == SK_ENUM) sum = 0;
+        if (cs == 0 && NKind(c, node.A) == NK_NAME) {
+            // of the built-ins, only str_from and slice_from make views (of their pointer)
+            u32 b = Lookup(c, NTok(c, node.A));
+            sum = 0;
+            if (b != 0 && SymGet(c, b).Kind == SK_BUILTIN) {
+                u32 id = SymGet(c, b).Aux2;
+                if (id == B_STR_FROM || id == B_SLICE_FROM || id == B_SLICE_FROM_MUT) sum = 2;
             }
         }
+        if (NKind(c, node.A) == NK_MEMBER && sum & 1 != 0 && cs != 0 && SymGet(c, cs).Kind == SK_FN && SymGet(c, cs).Flags & SF_STATIC == 0) {
+            u32 obj = CNode(c, node.A).A;
+            u32 r = LocalRootOf(c, obj);
+            if (r == 0) r = ViewOfLocal(c, x, obj);
+            if (r != 0) return r;
+        }
         u32 a = node.B;
+        u32 i = 1;
         while (a != 0) {
-            u32 r = ViewOfLocal(c, x, a);
+            u32 r = 0;
+            if (i >= 64 || sum & (1 as u64) << i != 0) r = ArgRootOf(c, a, sum == 2);
+            if (r == 0) r = ViewOfLocal(c, x, a);
             if (r != 0) return r;
             a = CNode(c, a).Next;
+            i++;
         }
         return 0;
     }
@@ -189,6 +201,35 @@ u32 ViewOfLocal(*Checker c, *MoveCx x, u32 e) {
             init = CNode(c, init).Next;
         }
     }
+    return 0;
+}
+
+// The owned local whose storage place (or `&place`) e is in, or 0.
+u32 LocalRootOf(*Checker c, u32 e) {
+    u32 n = e;
+    while (n != 0) {
+        Node node = CNode(c, n);
+        if (node.Kind == NK_NAME || node.Kind == NK_THIS) {
+            u32 s = NSym(c, n);
+            if (s == 0 || SymGet(c, s).Kind != SK_LOCAL || SymGet(c, s).Flags & SF_BYREF != 0) return 0;
+            return s;
+        }
+        // through a raw pointer the storage is not the local's ([own.unsafe.1])
+        if ((node.Kind == NK_MEMBER || node.Kind == NK_INDEX) && TyKind(c, NType(c, node.A)) == TYK_PTR) return 0;
+        if (node.Kind == NK_MEMBER || node.Kind == NK_INDEX || (node.Kind == NK_UNARY && node.Op == TK_AMP)) n = node.A;
+        else return 0;
+    }
+    return 0;
+}
+
+// The owned local whose storage argument a gives the callee: the place itself, or for a
+// pointer argument (str_from, slice_from) only `&place`: a pointer's target is not the
+// pointer local's storage.
+u32 ArgRootOf(*Checker c, u32 a, bool pointer) {
+    if (!pointer) return LocalRootOf(c, a);
+    u32 n = a;
+    while (NKind(c, n) == NK_CAST) n = CNode(c, n).A;
+    if (NKind(c, n) == NK_UNARY && CNode(c, n).Op == TK_AMP) return LocalRootOf(c, n);
     return 0;
 }
 
@@ -209,18 +250,40 @@ void KeepView(*Checker c, *MoveCx x, u32 s, u32 e) {
     unsafe {
         MemStoreU32(VecPush(&x.ViewLocals), s);
         MemStoreU32(VecPush(&x.ViewLocals), r);
-        if (!IsFrozen(x, r)) MemStoreU32(VecPush(&x.Viewed), r);
-        if (IsMutView(c, SymGet(c, s).Type)) MemStoreU32(VecPush(&x.Exclusive), r);
     }
 }
 
-bool IsExclusive(*MoveCx x, u32 s) {
+// Is local s borrowed exclusively: viewed by a local `mut T[]` in scope?
+bool IsExclusive(*Checker c, *MoveCx x, u32 s) {
     unsafe {
-        for (usize i = 0; i < VecLen(&x.Exclusive); i++) {
-            if (MemLoadU32(VecAt(&x.Exclusive, i)) == s) return true;
+        for (usize i = 0; i < VecLen(&x.ViewLocals); i += 2) {
+            if (MemLoadU32(VecAt(&x.ViewLocals, i + 1)) == s && IsMutView(c, SymGet(c, MemLoadU32(VecAt(&x.ViewLocals, i))).Type)) return true;
         }
     }
     return false;
+}
+
+// The block's own locals go out of scope: the borrows they held end.
+void EndViews(*Checker c, *MoveCx x, u32 block) {
+    u32 st = CNode(c, block).A;
+    while (st != 0) {
+        if (NKind(c, st) == NK_VAR) {
+            u32 v = NSym(c, st);
+            unsafe {
+                usize keep = 0;
+                for (usize i = 0; i < VecLen(&x.ViewLocals); i += 2) {
+                    u32 holder = MemLoadU32(VecAt(&x.ViewLocals, i));
+                    u32 root = MemLoadU32(VecAt(&x.ViewLocals, i + 1));
+                    if (holder == v) continue;
+                    MemStoreU32(VecAt(&x.ViewLocals, keep), holder);
+                    MemStoreU32(VecAt(&x.ViewLocals, keep + 1), root);
+                    keep += 2;
+                }
+                VecTruncate(&x.ViewLocals, keep);
+            }
+        }
+        st = CNode(c, st).Next;
+    }
 }
 
 // A value that leaves the function (returned, or stored outside its locals) may not view
@@ -256,6 +319,7 @@ void MvMatch(*Checker c, *MoveCx x, u32 n, bool isExpr, bool move) {
             if (kind == MS_OWNED_LOCAL as u64 && NValue(c, arm) == 1) PlaceSet(x, NSym(c, m.A), 0, MS_MOVED);
             bool froze = root != 0 && NSym(c, root) != 0 && ArmBorrows(c, a.A);
             if (froze) MemStoreU32(VecPush(&x.Frozen), NSym(c, root));
+            ResetBindings(c, x, a.A);
             MvExpr(c, x, a.E, false);
             if (isExpr && NKind(c, a.B) != NK_BLOCK) MvExpr(c, x, a.B, move);
             else MvStmt(c, x, a.B);
@@ -264,6 +328,20 @@ void MvMatch(*Checker c, *MoveCx x, u32 n, bool isExpr, bool move) {
             arm = a.Next;
         }
         x.St = after;
+    }
+}
+
+// The bindings of a pattern list are new each time the arm runs (in a loop, too).
+void ResetBindings(*Checker c, *MoveCx x, u32 pat) {
+    while (pat != 0) {
+        if (NKind(c, pat) == NK_CALL) {
+            u32 b = CNode(c, pat).B;
+            while (b != 0) {
+                if (NKind(c, b) == NK_NAME && NSym(c, b) != 0) PlaceReset(x, NSym(c, b));
+                b = CNode(c, b).Next;
+            }
+        }
+        pat = CNode(c, pat).Next;
     }
 }
 
@@ -363,7 +441,7 @@ void UseLocal(*Checker c, *MoveCx x, u32 n, u32 s, bool move) {
     u32 tok = NTok(c, n);
     u8 st = PlaceState(x, s, 0);
     if (st != MS_OWNED) UsedAfterMove(c, tok, s, st, false);
-    if (IsExclusive(x, s)) BorrowError(c, tok, s, E_BORROW_CONFLICT, "` is borrowed exclusively by a kept `mut` view, so it cannot be used here");
+    if (IsExclusive(c, x, s)) BorrowError(c, tok, s, E_BORROW_CONFLICT, "` is borrowed exclusively by a kept `mut` view, so it cannot be used here");
     unsafe {
         for (usize i = 0; i < VecLen(&x.Places); i += 2) {
             if (MemLoadU32(VecAt(&x.Places, i)) != s || MemLoadU32(VecAt(&x.Places, i + 1)) == 0) continue;
@@ -472,18 +550,7 @@ void MvExpr(*Checker c, *MoveCx x, u32 n, bool move) {
         if (IsMutView(c, NType(c, n))) MvMutate(c, x, node.A);
         MvExpr(c, x, node.A, false);
         MvExpr(c, x, node.B, false);
-        u32 r = ViewOfLocal(c, x, n);
-        bool direct;
-        unsafe { direct = x.DirectArg == n; }
-        if (r != 0 && !direct && !IsFrozen(x, r)) unsafe { MemStoreU32(VecPush(&x.Viewed), r); }
         return;
-    }
-    if (IsConverted(c, n)) {
-        // a kept `str` of a local `string` freezes it, like a view of a local array
-        u32 r = ViewOfLocal(c, x, n);
-        bool direct;
-        unsafe { direct = x.DirectArg == n; }
-        if (r != 0 && !direct && !IsFrozen(x, r)) unsafe { MemStoreU32(VecPush(&x.Viewed), r); }
     }
     if (k == NK_INDEX) {
         MvExpr(c, x, node.A, false);
@@ -646,6 +713,7 @@ void MvStmt(*Checker c, *MoveCx x, u32 n) {
             MvStmt(c, x, s);
             s = CNode(c, s).Next;
         }
+        EndViews(c, x, n);
         return;
     }
     if (k == NK_UNSAFE) {

@@ -1,0 +1,42 @@
+// One generic body compiled for a type that needs a drop and then for one that does not:
+// each instance keeps its own drop flags ([s1.own.2], [type.gen.1]). Found while building
+// Stage 2 (M3.1).
+// expect: drop a
+// expect: 5
+// expect: drop b
+struct Res { str Name; }
+impl IDrop for Res {
+    void Drop(ref this) {
+        write(1, "drop ");
+        print(this.Name);
+    }
+}
+
+void Keep<T>(ref List<T> into, T item) {
+    into.Push(item);
+}
+
+str Num(i64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    u64 n = v as u64;
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + n % 10) as u8;
+            n /= 10;
+            if (n == 0) break;
+        }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+
+void Run() {
+    List<Res> rs = List<Res>.New();
+    Keep(ref rs, new Res { Name = "a" });
+    List<i64> ns = List<i64>.New();
+    Keep(ref ns, 5);
+    rs.Set(0, new Res { Name = "b" });
+    print(Num(ns.Get(0)));
+}
+Run();

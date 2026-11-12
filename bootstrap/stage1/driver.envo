@@ -181,6 +181,7 @@ Checker NewChecker(*Vec toks, *Vec nodes, bool core, bool runtime) {
     c.NsSet = MapNew(16);
     c.Uses = VecNew(4, 8);
     c.TokSym = MapNew(16);
+    c.Summaries = MapNew(64);
     unsafe { VecPush(&c.TypeArgs); }      // index 0: "no environment"
     return c;
 }

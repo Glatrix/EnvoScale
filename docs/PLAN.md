@@ -129,8 +129,8 @@ reaches the fixed point (D18) in CI on both hosts.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [3.1](https://github.com/envoscale/EnvoScale/issues/68) | Stage 2 skeleton: `compiler/` in Envo-S1 built by `envoc1`; support library over `List<T>` and `string` (buffers, maps, files, diagnostics); `envoc version`; scripts and CI build it | smoke tests | next |
-| [3.2](https://github.com/envoscale/EnvoScale/issues/69) | Lexer for the full lexical grammar | every lexer input matches `envoc1` (D17) | |
+| [3.1](https://github.com/envoscale/EnvoScale/issues/68) | Stage 2 skeleton: `compiler/` in Envo-S1 built by `envoc1`; support library over `List<T>` and `string` (buffers, maps, files, diagnostics); `envoc version`; scripts and CI build it | smoke tests | done: `envoc version`, `help`, `selftest`; `envoc.util` and `envoc.diag`; built for both OSes by both scripts and CI; three Stage 1 bugs found and fixed ([`architecture/stage2.md`](architecture/stage2.md)) |
+| [3.2](https://github.com/envoscale/EnvoScale/issues/69) | Lexer for the full lexical grammar | every lexer input matches `envoc1` (D17) | next |
 | [3.3](https://github.com/envoscale/EnvoScale/issues/70) | Parser for Envo-S1, keeping trivia for tools | every parser and syntax input matches `envoc1` | |
 | [3.4](https://github.com/envoscale/EnvoScale/issues/71) | Names, types, generics, interfaces, closures, enums, views, namespaces | every type and error input matches `envoc1` | |
 | [3.5](https://github.com/envoscale/EnvoScale/issues/72) | Ownership and a flow-sensitive borrow checker (chapter 5) | `s1-own`, plus programs Stage 1 rejects that chapter 5 accepts | |

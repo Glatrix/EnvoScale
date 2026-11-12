@@ -1,0 +1,66 @@
+// envoc: the Stage 2 compiler (compiler/README.md), written in Envo-S1 and built by
+// envoc1 (PLAN D16). This is the entry file: its top-level statements are the program's
+// main. The other files are listed, in order, in compiler/files.txt.
+use envoc.util;
+use envoc.diag;
+
+const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
+
+void Usage(i32 fd) {
+    write(fd, "usage: envoc <command> [arguments]\n");
+    write(fd, "\n");
+    write(fd, "commands:\n");
+    write(fd, "  version             print the version\n");
+    write(fd, "  help                print this message\n");
+    write(fd, "\n");
+    write(fd, "envoc is being built (milestone M3): the compiler commands arrive one\n");
+    write(fd, "increment at a time (docs/PLAN.md section 5).\n");
+}
+
+// Checks the support library: a map through several rounds of growth, and numbers.
+void SelfTest() {
+    StrMap<u64> m = StrMap<u64>.New();
+    for (u64 i = 0; i < 1000; i++) m.Put(Decimal(i), i * 3);
+    for (u64 i = 0; i < 1000; i++) {
+        if ((m.Get(Decimal(i)) ?? 0) != i * 3) ToolFail("selftest: a map value is wrong", EXIT_INTERNAL);
+    }
+    m.Put("7", 1);
+    if (m.Len() != 1000 || (m.Get("7") ?? 0) != 1 || m.Has("x")) ToolFail("selftest: the map's contents are wrong", EXIT_INTERNAL);
+    if (!Same(Decimal(18446744073709551615).AsStr(), "18446744073709551615")) ToolFail("selftest: Decimal is wrong", EXIT_INTERNAL);
+    print("selftest: ok");
+}
+
+// The target this program runs on: Linux has /proc/self/exe.
+str HostTarget() {
+    i32 fd = open("/proc/self/exe", 0);
+    if (fd >= 0) {
+        close(fd);
+        return "x86_64-linux";
+    }
+    return "x86_64-windows";
+}
+
+if (argc() < 2) {
+    Usage(2);
+    return EXIT_USAGE;
+}
+str command = arg(1);
+if (Same(command, "version") || Same(command, "--version")) {
+    string v = string.From(VERSION);
+    v.Append(HostTarget());
+    v.Append(")\n");
+    write(1, v);
+    return EXIT_OK;
+}
+if (Same(command, "selftest")) {
+    SelfTest();
+    return EXIT_OK;
+}
+if (Same(command, "help") || Same(command, "--help")) {
+    Usage(1);
+    return EXIT_OK;
+}
+string msg = string.From("unknown command '");
+msg.Append(command);
+msg.Append("'; run `envoc help` for the list");
+ToolFail(msg, EXIT_USAGE);

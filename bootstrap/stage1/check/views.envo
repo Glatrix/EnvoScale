@@ -143,3 +143,244 @@ bool CheckForeach(*Checker c, u32 n) {
     unsafe { c.LSP = saved; }
     return false;
 }
+
+// ------------------------------------------------------------------ storage summaries
+
+// Which of a function's receiver (bit 0) and parameters (bit i + 1) its result may view
+// the storage of: a slice of their array, a `str` of their `string`, a view made from a
+// pointer read out of them (`slice_from(this.Data, …)`), or the result of a call whose own
+// summary says so. Found from the body ([life.infer.2]); a recursive function starts from
+// "none". A bodiless interface method is taken to view its receiver when its result can
+// hold a view.
+u64 StorageSummary(*Checker c, u32 fs) {
+    Buf key = BufNew(12);
+    u64 found;
+    unsafe {
+        BufU64(&key, fs as u64);
+        if (MapGet(&c.Summaries, BufView(&key), &found)) return found;
+        MapPut(&c.Summaries, BufCopy(&key), 0);       // while computing: none
+    }
+    Sym sym = SymGet(c, fs);
+    Node fn = CNode(c, sym.Node);
+    u64 mask = 0;
+    if (fn.C == 0) {
+        if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0 && HasView(c, sym.Type)) mask = 1;
+    } else {
+        Vec params = VecNew(4, 8);
+        Vec locals = VecNew(4, 16);
+        unsafe {
+            MemStoreU32(VecPush(&params), sym.Recv);
+            u32 p = FirstParam(c, fs);
+            while (p != 0) {
+                MemStoreU32(VecPush(&params), NSym(c, p));
+                p = CNode(c, p).Next;
+            }
+            // locals' masks until stable, then the returns
+            for (u32 round = 0; round < 4; round++) SumStmt(c, fn.C, &params, &locals, &mask, false);
+            if (NKind(c, fn.C) == NK_BLOCK) SumStmt(c, fn.C, &params, &locals, &mask, true);
+            else mask = SumExpr(c, fn.C, &params, &locals);
+        }
+    }
+    unsafe { MapPut(&c.Summaries, BufCopy(&key), mask); }
+    return mask;
+}
+
+// Can a value of type t hold a view or a `str` (function values are not counted)?
+bool HasView(*Checker c, u32 t) {
+    Type ty = TypeGet(c, t);
+    u8 k = ty.Kind;
+    if (k == TYK_STR || k == TYK_SLICE || k == TYK_PARAM) return true;
+    if (k == TYK_ARRAY) return HasView(c, ty.Elem);
+    if (k == TYK_STRUCT) {
+        u32 f = CNode(c, SymGet(c, ty.Sym).Node).A;
+        while (f != 0) {
+            if (HasView(c, FieldType(c, t, f))) return true;
+            f = CNode(c, f).Next;
+        }
+        return false;
+    }
+    if (k == TYK_UNION) {
+        u32 v = CNode(c, SymGet(c, ty.Sym).Node).B;
+        while (v != 0) {
+            u32 f = CNode(c, v).E;
+            while (f != 0) {
+                if (HasView(c, PayloadType(c, t, f))) return true;
+                f = CNode(c, f).Next;
+            }
+            v = CNode(c, v).Next;
+        }
+    }
+    return false;
+}
+
+// The bit of parameter (or receiver) local s, or 0.
+u64 ParamMaskOf(*Vec params, u32 s) {
+    unsafe {
+        for (usize i = 0; i < VecLen(params) && i < 64; i++) {
+            if (s != 0 && MemLoadU32(VecAt(params, i)) == s) return (1 as u64) << i;
+        }
+    }
+    return 0;
+}
+
+u64 LocalMaskOf(*Vec locals, u32 s) {
+    unsafe {
+        for (usize i = 0; i < VecLen(locals); i += 3) {
+            if (MemLoadU32(VecAt(locals, i)) == s) return MemLoadU32(VecAt(locals, i + 1)) as u64 | (MemLoadU32(VecAt(locals, i + 2)) as u64) << 32;
+        }
+    }
+    return 0;
+}
+
+void AddLocalMask(*Vec locals, u32 s, u64 m) {
+    if (m == 0 || s == 0) return;
+    unsafe {
+        for (usize i = 0; i < VecLen(locals); i += 3) {
+            if (MemLoadU32(VecAt(locals, i)) != s) continue;
+            u64 o = m | MemLoadU32(VecAt(locals, i + 1)) as u64 | (MemLoadU32(VecAt(locals, i + 2)) as u64) << 32;
+            MemStoreU32(VecAt(locals, i + 1), (o & 0xFFFFFFFF) as u32);
+            MemStoreU32(VecAt(locals, i + 2), (o >> 32) as u32);
+            return;
+        }
+        MemStoreU32(VecPush(locals), s);
+        MemStoreU32(VecPush(locals), (m & 0xFFFFFFFF) as u32);
+        MemStoreU32(VecPush(locals), (m >> 32) as u32);
+    }
+}
+
+// The parameter whose storage place e lies in (through fields, elements, and a pointer
+// read from it), as a mask.
+u64 PlaceMask(*Checker c, u32 e, *Vec params) {
+    u32 n = e;
+    while (n != 0) {
+        Node node = CNode(c, n);
+        if (node.Kind == NK_NAME || node.Kind == NK_THIS) return ParamMaskOf(params, NSym(c, n));
+        if (node.Kind == NK_MEMBER || node.Kind == NK_INDEX || node.Kind == NK_UNARY || node.Kind == NK_CAST) n = node.A;
+        else return 0;
+    }
+    return 0;
+}
+
+// Which parameters' storage the value of e may view.
+u64 SumExpr(*Checker c, u32 e, *Vec params, *Vec locals) {
+    if (e == 0) return 0;
+    Node node = CNode(c, e);
+    u16 k = node.Kind;
+    if (IsConverted(c, e)) return PlaceMask(c, e, params);
+    if (IsSlicing(c, e)) {
+        if (TyKind(c, NType(c, node.A)) == TYK_ARRAY) return PlaceMask(c, node.A, params);
+        return SumExpr(c, node.A, params, locals);
+    }
+    if (k == NK_NAME || k == NK_THIS) {
+        u32 s = NSym(c, e);
+        if (s == 0) return 0;
+        return LocalMaskOf(locals, s);
+    }
+    if (k == NK_MEMBER || k == NK_INDEX || k == NK_CAST || k == NK_TRY) {
+        if (!HasView(c, NType(c, e))) return 0;
+        return SumExpr(c, node.A, params, locals);
+    }
+    if (k == NK_COND) return SumExpr(c, node.B, params, locals) | SumExpr(c, node.C, params, locals);
+    if (k == NK_BINARY && node.Op == TK_QQ) return SumExpr(c, node.A, params, locals) | SumExpr(c, node.B, params, locals);
+    if (k == NK_MATCH) {
+        u64 m = 0;
+        u32 arm = node.B;
+        while (arm != 0) {
+            if (NKind(c, CNode(c, arm).B) != NK_BLOCK) m = m | SumExpr(c, CNode(c, arm).B, params, locals);
+            arm = CNode(c, arm).Next;
+        }
+        return m;
+    }
+    if (k == NK_NEW) {
+        u64 m = 0;
+        u32 init = node.B;
+        while (init != 0) {
+            m = m | SumExpr(c, CNode(c, init).A, params, locals);
+            init = CNode(c, init).Next;
+        }
+        return m;
+    }
+    if (k != NK_CALL || !HasView(c, NType(c, e))) return 0;
+    u32 cs = NSym(c, e);
+    u32 a = node.B;
+    if (cs == 0) {
+        // a built-in: str_from and slice_from view what their pointer points into
+        u32 callee = node.A;
+        if (NKind(c, callee) == NK_NAME && a != 0) {
+            u32 s = Lookup(c, NTok(c, callee));
+            if (s != 0 && SymGet(c, s).Kind == SK_BUILTIN) return PlaceMask(c, a, params);
+        }
+        return 0;
+    }
+    if (SymGet(c, cs).Kind != SK_FN) return 0;
+    u64 sum = StorageSummary(c, cs);
+    u64 m = 0;
+    Sym fs = SymGet(c, cs);
+    if (sum & 1 != 0 && fs.Flags & SF_METHOD != 0 && fs.Flags & SF_STATIC == 0 && NKind(c, node.A) == NK_MEMBER) {
+        u32 obj = CNode(c, node.A).A;
+        m = m | PlaceMask(c, obj, params) | SumExpr(c, obj, params, locals);
+    }
+    u32 i = 1;
+    while (a != 0) {
+        if (i < 64 && sum & (1 as u64) << i != 0) m = m | PlaceMask(c, a, params) | SumExpr(c, a, params, locals);
+        a = CNode(c, a).Next;
+        i++;
+    }
+    return m;
+}
+
+void SumStmt(*Checker c, u32 n, *Vec params, *Vec locals, *u64 mask, bool returns) {
+    if (n == 0) return;
+    Node node = CNode(c, n);
+    u16 k = node.Kind;
+    if (k == NK_BLOCK) {
+        u32 s = node.A;
+        while (s != 0) {
+            SumStmt(c, s, params, locals, mask, returns);
+            s = CNode(c, s).Next;
+        }
+        return;
+    }
+    if (k == NK_UNSAFE) {
+        SumStmt(c, node.A, params, locals, mask, returns);
+        return;
+    }
+    if (k == NK_WHILE) {
+        SumStmt(c, node.B, params, locals, mask, returns);
+        return;
+    }
+    if (k == NK_IF) {
+        SumStmt(c, node.B, params, locals, mask, returns);
+        SumStmt(c, node.C, params, locals, mask, returns);
+        return;
+    }
+    if (k == NK_FOR) {
+        SumStmt(c, node.A, params, locals, mask, returns);
+        SumStmt(c, node.D, params, locals, mask, returns);
+        return;
+    }
+    if (k == NK_FOREACH) {
+        SumStmt(c, node.C, params, locals, mask, returns);
+        return;
+    }
+    if (k == NK_MATCH) {
+        u32 arm = node.B;
+        while (arm != 0) {
+            SumStmt(c, CNode(c, arm).B, params, locals, mask, returns);
+            arm = CNode(c, arm).Next;
+        }
+        return;
+    }
+    if (k == NK_RETURN) {
+        if (returns) unsafe { *mask = *mask | SumExpr(c, node.A, params, locals); }
+        return;
+    }
+    if (k == NK_VAR) {
+        AddLocalMask(locals, NSym(c, n), SumExpr(c, node.B, params, locals));
+        return;
+    }
+    if (k == NK_ASSIGN) {
+        u32 t = node.A;
+        if (NKind(c, t) == NK_NAME && NSym(c, t) != 0) AddLocalMask(locals, NSym(c, t), SumExpr(c, node.B, params, locals));
+    }
+}

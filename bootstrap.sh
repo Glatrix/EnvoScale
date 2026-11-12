@@ -2,8 +2,9 @@
 # EnvoScale bootstrap entry point for POSIX systems (Linux, macOS, Git Bash on Windows).
 # Uses only POSIX shell tools, plus NASM through adapters/bootstrap/nasm (Phase A).
 #
-#   ./bootstrap.sh build   assemble Stage 0 (build/stage0/envoc0, envoc0.exe), then build
-#                          Stage 1 with it (build/stage1/envoc1, envoc1.exe)
+#   ./bootstrap.sh build   assemble Stage 0 (build/stage0/envoc0, envoc0.exe), build Stage 1
+#                          with it (build/stage1/envoc1, envoc1.exe), then Stage 2 with
+#                          Stage 1 (build/stage2/envoc, envoc.exe)
 #   ./bootstrap.sh test    build, then run the Stage 0 and Stage 1 tests with the native binaries
 #   ./bootstrap.sh check   repository checks: layout, lib->adapters imports, gallery limits
 #   ./bootstrap.sh clean   delete build/
@@ -15,6 +16,8 @@ set -eu
 ROOT=$(cd "$(dirname "$0")" && pwd)
 BUILD="$ROOT/build/stage0"
 BUILD1="$ROOT/build/stage1"
+BUILD2="$ROOT/build/stage2"
+STAGE2="$ROOT/compiler"
 STAGE0="$ROOT/bootstrap/stage0"
 STAGE1="$ROOT/bootstrap/stage1"
 
@@ -68,6 +71,25 @@ do_build() {
         say "          $size bytes  sha256 $(sha256 "$BUILD1/$out")"
     done
     chmod +x "$BUILD1/envoc1"
+
+    # Stage 2 is an Envo-S1 program (PLAN D16); the native envoc1 builds it for both OSes.
+    mkdir -p "$BUILD2"
+    envoc1="$BUILD1/envoc1$(host_suffix)"
+    set --
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$STAGE2/files.txt"
+    for unit in "x86_64-linux:envoc" "x86_64-windows:envoc.exe"; do
+        target=${unit%%:*}
+        out=${unit#*:}
+        say "build     compiler -> build/stage2/$out"
+        (cd "$STAGE2" && "$envoc1" build "$@" -o "$BUILD2/$out" --target "$target") \
+            || fail "building Stage 2 ($target) failed"
+        size=$(wc -c < "$BUILD2/$out" | tr -d ' ')
+        say "          $size bytes  sha256 $(sha256 "$BUILD2/$out")"
+    done
+    chmod +x "$BUILD2/envoc"
 }
 
 # ------------------------------------------------------------------- test
@@ -372,6 +394,18 @@ do_test() {
     done < "$STAGE1/files.txt"
     run "$STAGE1" --core check "$@"
     if [ "$rc" -eq 0 ]; then pass; else bad 'stage1 self-check' "exit $rc: $(head -c 300 "$TMP/err")"; fi
+
+    say ''
+    say 'stage 2 smoke tests'
+    EXE="$BUILD2/envoc$(host_suffix)"
+    run "$ROOT" version
+    if [ "$rc" -eq 0 ] && grep -q '^envoc ' "$TMP/out"; then pass; else bad 'envoc version' "exit $rc"; fi
+    run "$ROOT" selftest
+    if [ "$rc" -eq 0 ] && grep -q '^selftest: ok' "$TMP/out"; then pass; else bad 'envoc selftest' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    run "$ROOT"
+    if [ "$rc" -eq 2 ] && grep -q '^usage: envoc' "$TMP/err"; then pass; else bad 'envoc no arguments' "exit $rc"; fi
+    run "$ROOT" frobnicate
+    if [ "$rc" -eq 2 ] && grep -q "^envoc: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc unknown command' "exit $rc"; fi
     EXE=$stage0_exe
 
     say ''
@@ -429,12 +463,12 @@ do_check() {
 }
 
 # ------------------------------------------------------------------- compare
-# compare <dir-a> <dir-b>: both builds (each a copy of build/, with stage0/ and stage1/)
-# must be byte-identical (brief 4.1).
+# compare <dir-a> <dir-b>: both builds (each a copy of build/, with stage0/, stage1/ and
+# stage2/) must be byte-identical (brief 4.1).
 do_compare() {
     [ "$#" -eq 2 ] || fail "usage: ./bootstrap.sh compare <dir-a> <dir-b>"
     differ=0
-    for f in stage0/envoc0 stage0/envoc0.exe stage1/envoc1 stage1/envoc1.exe; do
+    for f in stage0/envoc0 stage0/envoc0.exe stage1/envoc1 stage1/envoc1.exe stage2/envoc stage2/envoc.exe; do
         [ -f "$1/$f" ] || fail "missing $1/$f"
         [ -f "$2/$f" ] || fail "missing $2/$f"
         say "$f"

@@ -1,0 +1,49 @@
+// Text helpers for the Stage 2 compiler (compiler/util/README.md).
+namespace envoc.util;
+
+// Do a and b hold the same bytes?
+public bool Same(str a, str b) {
+    if (a.Len != b.Len) return false;
+    for (usize i = 0; i < a.Len; i++) {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+public bool StartsWith(str s, str prefix) {
+    if (prefix.Len > s.Len) return false;
+    return Same(s[0..prefix.Len], prefix);
+}
+
+// v in decimal.
+public string Decimal(u64 v) {
+    u8[20] digits;
+    usize n = 0;
+    while (true) {
+        digits[n] = (48 + v % 10) as u8;
+        n++;
+        v /= 10;
+        if (v == 0) break;
+    }
+    string s = string.New();
+    while (n > 0) {
+        n--;
+        s.AppendByte(digits[n]);
+    }
+    return s;
+}
+
+// Appends v in decimal to s.
+public void AppendDecimal(ref string s, u64 v) {
+    string d = Decimal(v);
+    s.Append(d);
+}
+
+// FNV-1a over the bytes of s.
+public u64 Hash(str s) {
+    u64 h = 0xCBF29CE484222325;
+    for (usize i = 0; i < s.Len; i++) {
+        h = (h ^ s[i] as u64) *% 0x100000001B3;
+    }
+    return h;
+}

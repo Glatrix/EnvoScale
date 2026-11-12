@@ -32,6 +32,8 @@ jobs:
             build/stage0/envoc0.exe
             build/stage1/envoc1
             build/stage1/envoc1.exe
+            build/stage2/envoc
+            build/stage2/envoc.exe
 
   stage0-windows:
     runs-on: windows-latest
@@ -51,6 +53,8 @@ jobs:
             build/stage0/envoc0.exe
             build/stage1/envoc1
             build/stage1/envoc1.exe
+            build/stage2/envoc
+            build/stage2/envoc.exe
 
   # Brief 4.1 and 18: the same sources must give byte-identical binaries on every host.
   reproducible:
