@@ -27,6 +27,8 @@ public struct Sources {
         return this.Files.Len() - 1;
     }
 
+    public usize Count() => this.Files.Len();
+
     public str Path(usize file) => this.Files.AsSlice()[file].Path.AsStr();
     public str Text(usize file) => this.Files.AsSlice()[file].Text.AsStr();
 }
@@ -46,12 +48,28 @@ public void Position(str text, usize off, ref u32 line, ref u32 col) {
     }
 }
 
+// The column of byte offset off: characters from the start of its line, from 1.
+public u32 Column(str text, usize off) {
+    usize lineStart = off;
+    while (lineStart > 0 && text[lineStart - 1] != 10) lineStart--;
+    u32 col = 1;
+    for (usize i = lineStart; i < off; i++) {
+        if (text[i] & 0xC0 != 0x80) col++;
+    }
+    return col;
+}
+
 // Reports an error at byte offset off of a source file and exits.
 public void Fail(in Sources src, usize file, usize off, u32 code, str msg) {
+    FailAt(src.Path(file), src.Text(file), off, code, msg);
+}
+
+// Reports an error at byte offset off of text, read from path, and exits.
+public void FailAt(str path, str text, usize off, u32 code, str msg) {
     u32 line = 0;
     u32 col = 0;
-    Position(src.Text(file), off, ref line, ref col);
-    string e = string.From(src.Path(file));
+    Position(text, off, ref line, ref col);
+    string e = string.From(path);
     e.AppendByte(':');
     AppendDecimal(ref e, line as u64);
     e.AppendByte(':');

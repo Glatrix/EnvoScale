@@ -3,15 +3,22 @@
 // main. The other files are listed, in order, in compiler/files.txt.
 use envoc.util;
 use envoc.diag;
+use envoc.syntax;
 
 const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
 
+const usize MAX_SOURCE = 16 << 20;     // 16 MiB per file, as in Stages 0 and 1
+
 void Usage(i32 fd) {
-    write(fd, "usage: envoc <command> [arguments]\n");
+    write(fd, "usage: envoc [--core] <command> [arguments]\n");
     write(fd, "\n");
     write(fd, "commands:\n");
+    write(fd, "  lex <file.envo>     print the token stream of a source file\n");
     write(fd, "  version             print the version\n");
     write(fd, "  help                print this message\n");
+    write(fd, "\n");
+    write(fd, "options:\n");
+    write(fd, "  --core              accept only Envo-Core, as envoc0 does\n");
     write(fd, "\n");
     write(fd, "envoc is being built (milestone M3): the compiler commands arrive one\n");
     write(fd, "increment at a time (docs/PLAN.md section 5).\n");
@@ -40,11 +47,88 @@ str HostTarget() {
     return "x86_64-windows";
 }
 
-if (argc() < 2) {
+// Reads the source file at path into src, without a leading byte order mark, and returns
+// its index. Reports a file that cannot be read, and exits.
+usize Load(ref Sources src, str path) {
+    string? read = ReadFile(path);
+    if (read.IsNone()) {
+        string msg = string.From("cannot open '");
+        msg.Append(path);
+        msg.AppendByte(0x27);
+        ToolFail(msg, EXIT_ERRORS);
+    }
+    string text = read.Unwrap();
+    if (text.Len() > MAX_SOURCE) {
+        string msg = string.From("file too large: '");
+        msg.Append(path);
+        msg.Append("' (envoc accepts source files up to 16 MiB)");
+        ToolFail(msg, EXIT_ERRORS);
+    }
+    str t = text.AsStr();
+    if (t.Len >= 3 && t[0] == 0xEF && t[1] == 0xBB && t[2] == 0xBF) {
+        return src.Add(path, string.From(t[3..t.Len]));
+    }
+    return src.Add(path, text);
+}
+
+// `envoc lex <file.envo>`
+i32 CmdLex(usize argi, bool core) {
+    if (argc() != argi + 1) {
+        Usage(2);
+        return EXIT_USAGE;
+    }
+    Sources src = Sources.New();
+    usize f = Load(ref src, arg(argi));
+    LexTables tables = LexTables.New();
+    List<Token> toks = Lex(tables, src.Path(f), src.Text(f), f as u32, core);
+    string listing = string.New();
+    DumpTokens(ref listing, toks, src.Text(f));
+    write(1, listing);
+    return EXIT_OK;
+}
+
+// Lexes every file in src, in order, into one token list; starts gets each file's first
+// token.
+List<Token> LexAll(in Sources src, ref List<usize> starts, bool core) {
+    LexTables tables = LexTables.New();
+    List<Token> all = List<Token>.New();
+    for (usize f = 0; f < src.Count(); f++) {
+        starts.Push(all.Len());
+        List<Token> toks = Lex(tables, src.Path(f), src.Text(f), f as u32, core);
+        foreach (var t in toks.AsSlice()) all.Push(t);
+    }
+    return all;
+}
+
+// `envoc parse <file.envo>`
+i32 CmdParse(usize argi, bool core) {
+    if (argc() != argi + 1) {
+        Usage(2);
+        return EXIT_USAGE;
+    }
+    Sources src = Sources.New();
+    Load(ref src, arg(argi));
+    List<usize> starts = List<usize>.New();
+    List<Token> toks = LexAll(src, ref starts, core);
+    Tree tree = Parse(src, toks, starts, core);
+    string listing = string.New();
+    DumpTree(ref listing, tree, src, tree.Root, 0);
+    write(1, listing);
+    return EXIT_OK;
+}
+
+usize argi = 1;
+bool core = false;
+if (argi < argc() && Same(arg(argi), "--core")) {
+    core = true;
+    argi++;
+}
+if (argi >= argc()) {
     Usage(2);
     return EXIT_USAGE;
 }
-str command = arg(1);
+str command = arg(argi);
+argi++;
 if (Same(command, "version") || Same(command, "--version")) {
     string v = string.From(VERSION);
     v.Append(HostTarget());
@@ -56,6 +140,8 @@ if (Same(command, "selftest")) {
     SelfTest();
     return EXIT_OK;
 }
+if (Same(command, "lex")) return CmdLex(argi, core);
+if (Same(command, "parse")) return CmdParse(argi, core);
 if (Same(command, "help") || Same(command, "--help")) {
     Usage(1);
     return EXIT_OK;

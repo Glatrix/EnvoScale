@@ -402,6 +402,68 @@ function Invoke-Test {
     $r = Invoke-Tool $envoc @('frobnicate') $Root
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc: error: unknown command 'frobnicate'")) { Pass 'envoc unknown command' } else { Bad 'envoc unknown command' "exit $($r.Code)" }
 
+    # The Stage 2 front end (M3.2, M3.3): the lexer and parser goldens and the lexical and
+    # syntax spec tests, in the same modes as for Stage 1; then the same output as envoc1
+    # from `lex` and `parse` on every source file (D17). Keep in step with bootstrap.sh.
+    $stage2Golden = @(
+        @{ Dir = 'lexer';     Command = 'lex';   Ext = '.tokens'; Modes = @('--core', 's1') },
+        @{ Dir = 'parser';    Command = 'parse'; Ext = '.ast';    Modes = @('--core', 's1') },
+        @{ Dir = 's1-parser'; Command = 'parse'; Ext = '.ast';    Modes = @('s1') }
+    )
+    foreach ($suite in $stage2Golden) {
+      foreach ($mode in $suite.Modes) {
+        $pre = @()
+        if ($mode -eq '--core') { $pre = @('--core') }
+        Say "stage 2 golden tests ($mode): tests/golden/$($suite.Dir)"
+        $dir = Join-Path $Root "tests\golden\$($suite.Dir)"
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+            $name = "stage2 $mode golden/$($suite.Dir)/$($f.Name)"
+            $r = Invoke-Tool $envoc ($pre + @($suite.Command, $f.Name)) $dir
+            if ($r.Code -ne 0) { Bad $name "exit $($r.Code), stderr: $($r.Err.Trim())"; continue }
+            $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.envo$', $suite.Ext), $Utf8))
+            $actual = Normalize $r.Out
+            if ([string]::Equals($expected, $actual)) { Pass $name } else { Bad $name 'output differs'; Show-Diff $expected $actual }
+        }
+      }
+    }
+    $stage2Spec = @(
+        @{ Dir = '01-lexical';  Command = 'lex';   Modes = @('--core', 's1') },
+        @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
+        @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') }
+    )
+    foreach ($suite in $stage2Spec) {
+      foreach ($mode in $suite.Modes) {
+        $pre = @()
+        if ($mode -eq '--core') { $pre = @('--core') }
+        Say "stage 2 spec tests ($mode): tests/spec/$($suite.Dir)"
+        $dir = Join-Path $Root "tests\spec\$($suite.Dir)"
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+            $name = "stage2 $mode spec/$($suite.Dir)/$($f.Name)"
+            $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($f.FullName))
+            $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\d+:\d+)')
+            if (-not $m.Success) { Bad $name 'no // expect-error: annotation with a position'; continue }
+            $code = $m.Groups[1].Value
+            if ($mode -eq 's1' -and $code -match '^E090[1-4]$') { $code = 'E0950' }
+            $want = "$($f.Name):$($m.Groups[2].Value): error[$code]"
+            $r = Invoke-Tool $envoc ($pre + @($suite.Command, $f.Name)) $dir
+            if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $name }
+            else { Bad $name "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
+        }
+      }
+    }
+    Say 'stage 2 lex and parse against envoc1: every .envo file in compiler/, bootstrap/stage1/, tests/'
+    $sources = @('compiler', 'bootstrap\stage1', 'tests') | ForEach-Object {
+        Get-ChildItem -LiteralPath (Join-Path $Root $_) -Filter '*.envo' -Recurse -File
+    } | Sort-Object FullName
+    foreach ($f in $sources) {
+        foreach ($cmd in @('lex', 'parse')) {
+            $r1 = Invoke-Tool $envoc1 @($cmd, $f.Name) $f.DirectoryName
+            $r2 = Invoke-Tool $envoc @($cmd, $f.Name) $f.DirectoryName
+            if ($r1.Code -eq $r2.Code -and [string]::Equals($r1.Out, $r2.Out) -and [string]::Equals($r1.Err, $r2.Err)) { Pass $f.Name }
+            else { Bad "stage2 $cmd $($f.FullName.Substring($Root.Length + 1))" "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
+        }
+    }
+
     Say ''
     Say "$($script:passed) passed, $($script:failed) failed"
     if ($script:failed -gt 0) { exit 1 }

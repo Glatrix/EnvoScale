@@ -406,6 +406,69 @@ do_test() {
     if [ "$rc" -eq 2 ] && grep -q '^usage: envoc' "$TMP/err"; then pass; else bad 'envoc no arguments' "exit $rc"; fi
     run "$ROOT" frobnicate
     if [ "$rc" -eq 2 ] && grep -q "^envoc: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc unknown command' "exit $rc"; fi
+
+    # The Stage 2 front end (M3.2, M3.3): the lexer and parser goldens and the lexical and
+    # syntax spec tests, in the same modes as for Stage 1; then the same output as envoc1
+    # from `lex` and `parse` on every source file (D17). Keep in step with bootstrap.ps1.
+    envoc2=$EXE
+    for suite in lexer:lex:.tokens:both parser:parse:.ast:both s1-parser:parse:.ast:s1; do
+      sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; rest=${rest#*:}; ext=${rest%%:*}; modes=${rest#*:}
+      for mode in --core s1; do
+        [ "$modes" = s1 ] && [ "$mode" = --core ] && continue
+        if [ "$mode" = --core ]; then set -- --core; else set --; fi
+        say "stage 2 golden tests ($mode): tests/golden/$sdir"
+        dir="$ROOT/tests/golden/$sdir"
+        for f in "$dir"/*.envo; do
+            base=$(basename "$f")
+            name="stage2 $mode golden/$sdir/$base"
+            run "$dir" "$@" "$cmd" "$base"
+            if [ "$rc" -ne 0 ]; then bad "$name" "exit $rc: $(tr -d '\r' < "$TMP/err")"; continue; fi
+            tr -d '\r' < "${f%.envo}$ext" > "$TMP/expected"
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if cmp -s "$TMP/expected" "$TMP/actual"; then pass
+            else bad "$name" 'output differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+        done
+      done
+    done
+    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1; do
+      sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
+      for mode in --core s1; do
+        [ "$modes" = core ] && [ "$mode" = s1 ] && continue
+        [ "$modes" = s1 ] && [ "$mode" = --core ] && continue
+        if [ "$mode" = --core ]; then set -- --core; else set --; fi
+        say "stage 2 spec tests ($mode): tests/spec/$sdir"
+        dir="$ROOT/tests/spec/$sdir"
+        for f in "$dir"/*.envo; do
+            base=$(basename "$f")
+            line=$(LC_ALL=C grep -a -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
+            code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9][0-9][0-9][0-9]\).*|\1|')
+            if [ "$mode" = s1 ]; then
+                case "$code" in E090[1-4]) code=E0950 ;; esac
+            fi
+            pos=${line##* @ }; pos=${pos%% *}
+            want="$base:$pos: error[$code]"
+            run "$dir" "$@" "$cmd" "$base"
+            if [ "$rc" -eq 1 ] && LC_ALL=C grep -a -q -F "$want" "$TMP/err"; then pass
+            else bad "stage2 $mode spec/$sdir/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+        done
+      done
+    done
+    say 'stage 2 lex and parse against envoc1: every .envo file in compiler/, bootstrap/stage1/, tests/'
+    for f in $(cd "$ROOT" && find compiler bootstrap/stage1 tests -name '*.envo' | LC_ALL=C sort); do
+        dir="$ROOT/$(dirname "$f")"
+        base=$(basename "$f")
+        for cmd in lex parse; do
+            EXE=$ENVOC1
+            run "$dir" "$cmd" "$base"
+            rc1=$rc
+            mv "$TMP/out" "$TMP/out1"
+            mv "$TMP/err" "$TMP/err1"
+            EXE=$envoc2
+            run "$dir" "$cmd" "$base"
+            if [ "$rc" -eq "$rc1" ] && cmp -s "$TMP/out1" "$TMP/out" && cmp -s "$TMP/err1" "$TMP/err"; then pass
+            else bad "stage2 $cmd $f" "differs from envoc1 (exit $rc1 vs $rc)"; fi
+        done
+    done
     EXE=$stage0_exe
 
     say ''

@@ -1,5 +1,6 @@
 # `compiler/diag`
 
-> **Status:** Started in **M3.1**: `report.envo` (namespace `envoc.diag`): source files, positions, and diagnostics in the shared format.
+> **Status:** Started in M3.1. `report.envo` holds source files, positions and error output.
 
-Diagnostics: stable error codes (`docs/spec/errors.md`), labelled source snippets, fix suggestions, and `envo explain EXXXX`.
+Diagnostics: stable error codes (`docs/spec/errors.md`), source snippets, fix suggestions,
+and `envo explain EXXXX`.

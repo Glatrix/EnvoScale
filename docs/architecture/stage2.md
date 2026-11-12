@@ -1,53 +1,67 @@
-# Stage 2 architecture (`envoc`)
+# Stage 2 (`envoc`)
 
-`envoc` is the self-hosting compiler (milestone M3). Until it compiles itself to a fixed
-point it is written in **Envo-S1** and built by `envoc1` (PLAN D16); afterwards it may use
-any Envo it compiles. This page records its design as it is built, increment by increment
-(PLAN §5). File-by-file contents are in [`compiler/README.md`](../../compiler/README.md).
+`envoc` is the self-hosting compiler (M3). Until it reaches a fixed point it is written in
+Envo-S1 and built by `envoc1` (PLAN D16). This page grows with each increment of PLAN §5.
 
 ## Build
 
 ```
-envoc0 (assembly) ──builds──► envoc1 (Envo-Core) ──builds──► envoc (Envo-S1)
+envoc0 (assembly) → envoc1 (Envo-Core) → envoc (Envo-S1)
 ```
 
-Both bootstrap scripts build `envoc` with the native `envoc1` for Windows and Linux
-(`build/stage2/envoc.exe`, `build/stage2/envoc`) from `compiler/files.txt`, whose first file
-is the entry file. CI uploads both builds from both hosts, and the `reproducible` job
-requires them to be byte-identical, as for Stages 0 and 1.
+Both bootstrap scripts build `build/stage2/envoc.exe` and `build/stage2/envoc` with
+`envoc1`, from the files in `compiler/files.txt` (the first is the entry file). CI checks
+that the Linux-host and Windows-host builds are byte-identical.
 
-## Source layout
+## Layout
 
-Every Stage 2 file starts with a namespace: `envoc.util` (support library), `envoc.diag`
-(sources and diagnostics), and one per pass as they arrive (`envoc.syntax`,
-`envoc.sema`, …), in the folders `compiler/README.md` lists. The entry file,
-`driver/main.envo`, is in the root namespace and imports what it uses.
+Each file starts with a namespace: `envoc.util` (support code), `envoc.diag` (sources and
+errors), `envoc.syntax` (lexer and parser), and more per pass as they land. The entry
+file, `driver/main.envo`, is in the root namespace.
 
-## Support library (M3.1)
+## Support code (M3.1)
 
-Stage 2 builds on the S1 prelude (`List<T>`, `string`, `Option`, `Result`) and adds:
+On top of the S1 prelude (`List<T>`, `string`, `Option`, `Result`):
 
-- `envoc.util`: `Same`, `StartsWith`, `Decimal`, `Hash` (FNV-1a) and `StrMap<V>`, a hash map
-  from strings to values with open addressing over two `List`s.
-- `envoc.diag`: the source files read (`Sources`), positions (line and column, columns
-  counting characters), and diagnostics in the format every stage shares:
-  `path:line:col: error[E####]: message` with exit code 1, and `envoc: error: message`
-  with exit code 2 for command-line problems.
+- `envoc.util`: `Same`, `StartsWith`, `Decimal`, `Hash` (FNV-1a), `StrMap<V>` (open
+  addressing), `ReadFile`, and `Take`, which empties a list into a new one (a field can't
+  be moved out of a value whose type has a drop).
+- `envoc.diag`: the source files, line and column lookup, and errors in the shared format,
+  `path:line:col: error[E####]: message` (exit 1) or `envoc: error: message` (exit 2).
+
+## Lexer (M3.2)
+
+`envoc.syntax.Lex` turns one file into a `List<Token>`. Tokens are plain data, so the list
+doesn't borrow the text. Keyword and punctuation tables (`LexTables`) are built once per
+run. Like the earlier stages, it stops at the first error, and `--core` reports Core's
+leave-outs as E0901–E0904 instead of E0950.
+
+The test suites compare `envoc lex` with `envoc1 lex` on every `.envo` file in the repo, in
+addition to the lexer goldens and lexical spec tests. During development the two were also
+compared on 4,200 randomly mutated files. That found one bug: a punctuation lookup sliced
+three bytes, which can end mid-character, and Stage 2's `str` slices check character
+boundaries. `tests/spec/01-lexical/e0904_after_punct.envo` covers it.
+
+## Parser (M3.3)
+
+`envoc.syntax.Parse` is a port of Stage 1's recursive descent, rule for rule, so trees and
+first errors match. It works as methods on a `Parser` that owns the token and node lists
+and hands them back as a `Tree`. Nodes keep Stage 1's layout (`node.envo`), which keeps
+the parse dump identical. Backtracking restores the position, the node count and any
+`>>` tokens split while trying a generic type.
+
+It is tested like the lexer: the parser goldens, the syntax spec tests, and `envoc parse`
+against `envoc1 parse` on every `.envo` file in the repo. Comments aren't kept in the tree
+yet; the formatter (M5) needs that.
 
 ## Stage 1 bugs found by Stage 2
 
-Stage 2 is the largest Envo-S1 program, so it finds `envoc1` bugs. Each gets a minimal
-reproduction in `tests/spec/s1-*` and a fix in Stage 1 before Stage 2 goes on (PLAN §6):
+Stage 2 is the largest Envo-S1 program, so it finds `envoc1` bugs. Each is fixed in
+Stage 1 with a test before Stage 2 moves on (PLAN §6).
 
 | Found in | Bug | Test |
 |---|---|---|
-| M3.1 | A `match` binding inside a loop kept the previous iteration's "moved" state | `s1-run/match_in_loop.envo` |
-| M3.1 | One generic body lowered for a type with a drop and then one without reused the first instance's drop flags (a miscompilation, caught by the EIR verifier) | `s1-run/generic_drops.envo` |
-| M3.1 | Views: a method's result was assumed to borrow its receiver whenever it could hold a borrow, and a view built from a local pointer was taken for a view of the pointer local; Stage 1 now summarizes which storage each function's result views, and a local's freezes end with the locals that hold the views | `s1-run/views.envo`, `s1-own/` |
-
-## Decisions
-
-PLAN D16–D20 fix the language Stage 2 is written in, its relation to Stage 1 (the same
-EIR v1; Stage 1's semantics first), the fixed point (D18), linking over EIR objects (D19)
-and the two optimization levels (D20). Their details are filled in here as the
-increments that implement them land.
+| M3.1 | A `match` binding in a loop kept the previous iteration's "moved" state | `s1-run/match_in_loop.envo` |
+| M3.1 | A generic body lowered for a type with a drop, then one without, reused stale drop flags | `s1-run/generic_drops.envo` |
+| M3.1 | Views: method results were assumed to borrow the receiver, and a view made from a local pointer was treated as a view of the pointer. Stage 1 now works out which storage each function's result views | `s1-run/views.envo`, `s1-own/` |
+| M3.3 | Backtracking after a type didn't undo a `>>` split into two `>`, so `List<List<u32>> F()` at top level failed to parse | `s1-run/nested_generics.envo` |

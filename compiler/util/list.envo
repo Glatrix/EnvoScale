@@ -1,0 +1,17 @@
+// List helpers (compiler/util/README.md).
+namespace envoc.util;
+
+// Moves the items out of l, leaving it empty. (A field cannot be moved out of a value
+// whose type has a drop, so an owner hands its lists out this way.)
+public List<T> Take<T>(ref List<T> l) {
+    List<T> r = List<T>.New();
+    unsafe {
+        r.Data = l.Data;
+        r.Count = l.Count;
+        r.Cap = l.Cap;
+        l.Data = 0 as usize as *T;
+    }
+    l.Count = 0;
+    l.Cap = 0;
+    return r;
+}

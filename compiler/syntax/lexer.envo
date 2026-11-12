@@ -1,0 +1,494 @@
+// The lexer (docs/spec/01-lexical.md, compiler/syntax/README.md). It reports the same
+// first error at the same position as envoc0 and envoc1, so the compilers can be compared
+// on every input (PLAN D17). Literal values are validated, not computed; the parser
+// converts the literals it needs.
+//
+// With `core` set, the constructs Envo-Core leaves out are E0901-E0904, as in envoc0;
+// otherwise they are E0950 (not part of Envo-S1), at the same positions. Stage 2 lexes
+// them for real once it accepts more than Envo-S1.
+namespace envoc.syntax;
+
+use envoc.util;
+use envoc.diag;
+
+// Error codes of chapter 1.
+public const u32 E_INVALID_UTF8 = 1;
+public const u32 E_UNEXPECTED_CHAR = 2;
+public const u32 E_UNTERMINATED_COMMENT = 3;
+public const u32 E_UNTERMINATED_STRING = 4;
+public const u32 E_UNTERMINATED_CHAR = 5;
+public const u32 E_BAD_ESCAPE = 6;
+public const u32 E_BAD_NUMBER = 7;
+public const u32 E_BAD_SUFFIX = 8;
+public const u32 E_CHAR_LENGTH = 9;
+public const u32 E_BAD_UNICODE_ESCAPE = 10;
+public const u32 E_CONTROL_CHAR = 11;
+public const u32 E_CORE_INTERPOLATION = 901;
+public const u32 E_CORE_RAW_STRING = 902;
+public const u32 E_CORE_DIRECTIVE = 903;
+public const u32 E_CORE_NON_ASCII = 904;
+public const u32 E_NOT_S1 = 950;
+
+// The tables keywords and punctuation are looked up in; built once per compilation.
+public struct LexTables {
+    StrMap<u16> Keywords;
+    StrMap<u16> Puncts;
+
+    public static LexTables New() {
+        LexTables t = new LexTables { Keywords = StrMap<u16>.New(), Puncts = StrMap<u16>.New() };
+        for (u16 k = TK_KW_FIRST; k <= TK_KW_LAST; k++) t.Keywords.Put(Spelling(k), k);
+        for (u16 k = TK_PUNCT_FIRST; k <= TK_PUNCT_LAST; k++) t.Puncts.Put(Spelling(k), k);
+        return t;
+    }
+}
+
+// Tokenizes one source file (its text must not start with a byte order mark) and returns
+// its tokens, ending with TK_EOF. Stops at the first error.
+public List<Token> Lex(in LexTables tables, str path, str text, u32 file, bool core) {
+    Lexer lx = new Lexer {
+        Path = path, Src = text, Pos = 0, Line = 1,
+        Flags = TF_SPACE_BEFORE | TF_NEWLINE_BEFORE,     // [lex.flags.1], [lex.flags.2]
+        File = file, Core = core
+    };
+    usize bad = Utf8Invalid(text);
+    if (bad != text.Len) lx.Fail(bad, E_INVALID_UTF8);
+    // [lex.shebang.1] "#!" at the very start: skip to the end of the line.
+    if (text.Len >= 2 && text[0] == '#' && text[1] == '!') {
+        while (lx.Pos < text.Len && text[lx.Pos] != 10) lx.Pos++;
+    }
+    List<Token> toks = List<Token>.New();
+    while (lx.Trivia()) toks.Push(lx.Next(tables));
+    // [lex.eof.1]
+    lx.Pos = text.Len;
+    toks.Push(lx.Emit(TK_EOF, text.Len));
+    return toks;
+}
+
+// [lex.src.1] The offset of the first byte that makes text invalid UTF-8, or text.Len.
+public usize Utf8Invalid(str text) {
+    usize i = 0;
+    usize n = text.Len;
+    while (i < n) {
+        u8 b = text[i];
+        if (b < 0x80) {
+            i++;
+            continue;
+        }
+        if (b < 0xC2 || b >= 0xF5) return i;
+        if (b < 0xE0) {
+            if (i + 1 >= n || text[i + 1] & 0xC0 != 0x80) return i;
+            i += 2;
+            continue;
+        }
+        if (b < 0xF0) {
+            if (i + 2 >= n) return i;
+            u8 lo = 0x80;
+            u8 hi = 0xBF;
+            if (b == 0xE0) lo = 0xA0;
+            if (b == 0xED) hi = 0x9F;
+            u8 c1 = text[i + 1];
+            if (c1 < lo || c1 > hi || text[i + 2] & 0xC0 != 0x80) return i;
+            i += 3;
+            continue;
+        }
+        if (i + 3 >= n) return i;
+        u8 lo4 = 0x80;
+        u8 hi4 = 0xBF;
+        if (b == 0xF0) lo4 = 0x90;
+        if (b == 0xF4) hi4 = 0x8F;
+        u8 d1 = text[i + 1];
+        if (d1 < lo4 || d1 > hi4 || text[i + 2] & 0xC0 != 0x80 || text[i + 3] & 0xC0 != 0x80) return i;
+        i += 4;
+    }
+    return n;
+}
+
+bool IsLetter(u8 c) => (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+
+bool IsIdentCont(u8 c) => c == '_' || (c >= '0' && c <= '9') || IsLetter(c);
+
+bool IsDigit(u8 c) => c >= '0' && c <= '9';
+
+// The value of a digit or letter for bases up to 36, or 99.
+u32 DigitValue(u8 c) {
+    if (IsDigit(c)) return (c - '0') as u32;
+    if (IsLetter(c)) return ((c | 0x20) - 'a') as u32 + 10;
+    return 99;
+}
+
+// 0 if s is not a numeric suffix, 1 for an integer suffix, 2 for a float suffix.
+u32 SuffixKind(str s) {
+    if (Same(s, "f32") || Same(s, "f64")) return 2;
+    if (Same(s, "i8") || Same(s, "i16") || Same(s, "i32") || Same(s, "i64") || Same(s, "i128") ||
+        Same(s, "isize") || Same(s, "u8") || Same(s, "u16") || Same(s, "u32") || Same(s, "u64") ||
+        Same(s, "u128") || Same(s, "usize")) return 1;
+    return 0;
+}
+
+struct Lexer {
+    str Path;
+    str Src;
+    usize Pos;
+    u32 Line;
+    u16 Flags;          // flags for the next token
+    u32 File;
+    bool Core;
+
+    // Reports a lexical error at byte offset off and exits.
+    void Fail(in this, usize off, u32 code) {
+        str msg = "?";
+        match code {
+            E_INVALID_UTF8 => msg = "source file is not valid UTF-8",
+            E_UNEXPECTED_CHAR => msg = "unexpected character",
+            E_UNTERMINATED_COMMENT => msg = "unterminated block comment",
+            E_UNTERMINATED_STRING => msg = "unterminated string literal",
+            E_UNTERMINATED_CHAR => msg = "unterminated character literal",
+            E_BAD_ESCAPE => msg = "unknown or malformed escape sequence",
+            E_BAD_NUMBER => msg = "malformed numeric literal",
+            E_BAD_SUFFIX => msg = "invalid suffix on numeric literal",
+            E_CHAR_LENGTH => msg = "character literal must contain exactly one character",
+            E_BAD_UNICODE_ESCAPE => msg = "invalid Unicode escape",
+            E_CONTROL_CHAR => msg = "control character in literal; use an escape sequence",
+            _ => { }
+        }
+        FailAt(this.Path, this.Src, off, code, msg);
+    }
+
+    // A construct the accepted subset leaves out: E0901-E0904 in Core mode, else E0950.
+    void FailSubset(in this, usize off, u32 coreCode) {
+        if (this.Core) {
+            str msg = "non-ASCII characters outside literals and comments are not supported in Envo-Core";
+            match coreCode {
+                E_CORE_INTERPOLATION => msg = "interpolated strings are not part of Envo-Core",
+                E_CORE_RAW_STRING => msg = "raw string literals are not part of Envo-Core",
+                E_CORE_DIRECTIVE => msg = "directives are not part of Envo-Core",
+                _ => { }
+            }
+            FailAt(this.Path, this.Src, off, coreCode, msg);
+        }
+        str what = "not part of Envo-S1: non-ASCII characters outside literals and comments";
+        match coreCode {
+            E_CORE_INTERPOLATION => what = "not part of Envo-S1: interpolated strings",
+            E_CORE_RAW_STRING => what = "not part of Envo-S1: raw string literals",
+            E_CORE_DIRECTIVE => what = "not part of Envo-S1: directives",
+            _ => { }
+        }
+        FailAt(this.Path, this.Src, off, E_NOT_S1, what);
+    }
+
+    u8 At(in this, usize i) => this.Src[i];
+
+    // The token of kind `kind` from start to the current position, carrying the flags
+    // gathered since the previous token.
+    Token Emit(ref this, u16 kind, usize start) {
+        Token t = new Token {
+            Kind = kind, Flags = this.Flags, Start = start as u32,
+            Len = (this.Pos - start) as u32, Line = this.Line, File = this.File
+        };
+        this.Flags = 0;
+        return t;
+    }
+
+    // Skips whitespace and comments, recording them in the next token's flags. Returns
+    // false at the end of the file.
+    bool Trivia(ref this) {
+        usize n = this.Src.Len;
+        while (this.Pos < n) {
+            u8 c = this.Src[this.Pos];
+            if (c == ' ' || c == 9 || c == 13) {
+                this.Flags = this.Flags | TF_SPACE_BEFORE;
+                this.Pos++;
+            } else if (c == 10) {
+                this.Flags = this.Flags | TF_SPACE_BEFORE | TF_NEWLINE_BEFORE;
+                this.Line++;
+                this.Pos++;
+            } else if (c == '/' && this.Pos + 1 < n && this.Src[this.Pos + 1] == '/') {
+                // [lex.comment.1] runs to the LF (not included)
+                this.Flags = this.Flags | TF_SPACE_BEFORE;
+                while (this.Pos < n && this.Src[this.Pos] != 10) this.Pos++;
+            } else if (c == '/' && this.Pos + 1 < n && this.Src[this.Pos + 1] == '*') {
+                // [lex.comment.2] nests
+                this.Flags = this.Flags | TF_SPACE_BEFORE;
+                usize open = this.Pos;
+                this.Pos += 2;
+                u32 depth = 1;
+                while (depth > 0) {
+                    if (this.Pos >= n) this.Fail(open, E_UNTERMINATED_COMMENT);
+                    u8 b = this.Src[this.Pos];
+                    if (b == 10) {
+                        this.Line++;
+                        this.Flags = this.Flags | TF_NEWLINE_BEFORE;
+                        this.Pos++;
+                    } else if (b == '*' && this.Pos + 1 < n && this.Src[this.Pos + 1] == '/') {
+                        this.Pos += 2;
+                        depth--;
+                    } else if (b == '/' && this.Pos + 1 < n && this.Src[this.Pos + 1] == '*') {
+                        this.Pos += 2;
+                        depth++;
+                    } else {
+                        this.Pos++;
+                    }
+                }
+            } else {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The token at the current position (there is one: Trivia returned true).
+    Token Next(ref this, in LexTables tables) {
+        usize start = this.Pos;
+        usize n = this.Src.Len;
+        u8 c = this.Src[start];
+        if (c >= 0x80) this.FailSubset(start, E_CORE_NON_ASCII);
+        if (IsLetter(c) || c == '_') {
+            // [lex.ident.1], [lex.ident.2]
+            usize p = start + 1;
+            while (p < n && IsIdentCont(this.Src[p])) p++;
+            this.Pos = p;
+            u16 kind = tables.Keywords.Get(this.Src[start..p]) ?? TK_IDENT;
+            return this.Emit(kind, start);
+        }
+        if (IsDigit(c)) return this.Number(start);
+        if (c == '"') return this.StringLit(start);
+        if (c == 0x27) return this.CharLit(start);
+        if (c == '@') {
+            // [lex.ident.3] @name
+            if (start + 1 >= n) this.Fail(start, E_UNEXPECTED_CHAR);
+            u8 d = this.Src[start + 1];
+            if (d != '_' && !IsLetter(d)) this.Fail(start, E_UNEXPECTED_CHAR);
+            usize p = start + 2;
+            while (p < n && IsIdentCont(this.Src[p])) p++;
+            if (p - start == 2 && d == '_') this.Fail(start, E_UNEXPECTED_CHAR);
+            this.Pos = p;
+            return this.Emit(TK_IDENT, start);
+        }
+        if (c == '$') {
+            // [lex.punct.4] only `$"` means anything
+            if (start + 1 < n && this.Src[start + 1] == '"') this.FailSubset(start, E_CORE_INTERPOLATION);
+            this.Fail(start, E_UNEXPECTED_CHAR);
+        }
+        if (c == '#') {
+            // [lex.dir.1] directives start a line
+            if (this.Flags & TF_NEWLINE_BEFORE != 0) this.FailSubset(start, E_CORE_DIRECTIVE);
+            this.Fail(start, E_UNEXPECTED_CHAR);
+        }
+        // [lex.punct.1] maximal munch. Punctuation is ASCII, so a candidate ending inside
+        // a character (which a `str` slice cannot) is skipped.
+        usize len = 3;
+        while (len > 0) {
+            if (start + len <= n && (start + len == n || this.Src[start + len] & 0xC0 != 0x80)) {
+                u16? kind = tables.Puncts.Get(this.Src[start..start + len]);
+                match kind {
+                    Some(k) => {
+                        this.Pos = start + len;
+                        return this.Emit(k, start);
+                    }
+                    None => { }
+                }
+            }
+            len--;
+        }
+        this.Fail(start, E_UNEXPECTED_CHAR);
+        return this.Emit(TK_EOF, start);
+    }
+
+    // [lex.esc.1], [lex.esc.2]: validates the escape whose backslash is at Pos and moves
+    // past it. A backslash at the end of the file moves one byte, so the caller reports
+    // the unterminated literal.
+    void Escape(ref this) {
+        usize p = this.Pos;
+        usize n = this.Src.Len;
+        if (p + 1 >= n) {
+            this.Pos = p + 1;
+            return;
+        }
+        u8 c = this.Src[p + 1];
+        if (c == 'n' || c == 'r' || c == 't' || c == '0' || c == 0x5C || c == 0x27 || c == '"') {
+            this.Pos = p + 2;
+            return;
+        }
+        if (c == 'x') {
+            if (p + 3 >= n) this.Fail(p, E_BAD_ESCAPE);
+            u8 h = this.Src[p + 2];
+            if (h < '0' || h > '7') this.Fail(p, E_BAD_ESCAPE);
+            if (DigitValue(this.Src[p + 3]) >= 16) this.Fail(p, E_BAD_ESCAPE);
+            this.Pos = p + 4;
+            return;
+        }
+        if (c != 'u') this.Fail(p, E_BAD_ESCAPE);
+        if (p + 2 >= n || this.Src[p + 2] != '{') this.Fail(p, E_BAD_UNICODE_ESCAPE);
+        usize q = p + 3;
+        u64 v = 0;
+        while (true) {
+            if (q >= n) this.Fail(p, E_BAD_UNICODE_ESCAPE);
+            u8 d = this.Src[q];
+            if (d == '}') break;
+            u32 dv = DigitValue(d);
+            if (dv >= 16) this.Fail(p, E_BAD_UNICODE_ESCAPE);
+            v = (v << 4) | dv as u64;
+            q++;
+            if (q - p > 3 + 6) this.Fail(p, E_BAD_UNICODE_ESCAPE);
+        }
+        if (q - p == 3 || v > 0x10FFFF || v & 0xFFFFF800 == 0xD800) this.Fail(p, E_BAD_UNICODE_ESCAPE);
+        this.Pos = q + 1;
+    }
+
+    Token Number(ref this, usize start) {
+        usize n = this.Src.Len;
+        usize p = start;
+        bool isFloat = false;
+        u32 radix = 10;
+        if (this.Src[p] == '0' && p + 1 < n) {
+            u8 c = this.Src[p + 1];
+            if (c == 'x') radix = 16;
+            if (c == 'b') radix = 2;
+            if (c == 'o') radix = 8;
+        }
+        if (radix != 10) {
+            // [lex.int.1], [lex.int.2]
+            p += 2;
+            u32 digits = 0;
+            while (p < n) {
+                u8 c = this.Src[p];
+                if (c != '_') {
+                    u32 v = DigitValue(c);
+                    if (v >= radix) {
+                        if (v < 10) this.Fail(p, E_BAD_NUMBER);
+                        break;
+                    }
+                    digits++;
+                }
+                p++;
+            }
+            if (digits == 0) this.Fail(start, E_BAD_NUMBER);
+        } else {
+            while (p < n && (this.Src[p] == '_' || IsDigit(this.Src[p]))) p++;
+            // [lex.float.2] a fraction needs a digit right after the '.'
+            if (p + 1 < n && this.Src[p] == '.' && IsDigit(this.Src[p + 1])) {
+                isFloat = true;
+                p += 2;
+                while (p < n && (this.Src[p] == '_' || IsDigit(this.Src[p]))) p++;
+            }
+            if (p < n && this.Src[p] | 0x20 == 'e') {
+                isFloat = true;
+                p++;
+                if (p >= n) this.Fail(start, E_BAD_NUMBER);
+                if (this.Src[p] == '+' || this.Src[p] == '-') p++;
+                u32 edigits = 0;
+                while (p < n) {
+                    u8 c = this.Src[p];
+                    if (c != '_') {
+                        if (!IsDigit(c)) break;
+                        edigits++;
+                    }
+                    p++;
+                }
+                if (edigits == 0) this.Fail(start, E_BAD_NUMBER);
+            }
+        }
+        // [lex.int.3], [lex.float.3]
+        if (p < n && IsIdentCont(this.Src[p])) {
+            usize s = p;
+            while (p < n && IsIdentCont(this.Src[p])) p++;
+            u32 k = SuffixKind(this.Src[s..p]);
+            if (k == 0) this.Fail(s, E_BAD_SUFFIX);
+            if (k == 1 && isFloat) this.Fail(s, E_BAD_SUFFIX);
+            if (k == 2) {
+                if (radix != 10) this.Fail(s, E_BAD_SUFFIX);
+                isFloat = true;
+            }
+        }
+        this.Pos = p;
+        if (isFloat) return this.Emit(TK_FLOAT, start);
+        return this.Emit(TK_INT, start);
+    }
+
+    Token StringLit(ref this, usize start) {
+        usize n = this.Src.Len;
+        // [lex.str.3] `"""` always starts a raw string.
+        if (start + 2 < n && this.Src[start + 1] == '"' && this.Src[start + 2] == '"') {
+            this.FailSubset(start, E_CORE_RAW_STRING);
+        }
+        this.Pos = start + 1;
+        while (true) {
+            usize p = this.Pos;
+            if (p >= n) this.Fail(start, E_UNTERMINATED_STRING);
+            u8 c = this.Src[p];
+            if (c == '"') {
+                this.Pos = p + 1;
+                break;
+            }
+            if (c == 0x5C) {
+                this.Escape();
+                continue;
+            }
+            if (c == 10 || c == 13) this.Fail(start, E_UNTERMINATED_STRING);
+            if (c != 9 && (c < 0x20 || c == 0x7F)) this.Fail(p, E_CONTROL_CHAR);
+            this.Pos = p + 1;
+        }
+        return this.Emit(TK_STRING, start);
+    }
+
+    Token CharLit(ref this, usize start) {
+        usize n = this.Src.Len;
+        usize p = start + 1;
+        if (p >= n) this.Fail(start, E_UNTERMINATED_CHAR);
+        u8 c = this.Src[p];
+        if (c == 0x27) this.Fail(start, E_CHAR_LENGTH);
+        if (c == 10 || c == 13) this.Fail(start, E_UNTERMINATED_CHAR);
+        if (c == 0x5C) {
+            this.Pos = p;
+            this.Escape();
+            p = this.Pos;
+        } else {
+            if (c != 9 && (c < 0x20 || c == 0x7F)) this.Fail(p, E_CONTROL_CHAR);
+            // One Unicode scalar; the input is valid UTF-8, so the lead byte gives the length.
+            if (c < 0x80) p += 1;
+            else if (c < 0xE0) p += 2;
+            else if (c < 0xF0) p += 3;
+            else p += 4;
+        }
+        if (p >= n) this.Fail(start, E_UNTERMINATED_CHAR);
+        if (this.Src[p] != 0x27) {
+            // A closing quote later on this line means several characters (E0009);
+            // otherwise the literal was never closed (E0005).
+            usize q = p;
+            while (true) {
+                if (q >= n || this.Src[q] == 10) this.Fail(start, E_UNTERMINATED_CHAR);
+                if (this.Src[q] == 0x27) this.Fail(start, E_CHAR_LENGTH);
+                q++;
+            }
+        }
+        this.Pos = p + 1;
+        return this.Emit(TK_CHAR, start);
+    }
+}
+
+// `lex`: appends one line per token to out, "<line>:<col> <n|s|j> <class> <text>"
+// (01-lexical.md 1.11).
+public void DumpTokens(ref string dst, in List<Token> toks, str text) {
+    foreach (var t in toks.AsSlice()) {
+        AppendDecimal(ref dst, t.Line as u64);
+        dst.AppendByte(':');
+        AppendDecimal(ref dst, Column(text, t.Start as usize) as u64);
+        if (t.Flags & TF_NEWLINE_BEFORE != 0) dst.Append(" n ");
+        else if (t.Flags & TF_SPACE_BEFORE != 0) dst.Append(" s ");
+        else dst.Append(" j ");
+        if (t.Kind >= TK_PUNCT_FIRST) {
+            dst.Append("punct ");
+            dst.Append(Spelling(t.Kind));
+        } else if (t.Kind >= TK_KW_FIRST) {
+            dst.Append("kw ");
+            dst.Append(Spelling(t.Kind));
+        } else {
+            dst.Append(Spelling(t.Kind));
+            if (t.Kind != TK_EOF) {
+                dst.AppendByte(' ');
+                dst.Append(text[t.Start as usize..(t.Start + t.Len) as usize]);
+            }
+        }
+        dst.AppendByte(10);
+    }
+}

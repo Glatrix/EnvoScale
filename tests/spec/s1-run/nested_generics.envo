@@ -1,0 +1,38 @@
+// `>>` closing two generic argument lists ([lex.punct.2]) where the parser looks ahead and
+// backtracks: a top-level function returning a nested generic type, and a statement that
+// starts with a call with nested explicit type arguments. Found while porting the parser
+// to Stage 2 (M3.3): backtracking kept the split `>>`.
+// expect: 2 1
+// expect: ok
+str Num(usize v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + v % 10) as u8;
+            v /= 10;
+            if (v == 0) break;
+        }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+
+List<List<u32>> Make() {
+    List<List<u32>> outer = List<List<u32>>.New();
+    List<u32> a = List<u32>.New();
+    a.Push(7);
+    outer.Push(a);
+    outer.Push(List<u32>.New());
+    return outer;
+}
+
+void Check<T>(bool ok) {
+    if (ok) print("ok");
+}
+
+List<List<u32>> x = Make();
+write(1, Num(x.Len()));
+write(1, " ");
+print(Num(x.AsSlice()[0].Len()));
+Check<List<u32>>(x.Len() == 2);

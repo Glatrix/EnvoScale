@@ -1,5 +1,6 @@
 # `compiler/syntax`
 
-> **Status:** Not started. Planned for **M3**.
+> **Status:** Lexer and parser done (M3.2, M3.3). Namespace `envoc.syntax`.
 
-Lexer, parser, lossless CST (for the formatter and LSP) and the AST. Implements `docs/spec/01-lexical.md` onward.
+Lexer, parser, syntax tree, and later a lossless tree for the formatter and LSP.
+Implements `docs/spec/01-lexical.md` onward.

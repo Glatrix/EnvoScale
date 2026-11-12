@@ -1,0 +1,22 @@
+// Files (compiler/util/README.md).
+namespace envoc.util;
+
+// The whole contents of the file at path, or null if it cannot be opened or read.
+public string? ReadFile(str path) {
+    i32 fd = open(path, 0);
+    if (fd < 0) return null;
+    string s = string.New();
+    while (true) {
+        s.Reserve(1 << 16);
+        isize n = 0;
+        unsafe { n = read(fd, &s.Data[s.Count], s.Cap - s.Count); }
+        if (n < 0) {
+            close(fd);
+            return null;
+        }
+        if (n == 0) break;
+        s.Count += n as usize;
+    }
+    close(fd);
+    return Some(s);
+}

@@ -1,4 +1,11 @@
 driver/main.envo
 util/text.envo
 util/map.envo
+util/list.envo
+util/file.envo
 diag/report.envo
+syntax/token.envo
+syntax/lexer.envo
+syntax/node.envo
+syntax/parser.envo
+syntax/parser_s1.envo

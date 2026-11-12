@@ -25,7 +25,8 @@ Hello World Gallery. Each test is a `.envo` file whose comments say what must ha
 
 All Envo-Core `expect-error` tests run with `envoc0 check`, which lexes and parses first, so
 each error is still reported by the stage that owns it. They also run under Stage 1
-(`envoc1 --core`), which must report the same code at the same position (PLAN D14).
+(`envoc1 --core`), which must report the same code at the same position (PLAN D14). The
+lexical and syntax tests also run under Stage 2 (`envoc`), as do the lexer and parser goldens.
 
 Files named `*.bin.envo` contain bytes a text editor would mangle (invalid UTF-8, raw
 control characters); `.gitattributes` marks them binary.

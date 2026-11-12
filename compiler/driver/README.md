@@ -1,5 +1,6 @@
 # `compiler/driver`
 
-> **Status:** Started in **M3.1**: `main.envo`, the entry file (`envoc version`, `help`, `selftest`).
+> **Status:** Started in M3.1. `main.envo` is the entry file.
 
-The `envoc` entry point: command-line options, target selection, build profiles, and orchestration of the query engine across threads.
+The `envoc` entry point: command-line options, target selection, build profiles, and
+running the query engine across threads.

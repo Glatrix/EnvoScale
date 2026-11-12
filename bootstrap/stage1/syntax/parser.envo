@@ -281,20 +281,17 @@ u32 ParseToplevel(*Parser p) {
 
 // Does "Type IDENT (" start here? Looks ahead only; "Type IDENT <" is a generic function.
 bool IsFnStart(*Parser p) {
-    usize pos = PPos(p);
-    usize count;
+    PMark m = PSave(p);     // also undoes any `>>` split by the type ([lex.punct.2])
     bool result = false;
     unsafe {
-        count = VecLen(p.Nodes);
         if (TryType(p) != 0 && PKind(p) == TK_IDENT) {
             u16 next = PKindAt(p, 1);
             if (next == TK_LPAREN) result = true;
             else if (next == TK_LT && !p.Core) result = true;
             else if (next == TK_LT) PErrNotCore(p, "generic functions", p.Pos + 1);
         }
-        p.Pos = pos;
-        VecTruncate(p.Nodes, count);
     }
+    PRestore(p, m);
     return result;
 }
 
@@ -596,8 +593,7 @@ u32 ParseSimple(*Parser p) {
         return v;
     }
     usize start = PPos(p);
-    usize count;
-    unsafe { count = VecLen(p.Nodes); }
+    PMark m = PSave(p);
     // [core.decl.1] Type IDENT followed by '=', ';', '}' or EOF is a declaration.
     u32 type = TryType(p);
     if (type != 0 && PKind(p) == TK_IDENT) {
@@ -612,10 +608,7 @@ u32 ParseSimple(*Parser p) {
             return v;
         }
     }
-    unsafe {
-        p.Pos = start;      // backtrack
-        VecTruncate(p.Nodes, count);
-    }
+    PRestore(p, m);     // backtrack, undoing any `>>` split by the type
     u32 e = ParseExpr(p);
     u16 k = PKind(p);
     if (TokClass(k) & TC_ASSIGN != 0) {
