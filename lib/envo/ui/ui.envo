@@ -1,0 +1,641 @@
+// envo.ui: user interfaces as a retained tree of components (PLAN D47). A program builds
+// the tree (Column, Row, Card, Text, Button, Checkbox, Spacer, Divider), lays it out for
+// a size, draws it, and hands it input; input comes back as the component that was
+// activated, so the program decides what that means. One layout pass serves both
+// renderers: pixels (envo.gfx with envo.font, in a window) and cells (envo.term). Lumen
+// (envo.lumen) is the theme.
+namespace envo.ui;
+
+use envo.gfx;
+use envo.font;
+use envo.term;
+use envo.lumen;
+use ports.{Event, EventKind};
+
+// What a component is.
+public enum Kind {
+    Column,         // children top to bottom
+    Row,            // children left to right
+    Card,           // a column on a raised surface with rounded corners
+    Text,
+    Button,
+    Checkbox,
+    Spacer,         // empty; takes the space left over
+    Divider,        // a line across its container
+}
+
+// Where children sit across a container (left to right in a column, top to bottom in
+// a row).
+public enum Align {
+    Start,
+    Center,
+    End,
+    Stretch,
+}
+
+// Text styles (Lumen's type scale).
+public const u8 CAPTION = 0;
+public const u8 BODY = 1;
+public const u8 HEADLINE = 2;
+public const u8 TITLE = 3;
+public const u8 LARGE_TITLE = 4;
+
+// Spacing steps (Lumen's 4-pixel scale): what Gap and Padding take.
+public const u8 NONE = 0;
+public const u8 XS = 1;
+public const u8 S = 2;
+public const u8 M = 3;
+public const u8 L = 4;
+public const u8 XL = 5;
+public const u8 XXL = 6;
+
+struct Node {
+    Kind K;
+    u32 Parent;
+    u32 First;          // first child; 0 if none
+    u32 Last;
+    u32 Next;           // next sibling; 0 if none
+    u8 Style;           // text style
+    u8 GapStep;
+    u8 PadStep;
+    Align Cross;
+    u32 Grow;           // a share of the space left over along the container
+    bool On;            // a checkbox's state
+    bool Primary;       // a button drawn in the accent
+    bool Enabled;
+    i32 MW;             // measured size
+    i32 MH;
+    i32 X;              // laid-out bounds
+    i32 Y;
+    i32 W;
+    i32 H;
+}
+
+// A user interface: its components, their layout, and focus, hover and press.
+// Component 0 does not exist (it means "none"); component 1 is the root column.
+public struct Tree {
+    List<Node> Nodes;
+    List<string> Labels;
+    u32 Focus;
+    u32 Hover;
+    u32 Pressed;
+    bool Cells;         // laid out in terminal cells (else pixels)
+
+    public static Tree New() {
+        Tree t = new Tree { Nodes = List<Node>.New(), Labels = List<string>.New(), Focus = 0, Hover = 0, Pressed = 0, Cells = false };
+        t.Make(Kind.Column, 0, "");         // 0: none
+        t.Make(Kind.Column, 0, "");         // 1: the root
+        return t;
+    }
+
+    public u32 Root(in this) => 1;
+
+    u32 Make(ref this, Kind k, u32 parent, str label) {
+        u32 id = this.Nodes.Len() as u32;
+        this.Nodes.Push(new Node {
+            K = k, Parent = parent, First = 0, Last = 0, Next = 0, Style = BODY, GapStep = NONE, PadStep = NONE,
+            Cross = Align.Start, Grow = 0, On = false, Primary = false, Enabled = true,
+            MW = 0, MH = 0, X = 0, Y = 0, W = 0, H = 0,
+        });
+        this.Labels.Push(string.From(label));
+        if (id > 1) {
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            if (ns[parent as usize].Last == 0) ns[parent as usize].First = id;
+            else ns[ns[parent as usize].Last as usize].Next = id;
+            ns[parent as usize].Last = id;
+        }
+        return id;
+    }
+
+    // ---------------------------------------------------------------- building
+
+    public u32 Column(ref this, u32 parent) {
+        u32 id = this.Make(Kind.Column, parent, "");
+        this.SetGap(id, S);
+        return id;
+    }
+
+    public u32 Row(ref this, u32 parent) {
+        u32 id = this.Make(Kind.Row, parent, "");
+        this.SetGap(id, S);
+        this.SetAlign(id, Align.Center);
+        return id;
+    }
+
+    public u32 Card(ref this, u32 parent) {
+        u32 id = this.Make(Kind.Card, parent, "");
+        this.SetGap(id, M);
+        this.SetPadding(id, L);
+        return id;
+    }
+
+    public u32 Text(ref this, u32 parent, str label, u8 style) {
+        u32 id = this.Make(Kind.Text, parent, label);
+        this.Nodes.AsMutSlice()[id as usize].Style = style;
+        return id;
+    }
+
+    // A button; primary: drawn in the accent (one per screen, for the main action).
+    public u32 Button(ref this, u32 parent, str label, bool primary) {
+        u32 id = this.Make(Kind.Button, parent, label);
+        this.Nodes.AsMutSlice()[id as usize].Primary = primary;
+        return id;
+    }
+
+    public u32 Checkbox(ref this, u32 parent, str label, bool on) {
+        u32 id = this.Make(Kind.Checkbox, parent, label);
+        this.Nodes.AsMutSlice()[id as usize].On = on;
+        return id;
+    }
+
+    public u32 Spacer(ref this, u32 parent) {
+        u32 id = this.Make(Kind.Spacer, parent, "");
+        this.Nodes.AsMutSlice()[id as usize].Grow = 1;
+        return id;
+    }
+
+    public u32 Divider(ref this, u32 parent) => this.Make(Kind.Divider, parent, "");
+
+    // ---------------------------------------------------------------- properties
+
+    public void SetGap(ref this, u32 id, u8 step) {
+        this.Nodes.AsMutSlice()[id as usize].GapStep = step;
+    }
+
+    public void SetPadding(ref this, u32 id, u8 step) {
+        this.Nodes.AsMutSlice()[id as usize].PadStep = step;
+    }
+
+    public void SetAlign(ref this, u32 id, Align a) {
+        this.Nodes.AsMutSlice()[id as usize].Cross = a;
+    }
+
+    public void SetGrow(ref this, u32 id, u32 share) {
+        this.Nodes.AsMutSlice()[id as usize].Grow = share;
+    }
+
+    public void SetEnabled(ref this, u32 id, bool on) {
+        this.Nodes.AsMutSlice()[id as usize].Enabled = on;
+    }
+
+    public void SetText(ref this, u32 id, str label) {
+        this.Labels.Set(id as usize, string.From(label));
+    }
+
+    public void SetChecked(ref this, u32 id, bool on) {
+        this.Nodes.AsMutSlice()[id as usize].On = on;
+    }
+
+    public bool Checked(in this, u32 id) => this.Nodes.Get(id as usize).On;
+    public Kind KindOf(in this, u32 id) => this.Nodes.Get(id as usize).K;
+    public u32 Focused(in this) => this.Focus;
+
+    // A component's laid-out bounds.
+    public i32 X(in this, u32 id) => this.Nodes.Get(id as usize).X;
+    public i32 Y(in this, u32 id) => this.Nodes.Get(id as usize).Y;
+    public i32 Width(in this, u32 id) => this.Nodes.Get(id as usize).W;
+    public i32 Height(in this, u32 id) => this.Nodes.Get(id as usize).H;
+
+    // ---------------------------------------------------------------- layout
+
+    // Lays the tree out in a width x height pixel area, measuring text with f.
+    public void LayoutPixels(ref this, in font.Font f, in lumen.Theme th, i32 width, i32 height) {
+        this.Cells = false;
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.Nodes.Get(id as usize);
+            str label = this.Labels.AsSlice()[id as usize].AsStr();
+            i32 w = 0;
+            i32 h = 0;
+            if (d.K == Kind.Text) {
+                lumen.TypeStyle ts = TypeOf(th, d.Style);
+                w = f.Measure(label, ts.Size);
+                h = ts.Line as i32;
+            } else if (d.K == Kind.Button) {
+                w = f.Measure(label, th.Body.Size) + 2 * th.L as i32;
+                h = th.ControlHeight as i32;
+            } else if (d.K == Kind.Checkbox) {
+                w = 20 + th.S as i32 + f.Measure(label, th.Body.Size);
+                h = th.ControlHeight as i32;
+            } else if (d.K == Kind.Divider) {
+                h = 1;
+            }
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].MW = w;
+            ns[id as usize].MH = h;
+        }
+        this.Solve(th, width, height);
+    }
+
+    // Lays the tree out in a cols x rows terminal.
+    public void LayoutCells(ref this, in lumen.Theme th, i32 cols, i32 rows) {
+        this.Cells = true;
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.Nodes.Get(id as usize);
+            str label = this.Labels.AsSlice()[id as usize].AsStr();
+            i32 len = Chars(label);
+            i32 w = 0;
+            i32 h = 0;
+            if (d.K == Kind.Text) {
+                w = len;
+                h = 1;
+            } else if (d.K == Kind.Button) {
+                w = len + 4;        // "[ OK ]"
+                h = 1;
+            } else if (d.K == Kind.Checkbox) {
+                w = len + 4;        // "[x] OK"
+                h = 1;
+            } else if (d.K == Kind.Divider) {
+                h = 1;
+            }
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].MW = w;
+            ns[id as usize].MH = h;
+        }
+        this.Solve(th, cols, rows);
+    }
+
+    // A spacing step in this layout's units.
+    i32 Step(in this, in lumen.Theme th, u8 step) {
+        if (step == NONE) return 0;
+        if (this.Cells) {
+            if (step <= S) return 0;
+            if (step <= L) return 1;
+            return 2;
+        }
+        if (step == XS) return th.Xs as i32;
+        if (step == S) return th.S as i32;
+        if (step == M) return th.M as i32;
+        if (step == L) return th.L as i32;
+        if (step == XL) return th.Xl as i32;
+        return th.Xxl as i32;
+    }
+
+    // The space between a container's children: in a terminal a row keeps at least one
+    // cell between them.
+    i32 GapOf(in this, in lumen.Theme th, Kind k, u8 step) {
+        i32 g = this.Step(th, step);
+        if (this.Cells && k == Kind.Row && step != NONE && g < 1) return 1;
+        return g;
+    }
+
+    // A card's border in this layout's units (a box line in a terminal).
+    i32 Border(in this, Kind k) {
+        if (k == Kind.Card && this.Cells) return 1;
+        return 0;
+    }
+
+    bool IsBox(Kind k) => k == Kind.Column || k == Kind.Row || k == Kind.Card;
+
+    void Solve(ref this, in lumen.Theme th, i32 width, i32 height) {
+        this.Measure(th, 1);
+        this.Arrange(th, 1, 0, 0, width, height);
+    }
+
+    // Containers' sizes from their children's, bottom up.
+    void Measure(ref this, in lumen.Theme th, u32 id) {
+        Node d = this.Nodes.Get(id as usize);
+        if (!this.IsBox(d.K)) return;
+        bool row = d.K == Kind.Row;
+        i32 gap = this.GapOf(th, d.K, d.GapStep);
+        i32 pad = this.Step(th, d.PadStep) + this.Border(d.K);
+        i32 main = 0;
+        i32 cross = 0;
+        u32 count = 0;
+        u32 c = d.First;
+        while (c != 0) {
+            this.Measure(th, c);
+            Node k = this.Nodes.Get(c as usize);
+            i32 km = k.MH;
+            i32 kc = k.MW;
+            if (row) {
+                km = k.MW;
+                kc = k.MH;
+            }
+            main += km;
+            if (kc > cross) cross = kc;
+            count++;
+            c = k.Next;
+        }
+        if (count > 1) main += gap * (count - 1) as i32;
+        mut Node[] ns = this.Nodes.AsMutSlice();
+        if (row) {
+            ns[id as usize].MW = main + 2 * pad;
+            ns[id as usize].MH = cross + 2 * pad;
+        } else {
+            ns[id as usize].MW = cross + 2 * pad;
+            ns[id as usize].MH = main + 2 * pad;
+        }
+    }
+
+    // Bounds top down: each container shares what is left over among the children that
+    // grow, and places them across by its alignment.
+    void Arrange(ref this, in lumen.Theme th, u32 id, i32 x, i32 y, i32 w, i32 h) {
+        {
+            mut Node[] ns = this.Nodes.AsMutSlice();
+            ns[id as usize].X = x;
+            ns[id as usize].Y = y;
+            ns[id as usize].W = w;
+            ns[id as usize].H = h;
+        }
+        Node d = this.Nodes.Get(id as usize);
+        if (!this.IsBox(d.K)) return;
+        bool row = d.K == Kind.Row;
+        i32 gap = this.GapOf(th, d.K, d.GapStep);
+        i32 pad = this.Step(th, d.PadStep) + this.Border(d.K);
+        i32 innerMain = h - 2 * pad;
+        i32 innerCross = w - 2 * pad;
+        if (row) {
+            innerMain = w - 2 * pad;
+            innerCross = h - 2 * pad;
+        }
+        // what the children take, and the shares of what is left
+        i32 used = 0;
+        u32 shares = 0;
+        u32 count = 0;
+        u32 c = d.First;
+        while (c != 0) {
+            Node k = this.Nodes.Get(c as usize);
+            if (row) used += k.MW;
+            else used += k.MH;
+            shares += k.Grow;
+            count++;
+            c = k.Next;
+        }
+        if (count > 1) used += gap * (count - 1) as i32;
+        i32 extra = innerMain - used;
+        if (extra < 0) extra = 0;
+        i32 at = pad;
+        c = d.First;
+        i32 given = 0;
+        while (c != 0) {
+            Node k = this.Nodes.Get(c as usize);
+            i32 km = k.MH;
+            i32 kc = k.MW;
+            if (row) {
+                km = k.MW;
+                kc = k.MH;
+            }
+            if (k.Grow > 0 && shares > 0) {
+                i32 more = (extra as i64 * k.Grow as i64 / shares as i64) as i32;
+                given += more;
+                km += more;
+            }
+            // dividers and stretched children fill the cross axis
+            i32 cs = kc;
+            i32 off = 0;
+            if (d.Cross == Align.Stretch || k.K == Kind.Divider || this.IsBox(k.K) && d.K != Kind.Row) {
+                cs = innerCross;
+            } else if (d.Cross == Align.Center) {
+                off = (innerCross - kc) / 2;
+            } else if (d.Cross == Align.End) {
+                off = innerCross - kc;
+            }
+            if (cs > innerCross) cs = innerCross;
+            if (row) this.Arrange(th, c, x + at, y + pad + off, km, cs);
+            else this.Arrange(th, c, x + pad + off, y + at, cs, km);
+            at += km + gap;
+            c = k.Next;
+        }
+    }
+
+    // ---------------------------------------------------------------- input
+
+    bool Focusable(in this, u32 id) {
+        Node d = this.Nodes.Get(id as usize);
+        return d.Enabled && (d.K == Kind.Button || d.K == Kind.Checkbox);
+    }
+
+    // The focusable component at (x, y); 0 if none.
+    public u32 HitTest(in this, i32 x, i32 y) {
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            if (!this.Focusable(id)) continue;
+            Node d = this.Nodes.Get(id as usize);
+            if (x >= d.X && y >= d.Y && x < d.X + d.W && y < d.Y + d.H) return id;
+        }
+        return 0;
+    }
+
+    // Moves the focus to the next (forward) or previous focusable component, around.
+    public void MoveFocus(ref this, bool forward) {
+        u32 n = this.Nodes.Len() as u32;
+        if (n <= 2) return;
+        u32 id = this.Focus;
+        for (u32 k = 0; k < n; k++) {
+            if (forward) {
+                id++;
+                if (id >= n) id = 2;
+            } else {
+                if (id <= 2) id = n - 1;
+                else id--;
+            }
+            if (this.Focusable(id)) {
+                this.Focus = id;
+                return;
+            }
+        }
+    }
+
+    // Activates a component: a checkbox flips. Returns it.
+    u32 Activate(ref this, u32 id) {
+        if (id == 0 || !this.Focusable(id)) return 0;
+        mut Node[] ns = this.Nodes.AsMutSlice();
+        if (ns[id as usize].K == Kind.Checkbox) ns[id as usize].On = !ns[id as usize].On;
+        return id;
+    }
+
+    // A window event (pixels): pointer hover and press, a click (press and release on the
+    // same component), Tab to move the focus, Enter or Space to activate it. Returns the
+    // component activated, or 0.
+    public u32 OnEvent(ref this, Event e) {
+        EventKind k = e.Kind();
+        if (k == EventKind.MouseMove) {
+            this.Hover = this.HitTest(e.X(), e.Y());
+            return 0;
+        }
+        if (k == EventKind.MouseDown && e.Code() == 1) {
+            u32 hit = this.HitTest(e.X(), e.Y());
+            this.Pressed = hit;
+            if (hit != 0) this.Focus = hit;
+            return 0;
+        }
+        if (k == EventKind.MouseUp && e.Code() == 1) {
+            u32 hit = this.HitTest(e.X(), e.Y());
+            u32 was = this.Pressed;
+            this.Pressed = 0;
+            if (hit != 0 && hit == was) return this.Activate(hit);
+            return 0;
+        }
+        if (k == EventKind.KeyDown) {
+            if (e.Code() == 9) this.MoveFocus(true);                          // VK_TAB
+            else if (e.Code() == 13 || e.Code() == 32) return this.Activate(this.Focus);     // VK_RETURN, VK_SPACE
+        }
+        return 0;
+    }
+
+    // A terminal key: Tab, Shift+Tab and the arrows move the focus; Enter or Space
+    // activates it. Returns the component activated, or 0.
+    public u32 OnKey(ref this, term.Key key) {
+        if (key.Is(term.KeyKind.Tab) || key.Is(term.KeyKind.Down) || key.Is(term.KeyKind.Right)) {
+            this.MoveFocus(true);
+            return 0;
+        }
+        if (key.Is(term.KeyKind.BackTab) || key.Is(term.KeyKind.Up) || key.Is(term.KeyKind.Left)) {
+            this.MoveFocus(false);
+            return 0;
+        }
+        if (key.Is(term.KeyKind.Enter) || key.IsChar(' ' as u32)) return this.Activate(this.Focus);
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- drawing
+
+    // Draws the tree (laid out in pixels) on c, its text in f.
+    public void DrawPixels(in this, ref gfx.Canvas c, in font.Font f, in lumen.Theme th) {
+        c.FillRect(0, 0, c.Width(), c.Height(), Rgb(th.C.Background));
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.Nodes.Get(id as usize);
+            str label = this.Labels.AsSlice()[id as usize].AsStr();
+            if (d.K == Kind.Card) {
+                i32 r = th.RadiusLarge as i32;
+                c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Separator));
+                c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(th.C.Surface));
+            } else if (d.K == Kind.Divider) {
+                c.FillRect(d.X, d.Y, d.W, 1, Rgb(th.C.Separator));
+            } else if (d.K == Kind.Text) {
+                lumen.TypeStyle ts = TypeOf(th, d.Style);
+                u32 color = th.C.Text;
+                if (d.Style == CAPTION) color = th.C.TextSecondary;
+                DrawLabel(ref c, f, d.X, d.Y, d.H, label, ts.Size, color);
+            } else if (d.K == Kind.Button) {
+                i32 r = th.RadiusMedium as i32;
+                if (this.Focus == id) {
+                    i32 ring = th.FocusRing as i32;
+                    c.FillRoundedRect(d.X - ring, d.Y - ring, d.W + 2 * ring, d.H + 2 * ring, r + ring, Rgb(th.C.Accent));
+                    c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.Background));
+                }
+                u32 fill = th.C.SurfaceRaised;
+                u32 ink = th.C.Text;
+                if (d.Primary) {
+                    fill = th.C.Accent;
+                    ink = th.C.OnAccent;
+                    if (this.Hover == id) fill = th.C.AccentHover;
+                }
+                if (this.Pressed == id) fill = th.C.SurfacePressed;
+                if (!d.Enabled) ink = th.C.TextSecondary;
+                if (!d.Primary) {
+                    c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(th.C.ControlEdge));
+                    c.FillRoundedRect(d.X + 1, d.Y + 1, d.W - 2, d.H - 2, r - 1, Rgb(fill));
+                } else {
+                    c.FillRoundedRect(d.X, d.Y, d.W, d.H, r, Rgb(fill));
+                }
+                i32 tw = f.Measure(label, th.Body.Size);
+                DrawLabel(ref c, f, d.X + (d.W - tw) / 2, d.Y, d.H, label, th.Body.Size, ink);
+            } else if (d.K == Kind.Checkbox) {
+                i32 bs = 20;
+                i32 by = d.Y + (d.H - bs) / 2;
+                i32 r = th.RadiusSmall as i32;
+                if (this.Focus == id) {
+                    i32 ring = th.FocusRing as i32;
+                    c.FillRoundedRect(d.X - ring, by - ring, bs + 2 * ring, bs + 2 * ring, r + ring, Rgb(th.C.Accent));
+                    c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.Background));
+                }
+                if (d.On) {
+                    c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.Accent));
+                    gfx.Color mark = Rgb(th.C.OnAccent);
+                    for (i32 t = 0; t < 2; t++) {
+                        c.Line(d.X + 5, by + 10 + t, d.X + 8, by + 13 + t, mark);
+                        c.Line(d.X + 8, by + 13 + t, d.X + 15, by + 6 + t, mark);
+                    }
+                } else {
+                    c.FillRoundedRect(d.X, by, bs, bs, r, Rgb(th.C.ControlEdge));
+                    c.FillRoundedRect(d.X + 1, by + 1, bs - 2, bs - 2, r - 1, Rgb(th.C.SurfaceRaised));
+                }
+                u32 ink = th.C.Text;
+                if (!d.Enabled) ink = th.C.TextSecondary;
+                DrawLabel(ref c, f, d.X + bs + th.S as i32, d.Y, d.H, label, th.Body.Size, ink);
+            }
+        }
+    }
+
+    // Draws the tree (laid out in cells) on a terminal screen.
+    public void DrawCells(in this, ref term.Screen s, in lumen.Theme th) {
+        term.Style base0 = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Background);
+        s.Fill(0, 0, s.Cols(), s.Rows(), ' ' as u32, base0);
+        u32 n = this.Nodes.Len() as u32;
+        for (u32 id = 2; id < n; id++) {
+            Node d = this.Nodes.Get(id as usize);
+            str label = this.Labels.AsSlice()[id as usize].AsStr();
+            if (d.W <= 0 || d.H <= 0 || d.X < 0 || d.Y < 0) continue;
+            u32 x = d.X as u32;
+            u32 y = d.Y as u32;
+            term.Style surface = term.Style.Plain().Fg(th.C.Text).Bg(th.C.Surface);
+            if (d.K == Kind.Card) {
+                s.Fill(x, y, d.W as u32, d.H as u32, ' ' as u32, surface);
+                s.Box(x, y, d.W as u32, d.H as u32, term.Style.Plain().Fg(th.C.ControlEdge).Bg(th.C.Surface));
+            } else if (d.K == Kind.Divider) {
+                for (u32 i = 0; i < d.W as u32; i++) s.Set(x + i, y, 0x2500, term.Style.Plain().Fg(th.C.Separator).Bg(this.BgAt(th, id)));
+            } else if (d.K == Kind.Text) {
+                term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(this.BgAt(th, id));
+                if (d.Style == CAPTION) st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
+                if (d.Style >= HEADLINE) st = st.Bold();
+                s.Put(x, y, label, st);
+            } else if (d.K == Kind.Button) {
+                term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(th.C.SurfaceRaised);
+                if (d.Primary) st = term.Style.Plain().Fg(th.C.OnAccent).Bg(th.C.Accent).Bold();
+                if (this.Focus == id) st = st.Reverse();
+                if (!d.Enabled) st = term.Style.Plain().Fg(th.C.TextSecondary).Bg(this.BgAt(th, id));
+                u32 after = s.Put(x, y, "[ ", st);
+                after = s.Put(after, y, label, st);
+                s.Put(after, y, " ]", st);
+            } else if (d.K == Kind.Checkbox) {
+                term.Style st = term.Style.Plain().Fg(th.C.Text).Bg(this.BgAt(th, id));
+                term.Style box = st;
+                if (this.Focus == id) box = st.Reverse();
+                if (d.On) s.Put(x, y, "[x]", box);
+                else s.Put(x, y, "[ ]", box);
+                s.Put(x + 4, y, label, st);
+            }
+        }
+    }
+
+    // The background a component sits on: a card's surface, or the window's.
+    u32 BgAt(in this, in lumen.Theme th, u32 id) {
+        u32 p = this.Nodes.Get(id as usize).Parent;
+        while (p != 0) {
+            if (this.Nodes.Get(p as usize).K == Kind.Card) return th.C.Surface;
+            p = this.Nodes.Get(p as usize).Parent;
+        }
+        return th.C.Background;
+    }
+}
+
+lumen.TypeStyle TypeOf(in lumen.Theme th, u8 style) {
+    if (style == CAPTION) return th.Caption;
+    if (style == HEADLINE) return th.Headline;
+    if (style == TITLE) return th.Title;
+    if (style == LARGE_TITLE) return th.LargeTitle;
+    return th.Body;
+}
+
+gfx.Color Rgb(u32 c) => gfx.Color.Rgb((c >> 16 & 0xFF) as u8, (c >> 8 & 0xFF) as u8, (c & 0xFF) as u8);
+
+// Text vertically centred in a box of height h at (x, y).
+void DrawLabel(ref gfx.Canvas c, in font.Font f, i32 x, i32 y, i32 h, str label, u32 size, u32 color) {
+    i32 asc = (f.Ascent() as i64 * size as i64 / f.UnitsPerEm() as i64) as i32;
+    i32 desc = (0 - f.Descent() as i64 * size as i64 / f.UnitsPerEm() as i64) as i32;
+    i32 baseline = y + (h - asc - desc) / 2 + asc;
+    f.Draw(ref c, x, baseline, label, size, Rgb(color));
+}
+
+// Code points in s.
+i32 Chars(str s) {
+    i32 n = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] & 0xC0 != 0x80) n++;
+    }
+    return n;
+}

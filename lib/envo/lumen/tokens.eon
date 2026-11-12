@@ -1,0 +1,72 @@
+#eon 1
+
+// Lumen version 1 (docs/lumen/README.md). envo.lumen exposes these as typed values; its
+// tests check that the two agree.
+version = 1
+
+light {
+    background     = "#f5f5f7"
+    surface        = "#ffffff"
+    surfaceRaised  = "#ffffff"
+    surfacePressed = "#e8e8ed"
+    text           = "#1d1d1f"
+    textSecondary  = "#6e6e73"
+    separator      = "#c7c7cc"
+    controlEdge    = "#86868b"
+    accent         = "#0a66d8"
+    accentHover    = "#0858bd"
+    onAccent       = "#ffffff"
+    danger         = "#d70015"
+    success        = "#248a3d"
+    warning        = "#b25000"
+}
+
+dark {
+    background     = "#000000"
+    surface        = "#1c1c1e"
+    surfaceRaised  = "#2c2c2e"
+    surfacePressed = "#3a3a3c"
+    text           = "#f5f5f7"
+    textSecondary  = "#a1a1a6"
+    separator      = "#48484a"
+    controlEdge    = "#8e8e93"
+    accent         = "#4c9bff"
+    accentHover    = "#6eafff"
+    onAccent       = "#000000"
+    danger         = "#ff6961"
+    success        = "#30d158"
+    warning        = "#ffb340"
+}
+
+type {
+    caption    = [12, 16]
+    body       = [15, 20]
+    headline   = [17, 24]
+    title      = [22, 28]
+    largeTitle = [28, 36]
+}
+
+space {
+    xs  = 4
+    s   = 8
+    m   = 12
+    l   = 16
+    xl  = 24
+    xxl = 32
+}
+
+radius {
+    small  = 6
+    medium = 10
+    large  = 14
+}
+
+control {
+    height = 32
+    focusRing = 2
+}
+
+motion {
+    fast   = 120
+    normal = 200
+}

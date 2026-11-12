@@ -13,7 +13,7 @@ are ports, and everything drawn is computed in memory first:
 | 2D drawing (D44) | `envo.gfx`: an RGBA canvas, in software | done (8.3) |
 | Text | `envo.font`: TrueType, anti-aliased | done (8.4) |
 | Window port (D45) | `ports.IWindow`, adapters in `os.*` | done (8.5) |
-| UI (D47) | `envo.ui` | 8.6 |
+| UI (D47) | `envo.ui` on `envo.lumen` | done (8.6) |
 | GPU (D46) | `envo.gpu` | 8.7, 8.8 |
 
 ## Exact arithmetic
@@ -66,6 +66,22 @@ a test queued (`Queue`). Linux windows (X11, Wayland) come after M8: the Linux a
 In the script runtime the window calls need `--allow all`: a window class names a
 function for Windows to call, which the sandbox cannot check
 ([`script-runtime.md`](script-runtime.md)).
+
+## UI (D47)
+
+`envo.ui` keeps the interface as a tree in one list (each component knows its parent,
+first child and next sibling). Envo-S1 cannot store closures, so components return what
+was activated instead of calling handlers.
+
+Layout is one pass over the tree in two steps. Measuring goes bottom up: text through
+the font in pixels, or by code points in cells. Arranging goes top down: a container
+shares the space left over among the children that grow, then places them across by
+its alignment.
+
+Spacing is given as Lumen steps, so the same tree lays out in pixels or in cells; a
+terminal rounds the steps to cells. Both renderers draw the same roles: a card's
+rounded surface and edge become a box of lines, and the focus ring becomes reverse
+video.
 
 ## Fonts
 

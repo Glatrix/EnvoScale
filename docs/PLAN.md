@@ -190,9 +190,9 @@ tokens, `envo.cli`/`envo.term`.
 | [8.1](https://github.com/envoscale/EnvoScale/issues/111) | `envo.term` and the Terminal port (D43): VT output, size, raw mode, key events, a diffing cell buffer | `lib/envo/term/tests/`, conformance | done |
 | [8.2](https://github.com/envoscale/EnvoScale/issues/112) | `envo.cli`: commands, flags and help; tables; progress bars | `lib/envo/cli/tests/` | done |
 | [8.3](https://github.com/envoscale/EnvoScale/issues/113) | `envo.gfx`: the software rasterizer (D44) | golden pixel hashes | done |
-| [8.4](https://github.com/envoscale/EnvoScale/issues/114) | `envo.font`: TrueType outlines rasterized with anti-aliasing | golden glyph hashes | |
-| [8.5](https://github.com/envoscale/EnvoScale/issues/115) | The Window port and the Win32 adapter (D45) | conformance (off-screen and native) | |
-| [8.6](https://github.com/envoscale/EnvoScale/issues/116) | `envo.ui` with Lumen tokens: layout, desktop and terminal renderers (D47) | golden renders | |
+| [8.4](https://github.com/envoscale/EnvoScale/issues/114) | `envo.font`: TrueType outlines rasterized with anti-aliasing | golden glyph hashes || done |
+| [8.5](https://github.com/envoscale/EnvoScale/issues/115) | The Window port and the Win32 adapter (D45) | conformance (off-screen and native) || done |
+| [8.6](https://github.com/envoscale/EnvoScale/issues/116) | `envo.ui` with Lumen tokens: layout, desktop and terminal renderers (D47) | golden renders || done |
 | [8.7](https://github.com/envoscale/EnvoScale/issues/117) | `envo.gpu`: the port and its software adapter (D46) | `lib/envo/gpu/tests/` | |
 | [8.8](https://github.com/envoscale/EnvoScale/issues/118) | The Vulkan and D3D12 adapters | on machines with a GPU | |
 | [8.9](https://github.com/envoscale/EnvoScale/issues/119) | Docs and status; M8 complete | CI | |

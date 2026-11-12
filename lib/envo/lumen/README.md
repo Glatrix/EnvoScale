@@ -1,19 +1,29 @@
 # `envo.lumen`
 
-> **Status:** Not started. Planned for **M8**. Tier when it lands: Experimental.
+> **Status:** Experimental (M8.6). Tests: `lib/envo/lumen/tests/`. Spec:
+> [`docs/lumen/`](../../../docs/lumen/README.md).
 
-The Lumen design language as code: tokens (colour, type, space, materials, motion) loaded from EON and exposed as typed constants, plus the default component set. Spec: `docs/lumen/`.
+The Lumen design language's tokens as typed values: color roles for a light and a dark
+scheme, the type scale, the 4-pixel spacing scale, corner radii, control metrics and
+motion durations. [`tokens.eon`](tokens.eon) is the source; `Light()` and `Dark()` hold
+the same values, and the tests check that they agree. Every color pair the spec promises
+meets WCAG 2.2 AA contrast.
 
 ## Simple door
 
 ```envo
-Button("Get started")
+use envo.lumen;
+
+lumen.Theme th = lumen.Dark();
+u32 accent = th.C.Accent;      // 0xRRGGBB
 ```
 
 ## Full-control door
 
-Themes are token overrides; every component can be restyled or replaced.
+A theme is a plain value: change any field. `FromTokens(eonText, "light" | "dark")`
+reads tokens in `tokens.eon`'s shape over Lumen's own, so a program can ship its own
+token file. `Describe()` lists every value.
 
 ## Ports used
 
-none
+None.
