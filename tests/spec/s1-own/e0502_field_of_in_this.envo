@@ -1,0 +1,6 @@
+// expect-error: E0502 @ 5:21
+// [own.move.3] a field cannot be taken out of `in this`
+struct Box<T> {
+    T Item;
+    T Get() => this.Item;
+}

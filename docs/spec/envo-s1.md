@@ -158,7 +158,11 @@ The Envo-Core built-ins (`envo-core.md` §6), plus:
 ## 8. The S1 prelude
 
 Every S1 program is compiled with the prelude, which is S1 source shipped with `envoc1`
-(`bootstrap/stage1/prelude/`) and imported implicitly ([item.use.1]). It contains only:
+(`bootstrap/stage1/prelude/`) and imported implicitly ([item.use.1]). A program's own item
+of the same name hides a prelude item, so every Envo-Core program keeps its meaning
+([s1.subset.2]). `Copy` is an automatic interface built into the compiler: a bound
+`where T : Copy` lets a generic body copy `T` values, and implementing it by hand is
+E0336. The prelude contains only:
 
 | Item | Members (minimum) |
 |---|---|

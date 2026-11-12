@@ -1,0 +1,4 @@
+// expect-error: E0336 @ 4:1
+// [type.copy.1] `Copy` is automatic and is not implemented by hand
+struct P { i64 X; }
+impl Copy for P { }

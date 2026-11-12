@@ -1,0 +1,6 @@
+// expect-error: E0507 @ 5:9
+// [fn.cap.2] a function-typed parameter cannot be stored
+struct Holder { fn() F; }
+void Store(ref Holder h, fn() f) {
+    h.F = f;
+}

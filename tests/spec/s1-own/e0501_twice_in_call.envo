@@ -1,0 +1,6 @@
+// expect-error: E0501 @ 6:8
+// [own.move.2] an argument moved earlier in the same call cannot be used
+void Hello() => print("hello");
+void Two(fn() a, fn() b) { }
+fn() f = Hello;
+Two(f, f);

@@ -260,7 +260,7 @@ function Invoke-Test {
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc1: error: unknown command 'frobnicate'")) { Pass 'envoc1 unknown command' } else { Bad 'envoc1 unknown command' "exit $($r.Code), stderr: $($r.Err)" }
 
     # The runtime embedded in envoc1 must be generated from the current runtime sources.
-    $r = Invoke-Tool $envoc1 @('embed', 'runtime/common.envo', 'runtime/linux.envo', 'runtime/windows.envo') $Stage1
+    $r = Invoke-Tool $envoc1 @('embed', 'runtime/common.envo', 'runtime/linux.envo', 'runtime/windows.envo', 'prelude/prelude.envo') $Stage1
     $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Stage1 'runtime\embedded.envo'), $Utf8))
     if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc1 embedded runtime' }
     else { Bad 'envoc1 embedded runtime' 'bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)' }
@@ -307,7 +307,8 @@ function Invoke-Test {
         @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
         @{ Dir = 'core-types';  Command = 'check'; Modes = @('--core') },
         @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') },
-        @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') }
+        @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') },
+        @{ Dir = 's1-own';      Command = 'check'; Modes = @('s1') }
     )
     foreach ($suite in $stage1Spec) {
       foreach ($mode in $suite.Modes) {

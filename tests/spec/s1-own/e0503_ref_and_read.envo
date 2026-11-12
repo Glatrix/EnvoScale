@@ -1,0 +1,5 @@
+// expect-error: E0503 @ 5:12
+// [own.borrow.1] a place borrowed `ref` cannot be read in the same call
+void Add(ref i64 x, i64 y) { x += y; }
+i64 n = 1;
+Add(ref n, n);

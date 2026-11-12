@@ -1,0 +1,6 @@
+// expect-error: E0502 @ 6:22
+// [fn.cap.1] a lambda cannot move out of what it captured (Stage 1: no `once fn` inference yet)
+void Hello() => print("hello");
+void Run(fn() f) { f(); }
+fn() f = Hello;
+Run(() => { fn() g = f; });

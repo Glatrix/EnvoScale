@@ -19,6 +19,9 @@ check/stmt.envo
 check/expr.envo
 check/generic.envo
 check/closure.envo
+check/own.envo
+check/move.envo
+check/borrow.envo
 check/dump.envo
 eir/ir.envo
 eir/read.envo
@@ -32,4 +35,5 @@ lower/lower.envo
 lower/stmt.envo
 lower/expr.envo
 lower/closure.envo
+lower/drop.envo
 driver.envo

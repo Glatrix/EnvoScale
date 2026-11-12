@@ -1,0 +1,3 @@
+// expect-error: E0502 @ 3:23
+// [own.move.3] a value cannot be taken out of a `ref` borrow
+T Take<T>(ref T x) => x;

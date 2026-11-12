@@ -31,7 +31,7 @@ u32 LowerExpr(*Lower l, u32 n) {
         if (k == NK_ALIGNOF) size = align;
         return LConst(l, ET_U64, size);
     }
-    if (k == NK_THIS) return LoadPlace(l, t, LowerPlace(l, n));
+    if (k == NK_THIS) return LowerLocalUse(l, n, t);
     if (k == NK_LAMBDA) return LowerLambda(l, n);
     if (k == NK_NAME) {
         Sym sym = SymGet(c, NSym(c, n));
@@ -40,7 +40,7 @@ u32 LowerExpr(*Lower l, u32 n) {
             if (TyKind(c, sym.Type) == TYK_STR) return StrTemp(l, StringValue(l, CNode(c, sym.Node).B));
             return LConst(l, LType(l, sym.Type), WrapValue(c, sym.Value, IntReprType(c, sym.Type)));
         }
-        return LoadPlace(l, t, LowerPlace(l, n));
+        return LowerLocalUse(l, n, t);
     }
     if (k == NK_MEMBER) {
         // Enum.Variant
@@ -70,7 +70,11 @@ u32 LowerExpr(*Lower l, u32 n) {
     }
     if (k == NK_BINARY) return LowerBinary(l, n, node, t);
     if (k == NK_CAST) return LowerCast(l, LNType(l, node.A), t, LowerExpr(l, node.A));
-    if (k == NK_CALL) return LowerCall(l, n, node, t);
+    if (k == NK_CALL) {
+        u32 r = LowerCall(l, n, node, t);
+        TrackTemp(l, n, t, r);
+        return r;
+    }
     // NK_NEW: a zeroed temporary with the given fields
     u32 et = LType(l, t);
     u32 tmp = LSlot(l, et);
@@ -82,7 +86,18 @@ u32 LowerExpr(*Lower l, u32 n) {
         StoreTo(l, FieldType(c, t, field), v, LField(l, et, tmp, FieldIndex(c, t, field)));
         init = CNode(c, init).Next;
     }
+    TrackTemp(l, n, t, tmp);
     return tmp;
+}
+
+// The value of a local or `this`; a use that moves it clears its drop flag.
+u32 LowerLocalUse(*Lower l, u32 n, u32 t) {
+    *Checker c = LC(l);
+    u32 v = LoadPlace(l, t, LowerPlace(l, n));
+    bool moved;
+    unsafe { moved = *VecAt(&c.NMove, n as usize) == 1; }
+    if (moved) SetDropFlag(l, NSym(c, n), false);
+    return v;
 }
 
 u32 StrTypeOf(*Lower l) {
@@ -404,7 +419,7 @@ u32 LowerInstCall(*Lower l, u32 n, Node node, u32 t) {
     u32 env;
     u32 ne;
     unsafe { CallTarget(c, n, l.Env, l.NEnv, &s, &env, &ne); }
-    u32 f = InstAt(c, InstGet(c, s, env, ne, 0, 0)).Func;
+    u32 f = InstFunc(l, InstGet(c, s, env, ne, 0, 0));
     Sym sym = SymGet(c, s);
     Vec args = VecNew(4, 8);
     u32 retTmp = 0;

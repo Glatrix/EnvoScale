@@ -1,0 +1,149 @@
+// Drops and moves ([own.move.2], [own.drop.1], [s1.own.2]): `Drop` runs when the owner's
+// scope ends, newest first; a moved value is dropped by its new owner instead, also when
+// the move happens on one path only; reassignment drops the old value; a temporary drops
+// at the end of its statement; fields drop after their struct, in declaration order;
+// `break`, `continue` and `return` drop what they leave.
+// expect: scope: drop b
+// expect: drop a
+// expect: moved: in Take: drop m
+// expect: moved: end
+// expect: maybe: in Take: drop q
+// expect: maybe: end
+// expect: drop p
+// expect: maybe: in Take: drop p
+// expect: maybe: end
+// expect: drop q
+// expect: assign: drop old
+// expect: assign: end
+// expect: drop new
+// expect: temp: drop t
+// expect: temp: end
+// expect: fields: drop pair
+// expect: drop left
+// expect: drop right
+// expect: loop: drop i0
+// expect: drop i0
+// expect: drop i1
+// expect: drop i0
+// expect: drop i2
+// expect: return: drop r1
+// expect: got r0
+// expect: generic: drop g
+// expect: in: in Take: drop k
+// expect: end of main
+// expect: drop r0
+// expect: drop last
+// expect: drop again
+
+struct Res {
+    str Name;
+    static Res Of(str name) => new Res { Name = name };
+}
+
+impl IDrop for Res {
+    void Drop(ref this) {
+        write(1, "drop ");
+        print(this.Name);
+    }
+}
+
+struct Pair {
+    Res Left;
+    Res Right;
+}
+
+impl IDrop for Pair {
+    void Drop(ref this) { print("drop pair"); }
+}
+
+struct Holder<T> { T Item; }
+
+void Take(Res r) { write(1, "in Take: "); }
+
+str Peek(in Res r) => r.Name;
+
+Res Pick(bool first) {
+    Res a = Res.Of("r0");
+    Res b = Res.Of("r1");
+    if (first) return a;
+    return b;
+}
+
+void Scope() {
+    write(1, "scope: ");
+    Res a = Res.Of("a");
+    Res b = Res.Of("b");
+}
+
+void Moved() {
+    write(1, "moved: ");
+    Res m = Res.Of("m");
+    Take(m);
+    print("moved: end");
+}
+
+void Maybe(bool move) {
+    write(1, "maybe: ");
+    Res p = Res.Of("p");
+    Res q = Res.Of("q");
+    if (move) Take(p);
+    if (!move) Take(q);
+    print("maybe: end");
+}
+
+void Assign() {
+    write(1, "assign: ");
+    Res x = Res.Of("old");
+    x = Res.Of("new");
+    print("assign: end");
+}
+
+void Temp() {
+    write(1, "temp: ");
+    str name = Peek(Res.Of("t"));
+    print("temp: end");
+}
+
+void Fields() {
+    write(1, "fields: ");
+    Pair p = new Pair { Left = Res.Of("left"), Right = Res.Of("right") };
+}
+
+void Loop() {
+    write(1, "loop: ");
+    for (i32 i = 0; i < 4; i++) {
+        Res r = Res.Of("i0");
+        if (i == 1) r = Res.Of("i1");
+        if (i == 2) {
+            r = Res.Of("i2");
+            break;
+        }
+        if (i == 0) continue;
+    }
+}
+
+void Generic() {
+    write(1, "generic: ");
+    Holder<Res> h = new Holder<Res> { Item = Res.Of("g") };
+}
+
+Scope();
+Moved();
+Maybe(false);
+Maybe(true);
+Assign();
+Temp();
+Fields();
+Loop();
+write(1, "return: ");
+Res got = Pick(true);
+write(1, "got ");
+print(got.Name);
+Res last = Res.Of("last");
+Generic();
+write(1, "in: ");
+Res k = Res.Of("k");
+Peek(k);
+Take(k);
+print("end of main");
+got = Res.Of("again");

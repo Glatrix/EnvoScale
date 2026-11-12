@@ -42,6 +42,9 @@ Stage 0.
 | `check/expr.envo` | expressions, literals, constant evaluation; calls, method calls, inference at a call |
 | `check/generic.envo` | Envo-S1 generics: instances, substitution, inference, method tables, interfaces and impls, bounds, instantiation |
 | `check/closure.envo` | Envo-S1 function types, lambdas and their captures, calls through function values |
+| `check/own.envo` | `Copy`, drops, the S1 prelude's file |
+| `check/move.envo` | the move checker: use after move (E0501), moves out of borrows (E0502) |
+| `check/borrow.envo` | borrows held by a call (E0503, E0504), escaping closures and `from` clauses (E0507, E0508) |
 | `check/dump.envo` | the typed-tree dump of `check` |
 | `eir/ir.envo` | EIR v1 in memory: types and layout, module records, opcode table, intrinsics |
 | `eir/read.envo` | the EIR text reader |
@@ -57,6 +60,8 @@ Stage 0.
 | `lower/stmt.envo` | lowering statements, loops and `match` |
 | `lower/expr.envo` | lowering expressions, places, checks, casts and calls |
 | `lower/closure.envo` | function values: lambdas and their environments, thunks for named functions, calls through `call.ind` |
+| `lower/drop.envo` | drop flags, drops at scope exits and of temporaries |
+| `prelude/prelude.envo` | the Envo-S1 prelude, embedded in `envoc1` with the runtime |
 | `support/mem.envo` | raw memory: copy, zero, compare, loads and stores |
 | `support/text.envo` | `str` helpers: equality, prefixes, sub-strings, FNV-1a hashing, number parsing |
 | `support/buf.envo` | `Buf`, a growable byte buffer with number formatting |

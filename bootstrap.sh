@@ -253,7 +253,7 @@ do_test() {
     if [ "$rc" -eq 2 ] && grep -q "^envoc1: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc1 unknown command' "exit $rc"; fi
 
     # The runtime embedded in envoc1 must be generated from the current runtime sources.
-    run "$STAGE1" embed runtime/common.envo runtime/linux.envo runtime/windows.envo
+    run "$STAGE1" embed runtime/common.envo runtime/linux.envo runtime/windows.envo prelude/prelude.envo
     tr -d '\r' < "$STAGE1/runtime/embedded.envo" > "$TMP/expected"
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
@@ -295,7 +295,7 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core core-types:check:core s1-syntax:parse:s1 s1-types:check:s1; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core core-types:check:core s1-syntax:parse:s1 s1-types:check:s1 s1-own:check:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue

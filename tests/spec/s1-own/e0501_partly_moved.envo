@@ -1,0 +1,7 @@
+// expect-error: E0501 @ 7:10
+// [own.move.2] a value with a moved field cannot be used whole
+void Hello() => print("hello");
+struct Pair { fn() A; fn() B; }
+var p = new Pair { A = Hello, B = Hello };
+fn() a = p.A;
+Pair q = p;

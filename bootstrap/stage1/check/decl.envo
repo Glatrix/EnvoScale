@@ -66,6 +66,7 @@ void CheckProgram(*Checker c, u32 program) {
         }
         n = CNode(c, n).Next;
     }
+    if (!CCore(c)) MoveCheckMain(c, first);
     CollectInstances(c);
 }
 
@@ -80,9 +81,19 @@ void MethodBodies(*Checker c, u32 m) {
 // Pass 1 for one item: its symbol (E0201 if the name is taken).
 void DefineItem(*Checker c, u32 n, u8 kind) {
     u32 tok = NTok(c, n);
-    if (GFind(c, TokText(c, tok)) != 0) CFailName(c, tok, E_DUPLICATE, "`", tok, "` is already defined");
+    u32 prev = GFind(c, TokText(c, tok));
+    bool prelude = IsPreludeNode(c, n);
+    // the prelude comes last, so a program's own item of the same name hides it
+    bool hidden = prev != 0 && prelude;
+    if (prev != 0 && !prelude && SymGet(c, prev).Flags & SF_PRELUDE == 0) CFailName(c, tok, E_DUPLICATE, "`", tok, "` is already defined");
     u32 s = SymNew(c, kind, n);
     SetNSym(c, n, s);
+    if (prelude) {
+        unsafe {
+            SymPtr(c, s).Flags = SF_PRELUDE;
+            if (kind == SK_IFACE && StrEq(SymGet(c, s).Name, "IDrop")) c.DropSym = s;
+        }
+    }
     u32 tps = CNode(c, n).E;
     if (kind == SK_ENUM && tps != 0) CNotYet(c, "generic enums", NTok(c, tps));
     if (kind == SK_STRUCT || kind == SK_ENUM) {
@@ -96,7 +107,7 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
             t = SelfInstance(c, TYK_STRUCT, s, tps, count);
             unsafe {
                 SymPtr(c, s).NEnv = count;
-                SymPtr(c, s).Flags = SF_GENERIC;
+                SymPtr(c, s).Flags = SymGet(c, s).Flags | SF_GENERIC;
             }
         }
         unsafe { SymPtr(c, s).Type = t; }
@@ -105,10 +116,10 @@ void DefineItem(*Checker c, u32 n, u8 kind) {
         u32 count = DeclareTParams(c, tps, 0);
         unsafe {
             SymPtr(c, s).NEnv = count;
-            SymPtr(c, s).Flags = SF_GENERIC;
+            SymPtr(c, s).Flags = SymGet(c, s).Flags | SF_GENERIC;
         }
     }
-    GAdd(c, s);
+    if (!hidden) GAdd(c, s);
     if (kind == SK_IFACE) DeclareIfaceItem(c, s);
 }
 
@@ -513,6 +524,7 @@ void FnBody(*Checker c, u32 s) {
         u32 recv = 0;
         if (p != 0 && IsReceiver(c, p)) {
             recv = LocalPush(c, p, sym.OwnerType);
+            SetNSym(c, p, recv);
             p = CNode(c, p).Next;
         } else {
             recv = LocalPushNamed(c, "this", sym.OwnerType);
@@ -525,6 +537,7 @@ void FnBody(*Checker c, u32 s) {
     }
     while (p != 0) {
         u32 local = LocalPush(c, p, NType(c, p));
+        SetNSym(c, p, local);
         u32 mode = CNode(c, p).Flags;
         unsafe {
             if (mode & NF_IN != 0) SymPtr(c, local).Flags = SF_BYREF | SF_READONLY;
@@ -544,6 +557,10 @@ void FnBody(*Checker c, u32 s) {
         terminates = true;
     }
     if (sym.Type != T_VOID && !terminates) CError(c, E_MISSING_RETURN, fn.Tok);
+    if (!CCore(c)) {
+        MoveCheckFn(c, s);
+        OriginCheckFn(c, s);
+    }
     unsafe {
         c.LSP = saved;
         c.LBase = 0;

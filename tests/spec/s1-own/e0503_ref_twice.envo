@@ -1,0 +1,5 @@
+// expect-error: E0503 @ 5:17
+// [own.borrow.1] one exclusive borrow at a time
+void Swap<T>(ref T a, ref T b) where T : Copy { T t = a; a = b; b = t; }
+i64 n = 1;
+Swap(ref n, ref n);

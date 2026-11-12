@@ -1,0 +1,25 @@
+// The Envo-S1 prelude (docs/spec/envo-s1.md section 8). envoc1 compiles it with every
+// Envo-S1 program and imports it implicitly; a program's own items hide prelude items of
+// the same name, so every Envo-Core program means what it did ([s1.subset.2]). `Copy` is
+// built into the checker: it is implemented automatically ([type.copy.1]).
+//
+// M2.10 brings the interfaces ownership needs; M2.12 adds Option, Result, List and string.
+
+// Runs when a value is dropped: at the end of its owner's scope, unless it was moved
+// ([own.drop.1], [s1.own.2]).
+interface IDrop {
+    void Drop(ref this);
+}
+
+interface IEquatable<T> {
+    bool Equals(in T other);
+}
+
+interface IHash {
+    u64 Hash();
+}
+
+// An explicit copy of a value that is not `Copy` ([own.move.3]).
+interface IClone<T> {
+    T Clone();
+}

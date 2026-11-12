@@ -1,0 +1,5 @@
+// expect-error: E0334 @ 5:10
+// [type.copy.1] function values are not `Copy`
+void Hello() => print("hello");
+T Same<T>(T x) where T : Copy => x;
+fn() f = Same<fn()>(Hello);

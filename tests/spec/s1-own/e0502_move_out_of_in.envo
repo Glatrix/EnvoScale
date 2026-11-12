@@ -1,0 +1,5 @@
+// expect-error: E0502 @ 4:11
+// [own.move.3] a value cannot be taken out of an `in` borrow
+void Keep<T>(in T x) {
+    T y = x;
+}

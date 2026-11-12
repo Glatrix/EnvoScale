@@ -1,0 +1,6 @@
+// expect-error: E0501 @ 6:34
+// [own.move.2] a value moved in a loop body is gone on the next iteration
+void Hello() => print("hello");
+void Take(fn() f) { f(); }
+fn() f = Hello;
+for (i32 i = 0; i < 2; i++) Take(f);

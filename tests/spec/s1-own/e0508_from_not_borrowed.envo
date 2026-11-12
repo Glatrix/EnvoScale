@@ -1,0 +1,3 @@
+// expect-error: E0508 @ 3:29
+// [life.from.2] `from` names a parameter that holds a borrow
+str Name(i64 n, str s) from n => s;

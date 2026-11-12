@@ -1,0 +1,6 @@
+// expect-error: E0501 @ 5:12
+// [own.move.2] a value of a type parameter is moved unless `Copy`
+T Dup<T>(T x) {
+    T a = x;
+    return x;
+}

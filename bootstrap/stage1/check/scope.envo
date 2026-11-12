@@ -8,6 +8,7 @@ struct Checker {
     Vec NValue;         // u64 per node: constant value (expressions, enum variants), field offset
     Vec NSym;           // u32 per node: the symbol a name resolved to; an item's symbol
     Vec NMatched;       // u8 per node: a match pattern whose value was recorded
+    Vec NMove;          // u8 per node: 1 where a use moves a whole local (check/move.envo)
     Vec Types;          // Type
     Vec Syms;           // Sym
     Map Global;         // program scope: name -> symbol
@@ -42,6 +43,10 @@ struct Checker {
     Vec LamStack;       // u32 triples for the lambdas being checked: node, locals start, first change
     Vec CapTmp;         // u32 pairs (lambda, local) found so far
     Vec Captures;       // u32 locals, each lambda's contiguous (its NValue: first | count << 32)
+    // ownership (check/own.envo)
+    u32 PreludeFile;    // the source file of the S1 prelude (0xFFFFFFFF: none)
+    u32 CopySym;        // the built-in auto-interface `Copy`
+    u32 DropSym;        // the prelude's `IDrop`
 }
 
 // ------------------------------------------------------------------ side tables
@@ -313,7 +318,7 @@ void DeclareLocal(*Checker c, u32 n, u32 t) {
             CFail(c, tok, E_REDECLARED, BufView(&b));
         }
     }
-    LocalPush(c, n, t);
+    SetNSym(c, n, LocalPush(c, n, t));
 }
 
 // ------------------------------------------------------------------ diagnostics
@@ -480,6 +485,18 @@ void InitScope(*Checker c) {
     AddBuiltin(c, "arg", 9, T_STR, 1, T_USIZE, 0, 0);
     AddBuiltin(c, "panic", B_PANIC, T_VOID, 1, T_STR, 0, 0);
     AddBuiltin(c, "str_from", B_STR_FROM, T_STR, 2, T_PTR_U8, T_USIZE, 0);
+    if (!CCore(c)) {
+        // `Copy`, the automatic interface ([type.copy.1]); a program's own `Copy` hides it
+        u32 s = SymNew(c, SK_IFACE, 0);
+        unsafe {
+            *Sym sym = SymPtr(c, s);
+            sym.Name = "Copy";
+            sym.Flags = SF_PRELUDE;
+            sym.Type = TypeNamed(c, TYK_IFACE, s);
+            c.CopySym = s;
+        }
+        GAdd(c, s);
+    }
     bool runtime;
     unsafe { runtime = c.Runtime; }
     if (runtime) {

@@ -27,7 +27,8 @@ void W(i64 v) { write(1, Num(v)); write(1, " "); }
 struct Box<T> {
     T Item;
     static Box<T> Of(T x) => new Box<T> { Item = x };
-    T Get() => this.Item;
+    // reading a field through `in this` copies it, so it needs `Copy`
+    T Get() where T : Copy => this.Item;
     void Set(ref this, T x) { this.Item = x; }
 }
 
@@ -35,7 +36,8 @@ struct Pair<A, B> {
     A First;
     B Second;
     static Pair<A, B> Make(A a, B b) => new Pair<A, B> { First = a, Second = b };
-    Pair<B, A> Swap() => Pair<B, A>.Make(this.Second, this.First);
+    // copying both fields out of `in this` needs both to be `Copy`
+    Pair<B, A> Swap() where A : Copy, B : Copy => Pair<B, A>.Make(this.Second, this.First);
 }
 
 // a linked stack of T, through raw pointers

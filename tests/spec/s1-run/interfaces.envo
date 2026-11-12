@@ -42,7 +42,8 @@ T Max<T>(T a, T b) where T : IComparable<T> {
     return b;
 }
 
-T Min<T>(T a, T b) where T : IComparable<T> {
+// Max takes its arguments, so using them again needs `Copy` ([own.move.2])
+T Min<T>(T a, T b) where T : IComparable<T>, Copy {
     if (Max(a, b).Compare(a) == 0) return b;
     return a;
 }
@@ -118,7 +119,7 @@ void Say<T>(T x, bool last) where T : INamed {
 // a bound on a generic struct's method
 struct Cell<T> {
     T Value;
-    T Bigger(T other) where T : IComparable<T> => Max(this.Value, other);
+    T Bigger(T other) where T : IComparable<T>, Copy => Max(this.Value, other);
 }
 
 W(Max<i64>(4, 9));

@@ -31,6 +31,10 @@ struct Lower {
     Vec PendingLams;    // u32 quintuples: lambda node, EIR function, env struct, Env, NEnv
     Vec PendingThunks;  // u32 pairs: function symbol, thunk
     Map Thunks;         // function symbol -> thunk
+    // drops (lower/drop.envo)
+    Vec DropFlags;      // u32 per checker symbol: a local's drop flag slot
+    Vec Drops;          // u32: the locals with a drop flag, in scope order
+    Vec Temps;          // u32 pairs (type, address): the statement's temporaries to drop
 }
 
 // The type of checked node n in the function being lowered (its type arguments
@@ -327,6 +331,9 @@ void LowerProgram(*Lower l, u32 program) {
         l.PendingLams = VecNew(4, 20);
         l.PendingThunks = VecNew(4, 8);
         l.Thunks = MapNew(16);
+        l.DropFlags = VecNew(4, 64);
+        l.Drops = VecNew(4, 16);
+        l.Temps = VecNew(4, 8);
     }
     // declare every function and static first, so calls can refer forward; generic
     // functions and methods are declared once per instance
@@ -347,11 +354,18 @@ void LowerProgram(*Lower l, u32 program) {
         if (NKind(c, n) == NK_FN && !NeedsInst(c, NSym(c, n))) LowerFunc(l, NSym(c, n));
         n = CNode(c, n).Next;
     }
-    for (u32 i = 0; i < ninst; i++) {
-        Inst inst = InstAt(c, i);
-        LowerFuncEnv(l, inst.Sym, inst.Func, inst.Env, inst.NEnv);
-    }
     LowerMain(l, mainFn, CNode(c, program).A);
+    // instances, including those lowering itself needed (drops)
+    u32 i = 0;
+    while (true) {
+        unsafe {
+            if (i >= VecLen(&c.Insts) as u32) break;
+        }
+        u32 f = InstFunc(l, i);
+        Inst inst = InstAt(c, i);
+        LowerFuncEnv(l, inst.Sym, f, inst.Env, inst.NEnv);
+        i++;
+    }
     DrainThunks(l);
 }
 
@@ -382,7 +396,11 @@ void DeclareInst(*Lower l, u32 i) {
         ret = ET_VOID;
     }
     u32 f = AddFunc(l, name, count, ret);
-    unsafe { (VecAt(&c.Insts, i as usize) as *Inst).Func = f; }
+    unsafe {
+        *Inst ip = VecAt(&c.Insts, i as usize) as *Inst;
+        ip.Func = f;
+        ip.Declared = true;
+    }
 }
 
 // A new EIR function with nparams parameters (their values are added by the caller).
@@ -635,6 +653,7 @@ void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
     u32 first = EFuncGet(m, f).FirstValue;
     u32 k = 0;
     u32 ret = LSubst(l, sym.Type);
+    unsafe { VecClear(&l.Drops); }
     unsafe {
         l.Top = false;
         l.RetType = ret;
@@ -651,6 +670,7 @@ void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
     if (sym.Flags & SF_METHOD != 0 && sym.Flags & SF_STATIC == 0) {
         bool byref = sym.Flags & (SF_RECV_IN | SF_RECV_REF) != 0;
         unsafe { LowerParam(l, sym.Recv, LSubst(l, sym.OwnerType), byref, first + k, &stores); }
+        if (!byref) TrackDrop(l, sym.Recv, LSubst(l, sym.OwnerType), true, fn.Tok);
         k++;
         if (p != 0 && IsReceiver(c, p)) p = CNode(c, p).Next;
     }
@@ -658,6 +678,8 @@ void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
     while (p != 0) {
         bool byref = CNode(c, p).Flags & (NF_IN | NF_REF) != 0;
         unsafe { LowerParam(l, ParamSym(l, p), LNType(l, p), byref, first + k, &stores); }
+        // a parameter taken by value is the callee's to drop
+        if (!byref) TrackDrop(l, ParamSym(l, p), LNType(l, p), true, NTok(c, p));
         k++;
         p = CNode(c, p).Next;
     }
@@ -665,9 +687,11 @@ void LowerFuncEnv(*Lower l, u32 s, u32 f, u32 env, u32 n) {
         LowerStmt(l, fn.C);
     } else if (ret == T_VOID) {
         LowerExpr(l, fn.C);
+        DropTemps(l);
     } else {
         LowerReturnValue(l, fn.C);
     }
+    DropDownTo(l, 0, false);
     EndFunc(l, stores);
     unsafe {
         l.Env = 0;
@@ -712,11 +736,13 @@ void LowerMain(*Lower l, u32 f, u32 items) {
         l.RetType = T_I32;
         l.RetSlot = 0;
     }
+    unsafe { VecClear(&l.Drops); }
     u32 n = items;
     while (n != 0) {
         if (!NodeIsItem(NKind(c, n))) LowerStmt(l, n);
         n = CNode(c, n).Next;
     }
+    DropDownTo(l, 0, false);
     EndFunc(l, VecNew(4, 1));
     DrainLambdas(l);
 }

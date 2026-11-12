@@ -1,0 +1,6 @@
+// expect-error: E0507 @ 5:12
+// [fn.cap.2] a lambda holding a borrowed closure cannot be returned either
+fn() Wrap(fn() f) {
+    fn() g = () => f();
+    return g;
+}

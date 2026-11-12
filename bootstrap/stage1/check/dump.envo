@@ -60,6 +60,10 @@ void CheckDump(*Checker c, u32 first, usize depth) {
     u32 n = first;
     while (n != 0) {
         Node node = CNode(c, n);
+        if (IsPreludeNode(c, n)) {
+            n = node.Next;      // the prelude is not part of the program's tree
+            continue;
+        }
         Token t = CTok(c, node.Tok);
         str text = SrcGet(t.File).Text;
         BufRepeat(o, ' ', depth * 2);

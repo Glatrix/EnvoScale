@@ -1,0 +1,6 @@
+// expect-error: E0502 @ 6:13
+// [own.move.3] an element cannot be moved out of an array
+void Hello() => print("hello");
+struct Job { fn() Run; }
+Job[2] jobs;
+Job j = jobs[0];

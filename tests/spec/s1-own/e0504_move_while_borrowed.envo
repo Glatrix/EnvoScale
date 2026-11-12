@@ -1,0 +1,7 @@
+// expect-error: E0504 @ 7:8
+// [own.borrow.3] a value cannot be moved while borrowed
+void Hello() => print("hello");
+struct Job { fn() Run; }
+void Use(in Job a, Job b) { }
+var j = new Job { Run = Hello };
+Use(j, j);

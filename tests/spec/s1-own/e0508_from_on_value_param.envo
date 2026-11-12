@@ -1,0 +1,3 @@
+// expect-error: E0508 @ 3:22
+// [life.from.4] `from` on a parameter needs a `ref` parameter
+void Keep(str a from b, str b) { }

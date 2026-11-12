@@ -120,10 +120,6 @@ u32 LowerLambda(*Lower l, u32 n) {
     return FnValue(l, FuncAddr(l, f), envp);
 }
 
-u32 CaptureAt(*Checker c, u32 i) {
-    unsafe { return MemLoadU32(VecAt(&c.Captures, i as usize)); }
-}
-
 // Lowers the functions of the lambdas met so far (and of lambdas inside them).
 void DrainLambdas(*Lower l) {
     usize i = 0;
@@ -163,6 +159,7 @@ void LowerLambdaFunc(*Lower l, u32 n, u32 f, u32 envT, u32 env, u32 ne) {
     Type fty = TypeGet(c, LNType(l, n));
     u32 k = 0;
     unsafe {
+        VecClear(&l.Drops);
         l.Top = false;
         l.RetType = fty.Elem;
         l.RetSlot = 0;
@@ -189,6 +186,7 @@ void LowerLambdaFunc(*Lower l, u32 n, u32 f, u32 envT, u32 env, u32 ne) {
     for (u32 i = 0; i < fty.NArgs; i++) {
         bool byref = EnvGet(c, fty.Sym, i) != 0;
         unsafe { LowerParam(l, ParamSym(l, p), EnvGet(c, fty.Args, i), byref, first + k, &stores); }
+        if (!byref) TrackDrop(l, ParamSym(l, p), EnvGet(c, fty.Args, i), true, NTok(c, p));
         k++;
         p = CNode(c, p).Next;
     }
@@ -196,9 +194,11 @@ void LowerLambdaFunc(*Lower l, u32 n, u32 f, u32 envT, u32 env, u32 ne) {
         LowerStmt(l, lam.B);
     } else if (fty.Elem == T_VOID) {
         LowerExpr(l, lam.B);
+        DropTemps(l);
     } else {
         LowerReturnValue(l, lam.B);
     }
+    DropDownTo(l, 0, false);
     EndFunc(l, stores);
     unsafe {
         l.Env = 0;

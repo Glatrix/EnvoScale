@@ -1,0 +1,3 @@
+// expect-error: E0507 @ 3:22
+// [fn.cap.2] a function-typed parameter may borrow its caller's variables; it cannot be returned
+fn() Keep(fn() f) => f;

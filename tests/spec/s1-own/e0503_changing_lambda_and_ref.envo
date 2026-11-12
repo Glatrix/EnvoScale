@@ -1,0 +1,5 @@
+// expect-error: E0503 @ 5:21
+// [fn.cap.2] a lambda that changes a capture borrows it exclusively for the call
+void Twice(ref i64 x, mut fn() f) { f(); f(); }
+i64 total = 0;
+Twice(ref total, () => { total++; });

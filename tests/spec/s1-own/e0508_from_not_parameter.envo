@@ -1,0 +1,3 @@
+// expect-error: E0508 @ 3:23
+// [life.from.2] `from` names a parameter or `this`
+str First(str a) from z => a;

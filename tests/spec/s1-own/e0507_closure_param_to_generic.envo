@@ -1,0 +1,6 @@
+// expect-error: E0507 @ 5:16
+// [fn.cap.2] a function-typed parameter goes only to function-typed parameters
+T Id<T>(T x) => x;
+void G(fn() f) {
+    var k = Id(f);
+}

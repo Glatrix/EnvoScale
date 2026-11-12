@@ -89,6 +89,7 @@ const u32 SF_RECV_REF = 8;      // `ref this`
 const u32 SF_GENERIC = 16;      // has a generic environment (NEnv > 0)
 const u32 SF_BYREF = 32;        // a local reached through a pointer (`in`/`ref` parameter, receiver)
 const u32 SF_READONLY = 64;     // an `in` local
+const u32 SF_PRELUDE = 128;     // a prelude item: a program's own item of the same name hides it
 
 // Built-in ids (envo-core.md section 6), in Stage 0's order from 1.
 const u32 B_EXIT = 7;
@@ -146,6 +147,12 @@ const u32 E_BAD_THIS = 341;
 const u32 E_ARG_MODE = 342;
 const u32 E_STATIC_CALL = 343;
 const u32 E_INST_TOO_DEEP = 350;
+const u32 E_USE_AFTER_MOVE = 501;
+const u32 E_MOVE_OUT_OF_BORROW = 502;
+const u32 E_BORROW_CONFLICT = 503;
+const u32 E_MOVED_WHILE_BORROWED = 504;
+const u32 E_BORROW_NOT_DECLARED = 507;
+const u32 E_BAD_FROM = 508;
 const u32 E_NOT_YET = 951;
 
 // The fixed message of an error that has no arguments.

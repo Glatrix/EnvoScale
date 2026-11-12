@@ -1,0 +1,3 @@
+// expect-error: E0507 @ 3:34
+// [life.from.3] a function with `from` returns only borrows of what it names
+str Pick(str a, str b) from a => b;

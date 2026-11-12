@@ -1,0 +1,7 @@
+// expect-error: E0501 @ 7:1
+// [own.move.2] a value moved on one path may not be used after the paths meet
+void Hello() => print("hello");
+fn() f = Hello;
+fn() g = Hello;
+if (argc() > 5) g = f;
+f();

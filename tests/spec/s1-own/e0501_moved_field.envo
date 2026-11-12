@@ -1,0 +1,7 @@
+// expect-error: E0501 @ 7:3
+// [own.move.2] a moved field cannot be used
+void Hello() => print("hello");
+struct Pair { fn() A; fn() B; }
+var p = new Pair { A = Hello, B = Hello };
+fn() a = p.A;
+p.A();

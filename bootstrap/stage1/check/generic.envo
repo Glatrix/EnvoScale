@@ -22,6 +22,7 @@ struct Inst {
     u32 NEnv;
     u32 Depth;      // instantiation depth (E0350 past MAX_INST_DEPTH)
     u32 Func;       // its EIR function (set by lowering)
+    bool Declared;  // Func is set
 }
 
 const u32 MAX_INST_DEPTH = 64;
@@ -391,6 +392,9 @@ u32 ResolveIface(*Checker c, u32 n) {
 }
 
 void AddImpl(*Checker c, u32 target, u32 it, u32 node, u32 methods, u32 nparams) {
+    u32 copy;
+    unsafe { copy = c.CopySym; }
+    if (copy != 0 && TypeGet(c, it).Sym == copy) CFail(c, NTok(c, node), E_NOT_AN_IFACE, "`Copy` is implemented automatically; it cannot be implemented by hand");
     if (FindImpl(c, target, it) != 0) {
         Buf b = BufNew(64);
         unsafe {
@@ -605,6 +609,9 @@ u32 FindImpl(*Checker c, u32 t, u32 it) {
 // Does type t implement interface type it here? A type parameter does through the
 // current function's bounds ([type.gen.2]); other types through an implementation.
 bool Implements(*Checker c, u32 t, u32 it) {
+    u32 copy;
+    unsafe { copy = c.CopySym; }
+    if (TyKind(c, t) != TYK_PARAM && copy != 0 && TypeGet(c, it).Sym == copy) return IsCopy(c, t);
     if (TyKind(c, t) != TYK_PARAM) return FindImpl(c, t, it) != 0;
     u32 first;
     u32 n;
@@ -743,6 +750,7 @@ u32 InstGet(*Checker c, u32 s, u32 env, u32 n, u32 depth, u32 blame) {
         inst.NEnv = n;
         inst.Depth = depth;
         inst.Func = 0;
+        inst.Declared = false;
         MapPut(&c.InstMap, BufCopy(&key), idx as u64);
         return idx;
     }

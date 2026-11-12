@@ -90,6 +90,7 @@ bool CheckStmt(*Checker c, u32 n) {
         return true;
     }
     if (k == NK_MATCH) return CheckMatch(c, n);
+    if (k == NK_FOREACH) CNotYet(c, "`foreach`", node.Tok);
     return CheckSimple(c, n);
 }
 

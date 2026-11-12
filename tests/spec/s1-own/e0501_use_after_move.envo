@@ -1,0 +1,6 @@
+// expect-error: E0501 @ 6:1
+// [own.move.2] a moved value cannot be used
+void Hello() => print("hello");
+fn() f = Hello;
+fn() g = f;
+f();

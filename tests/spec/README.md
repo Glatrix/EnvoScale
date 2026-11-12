@@ -17,6 +17,7 @@ Hello World Gallery. Each test is a `.envo` file whose comments say what must ha
 | `core-multi/` | Programs of several files (`envo-core.md` §4, [item.mod.3]) | Yes: one folder per test; `main.envo` is the entry file and holds `// expect:` lines or `// expect-error: E#### @ <file>:L:C` |
 | `s1-syntax/` | Envo-S1 grammar (`envo-s1.md`) | Yes: `expect-error` tests run with `envoc1 parse` (E0101, E0950) |
 | `s1-types/` | Envo-S1 names and types: generics, methods, interfaces, parameter modes (`envo-s1.md` §3–§5) | Yes: `expect-error` tests run with `envoc1 check` (E02xx, E03xx, E0950) |
+| `s1-own/` | Envo-S1 ownership (chapter 5, `envo-s1.md` §6) | Yes: `expect-error` tests run with `envoc1 check` (E0501–E0508) |
 | `s1-run/` | Envo-S1 semantics | Yes: compiled with `envoc1 build` and run, annotated like `core-run/` |
 | `eir/` | EIR text and verifier (`eir.md` §3, §6) | Yes: `.eir` files with `; expect-error: E06xx @ L:C`, run with `envoc1 eir-check` |
 | `hello/` | Hello World Gallery (brief §17) | Line-count limits only (`limits.txt`, checked by `bootstrap.* check`); execution as each milestone lands |

@@ -166,6 +166,46 @@ Until the borrow checker (M2.10), nothing stops a callee from storing a function
 parameter that borrows its caller's variables; M2.10 reports that as E0504
 ([fn.cap.2]).
 
+## Ownership (M2.10)
+
+Chapter 5 for Envo-S1 ([s1.own.*]), in four parts:
+
+- **`Copy` and drops** (`check/own.envo`). A type is `Copy` by [type.copy.1]: primitives,
+  `str`, shared views, raw pointers, fieldless enums, and arrays and structs of `Copy`
+  values that do not implement `IDrop`. Function values are moved. A type parameter is
+  `Copy` only under a `where T : Copy` bound, so a generic body that copies a `T` says so.
+  A type *needs a drop* when it, a field or an element implements the prelude's `IDrop`.
+- **The move checker** (`check/move.envo`) runs over each body after type checking. It
+  follows the structured control flow with a state per tracked place: a local that is not
+  `Copy`, or one first-level field of one (a partial move). Where paths meet, a place moved
+  on one of them is *maybe moved*; a loop body is rechecked from the join of its entry and
+  its back edges until that join is stable. Using a moved place is E0501. Moving out of an
+  `in` or `ref` parameter or receiver, an array element, a temporary's field or a lambda's
+  capture is E0502. Each move of a whole local is recorded for lowering.
+- **Drops** (`lower/drop.envo`). Each local whose type needs a drop gets a drop flag, set
+  when it is initialized and cleared where it is moved, so conditional moves need no
+  analysis at run time. Leaving a scope (the end of a block, `break`, `continue`,
+  `return`, the end of a function or of `__main`) drops the live locals it owns, newest
+  first: the type's `Drop`, then its fields in declaration order ([own.drop.1]). An
+  assignment drops the old value first; a temporary that needs a drop is dropped at the
+  end of its statement. `Drop` methods are instantiated on demand during lowering.
+- **Borrows** (`check/borrow.envo`). Borrows created by a call last for the call: a local
+  passed `ref`, or captured by a lambda argument that changes it, may not be used any
+  other way in that call (E0503), and a local the call borrows may not be moved by it
+  (E0504). A function-typed parameter may hold a lambda that borrows its caller's
+  variables, so it may only be called or passed to a function-typed parameter; returning
+  it, storing it, or passing it to anything else is E0507, found by following which
+  parameters' borrows each value may carry. `from` clauses must name borrowed parameters
+  or `this` (E0508), and a function with one may return only borrows of those (E0507).
+  Without a clause the origins are inferred ([life.infer.2]); an Envo-S1 program exports
+  nothing, so E0506 never applies.
+
+Stage 1 accepts less than chapter 5 allows, never more ([s1.own.3]). Borrows held in
+locals across statements, disjoint field borrows, `once fn` inference (a lambda moving a
+capture is E0502), partial moves out of values that need a drop, and lambdas that take a
+value with a drop (E0951) are Stage 2's. Function values do not free their environments:
+the Stage 1 heap never frees.
+
 ## Executable images
 
 The same layout as Stage 0 (bootstrap.md, "Executable layout"): one read-write-execute

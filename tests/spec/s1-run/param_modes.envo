@@ -25,7 +25,8 @@ str Num(i64 v) {
 }
 void W(i64 v) { write(1, Num(v)); write(1, " "); }
 
-void Swap<T>(ref T a, ref T b) {
+// copying out of a `ref` needs `Copy` ([own.move.3])
+void Swap<T>(ref T a, ref T b) where T : Copy {
     T t = a;
     a = b;
     b = t;
