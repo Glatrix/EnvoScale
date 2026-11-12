@@ -285,11 +285,11 @@ function Invoke-Test {
     $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Stage1 'runtime\embedded.envo'), $Utf8))
     if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc1 embedded runtime' }
     else { Bad 'envoc1 embedded runtime' 'bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)' }
-    # Stage 2 embeds the same prelude (compiler/driver/prelude.envo).
-    $r = Invoke-Tool $envoc1 @('embed', 'bootstrap/stage1/prelude/prelude.envo') $Root
-    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\prelude.envo'), $Utf8))
-    if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc embedded prelude' }
-    else { Bad 'envoc embedded prelude' 'compiler/driver/prelude.envo is stale: regenerate it with envoc1 embed bootstrap/stage1/prelude/prelude.envo (see docs/architecture/stage2.md)' }
+    # Stage 2 embeds the same runtime and prelude (compiler/driver/runtime.envo).
+    $r = Invoke-Tool $envoc1 @('embed', 'bootstrap/stage1/runtime/common.envo', 'bootstrap/stage1/runtime/linux.envo', 'bootstrap/stage1/runtime/windows.envo', 'bootstrap/stage1/prelude/prelude.envo') $Root
+    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\runtime.envo'), $Utf8))
+    if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc embedded runtime' }
+    else { Bad 'envoc embedded runtime' "compiler/driver/runtime.envo is stale: regenerate it with envoc1 embed and Stage 1's runtime and prelude files (see docs/architecture/stage2.md)" }
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     $t42 = Join-Path $tmp 't42.exe'
@@ -484,14 +484,15 @@ function Invoke-Test {
         if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $f.Name }
         else { Bad "stage2 spec/eir/$($f.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
     }
-    Say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens'
+    Say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens; eir on the run programs'
     $sources = @('compiler', 'bootstrap\stage1', 'tests') | ForEach-Object {
         Get-ChildItem -LiteralPath (Join-Path $Root $_) -Filter '*.envo' -Recurse -File
     } | Sort-Object FullName
     foreach ($f in $sources) {
         $cmds = @('lex', 'parse')
         $rel = $f.FullName.Substring($Root.Length + 1)
-        if ($rel -match '^tests\\(spec\\(core|s1)-run|golden)\\') { $cmds = @('lex', 'parse', 'check') }
+        if ($rel -match '^tests\\golden\\') { $cmds = @('lex', 'parse', 'check') }
+        if ($rel -match '^tests\\spec\\(core|s1)-run\\') { $cmds = @('lex', 'parse', 'check', 'eir') }
         foreach ($cmd in $cmds) {
             $r1 = Invoke-Tool $envoc1 @($cmd, $f.Name) $f.DirectoryName
             $r2 = Invoke-Tool $envoc @($cmd, $f.Name) $f.DirectoryName
@@ -499,13 +500,15 @@ function Invoke-Test {
             else { Bad "stage2 $cmd $($f.FullName.Substring($Root.Length + 1))" "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
         }
     }
-    foreach ($unit in @(@{ Dir = 'bootstrap\stage1'; Pre = @('--core', 'check') }, @{ Dir = 'compiler'; Pre = @('check') })) {
+    foreach ($unit in @(@{ Dir = 'bootstrap\stage1'; Pre = @('--core', 'check') }, @{ Dir = 'compiler'; Pre = @('check') },
+                        @{ Dir = 'bootstrap\stage1'; Pre = @('--core', 'eir') }, @{ Dir = 'compiler'; Pre = @('eir') })) {
         $dir = Join-Path $Root $unit.Dir
         $files = @(Get-Content -LiteralPath (Join-Path $dir 'files.txt') | Where-Object { $_.Trim() -ne '' })
         $r1 = Invoke-Tool $envoc1 ($unit.Pre + $files) $dir
         $r2 = Invoke-Tool $envoc ($unit.Pre + $files) $dir
-        if ($r1.Code -eq $r2.Code -and [string]::Equals($r1.Out, $r2.Out) -and [string]::Equals($r1.Err, $r2.Err)) { Pass "stage2 check $($unit.Dir)" }
-        else { Bad "stage2 check $($unit.Dir)" "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
+        $what = "stage2 $($unit.Pre[-1]) $($unit.Dir)"
+        if ($r1.Code -eq $r2.Code -and [string]::Equals($r1.Out, $r2.Out) -and [string]::Equals($r1.Err, $r2.Err)) { Pass $what }
+        else { Bad $what "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
     }
 
     Say ''

@@ -1,5 +1,5 @@
 driver/main.envo
-driver/prelude.envo
+driver/runtime.envo
 util/text.envo
 util/textref.envo
 util/map.envo
@@ -30,3 +30,10 @@ eir/ir.envo
 eir/print.envo
 eir/verify.envo
 eir/read.envo
+eir/lower.envo
+eir/lower_stmt.envo
+eir/lower_expr.envo
+eir/lower_drop.envo
+eir/lower_closure.envo
+eir/lower_enums.envo
+eir/lower_views.envo

@@ -285,12 +285,12 @@ do_test() {
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
     else bad 'envoc1 embedded runtime' "bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)"; fi
-    # Stage 2 embeds the same prelude (compiler/driver/prelude.envo).
-    run "$ROOT" embed bootstrap/stage1/prelude/prelude.envo
-    tr -d '\r' < "$ROOT/compiler/driver/prelude.envo" > "$TMP/expected"
+    # Stage 2 embeds the same runtime and prelude (compiler/driver/runtime.envo).
+    run "$ROOT" embed bootstrap/stage1/runtime/common.envo bootstrap/stage1/runtime/linux.envo bootstrap/stage1/runtime/windows.envo bootstrap/stage1/prelude/prelude.envo
+    tr -d '\r' < "$ROOT/compiler/driver/runtime.envo" > "$TMP/expected"
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
-    else bad 'envoc embedded prelude' "compiler/driver/prelude.envo is stale: regenerate it with envoc1 embed bootstrap/stage1/prelude/prelude.envo (see docs/architecture/stage2.md)"; fi
+    else bad 'envoc embedded runtime' "compiler/driver/runtime.envo is stale: regenerate it with envoc1 embed and Stage 1's runtime and prelude files (see docs/architecture/stage2.md)"; fi
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
@@ -486,12 +486,15 @@ do_test() {
         if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
         else bad "stage2 spec/eir/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
     done
-    say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens'
+    say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens; eir on the run programs'
     for f in $(cd "$ROOT" && find compiler bootstrap/stage1 tests -name '*.envo' | LC_ALL=C sort); do
         dir="$ROOT/$(dirname "$f")"
         base=$(basename "$f")
         cmds='lex parse'
-        case "$f" in tests/spec/core-run/*|tests/spec/s1-run/*|tests/golden/*) cmds='lex parse check' ;; esac
+        case "$f" in
+            tests/spec/core-run/*|tests/spec/s1-run/*) cmds='lex parse check eir' ;;
+            tests/golden/*) cmds='lex parse check' ;;
+        esac
         for cmd in $cmds; do
             EXE=$ENVOC1
             run "$dir" "$cmd" "$base"
@@ -504,9 +507,13 @@ do_test() {
             else bad "stage2 $cmd $f" "differs from envoc1 (exit $rc1 vs $rc)"; fi
         done
     done
-    for unit in bootstrap/stage1:--core compiler:s1; do
+    for unit in bootstrap/stage1:--core compiler:s1 bootstrap/stage1:--core:eir compiler:s1:eir; do
+        pass_eir=0
+        case "$unit" in *:eir) pass_eir=1; unit=${unit%:eir} ;; esac
         dir="$ROOT/${unit%%:*}"
-        if [ "${unit#*:}" = --core ]; then set -- --core check; else set -- check; fi
+        cmd=check
+        [ "$pass_eir" = 1 ] && cmd=eir
+        if [ "${unit#*:}" = --core ]; then set -- --core "$cmd"; else set -- "$cmd"; fi
         while IFS= read -r f || [ -n "$f" ]; do
             f=$(printf '%s' "$f" | tr -d '\r')
             [ -n "$f" ] && set -- "$@" "$f"
@@ -519,7 +526,7 @@ do_test() {
         EXE=$envoc2
         run "$dir" "$@"
         if [ "$rc" -eq "$rc1" ] && cmp -s "$TMP/out1" "$TMP/out" && cmp -s "$TMP/err1" "$TMP/err"; then pass
-        else bad "stage2 check ${unit%%:*}" "differs from envoc1 (exit $rc1 vs $rc)"; fi
+        else bad "stage2 $cmd ${unit%%:*}" "differs from envoc1 (exit $rc1 vs $rc)"; fi
     done
     EXE=$stage0_exe
 

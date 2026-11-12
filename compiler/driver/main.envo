@@ -6,6 +6,7 @@ use envoc.diag;
 use envoc.syntax;
 use envoc.sema;
 use envoc.eir;
+use envoc.lower;
 
 const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
 
@@ -19,6 +20,8 @@ void Usage(i32 fd) {
     write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
     write(fd, "  check <file.envo>...\n");
     write(fd, "                      check names and types; print the typed syntax tree\n");
+    write(fd, "  eir <file.envo>... [--target x86_64-windows|x86_64-linux]\n");
+    write(fd, "                      print the program's EIR, runtime included\n");
     write(fd, "  eir-check <file.eir>\n");
     write(fd, "                      parse and verify an EIR text file, and print it back\n");
     write(fd, "  version             print the version\n");
@@ -134,7 +137,7 @@ i32 CmdCheck(usize argi, bool core) {
     Sources src = Sources.New();
     for (usize i = argi; i < argc(); i++) Load(ref src, arg(i));
     u32 prelude = 0xFFFFFFFF;
-    if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_0)) as u32;
+    if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
     List<usize> starts = List<usize>.New();
     List<Token> toks = LexAll(src, ref starts, core);
     Tree tree = Parse(src, toks, starts, core);
@@ -159,6 +162,76 @@ i32 CmdEirCheck(usize argi) {
     Module m = Module.New();
     ReadEir(ref m, src.Path(f), src.Text(f));
     m.Verify();
+    string listing = string.New();
+    PrintModule(m, ref listing);
+    write(1, listing);
+    return EXIT_OK;
+}
+
+void BuildUsage() {
+    write(2, "usage: envoc build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]\n");
+    exit(EXIT_USAGE);
+}
+
+// The arguments of `build` and `eir`: the files, -o <output>, --target <triple>.
+struct BuildArgs {
+    List<usize> Files;      // argument indexes
+    str Output;
+    u32 Target;
+}
+
+BuildArgs ParseBuildArgs(usize argi) {
+    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX };
+    if (Same(HostTarget(), "x86_64-windows")) b.Target = TARGET_WINDOWS;
+    usize i = argi;
+    while (i < argc()) {
+        str a = arg(i);
+        if (Same(a, "-o")) {
+            if (i + 1 >= argc()) BuildUsage();
+            b.Output = arg(i + 1);
+            i += 2;
+        } else if (Same(a, "--target")) {
+            if (i + 1 >= argc()) BuildUsage();
+            str t = arg(i + 1);
+            if (Same(t, "x86_64-windows")) b.Target = TARGET_WINDOWS;
+            else if (Same(t, "x86_64-linux")) b.Target = TARGET_LINUX;
+            else BuildUsage();
+            i += 2;
+        } else {
+            b.Files.Push(i);
+            i++;
+        }
+    }
+    return b;
+}
+
+// Compiles the program in the given files, with the runtime for target, to an EIR module.
+Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool core, bool verify) {
+    foreach (var i in files.AsSlice()) Load(ref src, arg(i));
+    src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
+    if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
+    else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
+    u32 prelude = 0xFFFFFFFF;
+    if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
+    List<usize> starts = List<usize>.New();
+    List<Token> toks = LexAll(src, ref starts, core);
+    Tree tree = Parse(src, toks, starts, core);
+    Checker c = Checker.New(src, tree, core, true);
+    c.PreludeFile = prelude;
+    c.CheckProgram();
+    Lower l = Lower.New(c, target);
+    l.LowerProgram();
+    Module m = l.TakeModule();
+    if (verify) m.Verify();
+    return m;
+}
+
+// `envoc eir <file.envo>... [--target …]`: the program's EIR, runtime included.
+i32 CmdEir(usize argi, bool core) {
+    BuildArgs b = ParseBuildArgs(argi);
+    if (b.Files.Len() == 0) BuildUsage();
+    Sources src = Sources.New();
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, false);     // eir-check the output to verify it
     string listing = string.New();
     PrintModule(m, ref listing);
     write(1, listing);
@@ -192,6 +265,7 @@ if (Same(command, "lex")) return CmdLex(argi, core);
 if (Same(command, "parse")) return CmdParse(argi, core);
 if (Same(command, "check")) return CmdCheck(argi, core);
 if (Same(command, "eir-check")) return CmdEirCheck(argi);
+if (Same(command, "eir")) return CmdEir(argi, core);
 if (Same(command, "help") || Same(command, "--help")) {
     Usage(1);
     return EXIT_OK;

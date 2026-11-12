@@ -672,4 +672,76 @@ impl Checker {
         this.CallTarget(call, env, n, ref s, ref e, ref k);
         this.InstGet(s, e, k, depth + 1, this.NTok(call));
     }
+
+    // ------------------------------------------------------------------ names
+
+    // A type's part of an instance's name. Self-delimiting: `0.` pointer, `1.` slice,
+    // `2.N.` array, then a name, and for a generic instance its argument count and
+    // arguments.
+    public void AppendMangle(in this, ref string b, u32 t) {
+        Type ty = this.TypeAt(t);
+        if (ty.Kind == TYK_PTR) {
+            b.Append("0.");
+            this.AppendMangle(ref b, ty.Elem);
+            return;
+        }
+        if (ty.Kind == TYK_SLICE) {
+            b.Append("1.");
+            this.AppendMangle(ref b, ty.Elem);
+            return;
+        }
+        if (ty.Kind == TYK_ARRAY) {
+            b.Append("2.");
+            AppendDecimal(ref b, ty.Count as u64);
+            b.AppendByte('.');
+            this.AppendMangle(ref b, ty.Elem);
+            return;
+        }
+        if (ty.Kind == TYK_FN) {
+            // 3.kind.count, then each parameter's mode and type, then the result
+            b.Append("3.");
+            AppendDecimal(ref b, ty.Count as u64);
+            b.AppendByte('.');
+            AppendDecimal(ref b, ty.NArgs as u64);
+            for (u32 i = 0; i < ty.NArgs; i++) {
+                b.AppendByte('.');
+                AppendDecimal(ref b, this.EnvGet(ty.Sym, i) as u64);
+                b.AppendByte('.');
+                this.AppendMangle(ref b, this.EnvGet(ty.Args, i));
+            }
+            b.AppendByte('.');
+            this.AppendMangle(ref b, ty.Elem);
+            return;
+        }
+        b.Append(TextStr(ty.Name));
+        if (ty.NArgs == 0) return;
+        b.AppendByte('.');
+        AppendDecimal(ref b, ty.NArgs as u64);
+        for (u32 i = 0; i < ty.NArgs; i++) {
+            b.AppendByte('.');
+            this.AppendMangle(ref b, this.EnvGet(ty.Args, i));
+        }
+    }
+
+    // The EIR name of instance i: [owner.]name, then each type argument.
+    public string InstName(in this, u32 i) {
+        Inst inst = this.Insts.Get(i as usize);
+        Sym s = this.SymAt(inst.Sym);
+        string b = string.New();
+        if (s.Iface != 0) {
+            b.Append(this.SymName(s.Iface));
+            b.AppendByte('.');
+        } else if (s.Flags & SF_METHOD != 0) {
+            Type ot = this.TypeAt(s.OwnerType);
+            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM || ot.Kind == TYK_UNION) b.Append(TextStr(ot.Name));
+            else this.AppendMangle(ref b, s.OwnerType);
+            b.AppendByte('.');
+        }
+        b.Append(TextStr(s.Name));
+        for (u32 k = 0; k < inst.NEnv; k++) {
+            b.AppendByte('.');
+            this.AppendMangle(ref b, this.EnvGet(inst.Env, k));
+        }
+        return b;
+    }
 }

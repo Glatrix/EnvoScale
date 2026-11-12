@@ -15,3 +15,14 @@ public List<T> Take<T>(ref List<T> l) {
     l.Cap = 0;
     return r;
 }
+
+// Puts value in place and returns what was there (neither is dropped). Through a raw
+// pointer: a read takes the old value, a write stores without dropping.
+public T Replace<T>(ref T place, T value) {
+    unsafe {
+        *T p = &place;
+        T old = *p;
+        *p = value;
+        return old;
+    }
+}

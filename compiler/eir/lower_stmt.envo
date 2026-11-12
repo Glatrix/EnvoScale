@@ -1,0 +1,376 @@
+// Lowering statements ([core.stmt.*]). Follows Stage 1's bootstrap/stage1/lower/stmt.envo.
+namespace envoc.lower;
+
+use envoc.util;
+use envoc.syntax;
+use envoc.sema;
+use envoc.eir;
+
+impl Lower {
+    void LowerStmt(ref this, u32 n) {
+        Node node = this.C.NodeAt(n);
+        u16 k = node.Kind;
+        if (k == NK_BLOCK) {
+            usize mark = this.DropMark();
+            u32 s = node.A;
+            while (s != 0) {
+                this.LowerStmt(s);
+                s = this.C.NNext(s);
+            }
+            this.DropDownTo(mark, false);
+            return;
+        }
+        if (k == NK_UNSAFE) {
+            this.LowerStmt(node.A);
+            return;
+        }
+        if (k == NK_IF) {
+            u32 then = this.NewBlock();
+            u32 join = this.NewBlock();
+            u32 other = join;
+            if (node.C != 0) other = this.NewBlock();
+            u32 cv = this.LowerExpr(node.A);
+            this.DropTemps();
+            this.CondBr(cv, then, other);
+            this.Start(then);
+            this.LowerStmt(node.B);
+            this.JumpIfOpen(join);
+            if (node.C != 0) {
+                this.Start(other);
+                this.LowerStmt(node.C);
+                this.JumpIfOpen(join);
+            }
+            this.Start(join);
+            return;
+        }
+        if (k == NK_WHILE) {
+            u32 head = this.NewBlock();
+            u32 body = this.NewBlock();
+            u32 exit = this.NewBlock();
+            this.Br(head);
+            this.Start(head);
+            u32 cv = this.LowerExpr(node.A);
+            this.DropTemps();
+            this.CondBr(cv, body, exit);
+            this.Start(body);
+            this.PushLoop(head, exit);
+            this.LowerStmt(node.B);
+            this.PopLoop();
+            this.JumpIfOpen(head);
+            this.Start(exit);
+            return;
+        }
+        if (k == NK_FOR) {
+            usize mark = this.DropMark();       // the init's variables live in the loop's scope
+            if (node.A != 0) this.LowerStmt(node.A);
+            u32 head = this.NewBlock();
+            u32 body = this.NewBlock();
+            u32 step = this.NewBlock();
+            u32 exit = this.NewBlock();
+            this.Br(head);
+            this.Start(head);
+            if (node.B != 0) {
+                u32 cv = this.LowerExpr(node.B);
+                this.DropTemps();
+                this.CondBr(cv, body, exit);
+            } else this.Br(body);
+            this.Start(body);
+            this.PushLoop(step, exit);
+            this.LowerStmt(node.D);
+            this.PopLoop();
+            this.JumpIfOpen(step);
+            this.Start(step);
+            if (node.C != 0) this.LowerStmt(node.C);
+            this.Br(head);
+            this.Start(exit);
+            this.DropDownTo(mark, false);
+            return;
+        }
+        if (k == NK_BREAK || k == NK_CONTINUE) {
+            usize top = this.Loops.Len();
+            u32 target = this.Loops.Get(top - 1);
+            if (k == NK_CONTINUE) target = this.Loops.Get(top - 2);
+            // leave the loop body's scopes
+            this.DropDownTo(this.Loops.Get(top - 3) as usize, true);
+            this.Br(target);
+            return;
+        }
+        if (k == NK_RETURN) {
+            if (node.A == 0) {
+                this.DropDownTo(0, true);
+                if (this.Top) {
+                    u32 zero = this.Const(ET_I32, 0);
+                    this.RetValue(zero);
+                } else this.Ret();
+                return;
+            }
+            this.LowerReturnValue(node.A);
+            return;
+        }
+        if (k == NK_FOREACH) {
+            this.LowerForeach(n);
+            return;
+        }
+        if (k == NK_MATCH) {
+            if (this.C.NValue(n) != 0) this.LowerMatchS1(n, false);     // the Envo-S1 form
+            else this.LowerMatch(n);
+            return;
+        }
+        this.LowerSimple(n);
+    }
+
+    void JumpIfOpen(ref this, u32 b) {
+        if (this.Block != 0) this.Br(b);
+    }
+
+    void PushLoop(ref this, u32 cont, u32 brk) {
+        u32 mark = this.Drops.Len() as u32;
+        this.Loops.Push(mark);
+        this.Loops.Push(cont);
+        this.Loops.Push(brk);
+    }
+
+    void PopLoop(ref this) {
+        this.Loops.Pop();
+        this.Loops.Pop();
+        this.Loops.Pop();
+    }
+
+    // return e: a scalar is returned; an aggregate is copied through the hidden pointer.
+    void LowerReturnValue(ref this, u32 e) {
+        u32 rs = this.RetSlot;
+        u32 rt = this.RetType;
+        u32 v = this.LowerExpr(e);
+        if (rs != 0) {
+            u32 et = this.LType(rt);
+            this.CopyBytes(rs, v, this.ESizeOf(et) as u64);
+            this.DropTemps();
+            this.DropDownTo(0, true);
+            this.Ret();
+            return;
+        }
+        this.DropTemps();
+        this.DropDownTo(0, true);
+        this.RetValue(v);
+    }
+
+    // A local's slot, created at its declaration.
+    u32 LocalSlotFor(ref this, u32 varNode, u32 t) {
+        u32 s = this.VarSym(varNode);
+        u32 et = this.LType(t);
+        u32 slot = this.Slot(et);
+        this.SetSymSlot(s, slot);
+        return slot;
+    }
+
+    // Before an assignment replaces the value of type t at place p (target node a): drop
+    // the old value. A local's goes by its drop flag, which the new value then sets; a
+    // field of a local only while the local holds a value; any other place always holds
+    // one.
+    void LowerDropOld(ref this, u32 a, u32 t, u32 p) {
+        if (!this.C.NeedsDrop(t)) return;
+        // raw memory may hold nothing yet: a write through a pointer only stores
+        if (this.ThroughPointer(a)) return;
+        u16 k = this.C.NKind(a);
+        if ((k == NK_NAME || k == NK_THIS) && this.DropFlag(this.C.NSym(a)) != 0) {
+            this.DropLocal(this.C.NSym(a));
+            this.SetDropFlag(this.C.NSym(a), true);
+            return;
+        }
+        u32 top = 0;
+        u32 s = this.C.MemberRoot(a, ref top);
+        if (s != 0 && this.DropFlag(s) != 0) {
+            u32 yes = this.NewBlock();
+            u32 join = this.NewBlock();
+            u32 live = this.Load(ET_BOOL, this.DropFlag(s));
+            this.CondBr(live, yes, join);
+            this.Start(yes);
+            this.DropValue(t, p);
+            this.Br(join);
+            this.Start(join);
+            return;
+        }
+        this.DropValue(t, p);
+    }
+
+    // Is place a reached through a raw pointer?
+    bool ThroughPointer(in this, u32 a) {
+        while (true) {
+            Node node = this.C.NodeAt(a);
+            if (node.Kind == NK_UNARY) return true;     // *p
+            if (node.Kind != NK_MEMBER && node.Kind != NK_INDEX) return false;
+            u8 k = this.C.TyKind(this.C.NType(node.A));
+            if (k == TYK_PTR) return true;
+            if (node.Kind == NK_INDEX && k == TYK_SLICE) return false;
+            a = node.A;
+        }
+        return false;
+    }
+
+    // The local symbol the checker declared for var node n.
+    u32 VarSym(in this, u32 n) => this.NodeLocals.Get(n as usize);
+
+    // Stores value v (a scalar, or the address of an aggregate) of checker type t to p.
+    void StoreTo(ref this, u32 t, u32 v, u32 p) {
+        u32 et = this.LType(t);
+        if (this.IsAggregate(t)) this.CopyBytes(p, v, this.ESizeOf(et) as u64);
+        else this.Store(et, v, p);
+    }
+
+    void LowerSimple(ref this, u32 n) {
+        Node node = this.C.NodeAt(n);
+        u16 k = node.Kind;
+        if (k == NK_VAR) {
+            u32 t = this.LNType(n);
+            u32 v = 0;
+            if (node.B != 0) v = this.LowerExpr(node.B);
+            u32 slot = this.LocalSlotFor(n, t);
+            if (node.B != 0) this.StoreTo(t, v, slot);
+            else {
+                u32 et = this.LType(t);
+                this.ZeroBytes(slot, this.ESizeOf(et) as u64);
+            }
+            // a local without an initializer holds nothing to drop until it is assigned
+            this.TrackDrop(this.VarSym(n), t, node.B != 0, node.Tok);
+            this.DropTemps();
+            return;
+        }
+        if (k == NK_EXPR) {
+            this.LowerExpr(node.A);
+            this.DropTemps();
+            return;
+        }
+        if (k == NK_ASSIGN) {
+            u32 t = this.LNType(node.A);
+            Text op = this.C.TokName(node.Tok);
+            if (op.Len == 1) {
+                u32 v = this.LowerExpr(node.B);
+                u32 p = this.LowerPlace(node.A);
+                this.LowerDropOld(node.A, t, p);
+                this.StoreTo(t, v, p);
+                this.DropTemps();
+                return;
+            }
+            u32 p = this.LowerPlace(node.A);
+            u32 et = this.LType(t);
+            u32 old = this.Load(et, p);
+            u32 r = this.LowerExpr(node.B);
+            u32 v = 0;
+            // compound: the operator is the text before '='
+            str opBase = TextStr(op)[0..op.Len - 1];
+            if (Same(opBase, "<<") || Same(opBase, ">>")) {
+                u32 rt = this.LNType(node.B);
+                v = this.LowerShift(Same(opBase, "<<"), t, old, r, rt);
+            } else v = this.Bin(ArithOp(opBase), et, old, r);
+            this.Store(et, v, p);
+            return;
+        }
+        // NK_INC, NK_DEC
+        u32 t = this.LNType(node.A);
+        u32 et = this.LType(t);
+        u32 p = this.LowerPlace(node.A);
+        u32 old = this.Load(et, p);
+        u32 one = this.Const(et, 1);
+        u16 op = 8;
+        if (k == NK_DEC) op = 9;
+        u32 v = this.Bin(op, et, old, one);
+        this.Store(et, v, p);
+    }
+
+    bool IsSignedType(in this, u32 t) {
+        Type ty = this.C.TypeAt(t);
+        if (ty.Kind == TYK_ENUM) return this.C.TypeAt(this.C.SymAt(ty.Sym).Aux).Signed;
+        return ty.Signed;
+    }
+
+    // match: a switch on the scrutinee; arm bodies in their own blocks.
+    void LowerMatch(ref this, u32 n) {
+        Node mt = this.C.NodeAt(n);
+        u32 st = this.LNType(mt.A);
+        u32 et = this.LType(st);
+        u32 v = this.LowerExpr(mt.A);
+        this.DropTemps();
+        u32 join = this.NewBlock();
+        u32 dflt = 0;
+        // the switch is emitted by hand: keys and targets for every pattern
+        List<u64> keys = List<u64>.New();
+        List<u32> targets = List<u32>.New();
+        List<u32> bodies = List<u32>.New();
+        u32 arm = mt.B;
+        while (arm != 0) {
+            Node a = this.C.NodeAt(arm);
+            u32 b = this.NewBlock();
+            bodies.Push(b);
+            u32 pat = a.A;
+            while (pat != 0) {
+                if (this.C.NKind(pat) == NK_WILD) dflt = b;
+                else {
+                    u32 rt = this.IntReprType(st);
+                    keys.Push(this.C.WrapValue(this.C.NValue(pat), rt));
+                    targets.Push(b);
+                }
+                pat = this.C.NNext(pat);
+            }
+            arm = a.Next;
+        }
+        bool hasDefault = dflt != 0;
+        if (!hasDefault) dflt = this.NewBlock();
+        EInst inst = NoInst(57);
+        inst.Ty = et;
+        inst.Block = this.Block;
+        inst.FirstOp = this.M.Ops.Len() as u32;
+        this.M.Ops.Push(OpV(v));
+        for (usize i = 0; i < keys.Len(); i++) {
+            EOp key = OpNone();
+            key.Kind = OK_CASE;
+            key.Int = keys.Get(i);
+            this.M.Ops.Push(key);
+            this.M.Ops.Push(OpTargetOf(targets.Get(i)));
+        }
+        this.M.Ops.Push(OpTargetOf(dflt));
+        inst.NOps = this.M.Ops.Len() as u32 - inst.FirstOp;
+        this.M.Insts.Push(inst);
+        this.Close();
+        arm = mt.B;
+        usize i = 0;
+        while (arm != 0) {
+            Node a = this.C.NodeAt(arm);
+            this.Start(bodies.Get(i));
+            this.LowerStmt(a.B);
+            this.JumpIfOpen(join);
+            i++;
+            arm = a.Next;
+        }
+        if (!hasDefault) {
+            // an exhaustive enum match: no other value can occur
+            this.Start(dflt);
+            this.Unreachable();
+        }
+        this.Start(join);
+    }
+
+    // The integer type whose bit pattern represents values of type t (an enum's
+    // representation, or t itself).
+    u32 IntReprType(in this, u32 t) {
+        Type ty = this.C.TypeAt(t);
+        if (ty.Kind == TYK_ENUM) return this.C.SymAt(ty.Sym).Aux;
+        return t;
+    }
+}
+
+// The EIR opcode of an arithmetic or bitwise operator spelling.
+u16 ArithOp(str op) {
+    if (Same(op, "+")) return 8;
+    if (Same(op, "-")) return 9;
+    if (Same(op, "*")) return 10;
+    if (Same(op, "+%")) return 5;
+    if (Same(op, "-%")) return 6;
+    if (Same(op, "*%")) return 7;
+    if (Same(op, "/")) return 12;
+    if (Same(op, "%")) return 13;
+    if (Same(op, "&")) return 14;
+    if (Same(op, "|")) return 15;
+    if (Same(op, "^")) return 16;
+    panic("lower: unknown operator");
+    return 0;
+}

@@ -88,6 +88,7 @@ public struct Checker {
             FileNs = List<Text>.New(), NsSet = StrMap<u32>.New(), Uses = List<u32>.New(),
             TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New()
         };
+        c.TypeArgs.Push(0);     // index 0: "no environment"
         for (usize f = 0; f < src.Count(); f++) {
             c.Paths.Push(TextOf(src.Path(f)));
             c.Texts.Push(TextOf(src.Text(f)));

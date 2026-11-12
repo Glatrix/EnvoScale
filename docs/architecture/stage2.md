@@ -58,9 +58,9 @@ yet; the formatter (M5) needs that.
 
 `envoc.sema` ports Stage 1's checker (`bootstrap/stage1/check/`) function for function, as
 methods on a `Checker` that owns the syntax tree and its side tables. `envoc check` prints
-the same typed tree and reports the same first error as `envoc1 check`. The prelude is
-embedded as `driver/prelude.envo`, generated with `envoc1 embed` from Stage 1's prelude
-(the tests check it is current).
+the same typed tree and reports the same first error as `envoc1 check`. Stage 1's runtime
+and prelude are embedded as `driver/runtime.envo`, generated with `envoc1 embed` (the tests
+check it is current).
 
 Type and symbol names are `Text` values, a pointer and a length, rather than `str`: a `str`
 is a borrow, and tables that own their entries cannot hold one. The text they point to
