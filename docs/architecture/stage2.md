@@ -54,6 +54,22 @@ It is tested like the lexer: the parser goldens, the syntax spec tests, and `env
 against `envoc1 parse` on every `.envo` file in the repo. Comments aren't kept in the tree
 yet; the formatter (M5) needs that.
 
+## Checker (M3.4)
+
+`envoc.sema` ports Stage 1's checker (`bootstrap/stage1/check/`) function for function, as
+methods on a `Checker` that owns the syntax tree and its side tables. `envoc check` prints
+the same typed tree and reports the same first error as `envoc1 check`. The prelude is
+embedded as `driver/prelude.envo`, generated with `envoc1 embed` from Stage 1's prelude
+(the tests check it is current).
+
+Type and symbol names are `Text` values, a pointer and a length, rather than `str`: a `str`
+is a borrow, and tables that own their entries cannot hold one. The text they point to
+(source files, string literals, and names the checker builds and keeps in `Owned`) lives
+as long as the checker.
+
+The move and borrow checks are M3.5. Until then, three type tests whose errors come from
+those passes are skipped for Stage 2 (`stage2_later` in the scripts).
+
 ## Stage 1 bugs found by Stage 2
 
 Stage 2 is the largest Envo-S1 program, so it finds `envoc1` bugs. Each is fixed in
@@ -65,3 +81,4 @@ Stage 1 with a test before Stage 2 moves on (PLAN §6).
 | M3.1 | A generic body lowered for a type with a drop, then one without, reused stale drop flags | `s1-run/generic_drops.envo` |
 | M3.1 | Views: method results were assumed to borrow the receiver, and a view made from a local pointer was treated as a view of the pointer. Stage 1 now works out which storage each function's result views | `s1-run/views.envo`, `s1-own/` |
 | M3.3 | Backtracking after a type didn't undo a `>>` split into two `>`, so `List<List<u32>> F()` at top level failed to parse | `s1-run/nested_generics.envo` |
+| M3.4 | Any read of a variable in an argument conflicted with the same call's `ref` borrow of it, so `list.Push(list.Len())` was E0503. Arguments are evaluated before the call takes its borrows, so a read that yields a value holding no borrow is now fine; lending a view or a `string`-as-`str` still conflicts. Chapter 5 now says so ([own.borrow.2]) | `s1-run/two_phase_args.envo`, `s1-own/e0503_ref_and_read.envo`, `s1-own/e0503_ref_and_string_view.envo` |

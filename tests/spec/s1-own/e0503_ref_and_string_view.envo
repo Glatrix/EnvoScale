@@ -1,0 +1,5 @@
+// expect-error: E0503 @ 5:15
+// [own.borrow.1] a `string` lent as `str` is a borrow, so it conflicts with `ref`
+void Append(ref string s, str tail) { s.Append(tail); }
+string t = string.From("a");
+Append(ref t, t);

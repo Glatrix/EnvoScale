@@ -114,13 +114,28 @@ void CollectLambdaBorrows(*Checker c, *Vec uses, u32 a) {
     }
 }
 
-// One argument (or the receiver) passed with mode k.
+// One argument (or the receiver) passed with mode k. Arguments are evaluated before the
+// call takes its borrows ([own.borrow.2]), so plain reads inside an argument whose value
+// holds no borrow (`list.Push(list.Len())`) do not conflict with the call; its moves and
+// its borrows of a place still do.
 void CollectArg(*Checker c, *Vec uses, u32 a, u8 k) {
     if (NKind(c, a) == NK_LAMBDA) {
         CollectLambdaBorrows(c, uses, a);
         return;
     }
+    usize start;
+    unsafe { start = VecLen(uses); }
     CollectUses(c, uses, a, k);
+    if (HoldsBorrow(c, NType(c, a)) || IsConverted(c, a)) return;      // a view, or a `string` lent as `str`
+    unsafe {
+        usize keep = start;
+        for (usize i = start; i < VecLen(uses); i += 3) {
+            if (MemLoadU32(VecAt(uses, i + 1)) == BK_READ as u32) continue;
+            for (usize j = 0; j < 3; j++) MemStoreU32(VecAt(uses, keep + j), MemLoadU32(VecAt(uses, i + j)));
+            keep += 3;
+        }
+        VecTruncate(uses, keep);
+    }
 }
 
 // [own.borrow.1], [own.borrow.3] within call n.

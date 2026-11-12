@@ -1,5 +1,5 @@
-// expect-error: E0503 @ 5:12
-// [own.borrow.1] a place borrowed `ref` cannot be read in the same call
-void Add(ref i64 x, i64 y) { x += y; }
-i64 n = 1;
-Add(ref n, n);
+// expect-error: E0503 @ 5:15
+// [own.borrow.1] a place borrowed `ref` cannot also be lent to the same call as a view
+void Fill(ref u8[4] a, u8[] from) { }
+u8[4] buf;
+Fill(ref buf, buf[0..2]);

@@ -285,6 +285,12 @@ do_test() {
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
     else bad 'envoc1 embedded runtime' "bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)"; fi
+    # Stage 2 embeds the same prelude (compiler/driver/prelude.envo).
+    run "$ROOT" embed bootstrap/stage1/prelude/prelude.envo
+    tr -d '\r' < "$ROOT/compiler/driver/prelude.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc embedded prelude' "compiler/driver/prelude.envo is stale: regenerate it with envoc1 embed bootstrap/stage1/prelude/prelude.envo (see docs/architecture/stage2.md)"; fi
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
@@ -407,11 +413,15 @@ do_test() {
     run "$ROOT" frobnicate
     if [ "$rc" -eq 2 ] && grep -q "^envoc: error: unknown command 'frobnicate'" "$TMP/err"; then pass; else bad 'envoc unknown command' "exit $rc"; fi
 
-    # The Stage 2 front end (M3.2, M3.3): the lexer and parser goldens and the lexical and
-    # syntax spec tests, in the same modes as for Stage 1; then the same output as envoc1
-    # from `lex` and `parse` on every source file (D17). Keep in step with bootstrap.ps1.
+    # The Stage 2 front end and checker (M3.2-M3.4): the lexer, parser and checker goldens
+    # and the lexical, syntax and type spec tests, in the same modes as for Stage 1; then
+    # the same output as envoc1 from `lex` and `parse` on every source file, from `check`
+    # on the run programs and goldens, and on both compilers' sources (D17). Tests whose
+    # error comes from the move and borrow checks wait for M3.5 (stage2_later).
+    # Keep in step with bootstrap.ps1.
     envoc2=$EXE
-    for suite in lexer:lex:.tokens:both parser:parse:.ast:both s1-parser:parse:.ast:s1; do
+    stage2_later=' e0503_change_while_bound.envo e0950_from_function_param.envo e0950_lambda_takes_drop_value.envo '
+    for suite in lexer:lex:.tokens:both parser:parse:.ast:both s1-parser:parse:.ast:s1 check:check:.check:both; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; rest=${rest#*:}; ext=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = s1 ] && [ "$mode" = --core ] && continue
@@ -430,7 +440,7 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1 core-types:check:core s1-types:check:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue
@@ -440,6 +450,7 @@ do_test() {
         dir="$ROOT/tests/spec/$sdir"
         for f in "$dir"/*.envo; do
             base=$(basename "$f")
+            case "$stage2_later" in *" $base "*) continue ;; esac
             line=$(LC_ALL=C grep -a -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
             code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9][0-9][0-9][0-9]\).*|\1|')
             if [ "$mode" = s1 ]; then
@@ -453,11 +464,13 @@ do_test() {
         done
       done
     done
-    say 'stage 2 lex and parse against envoc1: every .envo file in compiler/, bootstrap/stage1/, tests/'
+    say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens'
     for f in $(cd "$ROOT" && find compiler bootstrap/stage1 tests -name '*.envo' | LC_ALL=C sort); do
         dir="$ROOT/$(dirname "$f")"
         base=$(basename "$f")
-        for cmd in lex parse; do
+        cmds='lex parse'
+        case "$f" in tests/spec/core-run/*|tests/spec/s1-run/*|tests/golden/*) cmds='lex parse check' ;; esac
+        for cmd in $cmds; do
             EXE=$ENVOC1
             run "$dir" "$cmd" "$base"
             rc1=$rc
@@ -468,6 +481,23 @@ do_test() {
             if [ "$rc" -eq "$rc1" ] && cmp -s "$TMP/out1" "$TMP/out" && cmp -s "$TMP/err1" "$TMP/err"; then pass
             else bad "stage2 $cmd $f" "differs from envoc1 (exit $rc1 vs $rc)"; fi
         done
+    done
+    for unit in bootstrap/stage1:--core compiler:s1; do
+        dir="$ROOT/${unit%%:*}"
+        if [ "${unit#*:}" = --core ]; then set -- --core check; else set -- check; fi
+        while IFS= read -r f || [ -n "$f" ]; do
+            f=$(printf '%s' "$f" | tr -d '\r')
+            [ -n "$f" ] && set -- "$@" "$f"
+        done < "$dir/files.txt"
+        EXE=$ENVOC1
+        run "$dir" "$@"
+        rc1=$rc
+        mv "$TMP/out" "$TMP/out1"
+        mv "$TMP/err" "$TMP/err1"
+        EXE=$envoc2
+        run "$dir" "$@"
+        if [ "$rc" -eq "$rc1" ] && cmp -s "$TMP/out1" "$TMP/out" && cmp -s "$TMP/err1" "$TMP/err"; then pass
+        else bad "stage2 check ${unit%%:*}" "differs from envoc1 (exit $rc1 vs $rc)"; fi
     done
     EXE=$stage0_exe
 

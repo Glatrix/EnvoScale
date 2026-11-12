@@ -1,0 +1,22 @@
+// Text references (compiler/util/README.md).
+namespace envoc.util;
+
+// Bytes that outlive whoever holds this reference: source text, string literals, and
+// strings a table keeps for good. It is plain data, so it can sit in lists and structs
+// that a borrowed `str` could not.
+public struct Text {
+    *u8 Ptr;
+    usize Len;
+}
+
+public Text TextOf(str s) {
+    unsafe { return new Text { Ptr = s.Ptr, Len = s.Len }; }
+}
+
+public str TextStr(Text t) {
+    *u8 p = t.Ptr;
+    usize n = t.Len;
+    unsafe { return str_from(p, n); }
+}
+
+public bool TextIs(Text t, str s) => Same(TextStr(t), s);

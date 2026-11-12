@@ -50,7 +50,10 @@ assigned on every path that returns normally (E0505).
 borrows **or** exactly one exclusive borrow, never both. Violations are E0503.
 
 **[own.borrow.2]** Borrows are checked **flow-sensitively** (non-lexical): a borrow
-lasts from its creation to its last use, not to the end of its scope.
+lasts from its creation to its last use, not to the end of its scope. A call's arguments
+are evaluated before the call takes its borrows, so reading a variable in an argument whose
+value holds no borrow does not conflict with the call borrowing that variable:
+`list.Push(list.Len())` is valid.
 
 **[own.borrow.3]** A value may not be moved or dropped while borrowed (E0504).
 

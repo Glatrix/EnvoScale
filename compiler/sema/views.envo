@@ -1,0 +1,130 @@
+// Envo-S1 views and slicing (RFC 0002, RFC 0004 [view.*]) and `foreach`. Follows Stage 1's
+// bootstrap/stage1/check/views.envo: `T[]` is a shared view and `mut T[]` an exclusive
+// one, both { ptr, len }; `a[lo..hi]` makes a view of an array, a view or a `str`.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.syntax;
+
+impl Checker {
+    // The view type of elem: `T[]`, or `mut T[]` (a slice type with Count 1).
+    u32 ViewOf(ref this, u32 elem, bool mutable) {
+        u32 k = 0;
+        if (mutable) k = 1;
+        return this.TypeDerived(TYK_SLICE, elem, k);
+    }
+
+    bool IsMutView(in this, u32 t) => this.TyKind(t) == TYK_SLICE && this.TypeAt(t).Count == 1;
+
+    // A slice bound: any integer, an unsuffixed literal being `usize` ([expr.slice.1]).
+    void CheckBound(ref this, u32 b) {
+        if (b == 0) return;
+        if (this.IsUntyped(b)) {
+            this.CheckExpr(b, T_USIZE);
+            return;
+        }
+        u32 t = this.CheckValue(b, 0);
+        if (!this.IsIntType(t)) this.NotIntegerType(b, t);
+    }
+
+    // a[lo..hi], a[lo..=hi], a[lo..], a[..hi], a[..] ([expr.slice.1]–[expr.slice.4],
+    // [view.3]): a `mut T[]` where one is expected, a `T[]` otherwise, and `str` of a `str`.
+    u32 CheckSlice(ref this, u32 n, u32 expected) {
+        Node node = this.NodeAt(n);
+        Node r = this.NodeAt(node.B);
+        u32 bt = this.CheckValue(node.A, 0);
+        Type b = this.TypeAt(bt);
+        if (b.Kind != TYK_STR && b.Kind != TYK_ARRAY && b.Kind != TYK_SLICE) {
+            string m = string.From("cannot slice `");
+            this.AppendType(ref m, bt);
+            m.AppendByte('`');
+            this.Fail(node.Tok, E_CANNOT_SLICE, m);
+        }
+        if (b.Kind == TYK_ARRAY && !this.IsAddressable(node.A)) this.Error(E_SLICE_TEMP, node.Tok);
+        this.CheckBound(r.A);
+        this.CheckBound(r.B);
+        if (b.Kind == TYK_STR) return T_STR;
+        if (!this.IsMutView(expected)) return this.ViewOf(b.Elem, false);
+        // an exclusive view needs a place that may change ([view.3])
+        if (b.Kind == TYK_SLICE && !this.IsMutView(bt)) this.Error(E_NOT_ASSIGNABLE, this.NTok(node.A));
+        if (b.Kind == TYK_ARRAY && !this.IsMutable(node.A)) this.Error(E_NOT_ASSIGNABLE, this.NTok(node.A));
+        this.MarkMutation(node.A);
+        return this.ViewOf(b.Elem, true);
+    }
+
+    // `T[] slice_from<T>(*T ptr, usize len)` and `slice_from_mut` ([expr.slice.5],
+    // [view.6]): unsafe; T comes from the pointer or is written.
+    u32 CheckSliceFrom(ref this, u32 n, bool mutable) {
+        Node node = this.NodeAt(n);
+        this.NeedsUnsafe(n);
+        u32 count = this.ListCount(node.B);
+        if (count != 2) {
+            string m = string.From("wrong number of arguments: expected 2, found ");
+            AppendDecimal(ref m, count as u64);
+            this.Fail(node.Tok, E_ARG_COUNT, m);
+        }
+        u32 elem = 0;
+        u32 targs = this.NodeAt(node.A).E;
+        if (targs != 0) {
+            if (this.ListCount(targs) != 1) this.TypeArgCount(this.NTok(node.A), 1, this.ListCount(targs));
+            elem = this.ResolveType(targs, false);
+            u32 pt = this.TypePtrTo(elem);
+            this.ExpectType(node.B, pt);
+        } else {
+            u32 pt = this.CheckValue(node.B, 0);
+            if (this.TyKind(pt) != TYK_PTR) {
+                u32 want = this.TypePtrTo(T_U8);
+                this.Mismatch(want, this.NTok(node.B), pt);
+            }
+            elem = this.TypeAt(pt).Elem;
+        }
+        this.ExpectType(this.NNext(node.B), T_USIZE);
+        this.SetNSym(n, 0);
+        return this.ViewOf(elem, mutable);
+    }
+
+    // foreach (var x in e) body ([s1.stmt.1]): over an array, a view, a `str` (bytes) or an
+    // integer range lo..hi / lo..=hi. A non-`Copy` element is an `in` borrow of it.
+    bool CheckForeach(ref this, u32 n) {
+        Node node = this.NodeAt(n);
+        usize saved = this.LSP;
+        u32 et = 0;
+        bool borrow = false;
+        if (this.NKind(node.B) == NK_RANGE) {
+            Node r = this.NodeAt(node.B);
+            if (r.A == 0 || r.B == 0) this.NotCore("a `foreach` range without both bounds", r.Tok);
+            if (this.IsUntyped(r.A) && this.IsUntyped(r.B)) {
+                et = T_I32;
+                this.CheckExpr(r.A, et);
+                this.CheckExpr(r.B, et);
+            } else if (this.IsUntyped(r.A)) {
+                et = this.CheckValue(r.B, 0);
+                this.ExpectType(r.A, et);
+            } else {
+                et = this.CheckValue(r.A, 0);
+                this.ExpectType(r.B, et);
+            }
+            if (!this.IsIntType(et)) this.BadOperand(et, r.Tok);
+        } else {
+            u32 st = this.CheckValue(node.B, 0);
+            Type s = this.TypeAt(st);
+            if (s.Kind == TYK_STR) {
+                et = T_U8;
+            } else if (s.Kind == TYK_ARRAY || s.Kind == TYK_SLICE) {
+                et = s.Elem;
+                borrow = !this.IsCopy(et);
+            } else {
+                string m = string.From("`foreach` needs an array, a view, a `str` or a range, found `");
+                this.AppendType(ref m, st);
+                m.AppendByte('`');
+                this.Fail(this.NTok(node.B), E_BAD_OPERAND, m);
+            }
+        }
+        this.DeclareLocal(node.A, et);
+        this.SetNType(node.A, et);
+        if (borrow) this.SetSymFlags(this.NSym(node.A), SF_BYREF | SF_READONLY);
+        this.CheckLoopBody(node.C);
+        this.LSP = saved;
+        return false;
+    }
+}

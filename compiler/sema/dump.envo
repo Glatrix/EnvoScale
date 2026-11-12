@@ -1,0 +1,107 @@
+// `check`: the syntax tree with what the checker worked out (tests/golden/README.md):
+// struct " size S align A", field " offset O", variant / const / static " = value", and
+// " : type" for expressions, locals, parameters and fields. Follows Stage 1's
+// bootstrap/stage1/check/dump.envo.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.diag;
+use envoc.syntax;
+
+impl Checker {
+    void AppendValue(in this, ref string b, u32 t, u64 v) {
+        b.Append(" = ");
+        Type ty = this.TypeAt(t);
+        if (ty.Kind == TYK_ENUM) ty = this.TypeAt(this.SymAt(ty.Sym).Aux);
+        if (ty.Signed && (v as i64) < 0) {
+            b.AppendByte('-');
+            v = 0 -% v;
+        }
+        AppendDecimal(ref b, v);
+    }
+
+    void AppendExtra(in this, ref string b, u32 n, Node node) {
+        u16 k = node.Kind;
+        if (k == NK_STRUCT) {
+            u32 s = this.NSym(n);
+            if (s == 0) return;
+            Sym sym = this.SymAt(s);
+            if (sym.LState != 2 || sym.NEnv > 0) return;    // a generic struct has no one size
+            b.Append(" size ");
+            AppendDecimal(ref b, sym.Aux as u64);
+            b.Append(" align ");
+            AppendDecimal(ref b, sym.Aux2 as u64);
+            return;
+        }
+        if (k == NK_VARIANT) {
+            u32 t = this.NType(n);
+            if (t == 0) return;
+            this.AppendValue(ref b, t, this.NValue(n));
+            return;
+        }
+        if (k == NK_CONST || k == NK_STATIC) {
+            u32 s = this.NSym(n);
+            if (s == 0) return;
+            Sym sym = this.SymAt(s);
+            if (sym.State != 2 || !this.IsScalarValue(sym.Type)) return;
+            this.AppendValue(ref b, sym.Type, sym.Value);
+            return;
+        }
+        if (k == NK_FIELD) {
+            if (this.NType(n) == 0) return;
+            b.Append(" offset ");
+            AppendDecimal(ref b, this.NValue(n));
+        }
+        // expressions, locals, parameters and fields print their type
+        bool expression = k >= NK_INT && k <= NK_NEW;
+        if (!expression && k != NK_VAR && k != NK_PARAM && k != NK_FIELD) return;
+        u32 t = this.NType(n);
+        if (t == 0) return;
+        b.Append(" : ");
+        this.AppendType(ref b, t);
+    }
+
+    // Appends node `first` and the nodes linked after it, as the dump prints them.
+    public void Dump(in this, ref string dst, u32 first, usize depth) {
+        u32 n = first;
+        while (n != 0) {
+            Node node = this.NodeAt(n);
+            if (this.IsPreludeNode(n)) {
+                n = node.Next;      // the prelude is not part of the program's tree
+                continue;
+            }
+            Token t = this.Tok(node.Tok);
+            str text = TextStr(this.Texts.Get(t.File as usize));
+            for (usize i = 0; i < depth * 2; i++) dst.AppendByte(' ');
+            dst.Append(NodeName(node.Kind));
+            if (NodeHasText(node.Kind)) {
+                dst.AppendByte(' ');
+                dst.Append(text[t.Start as usize..(t.Start + t.Len) as usize]);
+            }
+            AppendNodeFlags(ref dst, node.Flags);
+            dst.Append(" @");
+            AppendDecimal(ref dst, t.Line as u64);
+            dst.AppendByte(':');
+            AppendDecimal(ref dst, Column(text, t.Start as usize) as u64);
+            this.AppendExtra(ref dst, n, node);
+            dst.AppendByte(10);
+            u32 slots = NodeSlots(node.Kind);
+            for (u32 s = 0; s < slots; s++) {
+                u32 child = node.A;
+                if (s == 1) child = node.B;
+                if (s == 2) child = node.C;
+                if (s == 3) child = node.D;
+                if (child == 0) {
+                    for (usize i = 0; i < (depth + 1) * 2; i++) dst.AppendByte(' ');
+                    dst.Append("-\n");
+                } else {
+                    this.Dump(ref dst, child, depth + 1);
+                }
+            }
+            if (node.E != 0) this.Dump(ref dst, node.E, depth + 1);
+            if (node.F != 0) this.Dump(ref dst, node.F, depth + 1);
+            if (node.G != 0) this.Dump(ref dst, node.G, depth + 1);
+            n = node.Next;
+        }
+    }
+}

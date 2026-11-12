@@ -1,5 +1,7 @@
 driver/main.envo
+driver/prelude.envo
 util/text.envo
+util/textref.envo
 util/map.envo
 util/list.envo
 util/file.envo
@@ -9,3 +11,15 @@ syntax/lexer.envo
 syntax/node.envo
 syntax/parser.envo
 syntax/parser_s1.envo
+sema/types.envo
+sema/checker.envo
+sema/decl.envo
+sema/stmt.envo
+sema/expr.envo
+sema/generic.envo
+sema/closure.envo
+sema/enums.envo
+sema/views.envo
+sema/names.envo
+sema/own.envo
+sema/dump.envo

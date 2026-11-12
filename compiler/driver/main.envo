@@ -4,6 +4,7 @@
 use envoc.util;
 use envoc.diag;
 use envoc.syntax;
+use envoc.sema;
 
 const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
 
@@ -14,6 +15,9 @@ void Usage(i32 fd) {
     write(fd, "\n");
     write(fd, "commands:\n");
     write(fd, "  lex <file.envo>     print the token stream of a source file\n");
+    write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
+    write(fd, "  check <file.envo>...\n");
+    write(fd, "                      check names and types; print the typed syntax tree\n");
     write(fd, "  version             print the version\n");
     write(fd, "  help                print this message\n");
     write(fd, "\n");
@@ -117,6 +121,29 @@ i32 CmdParse(usize argi, bool core) {
     return EXIT_OK;
 }
 
+// `envoc check <file.envo>...`: names and types; prints the typed syntax tree. In
+// Envo-S1 mode the prelude (driver/prelude.envo) is compiled with the program.
+i32 CmdCheck(usize argi, bool core) {
+    if (argc() <= argi) {
+        Usage(2);
+        return EXIT_USAGE;
+    }
+    Sources src = Sources.New();
+    for (usize i = argi; i < argc(); i++) Load(ref src, arg(i));
+    u32 prelude = 0xFFFFFFFF;
+    if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_0)) as u32;
+    List<usize> starts = List<usize>.New();
+    List<Token> toks = LexAll(src, ref starts, core);
+    Tree tree = Parse(src, toks, starts, core);
+    Checker c = Checker.New(src, tree, core, false);
+    c.PreludeFile = prelude;
+    c.CheckProgram();
+    string listing = string.New();
+    c.Dump(ref listing, c.T.Root, 0);
+    write(1, listing);
+    return EXIT_OK;
+}
+
 usize argi = 1;
 bool core = false;
 if (argi < argc() && Same(arg(argi), "--core")) {
@@ -142,6 +169,7 @@ if (Same(command, "selftest")) {
 }
 if (Same(command, "lex")) return CmdLex(argi, core);
 if (Same(command, "parse")) return CmdParse(argi, core);
+if (Same(command, "check")) return CmdCheck(argi, core);
 if (Same(command, "help") || Same(command, "--help")) {
     Usage(1);
     return EXIT_OK;

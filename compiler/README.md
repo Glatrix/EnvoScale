@@ -1,7 +1,7 @@
 # `compiler/` — Stage 2 `envoc`
 
 > **Status:** In progress (M3). Written in Envo-S1 and built by `envoc1` from
-> [`files.txt`](files.txt). Working so far: `envoc lex` and `parse`.
+> [`files.txt`](files.txt). Working so far: `envoc lex`, `parse` and `check`.
 > Design notes: [`docs/architecture/stage2.md`](../docs/architecture/stage2.md).
 
 The real Envo compiler, written in idiomatic full Envo. Once it compiles itself to a

@@ -1,0 +1,39 @@
+// A call's arguments are evaluated before the call takes its borrows ([own.borrow.2]):
+// reading a variable into a plain value in an argument does not conflict with `ref`.
+// Found while porting the checker to Stage 2 (M3.4).
+// expect: 2 3 7
+str Num(u64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + v % 10) as u8;
+            v /= 10;
+            if (v == 0) break;
+        }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+
+void Add(ref u64 x, u64 y) { x += y; }
+
+struct Counter {
+    u64 N;
+    u64 Get() => this.N;
+    void Bump(ref this, u64 by) { this.N += by; }
+}
+
+u64 n = 1;
+Add(ref n, n);
+List<u64> l = List<u64>.New();
+l.Push(5);
+l.Push(l.Len() as u64);
+l.Push(l.Get(0) + l.Get(1));
+Counter c = new Counter { N = 3 };
+c.Bump(c.Get() + 1);
+write(1, Num(n));
+write(1, " ");
+write(1, Num(l.Len() as u64));
+write(1, " ");
+print(Num(c.N));

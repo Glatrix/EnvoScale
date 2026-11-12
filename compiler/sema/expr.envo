@@ -1,0 +1,951 @@
+// Expressions, literals and constants ([core.expr.*], [core.const.*]). Follows Stage 1's
+// bootstrap/stage1/check/expr.envo.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.syntax;
+
+// An integer literal's parts ([lex.int.1]): base, digits (after any 0x/0b/0o, underscores
+// included) and the suffix, which starts at the first 'i' or 'u'.
+struct LiteralParts {
+    u64 Base;
+    Text Digits;
+    Text Suffix;
+}
+
+// The value of a digit or letter for bases up to 36.
+u64 DigitOf(u8 c) {
+    if (c >= '0' && c <= '9') return (c - '0') as u64;
+    return ((c | 0x20) - 'a') as u64 + 10;
+}
+
+impl Checker {
+    // Checks node n against type t exactly (E0301).
+    void ExpectType(ref this, u32 n, u32 t) {
+        u32 got = this.CheckValue(n, t);
+        if (!this.Coerce(n, got, t)) this.Mismatch(t, this.NTok(n), got);
+    }
+
+    // May node n, of type got, be used as a want? Assignable, or a `string` used as a `str`
+    // (envo-s1.md section 8), which is marked for lowering.
+    bool Coerce(ref this, u32 n, u32 got, u32 want) {
+        if (this.Assignable(got, want)) return true;
+        u32 s = this.StringSym;
+        if (want != T_STR || s == 0 || this.TyKind(got) != TYK_STRUCT || this.TypeAt(got).Sym != s) return false;
+        this.NConv.Set(n as usize, 1);
+        return true;
+    }
+
+    // CheckExpr, but a void value is E0322 ([core.expr.11]).
+    u32 CheckValue(ref this, u32 n, u32 expected) {
+        u32 t = this.CheckExpr(n, expected);
+        if (t == T_VOID) this.Error(E_VOID_VALUE, this.NTok(n));
+        return t;
+    }
+
+    // [core.expr.2] is this an unsuffixed literal expression?
+    bool IsUntyped(in this, u32 n) {
+        Node node = this.NodeAt(n);
+        if (node.Kind == NK_INT) return this.LiteralSplit(node.Tok).Suffix.Len == 0;
+        if (node.Kind == NK_UNARY) {
+            if (node.Op != TK_MINUS && node.Op != TK_TILDE) return false;
+            return this.IsUntyped(node.A);
+        }
+        if (node.Kind != NK_BINARY) return false;
+        if (node.Op == TK_AND_AND || node.Op == TK_OR_OR) return false;
+        if (TokClass(node.Op) & TC_PREC == PREC_COMPARE) return false;
+        return this.IsUntyped(node.A) && this.IsUntyped(node.B);
+    }
+
+    // Gives an untyped literal expression type t, checking each literal fits (E0304) and
+    // `-` has a signed type (E0302).
+    void TypeUntyped(ref this, u32 n, u32 t) {
+        this.SetNType(n, t);
+        Node node = this.NodeAt(n);
+        if (node.Kind == NK_INT) {
+            bool overflow = false;
+            u64 v = this.LiteralValue(node.Tok, ref overflow);
+            if (overflow || v > this.TypeMax(t)) this.DoesNotFit(node.Tok, t);
+            return;
+        }
+        if (node.Kind == NK_UNARY) {
+            if (node.Op == TK_MINUS) {
+                if (!this.TypeAt(t).Signed) this.BadOperand(t, node.Tok);
+                if (this.NKind(node.A) == NK_INT) {
+                    // -128 fits i8 even though 128 does not
+                    this.SetNType(node.A, t);
+                    u32 tok = this.NTok(node.A);
+                    bool overflow = false;
+                    u64 v = this.LiteralValue(tok, ref overflow);
+                    if (overflow || v > this.TypeMax(t) + 1) this.DoesNotFit(tok, t);
+                    return;
+                }
+            }
+            this.TypeUntyped(node.A, t);
+            return;
+        }
+        this.TypeUntyped(node.A, t);
+        this.TypeUntyped(node.B, t);
+    }
+
+    // Types an expression and records it ([core.expr.*]). expected may be 0.
+    u32 CheckExpr(ref this, u32 n, u32 expected) {
+        if (this.IsUntyped(n)) {
+            u32 t = this.IntegerOrI32(expected);
+            this.TypeUntyped(n, t);
+            this.ConstEval(n);
+            return t;
+        }
+        u32 t = this.CheckExprInner(n, expected);
+        this.SetNType(n, t);
+        return t;
+    }
+
+    u32 IntegerOrI32(in this, u32 t) {
+        if (t != 0 && this.IsIntType(t)) return t;
+        return T_I32;
+    }
+
+    void NeedsUnsafe(in this, u32 n) {
+        if (this.Unsafe == 0) this.Error(E_NEEDS_UNSAFE, this.NTok(n));
+    }
+
+    u32 CheckExprInner(ref this, u32 n, u32 expected) {
+        if (!this.Core) this.TryQualified(n);
+        Node node = this.NodeAt(n);
+        u16 k = node.Kind;
+        if (k == NK_INT) {
+            // a suffixed literal
+            u32 t = this.SuffixType(node.Tok);
+            if (t == 0xFFFFFFFF) this.NotCore("128-bit integers", node.Tok);
+            bool overflow = false;
+            u64 v = this.LiteralValue(node.Tok, ref overflow);
+            if (overflow || v > this.TypeMax(t)) this.DoesNotFit(node.Tok, t);
+            return t;
+        }
+        if (k == NK_CHAR) {
+            if (this.CharValue(node.Tok) > 0x7F) this.NotCore("non-ASCII character literals", node.Tok);
+            return T_U8;
+        }
+        if (k == NK_STRING) return T_STR;
+        if (k == NK_BOOL) return T_BOOL;
+        if (k == NK_NAME) {
+            u32 s = this.Lookup(node.Tok);
+            if (s == 0 && !this.Core) {
+                // an unqualified variant of the expected enum ([item.enum.3])
+                u32 v = this.ExpectedVariant(expected, node.Tok);
+                if (v != 0) return this.CheckVariantValue(n, this.TypeAt(expected).Sym, v, expected, 0, false, node.Tok);
+            }
+            if (s == 0) this.FailName(node.Tok, E_UNKNOWN_NAME, "unknown name `", node.Tok, "`");
+            this.SetNSym(n, s);
+            u8 sk = this.SymKind(s);
+            if (sk == SK_LOCAL) this.NoteLocalUse(s);
+            if (sk == SK_LOCAL || sk == SK_STATIC) return this.SymAt(s).Type;
+            if (sk == SK_CONST) {
+                this.ConstResolve(s, node.Tok);
+                return this.SymAt(s).Type;
+            }
+            if (sk == SK_FN && !this.Core) return this.FnItemType(s, node.Tok);
+            if (sk == SK_BUILTIN && !this.Core) this.NotCore("built-in functions as values; wrap the call in a lambda", node.Tok);
+            if (sk == SK_FN || sk == SK_BUILTIN) this.NotCore("function values", node.Tok);
+            this.FailName(node.Tok, E_NOT_A_VALUE, "`", node.Tok, "` is a type, not a value");
+        }
+        if (k == NK_CALL) return this.CheckCall(n, expected);
+        if (k == NK_THIS) {
+            u32 s = this.LocalFind(node.Tok);
+            if (s == 0) this.FailName(node.Tok, E_UNKNOWN_NAME, "unknown name `", node.Tok, "`");
+            this.SetNSym(n, s);
+            this.NoteLocalUse(s);
+            return this.SymAt(s).Type;
+        }
+        if (k == NK_LAMBDA) return this.CheckLambda(n, expected, false);
+        if (k == NK_COND) {
+            // [s1.expr.2] both branches have one type: the expected one, or the first branch's
+            this.ExpectType(node.A, T_BOOL);
+            u32 t = expected;
+            if (this.IsUntyped(node.B) && this.IsUntyped(node.C)) t = this.IntegerOrI32(expected);
+            if (t == 0 || this.NKind(node.B) == NK_LAMBDA) {
+                t = this.CheckValue(node.B, expected);
+            } else {
+                this.ExpectType(node.B, t);
+            }
+            this.ExpectType(node.C, t);
+            return t;
+        }
+        if (k == NK_TRY) return this.CheckTry(n);
+        if (k == NK_NULL) return this.CheckNull(n, expected);
+        if (k == NK_RANGE) this.NotCore("ranges outside slicing and `foreach`", node.Tok);
+        if (k == NK_MATCH) {
+            u32 st = this.CheckValue(node.A, 0);
+            return this.CheckMatchS1(n, st, expected, true);
+        }
+        if (k == NK_BINARY && node.Op == TK_QQ) return this.CheckCoalesce(n, expected);
+        if (k == NK_INDEX && !this.Core && this.NKind(node.B) == NK_RANGE) return this.CheckSlice(n, expected);
+        if (k == NK_INDEX) {
+            u32 objType = this.CheckValue(node.A, 0);
+            Type obj = this.TypeAt(objType);
+            u32 elem = obj.Elem;
+            if (obj.Kind == TYK_PTR) {
+                this.NeedsUnsafe(n);
+            } else if (obj.Kind == TYK_STR) {
+                elem = T_U8;
+            } else if (obj.Kind != TYK_ARRAY && obj.Kind != TYK_SLICE) {
+                this.BadOperand(objType, node.Tok);
+            }
+            if (this.IsUntyped(node.B)) {
+                this.CheckExpr(node.B, T_USIZE);
+            } else {
+                u32 it = this.CheckValue(node.B, 0);
+                if (!this.IsIntType(it)) this.NotIntegerType(node.B, it);
+            }
+            return elem;
+        }
+        if (k == NK_MEMBER) return this.CheckMember(n, expected);
+        if (k == NK_UNARY) {
+            u32 op = node.Tok;
+            if (node.Op == TK_MINUS) {
+                u32 t = this.CheckValue(node.A, expected);
+                Type ty = this.TypeAt(t);
+                if (ty.Kind != TYK_INT || !ty.Signed) this.BadOperand(t, op);
+                return t;
+            }
+            if (node.Op == TK_TILDE) {
+                u32 t = this.CheckValue(node.A, expected);
+                if (!this.IsIntType(t)) this.BadOperand(t, op);
+                return t;
+            }
+            if (node.Op == TK_BANG) {
+                u32 t = this.CheckValue(node.A, 0);
+                if (t != T_BOOL) this.BadOperand(t, op);
+                return t;
+            }
+            if (node.Op == TK_STAR) {
+                this.NeedsUnsafe(n);
+                u32 t = this.CheckValue(node.A, 0);
+                Type ty = this.TypeAt(t);
+                if (ty.Kind != TYK_PTR) this.BadOperand(t, op);
+                return ty.Elem;
+            }
+            // '&'
+            this.NeedsUnsafe(n);
+            u32 t = this.CheckValue(node.A, 0);
+            if (!this.IsAddressable(node.A)) this.Error(E_NOT_ADDRESSABLE, op);
+            return this.TypePtrTo(t);
+        }
+        if (k == NK_BINARY) return this.CheckBinary(n, expected);
+        if (k == NK_CAST) {
+            // [core.expr.9]
+            u32 from = this.CheckValue(node.A, 0);
+            u32 to = this.ResolveType(node.B, false);
+            u32 kind = this.CastKind(from, to);
+            if (kind == 0) {
+                string b = string.From("cannot convert `");
+                this.AppendType(ref b, from);
+                b.Append("` to `");
+                this.AppendType(ref b, to);
+                b.AppendByte('`');
+                this.Fail(node.Tok, E_BAD_CAST, b);
+            }
+            if (kind == 2) this.NeedsUnsafe(n);
+            return to;
+        }
+        if (k == NK_SIZEOF || k == NK_ALIGNOF) {
+            u32 t = this.ResolveType(node.A, false);
+            this.SetNSym(n, t);     // the operand type, for lowering generic code
+            u64 align = 0;
+            u64 size = this.SizeOf(t, node.Tok, ref align);
+            if (k == NK_SIZEOF) this.SetNValue(n, size);
+            else this.SetNValue(n, align);
+            return T_USIZE;
+        }
+        // NK_NEW [core.expr.10]
+        u32 t = this.ResolveType(node.A, false);
+        if (this.TyKind(t) != TYK_STRUCT) this.BadOperand(t, node.Tok);
+        this.StructLayout(this.TypeAt(t).Sym, node.Tok);
+        u32 init = node.B;
+        while (init != 0) {
+            u32 tok = this.NTok(init);
+            u32 field = this.StructFieldNamed(t, init);
+            if (field == 0) this.NoMember(tok, t);
+            if (this.FindEarlierName(node.B, init)) this.FailName(tok, E_FIELD_TWICE, "field `", tok, "` is set twice");
+            u32 ft = this.FieldType(t, field);
+            this.ExpectType(this.NodeAt(init).A, ft);
+            init = this.NNext(init);
+        }
+        return t;
+    }
+
+    // E0301 "mismatched types: expected an integer type, found `T`" at node n.
+    void NotIntegerType(in this, u32 n, u32 t) {
+        string b = string.From("mismatched types: expected an integer type, found `");
+        this.AppendType(ref b, t);
+        b.AppendByte('`');
+        this.Fail(this.NTok(n), E_MISMATCH, b);
+    }
+
+    u32 CheckCall(ref this, u32 n, u32 expected) {
+        if (!this.Core) this.TryQualified(this.NodeAt(n).A);
+        Node node = this.NodeAt(n);
+        if (this.NKind(node.A) == NK_MEMBER && !this.Core) return this.CheckMethodCall(n, expected);
+        if (this.NKind(node.A) != NK_NAME && !this.Core) return this.CheckIndirectCall(n, node.A);
+        if (this.NKind(node.A) != NK_NAME) this.Error(E_NOT_CALLABLE, node.Tok);
+        u32 calleeTok = this.NTok(node.A);
+        u32 s = this.Lookup(calleeTok);
+        if (s == 0 && !this.Core) {
+            // V(…): an unqualified variant of the expected enum ([item.enum.3])
+            u32 v = this.ExpectedVariant(expected, calleeTok);
+            if (v != 0 && this.IsTagged(expected)) return this.CheckVariantValue(n, this.TypeAt(expected).Sym, v, expected, node.B, true, calleeTok);
+        }
+        if (s == 0) this.FailName(calleeTok, E_UNKNOWN_NAME, "unknown name `", calleeTok, "`");
+        Sym sym = this.SymAt(s);
+        // a function value in a local or static ([fn.pos.3])
+        if ((sym.Kind == SK_LOCAL || sym.Kind == SK_STATIC) && this.TyKind(sym.Type) == TYK_FN) return this.CheckIndirectCall(n, node.A);
+        if (sym.Kind != SK_FN && sym.Kind != SK_BUILTIN) this.Error(E_NOT_CALLABLE, node.Tok);
+        u32 typeArgs = this.NodeAt(node.A).E;
+        if (sym.Kind == SK_FN && !this.Core) return this.CheckCallTo(n, s, 0, typeArgs, calleeTok);
+        if (typeArgs != 0 && !(sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT))) this.TypeArgCount(calleeTok, 0, this.ListCount(typeArgs));
+        // str_from vouches for raw memory
+        if (sym.Kind == SK_BUILTIN && sym.Aux2 == B_STR_FROM) this.NeedsUnsafe(n);
+        if (sym.Kind == SK_BUILTIN && sym.Aux2 == B_FREE) this.NeedsUnsafe(n);
+        if (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT)) return this.CheckSliceFrom(n, sym.Aux2 == B_SLICE_FROM_MUT);
+        // [core.expr.8] count the arguments first
+        u32 count = this.ListCount(node.B);
+        if (count != sym.Aux) this.ArgCount(node.Tok, sym.Aux, count);
+        u32 a = node.B;
+        u32 i = 0;
+        while (a != 0) {
+            this.ExpectType(a, this.ParamType(s, i));
+            if (this.NodeAt(a).Flags & NF_REF != 0) this.Fail(this.NTok(a), E_ARG_MODE, "only `ref` parameters take `ref` arguments");
+            i++;
+            a = this.NNext(a);
+        }
+        return sym.Type;
+    }
+
+    // A call to function symbol fs ([core.expr.8], [s1.expr.6], [s1.expr.7]). ownerEnv holds
+    // the type arguments of the method's owner (fs's first NOwn environment entries);
+    // typeArgs is the explicit type argument list, if any; tok is where to report. Infers
+    // the rest from the arguments, checks the bounds, and records the call's environment
+    // (NValue: first | count << 32) for instantiation.
+    u32 CheckCallTo(ref this, u32 n, u32 fs, u32 ownerEnv, u32 typeArgs, u32 tok) {
+        Sym fn = this.SymAt(fs);
+        Node node = this.NodeAt(n);
+        u32 ne = fn.NEnv;
+        u32 env = this.EnvNew(ne);
+        for (u32 i = 0; i < fn.NOwn; i++) this.EnvSet(env, i, this.EnvGet(ownerEnv, i));
+        if (typeArgs != 0) {
+            u32 have = this.ListCount(typeArgs);
+            if (have != ne - fn.NOwn) this.TypeArgCount(tok, ne - fn.NOwn, have);
+            u32 a = typeArgs;
+            for (u32 i = fn.NOwn; i < ne; i++) {
+                u32 at = this.ResolveType(a, false);
+                this.EnvSet(env, i, at);
+                a = this.NNext(a);
+            }
+        }
+        u32 count = this.ListCount(node.B);
+        if (count != fn.Aux) this.ArgCount(node.Tok, fn.Aux, count);
+        // inference: arguments with a type of their own first, then lambdas and untyped
+        // literals, which take their type from the parameter
+        u32 a = node.B;
+        u32 i = 0;
+        while (a != 0) {
+            u32 pt = this.ParamType(fs, i);
+            if (this.Unbound(pt, env, ne) && !this.IsUntyped(a) && this.NKind(a) != NK_LAMBDA) {
+                u32 at = this.CheckValue(a, 0);
+                this.Unify(pt, at, env, ne);
+            }
+            i++;
+            a = this.NNext(a);
+        }
+        a = node.B;
+        i = 0;
+        u32 p = this.FirstParam(fs);
+        while (a != 0) {
+            u32 pt = this.ParamType(fs, i);
+            this.MarkParamLambda(a, pt);
+            if (this.NType(a) == 0 && this.Unbound(pt, env, ne)) {
+                u32 at = 0;
+                if (this.NKind(a) == NK_LAMBDA && this.TyKind(pt) == TYK_FN) {
+                    // the parameter types must be known; the result may come from the body
+                    u32 target = this.Subst(pt, env, ne);
+                    Type tt = this.TypeAt(pt);
+                    bool known = true;
+                    for (u32 k = 0; k < tt.NArgs; k++) {
+                        if (this.Unbound(this.EnvGet(tt.Args, k), env, ne)) known = false;
+                    }
+                    if (!known) target = 0;
+                    at = this.CheckLambda(a, target, this.Unbound(tt.Elem, env, ne));
+                    this.SetNType(a, at);
+                } else {
+                    at = this.CheckValue(a, 0);
+                }
+                this.Unify(pt, at, env, ne);
+            }
+            u32 want = this.Subst(pt, env, ne);
+            if (this.NType(a) != 0) {
+                if (!this.Coerce(a, this.NType(a), want)) this.Mismatch(want, this.NTok(a), this.NType(a));
+            } else {
+                this.ExpectType(a, want);
+            }
+            this.CheckArgMode(a, this.NodeAt(p).Flags & NF_REF != 0);
+            i++;
+            a = this.NNext(a);
+            p = this.NNext(p);
+        }
+        // every type argument known ([s1.expr.7]) and every bound met ([type.gen.2])
+        u32 tp = this.NodeAt(fn.Node).E;
+        for (u32 k = fn.NOwn; k < ne; k++) {
+            if (this.EnvGet(env, k) == 0) this.FailName(tok, E_CANNOT_INFER, "cannot infer type argument `", this.NTok(tp), "`; write it explicitly");
+            tp = this.NNext(tp);
+        }
+        for (u32 k = 0; k < fn.NBounds; k++) {
+            u32 t = this.Subst(this.BoundAt(fn.Bounds + k, 0), env, ne);
+            u32 it = this.Subst(this.BoundAt(fn.Bounds + k, 1), env, ne);
+            if (!this.Implements(t, it)) this.NotImplemented(tok, t, it);
+        }
+        this.SetNSym(n, fs);
+        this.SetNValue(n, env as u64 | (ne as u64) << 32);
+        if (this.NeedsInst(fs)) this.RecordCall(n);
+        return this.Subst(fn.Type, env, ne);
+    }
+
+    // x.M(…) and T.M(…) ([s1.expr.6]): a method of x's type, of a bound of a type parameter,
+    // or a static method of a named type.
+    u32 CheckMethodCall(ref this, u32 n, u32 expected) {
+        Node node = this.NodeAt(n);
+        u32 m = node.A;
+        this.TryQualified(this.NodeAt(m).A);
+        Node mem = this.NodeAt(m);
+        u32 obj = mem.A;
+        u32 name = mem.Tok;
+        if (this.NKind(obj) == NK_NAME && this.TypeNameSym(this.NTok(obj)) != 0) {
+            u32 ts = this.TypeNameSym(this.NTok(obj));
+            if (this.IsTagged(this.SymAt(ts).Type)) {
+                // E.V(…) and E<A>.V(…): a variant ([item.enum.3])
+                this.TaggedEnumDeclare(ts);
+                u32 v = this.VariantNamed(this.SymAt(ts).Type, name);
+                if (v != 0) {
+                    u32 et = 0;
+                    if (this.NodeAt(obj).E != 0 || this.SymAt(ts).NEnv == 0) et = this.ResolveTypeName(this.NTok(obj), this.NodeAt(obj).E, 0);
+                    else if (expected != 0 && this.TypeAt(expected).Sym == ts) et = expected;
+                    return this.CheckVariantValue(n, ts, v, et, node.B, true, name);
+                }
+            }
+            // T.M(…): a static method
+            u32 t = this.ResolveTypeName(this.NTok(obj), this.NodeAt(obj).E, 0);
+            u64 found = this.MethodFind(t, name);
+            if (found == 0) this.NoMember(name, t);
+            u32 fs = (found & 0xFFFFFFFF) as u32;
+            if (this.SymAt(fs).Flags & SF_STATIC == 0) this.FailName(name, E_STATIC_CALL, "`", name, "` takes `this`; call it on a value");
+            u32 objSym = this.TypeNameSym(this.NTok(obj));
+            this.SetNSym(obj, objSym);
+            this.SetNType(obj, t);
+            u32 owner = this.OwnerEnv(t, found);
+            return this.CheckCallTo(n, fs, owner, mem.E, name);
+        }
+        u32 ot = this.CheckValue(obj, 0);
+        u32 rt = ot;
+        if (this.TyKind(ot) == TYK_PTR) {
+            // a method through a pointer, like a field ([core.expr.6])
+            this.NeedsUnsafe(m);
+            rt = this.TypeAt(ot).Elem;
+        }
+        u32 fs = 0;
+        u32 owner = 0;
+        if (this.TyKind(rt) == TYK_PARAM) {
+            u32 bound = 0;
+            fs = this.BoundMethod(rt, name, ref bound);
+            if (fs == 0) this.NoMember(name, rt);
+            Type bt = this.TypeAt(bound);
+            owner = this.EnvNew(1 + bt.NArgs);
+            this.EnvSet(owner, 0, rt);
+            for (u32 i = 0; i < bt.NArgs; i++) this.EnvSet(owner, i + 1, this.EnvGet(bt.Args, i));
+        } else {
+            u64 found = this.MethodFind(rt, name);
+            if (found == 0) {
+                // a field holding a function value: x.F(…) calls it ([fn.pos.3])
+                if (this.TyKind(rt) == TYK_STRUCT && this.StructFieldNamed(rt, m) != 0) return this.CheckIndirectCall(n, m);
+                this.NoMember(name, ot);
+            }
+            fs = (found & 0xFFFFFFFF) as u32;
+            owner = this.OwnerEnv(rt, found);
+        }
+        u32 flags = this.SymAt(fs).Flags;
+        if (flags & SF_STATIC != 0) this.FailName(name, E_STATIC_CALL, "`", name, "` is static; call it on its type");
+        // `ref this` needs a place it may change ([s1.expr.6])
+        if (flags & SF_RECV_REF != 0 && this.TyKind(ot) != TYK_PTR) {
+            if (!this.IsMutable(obj)) this.Error(E_NOT_ASSIGNABLE, this.NTok(obj));
+            this.MarkMutation(obj);
+        }
+        return this.CheckCallTo(n, fs, owner, mem.E, name);
+    }
+
+    // The owner's type arguments for method value v (from MethodFind) called on type t: t's
+    // own arguments, or for an interface's default body [t, the interface's arguments…].
+    u32 OwnerEnv(ref this, u32 t, u64 v) {
+        u32 fs = (v & 0xFFFFFFFF) as u32;
+        Type ty = this.TypeAt(t);
+        if (this.SymAt(fs).Iface == 0) return ty.Args;
+        ImplRec r = this.Impls.Get(((v >> 32) as u32 - 1) as usize);
+        u32 it = this.Subst(r.Iface, ty.Args, ty.NArgs);
+        Type ity = this.TypeAt(it);
+        u32 env = this.EnvNew(1 + ity.NArgs);
+        this.EnvSet(env, 0, t);
+        for (u32 i = 0; i < ity.NArgs; i++) this.EnvSet(env, i + 1, this.EnvGet(ity.Args, i));
+        return env;
+    }
+
+    // The type symbol named by tok, unless a local of that name hides it; 0 otherwise.
+    u32 TypeNameSym(ref this, u32 tok) {
+        if (this.LocalFind(tok) != 0) return 0;
+        u32 s = this.GFindAt(tok);
+        if (s == 0) return 0;
+        u8 k = this.SymKind(s);
+        if (k == SK_TYPE || k == SK_STRUCT || k == SK_ENUM) return s;
+        return 0;
+    }
+
+    u32 CheckMember(ref this, u32 n, u32 expected) {
+        if (!this.Core) this.TryQualified(this.NodeAt(n).A);
+        Node node = this.NodeAt(n);
+        u32 name = node.Tok;
+        // Enum.Variant ([core.expr.7])
+        if (this.NKind(node.A) == NK_NAME) {
+            u32 s = this.Lookup(this.NTok(node.A));
+            if (s != 0 && this.SymKind(s) == SK_ENUM) {
+                this.EnumDeclare(s);
+                u32 et = this.SymAt(s).Type;
+                if (this.IsTagged(et)) {
+                    u32 v = this.VariantNamed(et, name);
+                    if (v == 0) this.NoMember(name, et);
+                    u32 known = 0;
+                    if (this.NodeAt(node.A).E != 0 || this.SymAt(s).NEnv == 0) known = this.ResolveTypeName(this.NTok(node.A), this.NodeAt(node.A).E, 0);
+                    else if (expected != 0 && this.TypeAt(expected).Sym == s) known = expected;
+                    return this.CheckVariantValue(n, s, v, known, 0, false, name);
+                }
+                if (this.EnumVariantNamed(et, n) == 0) this.NoMember(name, et);
+                return et;
+            }
+        }
+        u32 objType = this.CheckValue(node.A, 0);
+        u32 st = objType;       // the struct type after auto-deref
+        Type obj = this.TypeAt(objType);
+        if (obj.Kind == TYK_PTR && this.TyKind(obj.Elem) == TYK_STRUCT) {
+            this.NeedsUnsafe(n);
+            st = obj.Elem;
+        }
+        if (this.TyKind(st) == TYK_STRUCT) {
+            this.StructLayout(this.TypeAt(st).Sym, name);
+            u32 field = this.StructFieldNamed(st, n);
+            if (field != 0) return this.FieldType(st, field);
+        }
+        if (obj.Kind == TYK_STR || obj.Kind == TYK_SLICE) {
+            str text = this.TokText(name);
+            if (Same(text, "Len")) return T_USIZE;
+            if (Same(text, "Ptr")) {
+                if (obj.Kind == TYK_STR) return T_PTR_U8;
+                return this.TypePtrTo(obj.Elem);
+            }
+        }
+        this.NoMember(name, objType);
+        return 0;
+    }
+
+    // Does a node before n in the list starting at first share its name?
+    bool FindEarlierName(in this, u32 first, u32 n) {
+        u32 tok = this.NTok(n);
+        u32 m = first;
+        while (m != n) {
+            if (this.SameName(this.NTok(m), tok)) return true;
+            m = this.NNext(m);
+        }
+        return false;
+    }
+
+    // The field node of struct type t named by node n's token, or 0.
+    u32 StructFieldNamed(in this, u32 t, u32 n) {
+        u32 tok = this.NTok(n);
+        u32 f = this.NodeAt(this.SymAt(this.TypeAt(t).Sym).Node).A;
+        while (f != 0) {
+            if (this.SameName(this.NTok(f), tok)) return f;
+            f = this.NNext(f);
+        }
+        return 0;
+    }
+
+    // [core.expr.9]: 0 invalid, 1 allowed, 2 allowed in unsafe only.
+    u32 CastKind(in this, u32 from, u32 to) {
+        u8 fk = this.TyKind(from);
+        u8 tk = this.TyKind(to);
+        if (tk == TYK_INT) {
+            if (fk == TYK_INT || fk == TYK_BOOL || fk == TYK_ENUM) return 1;
+            if (fk == TYK_PTR && (to == T_USIZE || to == T_ISIZE)) return 2;
+        } else if (tk == TYK_PTR) {
+            if (fk == TYK_PTR || from == T_USIZE || from == T_ISIZE) return 2;
+        }
+        if (from == to) return 1;
+        return 0;
+    }
+
+    // [core.expr.3], [core.expr.4]
+    u32 CheckBinary(ref this, u32 n, u32 expected) {
+        Node node = this.NodeAt(n);
+        u16 op = node.Op;
+        if (op == TK_AND_AND || op == TK_OR_OR) {
+            this.ExpectType(node.A, T_BOOL);
+            this.ExpectType(node.B, T_BOOL);
+            return T_BOOL;
+        }
+        if (op == TK_SHL || op == TK_SHR) {
+            u32 lt = 0;
+            if (this.IsUntyped(node.A)) {
+                lt = this.IntegerOrI32(expected);
+                this.TypeUntyped(node.A, lt);
+                this.ConstEval(node.A);
+            } else {
+                lt = this.CheckValue(node.A, expected);
+            }
+            if (!this.IsIntType(lt)) this.BadOperand(lt, node.Tok);
+            u32 rt = this.CheckValue(node.B, 0);
+            if (!this.IsIntType(rt)) this.BadOperand(rt, node.Tok);
+            return lt;
+        }
+        bool compare = TokClass(op) & TC_PREC == PREC_COMPARE;
+        if (compare) expected = 0;      // comparisons ignore the expected type
+        u32 t = 0;
+        if (this.IsUntyped(node.A)) {
+            if (this.IsUntyped(node.B)) {
+                t = this.IntegerOrI32(expected);
+                this.TypeUntyped(node.A, t);
+                this.ConstEval(node.A);
+                this.TypeUntyped(node.B, t);
+                this.ConstEval(node.B);
+            } else {
+                t = this.CheckValue(node.B, expected);
+                if (!this.IsIntType(t)) {
+                    string b = string.From("mismatched types: expected `");
+                    this.AppendType(ref b, t);
+                    b.Append("`, found an integer literal");
+                    this.Fail(this.NTok(node.A), E_MISMATCH, b);
+                }
+                this.TypeUntyped(node.A, t);
+                this.ConstEval(node.A);
+            }
+        } else {
+            t = this.CheckValue(node.A, expected);
+            this.ExpectType(node.B, t);
+        }
+        if (compare) {
+            u8 k = this.TyKind(t);
+            if (op == TK_EQ_EQ || op == TK_NOT_EQ) {
+                if (k != TYK_INT && k != TYK_BOOL && k != TYK_ENUM && k != TYK_PTR) this.BadOperand(t, node.Tok);
+            } else if (k != TYK_INT) {
+                this.BadOperand(t, node.Tok);
+            }
+            return T_BOOL;
+        }
+        if (!this.IsIntType(t)) this.BadOperand(t, node.Tok);
+        return t;
+    }
+
+    // ------------------------------------------------------------------ literals
+
+    LiteralParts LiteralSplit(in this, u32 tok) {
+        str text = this.TokText(tok);
+        u64 radix = 10;
+        usize start = 0;
+        if (text.Len >= 2 && text[0] == '0') {
+            if (text[1] == 'x') radix = 16;
+            if (text[1] == 'b') radix = 2;
+            if (text[1] == 'o') radix = 8;
+            if (radix != 10) start = 2;
+        }
+        usize i = start;
+        while (i < text.Len && text[i] != 'i' && text[i] != 'u') i++;
+        return new LiteralParts { Base = radix, Digits = TextOf(text[start..i]), Suffix = TextOf(text[i..text.Len]) };
+    }
+
+    // The value of integer literal tok; overflow is set if it does not fit in 64 bits.
+    u64 LiteralValue(in this, u32 tok, ref bool overflow) {
+        LiteralParts parts = this.LiteralSplit(tok);
+        str digits = TextStr(parts.Digits);
+        u64 v = 0;
+        bool over = false;
+        for (usize i = 0; i < digits.Len; i++) {
+            u8 ch = digits[i];
+            if (ch == '_') continue;
+            u64 d = DigitOf(ch);
+            if (v > (18446744073709551615 - d) / parts.Base) over = true;
+            v = v *% parts.Base +% d;
+        }
+        overflow = over;
+        return v;
+    }
+
+    // The type an integer literal's suffix names: 0 without one, 0xFFFFFFFF for i128/u128.
+    u32 SuffixType(in this, u32 tok) {
+        str s = TextStr(this.LiteralSplit(tok).Suffix);
+        if (s.Len == 0) return 0;
+        if (Same(s, "i8")) return T_I8;
+        if (Same(s, "i16")) return T_I16;
+        if (Same(s, "i32")) return T_I32;
+        if (Same(s, "i64")) return T_I64;
+        if (Same(s, "isize")) return T_ISIZE;
+        if (Same(s, "u8")) return T_U8;
+        if (Same(s, "u16")) return T_U16;
+        if (Same(s, "u32")) return T_U32;
+        if (Same(s, "u64")) return T_U64;
+        if (Same(s, "usize")) return T_USIZE;
+        return 0xFFFFFFFF;
+    }
+
+    // The largest value of integer type t, as stored.
+    u64 TypeMax(in this, u32 t) {
+        Type ty = this.TypeAt(t);
+        u64 bits = ty.Size as u64 * 8;
+        if (ty.Signed) bits--;
+        if (bits == 64) return 18446744073709551615;
+        return (1 << bits) - 1;
+    }
+
+    // Does stored value v fit type t (integer, bool or enum)?
+    bool ValueFits(in this, u64 v, u32 t) {
+        Type ty = this.TypeAt(t);
+        if (ty.Kind == TYK_BOOL) return v <= 1;
+        if (ty.Kind == TYK_ENUM) ty = this.TypeAt(this.SymAt(ty.Sym).Aux);
+        u64 bits = ty.Size as u64 * 8;
+        if (bits == 64) return true;    // every 64-bit pattern is a valid i64/u64
+        if (ty.Signed) {
+            // sign-extending the low bits must give the value back
+            u64 shift = 64 - bits;
+            return ((v << shift) as i64 >> shift) as u64 == v;
+        }
+        return v >> bits == 0;
+    }
+
+    // v reduced to the bit width of integer type t, sign- or zero-extended as stored.
+    u64 WrapValue(in this, u64 v, u32 t) {
+        Type ty = this.TypeAt(t);
+        u64 bits = ty.Size as u64 * 8;
+        if (bits == 64) return v;
+        u64 shift = 64 - bits;
+        if (ty.Signed) return ((v << shift) as i64 >> shift) as u64;
+        return (v << shift) >> shift;
+    }
+
+    // The value of a character literal (the lexer validated it).
+    u64 CharValue(in this, u32 tok) {
+        str text = this.TokText(tok);
+        u8 b = text[1];
+        if (b == 0x5C) {
+            u8 e = text[2];
+            if (e == 'n') return 10;
+            if (e == 'r') return 13;
+            if (e == 't') return 9;
+            if (e == '0') return 0;
+            usize i = 0;
+            if (e == 'x') i = 3;
+            else if (e == 'u') i = 4;
+            else return e as u64;       // \\ \' \"
+            u64 v = 0;
+            while (text[i] != '}' && text[i] != 0x27) {
+                v = (v << 4) | DigitOf(text[i]);
+                i++;
+            }
+            return v;
+        }
+        if (b < 0x80) return b as u64;
+        // a multi-byte UTF-8 scalar
+        u64 v = 0;
+        usize more = 0;
+        if (b < 0xE0) {
+            v = (b & 0x1F) as u64;
+            more = 1;
+        } else if (b < 0xF0) {
+            v = (b & 0x0F) as u64;
+            more = 2;
+        } else {
+            v = (b & 0x07) as u64;
+            more = 3;
+        }
+        for (usize i = 0; i < more; i++) v = (v << 6) | (text[2 + i] & 0x3F) as u64;
+        return v;
+    }
+
+    // ------------------------------------------------------------------ constants
+
+    // The value of a checked constant expression (E0310, E0311).
+    u64 ConstEval(ref this, u32 n) {
+        u64 v = this.ConstEvalInner(n);
+        this.SetNValue(n, v);
+        return v;
+    }
+
+    void ConstFailed(in this, u32 n) => this.Error(E_CONST_FAILED, this.NTok(n));
+
+    void NotConstant(in this, u32 n) => this.Error(E_NOT_CONSTANT, this.NTok(n));
+
+    u64 ConstEvalInner(ref this, u32 n) {
+        Node node = this.NodeAt(n);
+        u32 t = this.NType(n);
+        u16 k = node.Kind;
+        if (k == NK_INT) {
+            bool overflow = false;
+            return this.LiteralValue(node.Tok, ref overflow);
+        }
+        if (k == NK_STRING) return 0;
+        if (k == NK_CHAR) return this.CharValue(node.Tok);
+        if (k == NK_BOOL) {
+            if (Same(this.TokText(node.Tok), "true")) return 1;
+            return 0;
+        }
+        if (k == NK_SIZEOF || k == NK_ALIGNOF) return this.NValue(n);
+        if (k == NK_NAME) {
+            u32 s = this.NSym(n);
+            if (s == 0) s = this.Lookup(node.Tok);
+            if (s != 0 && this.SymKind(s) == SK_CONST) {
+                this.ConstResolve(s, node.Tok);
+                return this.SymAt(s).Value;
+            }
+            if (t != 0 && this.TyKind(t) == TYK_ENUM) {
+                u32 v = this.EnumVariantNamed(t, n);
+                if (v != 0) return this.NValue(v);
+            }
+            this.NotConstant(n);
+        }
+        if (k == NK_MEMBER) {
+            if (this.NKind(node.A) == NK_NAME) {
+                u32 s = this.Lookup(this.NTok(node.A));
+                if (s != 0 && this.SymKind(s) == SK_ENUM) {
+                    u32 v = this.EnumVariantNamed(this.SymAt(s).Type, n);
+                    if (v != 0) return this.NValue(v);
+                }
+            }
+            this.NotConstant(n);
+        }
+        if (k == NK_UNARY) {
+            if (node.Op == TK_MINUS) {
+                // an untyped -literal was range-checked as a whole by TypeUntyped
+                if (this.NKind(node.A) == NK_INT && this.IsUntyped(n)) {
+                    bool overflow = false;
+                    u64 lit = this.LiteralValue(this.NTok(node.A), ref overflow);
+                    return 0 -% lit;
+                }
+                u64 x = this.ConstEval(node.A);
+                if (x == 0x8000000000000000) this.ConstFailed(n);      // -(-2^63)
+                u64 r = 0 -% x;
+                if (!this.ValueFits(r, t)) this.ConstFailed(n);
+                return r;
+            }
+            if (node.Op == TK_TILDE) {
+                u64 x = this.ConstEval(node.A);
+                return this.WrapValue(~x, t);
+            }
+            if (node.Op == TK_BANG) return this.ConstEval(node.A) ^ 1;
+            this.NotConstant(n);
+        }
+        if (k == NK_CAST) {
+            u64 x = this.ConstEval(node.A);
+            if (!this.IsIntType(t)) this.NotConstant(n);
+            return this.WrapValue(x, t);
+        }
+        if (k == NK_BINARY) return this.ConstBinary(n, node, t);
+        this.NotConstant(n);
+        return 0;
+    }
+
+    u64 ConstBinary(ref this, u32 n, Node node, u32 t) {
+        u16 op = node.Op;
+        if (op == TK_AND_AND || op == TK_OR_OR) this.NotConstant(n);
+        u64 a = this.ConstEval(node.A);
+        u64 b = this.ConstEval(node.B);
+        bool signed = this.TypeAt(this.NType(node.A)).Signed;      // the operands' type decides
+        i64 sa = a as i64;
+        i64 sb = b as i64;
+        if (op == TK_EQ_EQ) return (a == b) as u64;
+        if (op == TK_NOT_EQ) return (a != b) as u64;
+        if (op == TK_LT) {
+            if (signed) return (sa < sb) as u64;
+            return (a < b) as u64;
+        }
+        if (op == TK_GT) {
+            if (signed) return (sa > sb) as u64;
+            return (a > b) as u64;
+        }
+        if (op == TK_LT_EQ) {
+            if (signed) return (sa <= sb) as u64;
+            return (a <= b) as u64;
+        }
+        if (op == TK_GT_EQ) {
+            if (signed) return (sa >= sb) as u64;
+            return (a >= b) as u64;
+        }
+        u64 r = 0;
+        if (op == TK_PLUS || op == TK_MINUS || op == TK_STAR) {
+            bool over = false;
+            if (op == TK_PLUS) {
+                r = a +% b;
+                if (signed) {
+                    i64 sr = r as i64;
+                    over = (sa >= 0 && sb >= 0 && sr < 0) || (sa < 0 && sb < 0 && sr >= 0);
+                } else {
+                    over = r < a;
+                }
+            } else if (op == TK_MINUS) {
+                r = a -% b;
+                if (signed) {
+                    i64 sr = r as i64;
+                    over = (sa >= 0 && sb < 0 && sr < 0) || (sa < 0 && sb >= 0 && sr >= 0);
+                } else {
+                    over = b > a;
+                }
+            } else {
+                r = a *% b;
+                if (signed) {
+                    if (sa != 0 && sb != 0) {
+                        if ((sa == -1 && b == 0x8000000000000000) || (sb == -1 && a == 0x8000000000000000)) over = true;
+                        else if ((r as i64) / sb != sa) over = true;
+                    }
+                } else if (a != 0 && r / a != b) {
+                    over = true;
+                }
+            }
+            if (over || !this.ValueFits(r, t)) this.ConstFailed(n);
+            return r;
+        }
+        if (op == TK_WRAP_ADD) return this.WrapValue(a +% b, t);
+        if (op == TK_WRAP_SUB) return this.WrapValue(a -% b, t);
+        if (op == TK_WRAP_MUL) return this.WrapValue(a *% b, t);
+        if (op == TK_SLASH || op == TK_PERCENT) {
+            if (b == 0) this.ConstFailed(n);
+            if (signed) {
+                // MIN / -1 overflows
+                if (sb == -1 && a == 0x8000000000000000) this.ConstFailed(n);
+                if (op == TK_SLASH) r = (sa / sb) as u64;
+                else r = (sa % sb) as u64;
+            } else {
+                if (op == TK_SLASH) r = a / b;
+                else r = a % b;
+            }
+            if (!this.ValueFits(r, t)) this.ConstFailed(n);
+            return r;
+        }
+        if (op == TK_AMP) return a & b;
+        if (op == TK_PIPE) return a | b;
+        if (op == TK_CARET) return a ^ b;
+        if (op == TK_SHL || op == TK_SHR) {
+            // the amount must be 0 <= b < bits of the result type, judged by the right
+            // operand's own signedness
+            bool rightSigned = this.TypeAt(this.NType(node.B)).Signed;
+            u64 bits = this.TypeAt(t).Size as u64 * 8;
+            if (rightSigned && sb < 0) this.ConstFailed(n);
+            if (b >= bits) this.ConstFailed(n);
+            if (op == TK_SHL) return this.WrapValue(a << b, t);
+            if (signed) return (sa >> b) as u64;
+            return a >> b;
+        }
+        this.NotConstant(n);
+        return 0;
+    }
+}

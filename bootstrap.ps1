@@ -285,6 +285,11 @@ function Invoke-Test {
     $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Stage1 'runtime\embedded.envo'), $Utf8))
     if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc1 embedded runtime' }
     else { Bad 'envoc1 embedded runtime' 'bootstrap/stage1/runtime/embedded.envo is stale: regenerate it with envoc1 embed (see docs/architecture/stage1.md)' }
+    # Stage 2 embeds the same prelude (compiler/driver/prelude.envo).
+    $r = Invoke-Tool $envoc1 @('embed', 'bootstrap/stage1/prelude/prelude.envo') $Root
+    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\prelude.envo'), $Utf8))
+    if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'envoc embedded prelude' }
+    else { Bad 'envoc embedded prelude' 'compiler/driver/prelude.envo is stale: regenerate it with envoc1 embed bootstrap/stage1/prelude/prelude.envo (see docs/architecture/stage2.md)' }
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     $t42 = Join-Path $tmp 't42.exe'
@@ -402,13 +407,18 @@ function Invoke-Test {
     $r = Invoke-Tool $envoc @('frobnicate') $Root
     if ($r.Code -eq 2 -and $r.Err.StartsWith("envoc: error: unknown command 'frobnicate'")) { Pass 'envoc unknown command' } else { Bad 'envoc unknown command' "exit $($r.Code)" }
 
-    # The Stage 2 front end (M3.2, M3.3): the lexer and parser goldens and the lexical and
-    # syntax spec tests, in the same modes as for Stage 1; then the same output as envoc1
-    # from `lex` and `parse` on every source file (D17). Keep in step with bootstrap.sh.
+    # The Stage 2 front end and checker (M3.2-M3.4): the lexer, parser and checker goldens
+    # and the lexical, syntax and type spec tests, in the same modes as for Stage 1; then
+    # the same output as envoc1 from `lex` and `parse` on every source file, from `check`
+    # on the run programs and goldens, and on both compilers' sources (D17). Tests whose
+    # error comes from the move and borrow checks wait for M3.5 ($stage2Later).
+    # Keep in step with bootstrap.sh.
+    $stage2Later = @('e0503_change_while_bound.envo', 'e0950_from_function_param.envo', 'e0950_lambda_takes_drop_value.envo')
     $stage2Golden = @(
         @{ Dir = 'lexer';     Command = 'lex';   Ext = '.tokens'; Modes = @('--core', 's1') },
         @{ Dir = 'parser';    Command = 'parse'; Ext = '.ast';    Modes = @('--core', 's1') },
-        @{ Dir = 's1-parser'; Command = 'parse'; Ext = '.ast';    Modes = @('s1') }
+        @{ Dir = 's1-parser'; Command = 'parse'; Ext = '.ast';    Modes = @('s1') },
+        @{ Dir = 'check';     Command = 'check'; Ext = '.check';  Modes = @('--core', 's1') }
     )
     foreach ($suite in $stage2Golden) {
       foreach ($mode in $suite.Modes) {
@@ -429,7 +439,9 @@ function Invoke-Test {
     $stage2Spec = @(
         @{ Dir = '01-lexical';  Command = 'lex';   Modes = @('--core', 's1') },
         @{ Dir = 'core-syntax'; Command = 'parse'; Modes = @('--core') },
-        @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') }
+        @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') },
+        @{ Dir = 'core-types';  Command = 'check'; Modes = @('--core') },
+        @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') }
     )
     foreach ($suite in $stage2Spec) {
       foreach ($mode in $suite.Modes) {
@@ -438,6 +450,7 @@ function Invoke-Test {
         Say "stage 2 spec tests ($mode): tests/spec/$($suite.Dir)"
         $dir = Join-Path $Root "tests\spec\$($suite.Dir)"
         foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+            if ($stage2Later -contains $f.Name) { continue }
             $name = "stage2 $mode spec/$($suite.Dir)/$($f.Name)"
             $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($f.FullName))
             $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\d+:\d+)')
@@ -451,17 +464,28 @@ function Invoke-Test {
         }
       }
     }
-    Say 'stage 2 lex and parse against envoc1: every .envo file in compiler/, bootstrap/stage1/, tests/'
+    Say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens'
     $sources = @('compiler', 'bootstrap\stage1', 'tests') | ForEach-Object {
         Get-ChildItem -LiteralPath (Join-Path $Root $_) -Filter '*.envo' -Recurse -File
     } | Sort-Object FullName
     foreach ($f in $sources) {
-        foreach ($cmd in @('lex', 'parse')) {
+        $cmds = @('lex', 'parse')
+        $rel = $f.FullName.Substring($Root.Length + 1)
+        if ($rel -match '^tests\\(spec\\(core|s1)-run|golden)\\') { $cmds = @('lex', 'parse', 'check') }
+        foreach ($cmd in $cmds) {
             $r1 = Invoke-Tool $envoc1 @($cmd, $f.Name) $f.DirectoryName
             $r2 = Invoke-Tool $envoc @($cmd, $f.Name) $f.DirectoryName
             if ($r1.Code -eq $r2.Code -and [string]::Equals($r1.Out, $r2.Out) -and [string]::Equals($r1.Err, $r2.Err)) { Pass $f.Name }
             else { Bad "stage2 $cmd $($f.FullName.Substring($Root.Length + 1))" "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
         }
+    }
+    foreach ($unit in @(@{ Dir = 'bootstrap\stage1'; Pre = @('--core', 'check') }, @{ Dir = 'compiler'; Pre = @('check') })) {
+        $dir = Join-Path $Root $unit.Dir
+        $files = @(Get-Content -LiteralPath (Join-Path $dir 'files.txt') | Where-Object { $_.Trim() -ne '' })
+        $r1 = Invoke-Tool $envoc1 ($unit.Pre + $files) $dir
+        $r2 = Invoke-Tool $envoc ($unit.Pre + $files) $dir
+        if ($r1.Code -eq $r2.Code -and [string]::Equals($r1.Out, $r2.Out) -and [string]::Equals($r1.Err, $r2.Err)) { Pass "stage2 check $($unit.Dir)" }
+        else { Bad "stage2 check $($unit.Dir)" "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
     }
 
     Say ''
