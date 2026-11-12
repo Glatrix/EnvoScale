@@ -1,0 +1,21 @@
+// --allow read: files can be read and folders listed, but nothing written.
+// allow: read
+// expect: read ok
+// expect: list ok
+// expect: write denied
+// expect: delete denied
+// expect-stderr: envo: permission denied: the script needs `--allow write`
+use std.fs;
+use ports.{IoError};
+
+bool IsDenied<T>(Result<T, IoError> r) {
+    match r {
+        Ok(_) => { return false; }
+        Err(e) => { return e == IoError.Denied; }
+    }
+}
+
+if (fs.ReadText("read_only.envo").IsOk()) print("read ok");
+if (fs.ListDir(".").IsOk()) print("list ok");
+if (IsDenied(fs.WriteText("read_only.envo", "x"))) print("write denied");
+if (IsDenied(fs.Delete("read_only.envo"))) print("delete denied");

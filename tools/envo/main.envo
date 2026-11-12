@@ -18,14 +18,17 @@ const u32 TGT_WINDOWS = 2;
 
 void EnvoUsage(i32 fd) {
     write(fd, "usage: envo <command> [arguments]\n");
+    write(fd, "       envo [--allow <permissions>] <file.envo> [arguments]   (a script)\n");
     write(fd, "\n");
     write(fd, "commands:\n");
     write(fd, "  new <name>              create a package in the folder <name>\n");
     write(fd, "  build [dir | file.envo...] [-O0|-O2] [-o <output>] [--os none] [--target <t>]\n");
     write(fd, "                          build a package's program (dir/build/<name>), or the\n");
     write(fd, "                          program in the given files\n");
-    write(fd, "  run [dir | file.envo...] [build options] [-- <arguments>]\n");
-    write(fd, "                          build, then run with the arguments\n");
+    write(fd, "  run [dir | file.envo...] [--allow <permissions>] [--native] [-- <arguments>]\n");
+    write(fd, "                          run in the script runtime, sandboxed (permissions:\n");
+    write(fd, "                          read, write, fs, each with :path; env, run, net, all;\n");
+    write(fd, "                          -A for all); --native builds and runs native code\n");
     write(fd, "  check [dir | file.envo...] [--os none]\n");
     write(fd, "                          check names, types and ownership without building\n");
     write(fd, "  test [path...] [-O0] [-v]\n");
@@ -109,12 +112,14 @@ struct BuildOpts {
     bool Opt;
     string Os;
     List<string> RunArgs;   // after `--`
+    bool Native;            // run: build and run native code instead of the script runtime
+    List<string> Allows;    // run: `--allow` permissions for the script runtime
 }
 
 BuildOpts ParseOpts(usize from) {
     BuildOpts o = new BuildOpts {
         Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
-        Os = string.New(), RunArgs = List<string>.New(),
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(),
     };
     usize i = from;
     while (i < env.ArgCount()) {
@@ -125,6 +130,18 @@ BuildOpts ParseOpts(usize from) {
         }
         if (Eq(a, "-O2") || Eq(a, "-O0")) {
             o.Opt = Eq(a, "-O2");
+            i++;
+        } else if (Eq(a, "--native")) {
+            o.Native = true;
+            i++;
+        } else if (Eq(a, "-A")) {
+            o.Allows.Push(string.From("all"));
+            i++;
+        } else if (Eq(a, "--allow") && i + 1 < env.ArgCount()) {
+            o.Allows.Push(string.From(env.Arg(i + 1)));
+            i += 2;
+        } else if (ct.StartsWith(a, "--allow=")) {
+            o.Allows.Push(string.From(a[8..a.Len]));
             i++;
         } else if ((Eq(a, "-o") || Eq(a, "--os") || Eq(a, "--target")) && i + 1 < env.ArgCount()) {
             str v = env.Arg(i + 1);
@@ -203,6 +220,7 @@ Plan PlanBuild(in BuildOpts o) {
 i32 CmdEnvoBuild(usize from, bool quiet) {
     BuildOpts o = ParseOpts(from);
     if (o.RunArgs.Len() > 0) EnvoFail("`--` and program arguments go with `envo run`", 2);
+    if (o.Native || o.Allows.Len() > 0) EnvoFail("--native and --allow go with `envo run`", 2);
     Plan p = PlanBuild(o);
     string home = EnvoHome();
     i32 code = BuildProgram(p.Files, p.Output.AsStr(), o.Target, o.Opt, home.AsStr(), o.Os.AsStr(), "");
@@ -216,6 +234,8 @@ i32 CmdEnvoBuild(usize from, bool quiet) {
 i32 CmdEnvoRun(usize from) {
     BuildOpts o = ParseOpts(from);
     if (o.Target != HostTargetCode()) EnvoFail("`envo run` builds for this machine; leave out --target", 2);
+    if (!o.Native) return RunScript(o);
+    if (o.Allows.Len() > 0) EnvoFail("--allow is for the script runtime; native programs are not sandboxed", 2);
     Plan p = PlanBuild(o);
     string home = EnvoHome();
     i32 code = BuildProgram(p.Files, p.Output.AsStr(), o.Target, o.Opt, home.AsStr(), o.Os.AsStr(), "");
@@ -343,6 +363,8 @@ if (Eq(command, "help") || Eq(command, "--help")) {
     EnvoUsage(1);
     return 0;
 }
+// a script run directly (`envo file.envo`, a shebang line), with any permissions first
+if (ct.EndsWith(command, ".envo") || Eq(command, "-A") || Eq(command, "--allow") || ct.StartsWith(command, "--allow=")) return CmdEnvoScript(1);
 if (Eq(command, "new")) return CmdEnvoNew(2);
 if (Eq(command, "build")) return CmdEnvoBuild(2, false);
 if (Eq(command, "run")) return CmdEnvoRun(2);
@@ -351,6 +373,7 @@ if (Eq(command, "test")) return CmdEnvoTest(2);
 if (Eq(command, "explain")) return CmdEnvoExplain(2);
 if (Eq(command, "fmt")) return CmdEnvoFmt(2);
 if (Eq(command, "lsp")) return CmdEnvoLsp(2);
+if (Eq(command, "repl")) return CmdEnvoRepl(2);
 string msg = string.From("unknown command '");
 msg.Append(command);
 msg.Append("'; run `envo help` for the list");

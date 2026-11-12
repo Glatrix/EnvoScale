@@ -1,0 +1,13 @@
+// --allow all (or -A): what a native program may do.
+// allow: all
+// expect: write ok
+// expect: read ok
+// expect: env ok
+// expect: delete ok
+use std.fs;
+use std.env;
+
+if (fs.WriteText("everything.txt", "all").IsOk()) print("write ok");
+if (fs.ReadText("everything.txt").IsOk()) print("read ok");
+if (env.Var("PATH").IsSome()) print("env ok");
+if (fs.Delete("everything.txt").IsOk()) print("delete ok");

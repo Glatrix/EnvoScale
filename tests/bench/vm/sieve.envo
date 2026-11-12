@@ -1,0 +1,14 @@
+// Loops and memory: the primes below two million, by the sieve of Eratosthenes.
+// expect: 148933
+usize n = 2000000;
+*u8 composite = alloc(n);
+usize count = 0;
+unsafe {
+    for (usize i = 2; i < n; i++) {
+        if (composite[i] != 0) continue;
+        count++;
+        for (usize k = i * i; k < n; k += i) composite[k] = 1;
+    }
+}
+use alloc.text;
+print(text.Uint(count as u64).AsStr());

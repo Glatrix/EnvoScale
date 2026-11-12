@@ -127,8 +127,15 @@ impl IFileSystem for FileSystem {
     Result<string, IoError> Read(ref this, str path) {
         i32 fd = open(path, 0);
         if (fd < 0) {
+            // a folder cannot be opened either (ACCESS_DENIED too): look before deciding;
+            // a name the system cannot take never reached it, so its error is stale
+            u32 e = LastError();
+            unsafe {
+                if (Wide(path) as usize == 0) return Err(IoError.Invalid);
+            }
             u32 attrs = Attributes(path);
             if (attrs != 0xFFFFFFFF && attrs & ATTR_DIRECTORY != 0) return Err(IoError.Invalid);
+            if (e == 5) return Err(IoError.Denied);
             if (attrs == 0xFFFFFFFF) return Err(IoError.NotFound);
             return Err(IoError.Denied);
         }
@@ -153,9 +160,11 @@ impl IFileSystem for FileSystem {
         if (attrs != 0xFFFFFFFF && attrs & ATTR_DIRECTORY != 0) return Err(IoError.Invalid);
         i32 fd = open(path, 1);
         if (fd < 0) {
+            u32 e = LastError();
             unsafe {
                 if (Wide(path) as usize == 0) return Err(IoError.Invalid);
             }
+            if (e == 5) return Err(IoError.Denied);
             return Err(IoError.NotFound);
         }
         write(fd, data);
@@ -207,10 +216,13 @@ impl IFileSystem for FileSystem {
         unsafe {
             if (Wide(path) as usize == 0) return Err(IoError.Invalid);
         }
-        if (!this.IsDir(path)) {
-            if (this.IsFile(path)) return Err(IoError.Invalid);
+        u32 attrs = 0xFFFFFFFF;
+        if (path.Len > 0) attrs = Attributes(path);
+        if (path.Len > 0 && attrs == 0xFFFFFFFF) {
+            if (LastError() == 5) return Err(IoError.Denied);
             return Err(IoError.NotFound);
         }
+        if (path.Len > 0 && attrs & ATTR_DIRECTORY == 0) return Err(IoError.Invalid);
         string pattern = string.From(path);
         if (path.Len > 0 && path[path.Len - 1] != '/' && path[path.Len - 1] != 0x5C) pattern.AppendByte('/');
         pattern.AppendByte('*');
@@ -485,5 +497,45 @@ impl IProcess for Process {
             Call(W_CLOSEHANDLE, pi64[1], 0, 0, 0, 0, 0);
         }
         return Ok(code as i32);
+    }
+}
+
+// ------------------------------------------------------------------ raw calls
+
+// Calls import k of the executable's table with the arguments: what a program's own
+// `__wincall(k, …)` does. The script runtime forwards its programs' calls here (PLAN
+// D32); k must be one of the slots the table has, else the result is -1.
+public i64 WinCall(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j) {
+    match k {
+        0 => { return __wincall(0, a, b, c, d, e, f, g, h, i, j); }
+        1 => { return __wincall(1, a, b, c, d, e, f, g, h, i, j); }
+        2 => { return __wincall(2, a, b, c, d, e, f, g, h, i, j); }
+        3 => { return __wincall(3, a, b, c, d, e, f, g, h, i, j); }
+        4 => { return __wincall(4, a, b, c, d, e, f, g, h, i, j); }
+        5 => { return __wincall(5, a, b, c, d, e, f, g, h, i, j); }
+        6 => { return __wincall(6, a, b, c, d, e, f, g, h, i, j); }
+        7 => { return __wincall(7, a, b, c, d, e, f, g, h, i, j); }
+        8 => { return __wincall(8, a, b, c, d, e, f, g, h, i, j); }
+        9 => { return __wincall(9, a, b, c, d, e, f, g, h, i, j); }
+        10 => { return __wincall(10, a, b, c, d, e, f, g, h, i, j); }
+        11 => { return __wincall(11, a, b, c, d, e, f, g, h, i, j); }
+        12 => { return __wincall(12, a, b, c, d, e, f, g, h, i, j); }
+        13 => { return __wincall(13, a, b, c, d, e, f, g, h, i, j); }
+        14 => { return __wincall(14, a, b, c, d, e, f, g, h, i, j); }
+        15 => { return __wincall(15, a, b, c, d, e, f, g, h, i, j); }
+        16 => { return __wincall(16, a, b, c, d, e, f, g, h, i, j); }
+        17 => { return __wincall(17, a, b, c, d, e, f, g, h, i, j); }
+        18 => { return __wincall(18, a, b, c, d, e, f, g, h, i, j); }
+        19 => { return __wincall(19, a, b, c, d, e, f, g, h, i, j); }
+        20 => { return __wincall(20, a, b, c, d, e, f, g, h, i, j); }
+        21 => { return __wincall(21, a, b, c, d, e, f, g, h, i, j); }
+        22 => { return __wincall(22, a, b, c, d, e, f, g, h, i, j); }
+        23 => { return __wincall(23, a, b, c, d, e, f, g, h, i, j); }
+        24 => { return __wincall(24, a, b, c, d, e, f, g, h, i, j); }
+        25 => { return __wincall(25, a, b, c, d, e, f, g, h, i, j); }
+        26 => { return __wincall(26, a, b, c, d, e, f, g, h, i, j); }
+        27 => { return __wincall(27, a, b, c, d, e, f, g, h, i, j); }
+        29 => { return __wincall(29, a, b, c, d, e, f, g, h, i, j); }
+        _ => { return -1; }
     }
 }

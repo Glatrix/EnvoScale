@@ -1,0 +1,17 @@
+// Library code: building, splitting and hashing text with the standard platform.
+// expect: 100000 lines, map 1000
+use alloc.text;
+use alloc.map.{Map};
+
+string all = string.New();
+for (u64 i = 0; i < 100000; i++) {
+    all.Append("line ");
+    all.Append(text.Uint(i % 1000).AsStr());
+    all.AppendByte(10);
+}
+List<str> lines = text.Lines(all.AsStr());
+Map<string, u64> seen = Map<string, u64>.New();
+foreach (var l in lines.AsSlice()) seen.Set(string.From(l), 1);
+write(1, text.Uint(lines.Len() as u64).AsStr());
+write(1, " lines, map ");
+print(text.Uint(seen.Len() as u64).AsStr());

@@ -627,6 +627,98 @@ do_test() {
             if [ "$nf" -gt 1 ]; then failed=$((failed + nf - 1)); fi
         fi
     fi
+    # The script runtime (PLAN D35): every spec run program, and every multi-file one, runs
+    # in the VM (`envo run -A`) with the output, exit code and panic it has natively.
+    say 'script runtime: tests/spec/core-run, s1-run, s2-run and the multi-file programs in the VM'
+    vmdir="$ROOT/build/run-vm"
+    mkdir -p "$vmdir"
+    for suite in core-run s1-run s2-run; do
+        for f in "$ROOT"/tests/spec/$suite/*.envo; do
+            name="vm spec/$suite/$(basename "$f")"
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
+            want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
+            panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+            [ -n "$want_code" ] || want_code=0
+            [ -z "$panic" ] || want_code=101
+            set +e
+            (cd "$vmdir" && "$envo" run -A "$f") > "$TMP/out" 2> "$TMP/err"
+            rc=$?
+            set -e
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if ! cmp -s "$TMP/expected" "$TMP/actual"; then bad "$name" 'stdout differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; continue; fi
+            if [ "$rc" -ne "$want_code" ]; then bad "$name" "exit code $rc, expected $want_code: $(cat "$TMP/err")"; continue; fi
+            if [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$TMP/err"; then bad "$name" "stderr: $(cat "$TMP/err")"; continue; fi
+            pass
+        done
+    done
+    for msuite in core-multi s1-multi; do
+        for d in "$ROOT"/tests/spec/$msuite/*/; do
+            d=${d%/}
+            grep -q '^// expect-error: ' "$d/main.envo" && continue
+            set -- main.envo
+            for f in "$d"/*.envo; do
+                f=$(basename "$f")
+                [ "$f" = main.envo ] || set -- "$@" "$f"
+            done
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
+            set +e
+            (cd "$d" && "$envo" run -A "$@") > "$TMP/out" 2> "$TMP/err"
+            rc=$?
+            set -e
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+            else bad "vm spec/$msuite/$(basename "$d")" "exit $rc: $(cat "$TMP/err")"; fi
+        done
+    done
+    # Permissions (PLAN D34): each tests/sandbox program runs with its `// allow:` lines as
+    # --allow, in a scratch copy of the folder; stdout must be its `// expect:` lines and
+    # stderr must hold each `// expect-stderr:` text (tests/sandbox/README.md)
+    say 'script runtime permissions: tests/sandbox'
+    boxdir="$ROOT/build/run-sandbox"
+    rm -rf "$boxdir"
+    mkdir -p "$boxdir"
+    cp "$ROOT"/tests/sandbox/*.envo "$boxdir"/
+    for f in "$boxdir"/*.envo; do
+        base=$(basename "$f")
+        set -- run
+        while IFS= read -r a; do
+            [ -n "$a" ] && set -- "$@" --allow "$a"
+        done <<EOF_ALLOW
+$(sed -n 's|^// allow: \(.*\)$|\1|p' "$f" | tr -d '\r')
+EOF_ALLOW
+        set -- "$@" "$base"
+        sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
+        set +e
+        (cd "$boxdir" && "$envo" "$@") > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        problem=
+        if [ "$rc" -ne 0 ]; then problem="exit $rc: $(cat "$TMP/err")"
+        elif ! cmp -s "$TMP/expected" "$TMP/actual"; then problem='stdout differs'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true
+        else
+            while IFS= read -r want; do
+                [ -n "$want" ] || continue
+                grep -q -F -- "$want" "$TMP/err" || problem="stderr lacks '$want': $(cat "$TMP/err")"
+            done <<EOF_ERR
+$(sed -n 's|^// expect-stderr: \(.*\)$|\1|p' "$f" | tr -d '\r')
+EOF_ERR
+        fi
+        if [ -z "$problem" ]; then pass; else bad "sandbox $base" "$problem"; fi
+    done
+    # A script run through its shebang line (PLAN D33), where the system has `env`: an
+    # executable file starting with `#!/usr/bin/env envo`, found on PATH
+    if [ -z "$(host_suffix)" ] && [ -x /usr/bin/env ]; then
+        say 'script runtime: a #!/usr/bin/env envo script'
+        printf '#!/usr/bin/env envo\nuse std.env;\nList<str> all = env.Args();\nforeach (var a in all.AsSlice()) print(a);\n' > "$boxdir/args.envo"
+        chmod +x "$boxdir/args.envo"
+        set +e
+        (cd "$boxdir" && PATH="$ROOT/build/envo:$PATH" ./args.envo one 'two words') > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+        printf 'one\ntwo words\n' > "$TMP/expected"
+        if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/out"; then pass; else bad 'shebang script' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     say 'envo commands: new, run, test, check, explain, version'
     erun="$ROOT/build/run-envo"
@@ -642,8 +734,10 @@ do_test() {
     if [ "$rc" -eq 0 ] && [ -f "$erun/demo/envo.envon" ]; then pass; else bad 'envo new' "exit $rc: $(cat "$TMP/err")"; fi
     envo_do run demo
     if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, demo!' ]; then pass; else bad 'envo run' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    envo_do run --native demo
+    if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, demo!' ]; then pass; else bad 'envo run --native' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     envo_do test demo
-    if [ "$rc" -eq 0 ] && grep -q '3 passed, 0 failed' "$TMP/out"; then pass; else bad 'envo test (package)' "exit $rc: $(cat "$TMP/out")"; fi
+    if [ "$rc" -eq 0 ] && grep -q '4 passed, 0 failed' "$TMP/out"; then pass; else bad 'envo test (package)' "exit $rc: $(cat "$TMP/out")"; fi
     printf 'i32 x = ;\n' > "$erun/bad.envo"
     envo_do check bad.envo
     if [ "$rc" -eq 1 ] && grep -q -F 'bad.envo:1:9: error[E0101]' "$TMP/err" && grep -q -F '1 | i32 x = ;' "$TMP/err" && grep -q -F 'envo explain E0101' "$TMP/err"; then pass; else bad 'envo check' "exit $rc: $(cat "$TMP/err")"; fi
@@ -653,6 +747,13 @@ do_test() {
     if [ "$rc" -eq 1 ]; then pass; else bad 'envo explain (unknown)' "exit $rc"; fi
     envo_do version
     if [ "$rc" -eq 0 ] && grep -q '^envo ' "$TMP/out"; then pass; else bad 'envo version' "exit $rc"; fi
+    # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
+    set +e
+    printf 'print("hello")\ni32 Twice(i32 x) {\n    return x * 2;\n}\nuse alloc.text;\nprint(text.Int(Twice(21) as i64).AsStr())\nu8 bad = nope;\n:quit\n' | (cd "$erun" && "$envo" repl) > "$TMP/out" 2> "$TMP/err"
+    rc=$?
+    set -e
+    hellos=$(grep -o hello "$TMP/out" | wc -l | tr -d ' ')
+    if [ "$rc" -eq 0 ] && [ "$hellos" -eq 1 ] && grep -q '> 42$' "$TMP/out" && grep -q -F 'error[E0203]' "$TMP/out"; then pass; else bad 'envo repl' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     envo_do frobnicate
     if [ "$rc" -eq 2 ]; then pass; else bad 'envo (unknown command)' "exit $rc"; fi
     # envo fmt: each tests/golden/fmt/name.envo formats to name.expected, which formats to
@@ -671,7 +772,7 @@ do_test() {
         else bad "golden fmt/$(basename "$f") (formatting the expected output changes it)" "exit $rc"; fi
     done
     set +e
-    (cd "$ROOT" && "$envo" fmt --check lib adapters tools tests/conformance compiler bootstrap/stage1 examples) > "$TMP/out" 2> "$TMP/err"
+    (cd "$ROOT" && "$envo" fmt --check lib adapters tools tests/conformance compiler bootstrap/stage1 runtime examples) > "$TMP/out" 2> "$TMP/err"
     rc=$?
     set -e
     if [ "$rc" -eq 0 ]; then pass; else bad 'envo fmt --check (run envo fmt on these files)' "$(cat "$TMP/out" "$TMP/err")"; fi

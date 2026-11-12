@@ -114,6 +114,7 @@ impl IFileSystem for FileSystem {
         if (kind == S_IFDIR) return Err(IoError.Invalid);
         i32 fd = open(path, 0);
         if (fd < 0) {
+            if (fd == -13) return Err(IoError.Denied);
             if (kind == 0) return Err(IoError.NotFound);
             return Err(IoError.Denied);
         }
@@ -452,3 +453,9 @@ impl IProcess for Process {
         return Ok((128 + sig) as i32);
     }
 }
+
+// ------------------------------------------------------------------ raw calls
+
+// Makes system call n with the arguments: what a program's own `__syscall(n, …)` does.
+// The script runtime forwards its programs' calls here (PLAN D32).
+public i64 SysCall(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __syscall(n, a, b, c, d, e, f);

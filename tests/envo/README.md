@@ -8,12 +8,14 @@ The scripts check each `envo` command end to end, in a scratch folder
 | Check | Passes when |
 |---|---|
 | `envo new demo` | it exits 0 and writes `demo/envo.envon` |
-| `envo run demo` | it prints `Hello, demo!` and exits 0 |
-| `envo test demo` | the package builds and its test passes at `-O0` and `-O2` (`3 passed, 0 failed`) |
+| `envo run demo` | it prints `Hello, demo!` (in the script runtime) and exits 0 |
+| `envo run --native demo` | the same, built and run as native code |
+| `envo test demo` | the package builds and its test passes at `-O0`, `-O2` and in the script runtime (`4 passed, 0 failed`) |
 | `envo check bad.envo` | it exits 1 with `bad.envo:1:9: error[E0101]`, the source line and a pointer to `envo explain` |
 | `envo explain E0004` | it prints the registry entry and the text of `[lex.str.1]` |
 | `envo explain E9999` | it exits 1 |
 | `envo version` | it prints `envo …` |
+| `envo repl`, cells piped in | each cell's output shows once (`hello`, then `42` from a function declared over three lines), and a cell that does not compile shows its error |
 | an unknown command | it exits 2 |
 | `envo fmt --stdout` on `tests/golden/fmt/*.envo` | the output is `name.expected`, which formats to itself |
 | `envo fmt --check` on `lib`, `adapters`, `tools`, `tests/conformance`, `compiler`, `bootstrap/stage1`, `examples` | nothing would change |

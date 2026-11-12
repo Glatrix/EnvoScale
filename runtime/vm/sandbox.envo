@@ -1,0 +1,334 @@
+// Permissions for scripts (PLAN D34; docs/architecture/script-runtime.md). A script has
+// its console and nothing else until `--allow` grants more:
+//
+//   read[:path]    read files and list folders (under path)
+//   write[:path]   create, change and delete files and folders (under path)
+//   fs[:path]      both
+//   env            read environment variables
+//   run            start other programs
+//   net            the network (M7)
+//   all            everything
+//
+// The VM asks before it forwards a system call (vm.envo). A denied call fails the way the
+// system fails it for "access denied", so library code sees IoError.Denied; the first
+// denial of each kind prints a note saying what to allow.
+namespace envo.vm;
+
+use envoc.util;
+
+const u32 CAP_READ = 0;
+const u32 CAP_WRITE = 1;
+const u32 CAP_ENV = 2;
+const u32 CAP_RUN = 3;
+const u32 CAP_NET = 4;
+
+public struct Sandbox {
+    bool All;
+    u32 Any;                    // capabilities with no path limit, a bit each
+    List<string> ReadPaths;     // normalized, for read:path
+    List<string> WritePaths;
+    u32 Noted;                  // capabilities a note was printed for
+    bool LastDenied;            // the last Windows call was denied (for GetLastError)
+    string Cwd;                 // the working directory, normalized
+
+    // A sandbox that allows nothing.
+    public static Sandbox None(str cwd) {
+        Sandbox s = new Sandbox {
+            All = false, Any = 0, ReadPaths = List<string>.New(),
+            WritePaths = List<string>.New(), Noted = 0,
+            LastDenied = false, Cwd = string.New(),
+        };
+        s.Cwd = Normal(cwd, "");
+        return s;
+    }
+
+    // Grants one `--allow` item (or a comma-separated list); false if one is not known.
+    public bool Allow(ref this, str spec) {
+        usize at = 0;
+        while (at <= spec.Len) {
+            usize end = at;
+            while (end < spec.Len && spec[end] != ',') end++;
+            if (!this.AllowOne(spec[at..end])) return false;
+            at = end + 1;
+        }
+        return true;
+    }
+
+    bool AllowOne(ref this, str item) {
+        str name = item;
+        str path = "";
+        for (usize i = 0; i < item.Len; i++) {
+            if (item[i] == ':' && i > 1) {
+                name = item[0..i];
+                path = item[i + 1..item.Len];
+                break;
+            }
+        }
+        if (Same(name, "all") && path.Len == 0) {
+            this.All = true;
+            return true;
+        }
+        bool read = Same(name, "read") || Same(name, "fs");
+        bool write = Same(name, "write") || Same(name, "fs");
+        if (read || write) {
+            if (path.Len == 0) {
+                if (read) this.Any = this.Any | (1 << CAP_READ);
+                if (write) this.Any = this.Any | (1 << CAP_WRITE);
+            } else {
+                if (read) this.ReadPaths.Push(Normal(path, this.Cwd.AsStr()));
+                if (write) this.WritePaths.Push(Normal(path, this.Cwd.AsStr()));
+            }
+            return true;
+        }
+        if (path.Len > 0) return false;
+        if (Same(name, "env")) this.Any = this.Any | (1 << CAP_ENV);
+        else if (Same(name, "run")) this.Any = this.Any | (1 << CAP_RUN);
+        else if (Same(name, "net")) this.Any = this.Any | (1 << CAP_NET);
+        else return false;
+        return true;
+    }
+
+    // May the script look at path's metadata (does it exist, is it a folder)? Reading or
+    // writing it allows that, and so does running programs, which are found that way.
+    bool MayStat(ref this, str path) {
+        if (this.All || (this.Any >> CAP_RUN) & 1 != 0) return true;
+        if (this.Quietly(CAP_WRITE, path)) return true;
+        return this.May(CAP_READ, path);
+    }
+
+    // May, without a note.
+    bool Quietly(ref this, u32 cap, str path) {
+        u32 noted = this.Noted;
+        this.Noted = 0xFFFFFFFF;
+        bool ok = this.May(cap, path);
+        this.Noted = noted;
+        return ok;
+    }
+
+    // May the script use capability cap on path ("" for no path)?
+    bool May(ref this, u32 cap, str path) {
+        if (this.All || (this.Any >> cap) & 1 != 0) return true;
+        if (path.Len > 0 && (cap == CAP_READ || cap == CAP_WRITE)) {
+            string full = Normal(path, this.Cwd.AsStr());
+            if (cap == CAP_READ) {
+                foreach (var r in this.ReadPaths.AsSlice()) {
+                    if (Under(full.AsStr(), r.AsStr())) return true;
+                }
+            } else {
+                foreach (var r in this.WritePaths.AsSlice()) {
+                    if (Under(full.AsStr(), r.AsStr())) return true;
+                }
+            }
+        }
+        this.Note(cap, path);
+        return false;
+    }
+
+    void Note(ref this, u32 cap, str path) {
+        if ((this.Noted >> cap) & 1 != 0) return;
+        this.Noted = this.Noted | (1 << cap);
+        str what = "read";
+        if (cap == CAP_WRITE) what = "write";
+        if (cap == CAP_ENV) what = "env";
+        if (cap == CAP_RUN) what = "run";
+        if (cap == CAP_NET) what = "net";
+        string m = string.From("envo: permission denied: the script needs `--allow ");
+        m.Append(what);
+        if (path.Len > 0) {
+            m.Append("` (or `--allow ");
+            m.Append(what);
+            m.AppendByte(':');
+            m.Append(path);
+            m.Append("`)");
+        } else {
+            m.AppendByte('`');
+        }
+        m.AppendByte(10);
+        write(2, m.AsStr());
+    }
+
+    // ------------------------------------------------------------------ the calls
+
+    // Linux: system call n with its first arguments.
+    public bool AllowSyscall(ref this, i64 n, i64 a1, i64 a2, i64 a3) {
+        if (this.All) return true;
+        if (n == 2) return this.MayOpen(CString(a1), a2);              // open
+        if (n == 257) return this.MayOpen(CString(a2), a3);            // openat
+        if (n == 85) return this.May(CAP_WRITE, CString(a1).AsStr());  // creat
+        if (n == 87 || n == 83 || n == 84) return this.May(CAP_WRITE, CString(a1).AsStr());    // unlink, mkdir, rmdir
+        if (n == 262) return this.MayStat(CString(a2).AsStr());         // newfstatat
+        if (n == 59) return this.May(CAP_RUN, "");                      // execve
+        return true;
+    }
+
+    bool MayOpen(ref this, in string path, i64 flags) {
+        // the environment comes from /proc/self/environ
+        if (Same(path.AsStr(), "/proc/self/environ")) return this.May(CAP_ENV, "");
+        bool writes = flags & 3 != 0 || flags & 0x40 != 0 || flags & 0x200 != 0;    // O_WRONLY/O_RDWR, O_CREAT, O_TRUNC
+        if (writes && !this.May(CAP_WRITE, path.AsStr())) return false;
+        if (flags & 3 != 1 && !this.May(CAP_READ, path.AsStr())) return false;
+        return true;
+    }
+
+    // Windows: import k (bootstrap/stage1/x64/image.envo) with its first arguments, and
+    // its fifth (CreateFileW's disposition).
+    public bool AllowWincall(ref this, i64 k, i64 a1, i64 a2, i64 a5) {
+        this.LastDenied = false;
+        if (this.All) return true;
+        bool ok = true;
+        if (k == 2) {
+            // CreateFileW(name, access, share, sa, disposition, …)
+            string p = WideString(a1);
+            bool writes = (a2 as u64) & 0x40000000 != 0 || a5 == 1 || a5 == 2 || a5 == 4 || a5 == 5;
+            bool reads = (a2 as u64) & 0x80000000 != 0 || !writes;
+            if (writes && !this.May(CAP_WRITE, p.AsStr())) ok = false;
+            if (ok && reads && !this.May(CAP_READ, p.AsStr())) ok = false;
+        } else if (k == 15 || k == 16 || k == 17) {
+            string p = WideString(a1);
+            ok = this.May(CAP_WRITE, p.AsStr());                     // DeleteFileW, CreateDirectoryW, RemoveDirectoryW
+        } else if (k == 18) {
+            string p = WideString(a1);
+            ok = this.MayStat(p.AsStr());                            // GetFileAttributesW
+        } else if (k == 22) {
+            string p = WideString(a1);
+            if (p.Len() >= 2) {
+                // FindFirstFileW takes `folder/*`: the folder is what is read
+                string folder = string.From(p.AsStr()[0..p.Len() - 2]);
+                p = folder;
+            }
+            ok = this.May(CAP_READ, p.AsStr());                      // FindFirstFileW
+        } else if (k == 19) {
+            ok = this.May(CAP_RUN, "");                              // CreateProcessW
+        } else if (k == 26) {
+            ok = this.May(CAP_ENV, "");                              // GetEnvironmentVariableW
+        }
+        if (!ok) this.LastDenied = true;
+        return ok;
+    }
+
+    // Was the last Windows call denied? Then GetLastError reports ACCESS_DENIED, once.
+    public bool PendingDenied(ref this) {
+        bool d = this.LastDenied;
+        this.LastDenied = false;
+        return d;
+    }
+}
+
+// ------------------------------------------------------------------ paths
+
+// The NUL-terminated bytes at address a.
+string CString(i64 a) {
+    string s = string.New();
+    if (a == 0) return s;
+    unsafe {
+        *u8 p = a as isize as *u8;
+        usize i = 0;
+        while (p[i] != 0 && i < 65536) {
+            s.AppendByte(p[i]);
+            i++;
+        }
+    }
+    return s;
+}
+
+// The UTF-16 text ending in 0 at address a, as UTF-8.
+string WideString(i64 a) {
+    string s = string.New();
+    if (a == 0) return s;
+    unsafe {
+        *u16 p = a as isize as *u16;
+        usize i = 0;
+        while (p[i] != 0 && i < 32768) {
+            u32 c = p[i] as u32;
+            i++;
+            if (c >= 0xD800 && c <= 0xDBFF && p[i] >= 0xDC00 && p[i] <= 0xDFFF) {
+                c = 0x10000 + ((c - 0xD800) << 10) + (p[i] as u32 - 0xDC00);
+                i++;
+            }
+            if (c < 0x80) {
+                s.AppendByte(c as u8);
+            } else if (c < 0x800) {
+                s.AppendByte((0xC0 | (c >> 6)) as u8);
+                s.AppendByte((0x80 | (c & 0x3F)) as u8);
+            } else if (c < 0x10000) {
+                s.AppendByte((0xE0 | (c >> 12)) as u8);
+                s.AppendByte((0x80 | ((c >> 6) & 0x3F)) as u8);
+                s.AppendByte((0x80 | (c & 0x3F)) as u8);
+            } else {
+                s.AppendByte((0xF0 | (c >> 18)) as u8);
+                s.AppendByte((0x80 | ((c >> 12) & 0x3F)) as u8);
+                s.AppendByte((0x80 | ((c >> 6) & 0x3F)) as u8);
+                s.AppendByte((0x80 | (c & 0x3F)) as u8);
+            }
+        }
+    }
+    return s;
+}
+
+bool IsAbsolutePath(str p) {
+    if (p.Len > 0 && (p[0] == '/' || p[0] == 0x5C)) return true;
+    return p.Len >= 2 && p[1] == ':';
+}
+
+u8 Lower(u8 c) {
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    return c;
+}
+
+// path made absolute against cwd, with `/` separators, `.` and `..` resolved, no
+// trailing `/`; on Windows (a drive letter) lowercase, since names there ignore case.
+string Normal(str path, str cwd) {
+    string full = string.New();
+    if (!IsAbsolutePath(path) && cwd.Len > 0) {
+        full.Append(cwd);
+        full.AppendByte('/');
+    }
+    full.Append(path);
+    str f = full.AsStr();
+    bool windows = f.Len >= 2 && f[1] == ':';
+    // split into parts and resolve
+    List<string> parts = List<string>.New();
+    string prefix = string.New();
+    usize at = 0;
+    if (windows) {
+        prefix.AppendByte(Lower(f[0]));
+        prefix.AppendByte(':');
+        at = 2;
+    }
+    while (at <= f.Len) {
+        usize end = at;
+        while (end < f.Len && f[end] != '/' && f[end] != 0x5C) end++;
+        str part = f[at..end];
+        if (part.Len == 0 || Same(part, ".")) {
+            // nothing
+        } else if (Same(part, "..")) {
+            string? last = parts.Pop();
+        } else {
+            string ps = string.New();
+            for (usize i = 0; i < part.Len; i++) {
+                if (windows) ps.AppendByte(Lower(part[i]));
+                else ps.AppendByte(part[i]);
+            }
+            parts.Push(ps);
+        }
+        at = end + 1;
+    }
+    string r = string.From(prefix.AsStr());
+    foreach (var p in parts.AsSlice()) {
+        r.AppendByte('/');
+        r.Append(p.AsStr());
+    }
+    if (r.Len() == 0 || (windows && r.Len() == 2)) r.AppendByte('/');
+    return r;
+}
+
+// Is path root, or inside it?
+bool Under(str path, str root) {
+    if (path.Len < root.Len) return false;
+    for (usize i = 0; i < root.Len; i++) {
+        if (path[i] != root[i]) return false;
+    }
+    if (path.Len == root.Len) return true;
+    if (root.Len > 0 && root[root.Len - 1] == '/') return true;
+    return path[root.Len] == '/';
+}

@@ -11,7 +11,8 @@
 // A test program runs in a scratch folder (build/envo-test/run) and must exit with 0.
 // `// os: none` builds it with the reference adapters; a program under
 // tests/conformance/ runs against both the reference and the native adapters. Each is
-// built at -O0 and -O2 (only -O0 with `-O0`).
+// built at -O0 and -O2 (only -O0 with `-O0`) and also run in the script runtime
+// (`envo run -A`, PLAN D35) unless it has a `// vm: skip` line saying why.
 use std.fs;
 use std.env;
 use std.path;
@@ -203,49 +204,75 @@ void RunTest(ref TestRun r, str testFile, in List<string> extra, str shown) {
     List<string> files = List<string>.New();
     files.Push(string.From(testFile));
     foreach (var f in extra.AsSlice()) files.Push(string.From(f.AsStr()));
+    bool vmToo = !ct.Contains(src.AsStr(), "\n// vm: skip");
     foreach (var os in oses.AsSlice()) {
-        for (usize level = 0; level < 2; level++) {
+        for (usize level = 0; level < 3; level++) {
             if (level == 1 && r.Quick) continue;
+            if (level == 2 && !vmToo) continue;
             string label = string.From(shown);
             label.Append(" (");
             label.Append(os);
-            if (level == 1) label.Append(" -O2)");
+            if (level == 2) label.Append(" vm)");
+            else if (level == 1) label.Append(" -O2)");
             else label.Append(" -O0)");
-            string exe = BuildFor(ref r, files, os, level == 1, label.AsStr());
-            if (exe.Len() == 0) continue;
-            string outFile = path.Join(r.Work.AsStr(), "out.txt");
-            string errFile = path.Join(r.Work.AsStr(), "err.txt");
-            List<str> none = List<str>.New();
-            // absolute, since the program runs in another folder and may start itself
-            string program = path.Join(env.CurrentDir().AsStr(), exe.AsStr());
-            Result<i32, IoError> run = process.RunIn(program.AsStr(), none.AsSlice(), r.RunDir.AsStr(), outFile.AsStr(), errFile.AsStr());
-            if (run.IsErr()) {
-                string why = string.From("cannot start the program: ");
-                why.Append(IoErrorText(run.UnwrapErr()));
-                Report(ref r, false, label.AsStr(), why.AsStr());
-                continue;
+            List<str> args = List<str>.New();
+            string program = string.New();
+            string exe = string.New();
+            List<string> absolute = List<string>.New();
+            if (level == 2) {
+                // the script runtime: `envo run -A`, with the files by absolute path since
+                // the program runs in another folder
+                program = string.From(r.Self.AsStr());
+                args.Push("run");
+                args.Push("-A");
+                if (ct.Compare(os, "none") == 0) {
+                    args.Push("--os");
+                    args.Push("none");
+                }
+                foreach (var f in files.AsSlice()) absolute.Push(path.Join(env.CurrentDir().AsStr(), f.AsStr()));
+                foreach (var f in absolute.AsSlice()) args.Push(f.AsStr());
+            } else {
+                exe = BuildFor(ref r, files, os, level == 1, label.AsStr());
+                if (exe.Len() == 0) continue;
+                // absolute, since the program runs in another folder and may start itself
+                program = path.Join(env.CurrentDir().AsStr(), exe.AsStr());
             }
-            i32 code = run.Unwrap();
-            Result<string, IoError> gotR = fs.ReadText(outFile.AsStr());
-            string got = string.New();
-            if (gotR.IsOk()) got = WithoutCr(gotR.Unwrap().AsStr());
-            if (code != 0) {
-                string why = string.From("exit code ");
-                why.Append(text.Int(code as i64).AsStr());
-                why.Append("\n    ");
-                why.Append(Head(errFile.AsStr(), 4).AsStr());
-                Report(ref r, false, label.AsStr(), why.AsStr());
-                continue;
-            }
-            if (!got.Equals(want.AsStr())) {
-                Report(ref r, false, label.AsStr(), "the output differs");
-                ShowDiff(want.AsStr(), got.AsStr());
-                continue;
-            }
-            Report(ref r, true, label.AsStr(), "");
-            fs.Delete(exe.AsStr());
+            if (CheckRun(ref r, label.AsStr(), program.AsStr(), args.AsSlice(), want.AsStr()) && exe.Len() > 0) fs.Delete(exe.AsStr());
         }
     }
+}
+
+// Runs program with args in the scratch folder and reports whether it exits with 0 and
+// prints want.
+bool CheckRun(ref TestRun r, str label, str program, str[] args, str want) {
+    string outFile = path.Join(r.Work.AsStr(), "out.txt");
+    string errFile = path.Join(r.Work.AsStr(), "err.txt");
+    Result<i32, IoError> run = process.RunIn(program, args, r.RunDir.AsStr(), outFile.AsStr(), errFile.AsStr());
+    if (run.IsErr()) {
+        string why = string.From("cannot start the program: ");
+        why.Append(IoErrorText(run.UnwrapErr()));
+        Report(ref r, false, label, why.AsStr());
+        return false;
+    }
+    i32 code = run.Unwrap();
+    Result<string, IoError> gotR = fs.ReadText(outFile.AsStr());
+    string got = string.New();
+    if (gotR.IsOk()) got = WithoutCr(gotR.Unwrap().AsStr());
+    if (code != 0) {
+        string why = string.From("exit code ");
+        why.Append(text.Int(code as i64).AsStr());
+        why.Append("\n    ");
+        why.Append(Head(errFile.AsStr(), 4).AsStr());
+        Report(ref r, false, label, why.AsStr());
+        return false;
+    }
+    if (!got.Equals(want)) {
+        Report(ref r, false, label, "the output differs");
+        ShowDiff(want, got.AsStr());
+        return false;
+    }
+    Report(ref r, true, label, "");
+    return true;
 }
 
 string WithoutSlashes(str p) {
@@ -309,9 +336,16 @@ bool IsWorkspace(str dir) {
     return doc.Has("workspace") && !doc.Has("package");
 }
 
+// This program's path, absolute when it was started by one (children run elsewhere).
+string SelfPath() {
+    str a = env.Arg(0);
+    if (path.IsAbsolute(a) || (ct.IndexOfByte(a, '/').IsNone() && ct.IndexOfByte(a, 0x5C).IsNone())) return string.From(a);
+    return path.Join(env.CurrentDir().AsStr(), a);
+}
+
 i32 CmdEnvoTest(usize from) {
     TestRun r = new TestRun {
-        Self = string.From(env.Arg(0)), Work = string.From("build/envo-test"), RunDir = string.From("build/envo-test/run"),
+        Self = SelfPath(), Work = string.From("build/envo-test"), RunDir = string.From("build/envo-test/run"),
         Quick = false, Verbose = false, Passed = 0, Failed = 0, Count = 0,
     };
     List<string> paths = List<string>.New();

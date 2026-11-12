@@ -5,6 +5,7 @@
 // the exit code). Output files go to a directory it makes and removes under the working
 // directory.
 // expect: process: done
+// vm: skip (it starts itself as a program, which a script cannot do by its own name)
 use ports.{IProcess, IFileSystem, IEnvironment, IoError};
 use platform;
 

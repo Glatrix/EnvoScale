@@ -165,13 +165,13 @@ run test gives the same output and exit code in the VM as natively (D35).
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| 6.1 | The EIR interpreter: every instruction, calls, slots, globals, function values, panics | `tests/spec/*-run` in the VM | |
-| 6.2 | Forwarded `syscall`/`wincall`, arguments and exit codes; `envo run` in the VM, `--native` | the run tests and library tests in both modes | |
-| 6.3 | Shebang scripts and `envo <file>` | `tests/envo/` (Linux in CI) | |
-| 6.4 | Permissions: `--allow read, write, fs, env, run, net, all` | `tests/sandbox/` | |
-| 6.5 | `envo repl` | `tests/envo/` | |
-| 6.6 | Speed: the VM's own instruction form, measured on the test programs | `tests/bench/` | |
-| 6.7 | Docs and status; M6 complete | CI | |
+| [6.1](https://github.com/envoscale/EnvoScale/issues/96) | The EIR interpreter: every instruction, calls, slots, globals, function values, panics | `tests/spec/*-run` in the VM | |
+| [6.2](https://github.com/envoscale/EnvoScale/issues/97) | Forwarded `syscall`/`wincall`, arguments and exit codes; `envo run` in the VM, `--native` | the run tests and library tests in both modes | |
+| [6.3](https://github.com/envoscale/EnvoScale/issues/98) | Shebang scripts and `envo <file>` | `tests/envo/` (Linux in CI) | |
+| [6.4](https://github.com/envoscale/EnvoScale/issues/99) | Permissions: `--allow read, write, fs, env, run, net, all` | `tests/sandbox/` | |
+| [6.5](https://github.com/envoscale/EnvoScale/issues/100) | `envo repl` | `tests/envo/` | |
+| [6.6](https://github.com/envoscale/EnvoScale/issues/101) | Speed: the VM's own instruction form, measured on the test programs | `tests/bench/` | |
+| [6.7](https://github.com/envoscale/EnvoScale/issues/102) | Docs and status; M6 complete | CI | |
 
 ## 6. Risks
 

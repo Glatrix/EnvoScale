@@ -627,6 +627,71 @@ function Invoke-Test {
         $nfail = [int]$m.Groups[2].Value
         if ($nfail -gt 0 -or $r.Code -ne 0) { Bad 'envo test' (Normalize $r.Out).Trim(); $script:failed += [Math]::Max(0, $nfail - 1) }
     }
+    # The script runtime (PLAN D35): every spec run program, and every multi-file one, runs
+    # in the VM (`envo run -A`) with the output, exit code and panic it has natively.
+    Say 'script runtime: tests/spec/core-run, s1-run, s2-run and the multi-file programs in the VM'
+    $vmDir = Join-Path $Root 'build\run-vm'
+    New-Item -ItemType Directory -Force $vmDir | Out-Null
+    foreach ($suite in @('core-run', 's1-run', 's2-run')) {
+        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envo' | Sort-Object Name) {
+            $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
+            $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+            $wantOut = ''
+            if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+            $wantCode = 0
+            $m = [regex]::Match($text, '(?m)^// expect-exit: (\d+)')
+            if ($m.Success) { $wantCode = [int]$m.Groups[1].Value }
+            $panic = [regex]::Match($text, '(?m)^// expect-panic: (.*)$')
+            if ($panic.Success) { $wantCode = 101 }
+            $name = "vm spec/$suite/$($f.Name)"
+            $r = Invoke-Tool $envo @('run', '-A', $f.FullName) $vmDir
+            $out = Normalize $r.Out
+            if ($out -ne $wantOut) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
+            if ($r.Code -ne $wantCode) { Bad $name "exit code $($r.Code), expected $($wantCode): $($r.Err.Trim())"; continue }
+            if ($panic.Success -and -not $r.Err.Contains("panic: $($panic.Groups[1].Value.Trim())")) { Bad $name "stderr: $($r.Err.Trim())"; continue }
+            Pass $name
+        }
+    }
+    foreach ($msuite in @('core-multi', 's1-multi')) {
+        foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$msuite") -Directory | Sort-Object Name) {
+            $main = Join-Path $d.FullName 'main.envo'
+            $text = Normalize ([IO.File]::ReadAllText($main, $Utf8))
+            if ($text -match '(?m)^// expect-error: ') { continue }
+            $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
+            $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+            $wantOut = ''
+            if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+            $r = Invoke-Tool $envo (@('run', '-A') + $files) $d.FullName
+            if ($r.Code -eq 0 -and (Normalize $r.Out) -eq $wantOut) { Pass "vm spec/$msuite/$($d.Name)" } else { Bad "vm spec/$msuite/$($d.Name)" "exit $($r.Code): $($r.Err.Trim())"; Show-Diff $wantOut (Normalize $r.Out) }
+        }
+    }
+    # Permissions (PLAN D34): each tests\sandbox program runs with its `// allow:` lines as
+    # --allow, in a scratch copy of the folder; stdout must be its `// expect:` lines and
+    # stderr must hold each `// expect-stderr:` text (tests/sandbox/README.md)
+    Say 'script runtime permissions: tests/sandbox'
+    $boxDir = Join-Path $Root 'build\run-sandbox'
+    if (Test-Path -LiteralPath $boxDir) { Remove-Item -Recurse -Force $boxDir }
+    New-Item -ItemType Directory -Force $boxDir | Out-Null
+    Copy-Item -Path (Join-Path $Root 'tests\sandbox\*.envo') -Destination $boxDir
+    foreach ($f in Get-ChildItem -LiteralPath $boxDir -Filter '*.envo' | Sort-Object Name) {
+        $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
+        $argv = @('run')
+        foreach ($m in [regex]::Matches($text, '(?m)^// allow: (.*)$')) { $argv += @('--allow', $m.Groups[1].Value.Trim()) }
+        $argv += $f.Name
+        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+        $wantOut = ''
+        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+        $r = Invoke-Tool $envo $argv $boxDir
+        $problem = $null
+        if ($r.Code -ne 0) { $problem = "exit $($r.Code): $($r.Err.Trim())" }
+        elseif ((Normalize $r.Out) -ne $wantOut) { $problem = 'stdout differs'; Show-Diff $wantOut (Normalize $r.Out) }
+        else {
+            foreach ($m in [regex]::Matches($text, '(?m)^// expect-stderr: (.*)$')) {
+                if (-not $r.Err.Contains($m.Groups[1].Value.Trim())) { $problem = "stderr lacks '$($m.Groups[1].Value.Trim())': $($r.Err.Trim())" }
+            }
+        }
+        if ($problem) { Bad "sandbox $($f.Name)" $problem } else { Pass "sandbox $($f.Name)" }
+    }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     Say 'envo commands: new, run, test, check, explain, version'
     $envoRun = Join-Path $Root 'build\run-envo'
@@ -636,8 +701,10 @@ function Invoke-Test {
     if ($r.Code -eq 0 -and (Test-Path -LiteralPath (Join-Path $envoRun 'demo\envo.envon'))) { Pass 'envo new' } else { Bad 'envo new' "exit $($r.Code): $($r.Err.Trim())" }
     $r = Invoke-Tool $envo @('run', 'demo') $envoRun
     if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, demo!`n") { Pass 'envo run' } else { Bad 'envo run' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    $r = Invoke-Tool $envo @('run', '--native', 'demo') $envoRun
+    if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, demo!`n") { Pass 'envo run --native' } else { Bad 'envo run --native' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     $r = Invoke-Tool $envo @('test', 'demo') $envoRun
-    if ($r.Code -eq 0 -and $r.Out.Contains('3 passed, 0 failed')) { Pass 'envo test (package)' } else { Bad 'envo test (package)' "exit $($r.Code): $($r.Out.Trim())" }
+    if ($r.Code -eq 0 -and $r.Out.Contains('4 passed, 0 failed')) { Pass 'envo test (package)' } else { Bad 'envo test (package)' "exit $($r.Code): $($r.Out.Trim())" }
     [IO.File]::WriteAllText((Join-Path $envoRun 'bad.envo'), "i32 x = ;`n", $Utf8)
     $r = Invoke-Tool $envo @('check', 'bad.envo') $envoRun
     if ($r.Code -eq 1 -and $r.Err.Contains('bad.envo:1:9: error[E0101]') -and $r.Err.Contains('1 | i32 x = ;') -and $r.Err.Contains('envo explain E0101')) { Pass 'envo check' } else { Bad 'envo check' "exit $($r.Code): $($r.Err.Trim())" }
@@ -647,6 +714,27 @@ function Invoke-Test {
     if ($r.Code -eq 1) { Pass 'envo explain (unknown)' } else { Bad 'envo explain (unknown)' "exit $($r.Code)" }
     $r = Invoke-Tool $envo @('version') $envoRun
     if ($r.Code -eq 0 -and $r.Out.StartsWith('envo ')) { Pass 'envo version' } else { Bad 'envo version' "exit $($r.Code)" }
+    # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
+    $replIn = "print(`"hello`")`ni32 Twice(i32 x) {`n    return x * 2;`n}`nuse alloc.text;`nprint(text.Int(Twice(21) as i64).AsStr())`nu8 bad = nope;`n:quit`n"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $envo
+    $psi.Arguments = 'repl'
+    $psi.WorkingDirectory = $envoRun
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $Utf8
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $bytes = $Utf8.GetBytes($replIn)
+    $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $p.StandardInput.BaseStream.Close()
+    $p.WaitForExit()
+    $got = Normalize $outTask.Result
+    $hellos = ([regex]::Matches($got, 'hello')).Count
+    if ($p.ExitCode -eq 0 -and $hellos -eq 1 -and $got.Contains("42`n") -and $got.Contains('error[E0203]')) { Pass 'envo repl' } else { Bad 'envo repl' "exit $($p.ExitCode): $got $($errTask.Result)" }
     $r = Invoke-Tool $envo @('frobnicate') $envoRun
     if ($r.Code -eq 2) { Pass 'envo (unknown command)' } else { Bad 'envo (unknown command)' "exit $($r.Code)" }
     # envo fmt: each tests\golden\fmt\name.envo formats to name.expected, which formats to
@@ -660,7 +748,7 @@ function Invoke-Test {
         $r = Invoke-Tool $envo @('fmt', '--stdout', $expected) $envoRun
         if ($r.Code -eq 0 -and (Normalize $r.Out) -eq $want) { Pass "fmt $($f.Name) (again)" } else { Bad "golden fmt/$($f.Name) (formatting the expected output changes it)" "exit $($r.Code)" }
     }
-    $r = Invoke-Tool $envo @('fmt', '--check', 'lib', 'adapters', 'tools', 'tests/conformance', 'compiler', 'bootstrap/stage1', 'examples') $Root
+    $r = Invoke-Tool $envo @('fmt', '--check', 'lib', 'adapters', 'tools', 'tests/conformance', 'compiler', 'bootstrap/stage1', 'runtime', 'examples') $Root
     if ($r.Code -eq 0) { Pass 'envo fmt --check' } else { Bad 'envo fmt --check (run envo fmt on these files)' "$($r.Out.Trim()) $($r.Err.Trim())" }
     # envo lsp: tests\lsp\session.jsonl, framed, piped in; the bodies it writes back must
     # be tests\lsp\expected.jsonl (tests/lsp/README.md)

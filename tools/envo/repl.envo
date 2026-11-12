@@ -1,0 +1,201 @@
+// `envo repl`: an interactive session on the script runtime (PLAN D36). Each input is a
+// cell: declarations and statements, as in a script. The session's program is its cells
+// in order; after each new cell the program runs again (a child `envo run`, sandboxed
+// with the session's permissions) and only the output it had not printed before is
+// shown. A cell that does not compile, or that fails when it runs, is shown its error
+// and left out of the session. Side effects of earlier cells (files written) happen again
+// on each run: a resident VM state needs incremental compilation and comes later.
+//
+// An input line that ends inside braces, brackets or parentheses continues on the next.
+// A line without a final `;` or `}` gets a `;`. Commands: `:help`, `:show`, `:reset`,
+// `:quit`.
+use std.fs;
+use std.env;
+use std.path;
+use std.process;
+use core.text as ct;
+use alloc.text;
+use ports.{IConsole, IoError};
+use platform;
+
+struct Repl {
+    List<string> Cells;
+    usize Shown;            // bytes of the program's output already shown
+    string Buf;             // input read and not yet used
+    bool Ended;
+    string Work;            // build/envo-repl
+    string Self;
+    List<string> Allows;
+}
+
+// The next line of input without its line break, or false at the end.
+bool ReadLine(ref Repl r, ref string line) {
+    var con = platform.Console();
+    while (true) {
+        usize? nl = ct.IndexOfByte(r.Buf.AsStr(), 10);
+        if (nl.IsSome()) {
+            usize at = nl.Unwrap();
+            usize end = at;
+            if (end > 0 && r.Buf.AsStr()[end - 1] == 13) end--;
+            line = string.From(r.Buf.AsStr()[0..end]);
+            string rest = string.From(r.Buf.AsStr()[at + 1..r.Buf.Len()]);
+            r.Buf = rest;
+            return true;
+        }
+        if (r.Ended) {
+            if (r.Buf.Len() == 0) return false;
+            line = string.From(r.Buf.AsStr());
+            r.Buf = string.New();
+            return true;
+        }
+        u8[4096] chunk;
+        usize n = con.Read(chunk[0..4096]);
+        if (n == 0) {
+            r.Ended = true;
+            continue;
+        }
+        for (usize i = 0; i < n; i++) r.Buf.AppendByte(chunk[i]);
+    }
+    return false;
+}
+
+// How many brackets text leaves open (strings, characters and comments skipped).
+i64 Depth(str t) {
+    i64 depth = 0;
+    usize i = 0;
+    while (i < t.Len) {
+        u8 c = t[i];
+        if (c == '/' && i + 1 < t.Len && t[i + 1] == '/') {
+            while (i < t.Len && t[i] != 10) i++;
+            continue;
+        }
+        if (c == '"' || c == 0x27) {
+            i++;
+            while (i < t.Len && t[i] != c && t[i] != 10) {
+                if (t[i] == 0x5C) i++;
+                i++;
+            }
+            i++;
+            continue;
+        }
+        if (c == '{' || c == '(' || c == '[') depth++;
+        if (c == '}' || c == ')' || c == ']') depth--;
+        i++;
+    }
+    return depth;
+}
+
+void Prompt(str p) {
+    var con = platform.Console();
+    con.Out(p);
+}
+
+// The session's program with cell (if not empty) at the end.
+string Program(in Repl r, str cell) {
+    string s = string.New();
+    foreach (var c in r.Cells.AsSlice()) {
+        s.Append(c.AsStr());
+        s.AppendByte(10);
+    }
+    if (cell.Len > 0) {
+        s.Append(cell);
+        s.AppendByte(10);
+    }
+    return s;
+}
+
+// Runs the session with cell added; keeps the cell if it compiles and runs.
+void RunCell(ref Repl r, str cell) {
+    string program = Program(r, cell);
+    string file = path.Join(r.Work.AsStr(), "session.envo");
+    string outFile = path.Join(r.Work.AsStr(), "out.txt");
+    string errFile = path.Join(r.Work.AsStr(), "err.txt");
+    if (fs.WriteText(file.AsStr(), program.AsStr()).IsErr()) {
+        print("envo: cannot write the session file");
+        return;
+    }
+    List<str> args = List<str>.New();
+    args.Push("run");
+    foreach (var a in r.Allows.AsSlice()) {
+        args.Push("--allow");
+        args.Push(a.AsStr());
+    }
+    args.Push(file.AsStr());
+    Result<i32, IoError> run = process.RunIn(r.Self.AsStr(), args.AsSlice(), "", outFile.AsStr(), errFile.AsStr());
+    var con = platform.Console();
+    Result<string, IoError> outR = fs.ReadText(outFile.AsStr());
+    string got = string.New();
+    if (outR.IsOk()) got = outR.Unwrap();
+    // only what is new
+    if (got.Len() > r.Shown) con.Out(got.AsStr()[r.Shown..got.Len()]);
+    i32 code = 1;
+    if (run.IsOk()) code = run.Unwrap();
+    if (code != 0) {
+        Result<string, IoError> errR = fs.ReadText(errFile.AsStr());
+        if (errR.IsOk()) con.Out(errR.Unwrap().AsStr());
+        return;
+    }
+    r.Shown = got.Len();
+    r.Cells.Push(string.From(cell));
+}
+
+i32 CmdEnvoRepl(usize from) {
+    Repl r = new Repl {
+        Cells = List<string>.New(), Shown = 0, Buf = string.New(), Ended = false,
+        Work = string.From("build/envo-repl"), Self = SelfPath(), Allows = List<string>.New(),
+    };
+    for (usize i = from; i < env.ArgCount(); i++) {
+        str a = env.Arg(i);
+        if (ct.Compare(a, "-A") == 0) r.Allows.Push(string.From("all"));
+        else if (ct.Compare(a, "--allow") == 0 && i + 1 < env.ArgCount()) {
+            r.Allows.Push(string.From(env.Arg(i + 1)));
+            i++;
+        } else EnvoFail("envo repl takes only --allow <permissions> and -A", 2);
+    }
+    if (fs.CreateDirAll(r.Work.AsStr()).IsErr()) EnvoFail("cannot create build/envo-repl", 1);
+    // the child `envo run` needs the library
+    EnvoHome();
+    print("envo repl: a session on the script runtime. :help for commands, :quit to leave.");
+    while (true) {
+        Prompt("> ");
+        string line = string.New();
+        if (!ReadLine(ref r, ref line)) break;
+        str t = ct.Trim(line.AsStr());
+        if (t.Len == 0) continue;
+        if (ct.Compare(t, ":quit") == 0 || ct.Compare(t, ":q") == 0 || ct.Compare(t, ":exit") == 0) break;
+        if (ct.Compare(t, ":help") == 0) {
+            print(":show   the session's program");
+            print(":reset  start a new session");
+            print(":quit   leave");
+            continue;
+        }
+        if (ct.Compare(t, ":show") == 0) {
+            string p = Program(r, "");
+            var con = platform.Console();
+            con.Out(p.AsStr());
+            continue;
+        }
+        if (ct.Compare(t, ":reset") == 0) {
+            List<string> none = List<string>.New();
+            r.Cells = none;
+            r.Shown = 0;
+            print("a new session");
+            continue;
+        }
+        // a cell: lines until the brackets close
+        string cell = string.From(line.AsStr());
+        while (Depth(cell.AsStr()) > 0) {
+            Prompt("... ");
+            string more = string.New();
+            if (!ReadLine(ref r, ref more)) break;
+            cell.AppendByte(10);
+            cell.Append(more.AsStr());
+        }
+        str c = ct.TrimEnd(cell.AsStr());
+        string complete = string.From(c);
+        if (c.Len > 0 && c[c.Len - 1] != ';' && c[c.Len - 1] != '}') complete.AppendByte(';');
+        RunCell(ref r, complete.AsStr());
+    }
+    print("");
+    return 0;
+}

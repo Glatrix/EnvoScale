@@ -1,7 +1,8 @@
 # `runtime/`
 
-> **Status:** Not started. Startup and panics arrive with **M3**; the EIR VM, REPL and
-> JIT tiering with **M6**.
+> **Status:** Startup, panics and the OS layer live in `bootstrap/stage1/runtime/`
+> (compiled into every program, M2–M3). The EIR VM is in [`vm/`](vm/README.md) (M6);
+> ARC and JIT tiering come later.
 
 Code that runs inside every Envo program or script, below the standard library:
 

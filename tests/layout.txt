@@ -117,6 +117,7 @@ lib/ports
 lib/prelude
 lib/std
 runtime
+runtime/vm
 templates
 templates/lumen
 templates/projects
@@ -129,6 +130,7 @@ tests/envo
 tests/fuzz
 tests/golden
 tests/lsp
+tests/sandbox
 tests/spec
 tests/vectors
 tools

@@ -1,8 +1,9 @@
 # `tools/envo`
 
-> **Status:** Experimental (M5): `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`,
-> `explain`, `version`. The other commands in [`tools/README.md`](../README.md) come
-> later.
+> **Status:** Experimental (M5, M6): `new`, `build`, `run` (in the script runtime, or
+> `--native`), `check`, `test`, `fmt`, `lsp`, `repl`, `explain`, `version`, and scripts
+> run directly (`envo file.envo`). The other commands in
+> [`tools/README.md`](../README.md) come later.
 
 The unified `envo` CLI. One binary that holds the compiler (PLAN D26): it is built from
 the files in `files.txt` plus `compiler/files.txt` without `driver/main.envo`, by Stage 2
@@ -17,10 +18,12 @@ in the shared format and ends `envo` with exit code 1.
 |---|---|
 | `envo new <name>` | Creates the package `<name>`: `envo.envon`, `main.envo`, `greet.envo`, `tests/greet.envo` |
 | `envo build [dir \| file.envo...]` | Builds a package's program to `dir/build/<name>(.exe)`, or the program in the given files (`-O0`/`-O2`, `-o`, `--os none`, `--target`) |
-| `envo run [dir \| file.envo...] [-- args]` | Builds, then runs the program with the arguments; exits with its exit code |
+| `envo run [dir \| file.envo...] [--allow …] [--native] [-- args]` | Runs the program in the script runtime, sandboxed ([`script-runtime.md`](../../docs/architecture/script-runtime.md)); `--native` builds and runs native code; exits with the program's exit code |
+| `envo [--allow …] file.envo [args]` | Runs a script directly, so `#!/usr/bin/env envo` works |
 | `envo check [dir \| file.envo...]` | Checks names, types and ownership without building |
 | `envo test [path...] [-O0] [-v]` | Builds and runs test programs and compares their output with their `// expect:` lines |
 | `envo fmt [path...] [--check \| --stdout]` | Lays out `.envo` files in the canonical format (see `fmt.envo`); `--check` lists what would change and exits 1 |
+| `envo repl [--allow …]` | An interactive session on the script runtime: cells of declarations and statements; each cell's new output shows; `:show`, `:reset`, `:quit` |
 | `envo lsp` | A language server for editors: diagnostics over JSON-RPC ([`tools/lsp`](../lsp/README.md)) |
 | `envo explain <code>` | Prints a diagnostic code's entry from `docs/spec/errors.md` and the text of the rules it cites |
 | `envo version`, `envo help` | |

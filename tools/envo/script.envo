@@ -1,0 +1,82 @@
+// `envo run` in the script runtime (PLAN D31-D34): the program is compiled for this
+// machine in memory and its EIR runs in the VM (runtime/vm), sandboxed.
+use std.env;
+use std.path;
+use core.text as ct;
+use envoc.eir;
+use envoc.diag;
+use envo.vm;
+
+// Compiles the planned program and runs it in the VM with o's permissions; gives its exit
+// code (a program that ends itself never returns here).
+i32 RunScript(in BuildOpts o) {
+    Plan p = PlanScript(o);
+    string home = EnvoHome();
+    vm.Sandbox box = vm.Sandbox.None(env.CurrentDir().AsStr());
+    foreach (var a in o.Allows.AsSlice()) {
+        if (!box.Allow(a.AsStr())) {
+            string msg = string.From("unknown permission in `--allow ");
+            msg.Append(a.AsStr());
+            msg.Append("`: use read, write, fs (each with an optional :path), env, run, net or all");
+            EnvoFail(msg.AsStr(), 2);
+        }
+    }
+    Sources src = Sources.New();
+    Module m = CompileProgram(ref src, p.Files, HostTargetCode(), false, true, -1, o.Opt, home.AsStr(), o.Os.AsStr());
+    List<string> args = List<string>.New();
+    args.Push(string.From(p.Files.AsSlice()[0].AsStr()));
+    foreach (var a in o.RunArgs.AsSlice()) args.Push(string.From(a.AsStr()));
+    vm.Vm machine = vm.Vm.New(m, box);
+    return machine.Run(args);
+}
+
+// The files of the program to run: the given .envo files, or a package's sources.
+Plan PlanScript(in BuildOpts o) {
+    Plan p = new Plan { Files = List<string>.New(), Output = string.New() };
+    if (FileInputs(o)) {
+        foreach (var f in o.Inputs.AsSlice()) p.Files.Push(string.From(f.AsStr()));
+        return p;
+    }
+    if (o.Inputs.Len() > 1) EnvoFail("give one package folder, or .envo files", 2);
+    str dir = ".";
+    if (o.Inputs.Len() == 1) dir = o.Inputs.AsSlice()[0].AsStr();
+    Package pkg = ReadPackage(dir);
+    if (!pkg.HasMain) {
+        string msg = string.From("the package `");
+        msg.Append(pkg.Name.AsStr());
+        msg.Append("` has no main.envo, so there is no program to run");
+        EnvoFail(msg.AsStr(), 1);
+    }
+    foreach (var f in pkg.Sources.AsSlice()) p.Files.Push(string.From(f.AsStr()));
+    return p;
+}
+
+// `envo [--allow …] <file.envo> [args]`: a script run directly, as `#!/usr/bin/env envo`
+// does (PLAN D33). The permissions come before the file; everything after it is the
+// script's.
+i32 CmdEnvoScript(usize from) {
+    BuildOpts o = new BuildOpts {
+        Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(),
+    };
+    usize i = from;
+    while (i < env.ArgCount()) {
+        str a = env.Arg(i);
+        if (Eq(a, "-A")) {
+            o.Allows.Push(string.From("all"));
+            i++;
+        } else if (Eq(a, "--allow") && i + 1 < env.ArgCount()) {
+            o.Allows.Push(string.From(env.Arg(i + 1)));
+            i += 2;
+        } else if (ct.StartsWith(a, "--allow=")) {
+            o.Allows.Push(string.From(a[8..a.Len]));
+            i++;
+        } else {
+            break;
+        }
+    }
+    if (i >= env.ArgCount()) EnvoFail("give the script to run after the permissions", 2);
+    o.Inputs.Push(string.From(env.Arg(i)));
+    for (usize k = i + 1; k < env.ArgCount(); k++) o.RunArgs.Push(string.From(env.Arg(k)));
+    return RunScript(o);
+}

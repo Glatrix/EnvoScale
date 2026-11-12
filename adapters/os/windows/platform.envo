@@ -9,3 +9,9 @@ public windows.Clock Clock() => windows.Clock.New();
 public windows.Entropy Entropy() => windows.Entropy.New();
 public windows.Environment Environment() => windows.Environment.New();
 public windows.Process Process() => windows.Process.New();
+
+// The host's raw call gate for the script runtime: `wincall` (kind 2) on Windows.
+public i64 RawCall(u32 kind, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j) {
+    if (kind != 2) return -1;
+    return windows.WinCall(k, a, b, c, d, e, f, g, h, i, j);
+}

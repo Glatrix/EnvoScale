@@ -1,0 +1,10 @@
+// Calls: naive recursive Fibonacci.
+// expect: 196418
+u64 Fib(u64 n) {
+    if (n < 2) return n;
+    return Fib(n - 1) + Fib(n - 2);
+}
+
+u64 r = Fib(27);
+use alloc.text;
+print(text.Uint(r).AsStr());

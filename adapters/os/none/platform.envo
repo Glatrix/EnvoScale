@@ -13,3 +13,7 @@ public none.Clock Clock() => none.SharedClock();
 public none.Entropy Entropy() => none.SharedEntropy();
 public none.Environment Environment() => none.SharedEnvironment();
 public none.Process Process() => none.SharedProcess();
+
+// The reference adapters have no system to call: the script runtime runs only on a
+// native platform.
+public i64 RawCall(u32 kind, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j) => -1;
