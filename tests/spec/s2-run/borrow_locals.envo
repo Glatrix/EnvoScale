@@ -1,0 +1,70 @@
+// [own.borrow.4] `var x = place;`, where taking the value would move out of a borrow (an
+// element of an array or a view, or a value behind an `in` parameter), binds x as a
+// shared borrow of the place instead. The place's local cannot change until x's block
+// ends. Stage 1 always tries to move, which is E0502 (M3.10).
+// stage1-error: E0502
+// expect: total 3
+// expect: first a
+// expect: running b
+// expect: name b
+str Num(u64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + v % 10) as u8;
+            v /= 10;
+            if (v == 0) break;
+        }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+
+void Lo() => print("not called");
+void Hi() => print("running b");
+
+// a function value is moved, not copied, so a Task is not `Copy`
+struct Task {
+    str Name;
+    u64 Cost;
+    fn() Run;
+}
+
+u64 Total(in Task[] tasks) {
+    u64 sum = 0;
+    for (usize i = 0; i < tasks.Len; i++) {
+        var t = tasks[i];       // borrows the element
+        sum += t.Cost;
+    }
+    return sum;
+}
+
+void First(in Task[2] tasks) {
+    var t = tasks[0];           // borrows through the `in` parameter
+    write(1, "first ");
+    print(t.Name);
+}
+
+str NameOf(in Task task) {
+    var same = task;            // another name for the borrowed value
+    return same.Name;
+}
+
+Task[2] all;
+all[0].Name = "a";
+all[0].Cost = 1;
+all[0].Run = Lo;
+all[1].Name = "b";
+all[1].Cost = 2;
+all[1].Run = Hi;
+write(1, "total ");
+print(Num(Total(all[0..2])));
+First(all);
+{
+    var b = all[1];             // borrows an element of a local array
+    b.Run();
+}
+all[0].Cost = 5;                // the borrow's block has ended: `all` may change again
+write(1, "name ");
+print(NameOf(all[1]));

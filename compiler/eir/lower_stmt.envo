@@ -230,6 +230,12 @@ impl Lower {
     void LowerSimple(ref this, u32 n) {
         Node node = this.C.NodeAt(n);
         u16 k = node.Kind;
+        if (k == NK_VAR && this.C.SymAt(this.VarSym(n)).Flags & SF_BYREF != 0) {
+            // [own.borrow.4] a local that borrows a place is the place's address
+            this.SetSymSlot(this.VarSym(n), this.LowerPlace(node.B));
+            this.DropTemps();
+            return;
+        }
         if (k == NK_VAR) {
             u32 t = this.LNType(n);
             u32 v = 0;

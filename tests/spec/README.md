@@ -20,6 +20,7 @@ Hello World Gallery. Each test is a `.envo` file whose comments say what must ha
 | `s1-own/` | Envo-S1 ownership (chapter 5, `envo-s1.md` §6) | Yes: `expect-error` tests run with `envoc1 check` (E0501–E0508) |
 | `s1-run/` | Envo-S1 semantics | Yes: compiled with `envoc1 build` and run, annotated like `core-run/` |
 | `s1-multi/` | Envo-S1 programs of several files: namespaces, `use`, visibility | Yes: like `core-multi/`, with `envoc1` |
+| `s2-own/` | Ownership errors only Stage 2 can reach, in programs Stage 1 already rejects elsewhere (M3.10) | Yes: `expect-error` tests run with `envoc check` |
 | `s2-run/` | Programs chapter 5 allows that Stage 1 rejects (M3.10) | Yes: built and run by Stage 2 like `s1-run/`; `// stage1-error: E####` names the error `envoc1 check` must give |
 | `eir/` | EIR text and verifier (`eir.md` §3, §6) | Yes: `.eir` files with `; expect-error: E06xx @ L:C`, run with `envoc1 eir-check` |
 | `hello/` | Hello World Gallery (brief §17) | Line-count limits only (`limits.txt`, checked by `bootstrap.* check`); execution as each milestone lands |

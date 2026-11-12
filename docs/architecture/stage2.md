@@ -96,8 +96,16 @@ still gives:
   inferred yet: a lambda without a `once fn` type that moves a capture is still E0502,
   as is a borrowing lambda (one passed to a function-typed parameter without `move`).
 
-Still to come: borrows held in locals across statements ([own.borrow.4]) and inferring
-`once fn` from the body ([fn.type.2]).
+- **Locals that borrow** (`borrow_locals.envo`). `var x = place;` without a type, where
+  taking the value would move out of a borrow (an array element, an element of a shared
+  view, a value behind an `in` or `ref` local), binds `x` as a read-only borrow, as a
+  `foreach` element is ([own.borrow.4]). Lowering makes `x` the place's address. The
+  place's local cannot change or move until `x`'s block ends (`s2-own/`). That is
+  lexical, not flow-sensitive, so it accepts less than [own.borrow.2] allows. An element
+  of a `mut T[]` is not borrowed this way, since the view could change it.
+
+Still to come: inferring `once fn` from the body ([fn.type.2]), and making borrows held
+in locals end at their last use instead of at the end of the block.
 
 ## EIR (M3.6)
 

@@ -1,0 +1,9 @@
+// expect-error: E0502 @ 8:18
+// [own.move.3] a local that borrows a value cannot give it away: it does not own it
+void Go() { }
+struct Task { u64 Cost; fn() Run; }
+void Take(Task t) { }
+void Use(in Task t) {
+    var same = t;
+    Task other = same;
+}

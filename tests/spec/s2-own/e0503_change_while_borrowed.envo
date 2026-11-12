@@ -1,0 +1,8 @@
+// expect-error: E0503 @ 8:1
+// [own.borrow.4] a local that borrows an element keeps the array from changing until
+// its block ends
+void Go() { }
+struct Task { u64 Cost; fn() Run; }
+Task[2] all;
+var t = all[0];
+all[1].Cost = 2;

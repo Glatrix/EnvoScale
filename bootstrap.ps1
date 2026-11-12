@@ -533,7 +533,8 @@ function Invoke-Test {
         @{ Dir = 's1-syntax';   Command = 'parse'; Modes = @('s1') },
         @{ Dir = 'core-types';  Command = 'check'; Modes = @('--core') },
         @{ Dir = 's1-types';    Command = 'check'; Modes = @('s1') },
-        @{ Dir = 's1-own';      Command = 'check'; Modes = @('s1') }
+        @{ Dir = 's1-own';      Command = 'check'; Modes = @('s1') },
+        @{ Dir = 's2-own';      Command = 'check'; Modes = @('s1') }
     )
     foreach ($suite in $stage2Spec) {
       foreach ($mode in $suite.Modes) {

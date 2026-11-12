@@ -515,7 +515,7 @@ do_test() {
         done
       done
     done
-    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1 core-types:check:core s1-types:check:s1 s1-own:check:s1; do
+    for suite in 01-lexical:lex:both core-syntax:parse:core s1-syntax:parse:s1 core-types:check:core s1-types:check:s1 s1-own:check:s1 s2-own:check:s1; do
       sdir=${suite%%:*}; rest=${suite#*:}; cmd=${rest%%:*}; modes=${rest#*:}
       for mode in --core s1; do
         [ "$modes" = core ] && [ "$mode" = s1 ] && continue

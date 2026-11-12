@@ -113,6 +113,11 @@ impl Checker {
             }
             this.DeclareLocal(n, t);
             this.SetNType(n, t);
+            // [own.borrow.4] `var x = place;` that would move out of a borrow borrows the
+            // place instead (M3.10; Stage 1: E0502). An explicit type asks for ownership.
+            if (node.A == 0 && !this.Core && !this.IsCopy(t) && this.BorrowsPlace(node.B)) {
+                this.SetSymFlags(this.NSym(n), SF_BYREF | SF_READONLY);
+            }
             return false;
         }
         if (node.Kind == NK_EXPR) {
@@ -146,6 +151,35 @@ impl Checker {
         if (!this.IsMutable(node.A)) this.Error(E_NOT_ASSIGNABLE, node.Tok);
         this.MarkMutation(node.A);
         if (!this.IsIntType(t)) this.BadOperand(t, node.Tok);
+        return false;
+    }
+
+    // Would taking the value of place e move out of a borrow: e is in an `in` or `ref`
+    // local, or is an element of an array or of a shared view? (A `mut T[]` element could
+    // change under the borrow, so it does not count.)
+    bool BorrowsPlace(in this, u32 e) {
+        bool through = false;
+        u32 n = e;
+        while (n != 0) {
+            Node node = this.NodeAt(n);
+            if (node.Kind == NK_NAME || node.Kind == NK_THIS) {
+                u32 s = this.NSym(n);
+                if (s == 0 || this.SymKind(s) != SK_LOCAL) return false;
+                return through || this.SymAt(s).Flags & SF_BYREF != 0;
+            }
+            if (node.Kind == NK_MEMBER) {
+                if (this.TyKind(this.NType(node.A)) != TYK_STRUCT) return false;
+            } else if (node.Kind == NK_INDEX) {
+                if (this.NKind(node.B) == NK_RANGE) return false;
+                u32 at = this.NType(node.A);
+                if (this.TyKind(at) == TYK_ARRAY) through = true;
+                else if (this.TyKind(at) == TYK_SLICE && !this.IsMutView(at)) through = true;
+                else return false;
+            } else {
+                return false;
+            }
+            n = node.A;
+        }
         return false;
     }
 

@@ -303,7 +303,8 @@ impl Checker {
     // ([own.borrow.3]: the array is dropped while borrowed).
     void ViewEscapes(ref this, in MoveCx x, u32 e, u32 tok) {
         u32 r = this.ViewOfLocal(x, e);
-        if (r != 0) this.BorrowError(tok, r, E_MOVED_WHILE_BORROWED, "` is dropped when this function returns, but a view of it would outlive it");
+        // storage behind an `in`/`ref` local is the caller's: the origin checks cover it
+        if (r != 0 && this.SymAt(r).Flags & SF_BYREF == 0) this.BorrowError(tok, r, E_MOVED_WHILE_BORROWED, "` is dropped when this function returns, but a view of it would outlive it");
     }
 
     // A change to place n (assignment, `++`, `ref`): not while a binding borrows its local.
@@ -729,6 +730,20 @@ impl Checker {
                 arm = this.NNext(arm);
             }
             x.St = after;
+            return;
+        }
+        if (k == NK_VAR && this.NSym(n) != 0 && this.SymAt(this.NSym(n)).Flags & SF_BYREF != 0) {
+            // [own.borrow.4] a local that borrows a place reads it, and the place's local
+            // may not change or move until the block ends (M3.10)
+            u32 s = this.NSym(n);
+            this.MvExpr(ref x, node.B, false);
+            x.PlaceReset(s);
+            u32 root = this.PlaceRoot(node.B);
+            // an `in` local cannot change anyway; an owned or `ref` one is frozen
+            if (root != 0 && this.NSym(root) != 0 && this.SymAt(this.NSym(root)).Flags & SF_READONLY == 0) {
+                x.ViewLocals.Push(s);
+                x.ViewLocals.Push(this.NSym(root));
+            }
             return;
         }
         if (k == NK_VAR) {
