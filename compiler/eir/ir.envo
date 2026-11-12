@@ -215,6 +215,10 @@ public struct Module {
         });
     }
 
+    // A copy of text t that the module keeps (PLAN D76: the module outlives the checker and
+    // the lowering, so every name it holds must be its own).
+    public Text Own(ref this, Text t) => this.Keep(string.From(TextStr(t)));
+
     // Keeps a string for good and returns a reference to it.
     public Text Keep(ref this, string s) {
         Text t = new Text { Ptr = s.Data, Len = s.Count };

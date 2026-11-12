@@ -25,6 +25,13 @@ swap (`mem.Replace`). There are no hidden copies of non-`Copy` values.
 declaration order after the struct's own `Drop` method, if any. A type gets custom drop
 behaviour by implementing `IDrop`.
 
+**[own.temp.1]** A temporary (a value an expression makes and nothing takes) drops at the
+end of its statement, with one exception: when a local's initializer is borrowed from a
+temporary (a local of type `str` or a slice, or a local that borrows a place), the
+statement's temporaries live until the end of the local's block and drop with its
+locals, newest first. So `str s = Make().AsStr();` is sound: `s` views a `string` that
+lives as long as `s` does.
+
 ## 5.2 Parameter modes
 
 | Syntax | Meaning | Rust equivalent |

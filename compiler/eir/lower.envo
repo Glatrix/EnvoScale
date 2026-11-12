@@ -95,6 +95,7 @@ public struct Lower {
     List<u32> DropFlags;    // per checker symbol: a local's drop flag slot
     List<u32> Drops;        // the locals with a drop flag, in scope order
     List<u32> Temps;        // pairs (type, address): the statement's temporaries to drop
+    List<u32> KeptTemps;    // pairs (type, address): temporaries a view local borrows, dropped with its block
     List<u32> FlagSyms;     // the locals given a drop flag in the current function
     List<u32> FieldFlags;   // per checker symbol: 1 + where a partly moved local's field flags start
     List<u32> FieldFlagSlots; // per field of such a local: its drop flag slot, 0 if it needs none
@@ -107,7 +108,7 @@ public struct Lower {
         Strings = StrMap<u32>.New(), Loops = List<u32>.New(), StrType = 0, RetSlot = 0, RetType = 0,
         Top = false, Target = target, Env = 0, NEnv = 0, FnvType = 0, LamCount = 0,
         PendingLams = List<u32>.New(), PendingThunks = List<u32>.New(), Thunks = StrMap<u32>.New(),
-        DropFlags = List<u32>.New(), Drops = List<u32>.New(), Temps = List<u32>.New(), FlagSyms = List<u32>.New(),
+        DropFlags = List<u32>.New(), Drops = List<u32>.New(), Temps = List<u32>.New(), KeptTemps = List<u32>.New(), FlagSyms = List<u32>.New(),
         FieldFlags = List<u32>.New(), FieldFlagSlots = List<u32>.New(), Src = 0
     };
 
@@ -431,8 +432,9 @@ public struct Lower {
     }
 
     // A new EIR function with nparams parameters (their values are added by the caller).
-    u32 AddFunc(ref this, Text name, u32 nparams, u32 ret) {
+    u32 AddFunc(ref this, Text given, u32 nparams, u32 ret) {
         u32 f = this.M.Funcs.Len() as u32;
+        Text name = this.M.Own(given);         // given may be the checker's, which goes first
         this.M.Funcs.Push(new EFunc {
             Name = name, Extern = false, Abi = TextOf(""), Ret = ret, NParams = nparams,
             FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0
@@ -629,7 +631,8 @@ public struct Lower {
     // Lists local s (its storage's address in value v, holding EIR type et) for debuggers.
     void DebugLocal(ref this, u32 s, u32 v, u32 et) {
         Sym sym = this.C.SymAt(s);
-        this.M.Locals.Push(new EDebugVar { Func = this.Func, Value = v, Type = et, Name = sym.Name });
+        Text local = this.M.Own(sym.Name);
+        this.M.Locals.Push(new EDebugVar { Func = this.Func, Value = v, Type = et, Name = local });
     }
 
     // The Src of node n: its first token's file and line.

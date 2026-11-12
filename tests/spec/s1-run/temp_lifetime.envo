@@ -1,0 +1,44 @@
+// [own.temp.1] A local that views a temporary keeps the temporary alive until the end of
+// its block; other temporaries still drop at the end of their statement.
+// expect: made one
+// expect: one
+// expect: one
+// expect: inner: two
+// expect: dropped two
+// expect: still one
+// expect: dropped one
+struct Named {
+    string Name;
+
+    str AsStr() => this.Name.AsStr();
+}
+
+impl IDrop for Named {
+    void Drop(ref this) {
+        write(1, "dropped ");
+        print(this.Name.AsStr());
+    }
+}
+
+Named Make(str name) {
+    if (name.Len == 3 && name[0] == 'o') print("made one");
+    return new Named { Name = string.From(name) };
+}
+
+void Run() {
+    str s = Make("one").AsStr();
+    print(s);
+    // memory freed and reused in between must not change what s views
+    string filler = string.From("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    filler.Append("yyyy");
+    print(s);
+    {
+        str t = Make("two").AsStr();
+        write(1, "inner: ");
+        print(t);
+    }
+    write(1, "still ");
+    print(s);
+}
+
+Run();

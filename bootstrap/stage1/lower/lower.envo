@@ -35,6 +35,7 @@ struct Lower {
     Vec DropFlags;      // u32 per checker symbol: a local's drop flag slot
     Vec Drops;          // u32: the locals with a drop flag, in scope order
     Vec Temps;          // u32 pairs (type, address): the statement's temporaries to drop
+    Vec KeptTemps;      // u32 pairs (type, address): temporaries a view local borrows, dropped with its block
     Vec FlagSyms;       // u32: the locals given a drop flag in the current function
 }
 
@@ -334,6 +335,7 @@ void LowerProgram(*Lower l, u32 program) {
         l.DropFlags = VecNew(4, 64);
         l.Drops = VecNew(4, 16);
         l.Temps = VecNew(4, 8);
+        l.KeptTemps = VecNew(4, 8);
         l.FlagSyms = VecNew(4, 16);
     }
     // declare every function and static first, so calls can refer forward; generic

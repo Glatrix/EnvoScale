@@ -48,6 +48,27 @@ void ResetDropFlags(*Lower l) {
         for (usize i = 0; i < VecLen(&l.FlagSyms); i++) MemStoreU32(VecAt(&l.DropFlags, MemLoadU32(VecAt(&l.FlagSyms, i)) as usize), 0);
         VecClear(&l.FlagSyms);
         VecClear(&l.Drops);
+        VecClear(&l.KeptTemps);
+    }
+}
+
+// [own.temp.1] A local of a view type (str, a slice) may borrow from a temporary of its
+// initializer (`str s = Make().AsStr();`): the statement's temporaries then live until the
+// end of the local's block, dropped with its locals. In Drops such a temporary is its
+// index in KeptTemps with the top bit set.
+void KeepTemps(*Lower l, u32 t) {
+    *Checker c = LC(l);
+    u8 k = TyKind(c, t);
+    if (k != TYK_STR && k != TYK_SLICE) return;
+    unsafe {
+        usize n = VecLen(&l.Temps);
+        for (usize i = 0; i + 1 < n; i += 2) {
+            u32 at = (VecLen(&l.KeptTemps) / 2) as u32;
+            MemStoreU32(VecPush(&l.KeptTemps), MemLoadU32(VecAt(&l.Temps, i)));
+            MemStoreU32(VecPush(&l.KeptTemps), MemLoadU32(VecAt(&l.Temps, i + 1)));
+            MemStoreU32(VecPush(&l.Drops), at | 0x80000000);
+        }
+        VecClear(&l.Temps);
     }
 }
 
@@ -64,7 +85,12 @@ void DropDownTo(*Lower l, usize mark, bool keep) {
             i--;
             if (l.Block == 0) break;        // nothing more runs on this path
             u32 s = MemLoadU32(VecAt(&l.Drops, i));
-            DropLocal(l, s);
+            if (s & 0x80000000 != 0) {
+                usize at = ((s & 0x7FFFFFFF) * 2) as usize;
+                DropValue(l, MemLoadU32(VecAt(&l.KeptTemps, at)), MemLoadU32(VecAt(&l.KeptTemps, at + 1)));
+            } else {
+                DropLocal(l, s);
+            }
         }
         if (!keep) VecTruncate(&l.Drops, mark);
     }

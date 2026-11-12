@@ -111,6 +111,27 @@ impl Lower {
         }
         while (this.FlagSyms.Len() > 0) this.FlagSyms.Pop();
         while (this.Drops.Len() > 0) this.Drops.Pop();
+        while (this.KeptTemps.Len() > 0) this.KeptTemps.Pop();
+    }
+
+    // [own.temp.1] A local of a view type (str, a slice) may borrow from a temporary of its
+    // initializer (`str s = Make().AsStr();`), and a borrowing local (SF_BYREF) may be a
+    // place in one: the statement's temporaries then live until the end of the local's
+    // block, dropped with its locals. In Drops such a temporary is its index in KeptTemps
+    // with the top bit set.
+    void KeepTemps(ref this, u32 t, bool always) {
+        if (!always) {
+            u8 k = this.C.TyKind(t);
+            if (k != TYK_STR && k != TYK_SLICE) return;
+        }
+        usize n = this.Temps.Len();
+        for (usize i = 0; i + 1 < n; i += 2) {
+            u32 at = (this.KeptTemps.Len() / 2) as u32;
+            this.KeptTemps.Push(this.Temps.Get(i));
+            this.KeptTemps.Push(this.Temps.Get(i + 1));
+            this.Drops.Push(at | 0x80000000);
+        }
+        while (this.Temps.Len() > 0) this.Temps.Pop();
     }
 
     usize DropMark(in this) => this.Drops.Len();
@@ -122,7 +143,13 @@ impl Lower {
         while (i > mark) {
             i--;
             if (this.Block == 0) break;     // nothing more runs on this path
-            this.DropLocal(this.Drops.Get(i));
+            u32 s = this.Drops.Get(i);
+            if (s & 0x80000000 != 0) {
+                usize at = ((s & 0x7FFFFFFF) * 2) as usize;
+                this.DropValue(this.KeptTemps.Get(at), this.KeptTemps.Get(at + 1));
+            } else {
+                this.DropLocal(s);
+            }
         }
         if (!keep) {
             while (this.Drops.Len() > mark) this.Drops.Pop();
