@@ -1,0 +1,70 @@
+// envo.gpu's software adapter: coverage by pixel centres with the top-left rule (two
+// triangles sharing an edge cover every pixel once), colors interpolated, alpha blended,
+// and a frame by hash.
+// expect: software
+// expect: an empty frame is refused
+// expect: covered once: 64
+// expect: top left 247 0 8 255
+// expect: bottom left 8 0 247 255
+// expect: middle, under green 60 128 67 255
+// expect: repeat differs in 0
+// expect: f70bcb0acb894311c4df937ddd2dc9bb1ae27bb4b1e3c0e8f57b4106d7c97fcf
+use ports.{IGpu, Vertex};
+use envo.gpu;
+use envo.gfx;
+use alloc.text;
+
+void Pixel(str label, u8[] f, u32 w, u32 x, u32 y) {
+    usize at = ((y * w + x) * 4) as usize;
+    write(1, label);
+    for (usize k = 0; k < 4; k++) {
+        write(1, " ");
+        write(1, text.Uint(f[at + k] as u64).AsStr());
+    }
+    print("");
+}
+
+gpu.Software dev = gpu.Software.New();
+print(dev.Name().AsStr());
+if (!dev.Begin(0, 10, 0)) print("an empty frame is refused");
+
+// two triangles sharing a diagonal, adding 1 to red: every pixel exactly once
+dev.Begin(8, 8, 0x000000FF);
+List<Vertex> v = List<Vertex>.New();
+gpu.Triangle(ref v, Vertex.At(0, 0, 0x010000FF), Vertex.At(8, 0, 0x010000FF), Vertex.At(0, 8, 0x010000FF));
+gpu.Triangle(ref v, Vertex.At(8, 0, 0x010000FF), Vertex.At(8, 8, 0x010000FF), Vertex.At(0, 8, 0x010000FF));
+dev.Triangles(v.AsSlice());
+List<u8> f = dev.End();
+u8[] fs = f.AsSlice();
+u32 once = 0;
+for (usize i = 0; i < fs.Len; i += 4) {
+    if (fs[i] == 1) once++;
+}
+write(1, "covered once: ");
+print(text.Uint(once as u64).AsStr());
+
+// a gradient and a translucent rectangle over it
+dev.Begin(16, 16, 0xFFFFFFFF);
+List<Vertex> g = List<Vertex>.New();
+gpu.Gradient(ref g, 0, 0, 16, 16, 0xFF0000FF, 0x0000FFFF);
+gpu.Rect(ref g, 4, 4, 8, 8, 0x00FF0080);
+dev.Triangles(g.AsSlice());
+List<u8> frame = dev.End();
+Pixel("top left", frame.AsSlice(), 16, 0, 0);
+Pixel("bottom left", frame.AsSlice(), 16, 0, 15);
+Pixel("middle, under green", frame.AsSlice(), 16, 8, 8);
+
+// the same scene twice is the same frame; a frame by hash
+dev.Begin(64, 48, 0xF5F5F7FF);
+List<Vertex> s = List<Vertex>.New();
+gpu.Gradient(ref s, 0, 0, 64, 24, 0x0A66D8FF, 0x4C9BFFFF);
+gpu.Triangle(ref s, Vertex.At(10, 40, 0xFF2D55FF), Vertex.At(32, 4, 0x30D158FF), Vertex.At(54, 40, 0xFFB340C0));
+dev.Triangles(s.AsSlice());
+List<u8> one = dev.End();
+dev.Begin(64, 48, 0xF5F5F7FF);
+dev.Triangles(s.AsSlice());
+List<u8> two = dev.End();
+write(1, "repeat differs in ");
+print(text.Uint(gpu.Differing(one.AsSlice(), two.AsSlice(), 0) as u64).AsStr());
+gfx.Canvas c = gfx.Canvas.FromRgba(64, 48, one.AsSlice());
+print(c.Hash().AsStr());

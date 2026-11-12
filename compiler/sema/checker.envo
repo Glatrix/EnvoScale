@@ -571,6 +571,7 @@ public struct Checker {
             this.AddBuiltinN("__syscall", B_SYSCALL, T_I64, 7, T_I64);
             this.AddBuiltinN("__wincall", B_WINCALL, T_I64, 11, T_I64);    // import slot and up to 10 arguments
             this.AddBuiltinN("__wincall12", B_WINCALL, T_I64, 13, T_I64);  // import slot and 12 arguments
+            this.AddBuiltinN("__wincallp", B_WINCALLP, T_I64, 13, T_I64);  // a function pointer and 12 arguments
         }
     }
 }

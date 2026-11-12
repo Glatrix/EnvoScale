@@ -59,6 +59,7 @@ The OS layer needs two operations Envo-Core cannot express, which the backend en
 |---|---|---|
 | `intrinsic syscall(i64 n, i64 a, …)` → `i64` | Linux | `syscall` with up to six arguments |
 | `intrinsic wincall(i64 k, i64 a, …)` → `i64` | Windows | call import *k* of the image's import address table with the Microsoft x64 convention; 10 arguments, or 12 (`__wincall12`) |
+| `intrinsic wincallp(i64 fn, i64 a, …)` → `i64` | Windows | call the function at address *fn* the same way, with 12 arguments (`__wincallp`) |
 
 The portable EIR intrinsics of [eir.md](../spec/eir.md) §5.6 (`write`, `read`, …) lower to
 calls into this runtime, so EIR itself stays target-independent and the script VM (M6) can

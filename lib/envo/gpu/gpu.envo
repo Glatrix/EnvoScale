@@ -1,0 +1,160 @@
+// envo.gpu: the GPU port's software adapter and helpers for building frames (PLAN D46).
+// The software adapter follows the rules GPUs do, so the adapters agree: a pixel is
+// covered when its centre is inside a triangle, edges through a centre belong to the
+// triangle on their top or left side, colors are interpolated linearly at the centre,
+// and blending is source-over, (src * a + dst * (255 - a)) / 255.
+namespace envo.gpu;
+
+use ports.{IGpu, Vertex};
+
+// Draws on the CPU; every device has it.
+public struct Software {
+    List<u8> Px;
+    u32 W;
+    u32 H;
+
+    public static Software New() => new Software { Px = List<u8>.New(), W = 0, H = 0 };
+}
+
+impl IGpu for Software {
+    string Name(ref this) => string.From("software");
+
+    bool Begin(ref this, u32 width, u32 height, u32 clearRgba) {
+        if (width == 0 || height == 0 || width > 16384 || height > 16384) return false;
+        this.W = width;
+        this.H = height;
+        this.Px = List<u8>.New();
+        u8 r = (clearRgba >> 24) as u8;
+        u8 g = (clearRgba >> 16) as u8;
+        u8 b = (clearRgba >> 8) as u8;
+        u8 a = clearRgba as u8;
+        for (u32 i = 0; i < width * height; i++) {
+            this.Px.Push(r);
+            this.Px.Push(g);
+            this.Px.Push(b);
+            this.Px.Push(a);
+        }
+        return true;
+    }
+
+    void Triangles(ref this, Vertex[] v) {
+        for (usize i = 0; i + 2 < v.Len; i += 3) this.Triangle(v[i], v[i + 1], v[i + 2]);
+    }
+
+    List<u8> End(ref this) {
+        List<u8> done = List<u8>.New();
+        u8[] px = this.Px.AsSlice();
+        for (usize i = 0; i < px.Len; i++) done.Push(px[i]);
+        return done;
+    }
+}
+
+impl Software {
+    void Triangle(ref this, Vertex a0, Vertex b0, Vertex c0) {
+        Vertex a = a0;
+        Vertex b = b0;
+        Vertex c = c0;
+        i64 area = Edge(a.X, a.Y, b.X, b.Y, c.X, c.Y);
+        if (area == 0) return;
+        if (area < 0) {
+            Vertex t = b;
+            b = c;
+            c = t;
+            area = 0 - area;
+        }
+        i32 minX = Max(Min(a.X, Min(b.X, c.X)), 0);
+        i32 maxX = Min(Max(a.X, Max(b.X, c.X)), this.W as i32);
+        i32 minY = Max(Min(a.Y, Min(b.Y, c.Y)), 0);
+        i32 maxY = Min(Max(a.Y, Max(b.Y, c.Y)), this.H as i32);
+        bool tl0 = TopLeft(b, c);
+        bool tl1 = TopLeft(c, a);
+        bool tl2 = TopLeft(a, b);
+        mut u8[] px = this.Px.AsMutSlice();
+        for (i32 y = minY; y < maxY; y++) {
+            for (i32 x = minX; x < maxX; x++) {
+                // the pixel's centre, in half pixels
+                i64 w0 = Edge2(b, c, 2 * x + 1, 2 * y + 1);
+                i64 w1 = Edge2(c, a, 2 * x + 1, 2 * y + 1);
+                i64 w2 = Edge2(a, b, 2 * x + 1, 2 * y + 1);
+                if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                if (w0 == 0 && !tl0 || w1 == 0 && !tl1 || w2 == 0 && !tl2) continue;
+                i64 sum = w0 + w1 + w2;
+                u32 r = Mix(a.Rgba >> 24, b.Rgba >> 24, c.Rgba >> 24, w0, w1, w2, sum);
+                u32 g = Mix(a.Rgba >> 16 & 0xFF, b.Rgba >> 16 & 0xFF, c.Rgba >> 16 & 0xFF, w0, w1, w2, sum);
+                u32 bl = Mix(a.Rgba >> 8 & 0xFF, b.Rgba >> 8 & 0xFF, c.Rgba >> 8 & 0xFF, w0, w1, w2, sum);
+                u32 al = Mix(a.Rgba & 0xFF, b.Rgba & 0xFF, c.Rgba & 0xFF, w0, w1, w2, sum);
+                usize at = ((y as u32 * this.W + x as u32) * 4) as usize;
+                px[at] = Over(r, px[at] as u32, al);
+                px[at + 1] = Over(g, px[at + 1] as u32, al);
+                px[at + 2] = Over(bl, px[at + 2] as u32, al);
+                px[at + 3] = Over(255, px[at + 3] as u32, al);
+            }
+        }
+    }
+}
+
+// Twice the signed area of (a, b, p), all in pixels.
+i64 Edge(i32 ax, i32 ay, i32 bx, i32 by, i32 px, i32 py) => (bx - ax) as i64 * (py - ay) as i64 - (by - ay) as i64 * (px - ax) as i64;
+
+// The same with p in half pixels (a and b are doubled).
+i64 Edge2(in Vertex a, in Vertex b, i32 px, i32 py) => Edge(2 * a.X, 2 * a.Y, 2 * b.X, 2 * b.Y, px, py);
+
+// With the corners in the order that makes the area positive (y down), an edge a -> b
+// is a top edge if it is horizontal going right, a left edge if it goes up.
+bool TopLeft(in Vertex a, in Vertex b) => a.Y == b.Y && b.X > a.X || b.Y < a.Y;
+
+// A channel interpolated at the centre, rounded.
+u32 Mix(u32 a, u32 b, u32 c, i64 wa, i64 wb, i64 wc, i64 sum) => ((a as i64 * wa + b as i64 * wb + c as i64 * wc + sum / 2) / sum) as u32;
+
+u8 Over(u32 src, u32 dst, u32 alpha) => ((src * alpha + dst * (255 - alpha) + 127) / 255) as u8;
+
+i32 Min(i32 a, i32 b) {
+    if (a < b) return a;
+    return b;
+}
+
+i32 Max(i32 a, i32 b) {
+    if (a > b) return a;
+    return b;
+}
+
+// ------------------------------------------------------------------ building frames
+
+// A rectangle as two triangles, one color.
+public void Rect(ref List<Vertex> v, i32 x, i32 y, i32 w, i32 h, u32 rgba) {
+    Gradient(ref v, x, y, w, h, rgba, rgba);
+}
+
+// A rectangle shading from top to bottom.
+public void Gradient(ref List<Vertex> v, i32 x, i32 y, i32 w, i32 h, u32 top, u32 bottom) {
+    v.Push(Vertex.At(x, y, top));
+    v.Push(Vertex.At(x + w, y, top));
+    v.Push(Vertex.At(x, y + h, bottom));
+    v.Push(Vertex.At(x + w, y, top));
+    v.Push(Vertex.At(x + w, y + h, bottom));
+    v.Push(Vertex.At(x, y + h, bottom));
+}
+
+public void Triangle(ref List<Vertex> v, Vertex a, Vertex b, Vertex c) {
+    v.Push(a);
+    v.Push(b);
+    v.Push(c);
+}
+
+// How many pixels of two RGBA frames differ in some channel by more than tolerance:
+// GPUs round colors slightly differently, so their frames are compared this way.
+public usize Differing(u8[] x, u8[] y, u32 tolerance) {
+    if (x.Len != y.Len) return x.Len / 4 + 1;
+    usize n = 0;
+    for (usize i = 0; i + 3 < x.Len; i += 4) {
+        for (usize k = 0; k < 4; k++) {
+            i32 d = x[i + k] as i32 - y[i + k] as i32;
+            if (d < 0) d = 0 - d;
+            if (d as u32 > tolerance) {
+                n++;
+                break;
+            }
+        }
+    }
+    return n;
+}

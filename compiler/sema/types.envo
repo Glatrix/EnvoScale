@@ -107,6 +107,7 @@ public const u32 B_WINCALL = 13;
 public const u32 B_FREE = 14;
 public const u32 B_SLICE_FROM = 15;
 public const u32 B_SLICE_FROM_MUT = 16;
+public const u32 B_WINCALLP = 17;      // wincall through a function pointer (D46)
 
 public const u64 MAX_TYPE_SIZE = 0x7FFFFFFF;
 

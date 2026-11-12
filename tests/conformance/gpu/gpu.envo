@@ -1,0 +1,51 @@
+// GPU conformance: what every IGpu adapter promises (lib/ports). Its frames agree with
+// the software adapter's to within 1 in every channel (GPUs round colors slightly
+// differently): a frame with only a clear, gradients, overlapping translucent
+// triangles, triangles sharing edges, and frames of a new size.
+// expect: gpu: done
+use ports.{IGpu, Vertex};
+use envo.gpu;
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+// Draws v on both and compares.
+void Same<G>(ref G dev, u32 w, u32 h, u32 clear, in List<Vertex> v, str what) where G : IGpu {
+    gpu.Software sw = gpu.Software.New();
+    Check(dev.Begin(w, h, clear), "Begin");
+    dev.Triangles(v.AsSlice());
+    List<u8> got = dev.End();
+    sw.Begin(w, h, clear);
+    sw.Triangles(v.AsSlice());
+    List<u8> want = sw.End();
+    Check(got.Len() == (w * h * 4) as usize, "a frame has width x height RGBA pixels");
+    Check(gpu.Differing(got.AsSlice(), want.AsSlice(), 1) == 0, what);
+}
+
+void Run<G>(ref G dev) where G : IGpu {
+    Check(dev.Name().Len() > 0, "a name");
+    Check(!dev.Begin(0, 16, 0), "an empty frame is refused");
+    List<Vertex> none = List<Vertex>.New();
+    Same(ref dev, 16, 16, 0x336699FF, none, "a clear");
+    List<Vertex> v = List<Vertex>.New();
+    gpu.Gradient(ref v, 0, 0, 96, 64, 0x0A66D8FF, 0xFF2D55FF);
+    gpu.Rect(ref v, 10, 10, 40, 30, 0x30D15880);
+    gpu.Rect(ref v, 30, 20, 40, 30, 0xFFB34060);
+    gpu.Triangle(ref v, Vertex.At(0, 64, 0x000000FF), Vertex.At(48, 32, 0xFFFFFFFF), Vertex.At(96, 64, 0x000000FF));
+    // a fan of triangles sharing edges: each pixel covered once
+    for (i32 k = 0; k < 8; k++) {
+        gpu.Triangle(ref v, Vertex.At(48, 32, 0x10101040), Vertex.At(8 + 10 * k, 2, 0x10101040), Vertex.At(18 + 10 * k, 2, 0x10101040));
+    }
+    Same(ref dev, 96, 64, 0xF5F5F7FF, v, "gradients, translucent rectangles and a fan");
+    Same(ref dev, 33, 17, 0x000000FF, v, "a frame of a new, odd size");
+    Same(ref dev, 96, 64, 0xFFFFFF00, v, "a transparent clear");
+}
+
+var dev = platform.Gpu();
+Run(ref dev);
+print("gpu: done");

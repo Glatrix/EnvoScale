@@ -13,9 +13,12 @@ public windows.Net Net() => windows.Net.New();
 public windows.Trust Trust() => windows.Trust.New();
 public windows.Terminal Terminal() => windows.Terminal.New();
 public windows.Window Window() => windows.Window.New();
+public windows.Gpu Gpu() => windows.Gpu.New();
 
-// The host's raw call gate for the script runtime: `wincall` (kind 2) on Windows.
+// The host's raw call gate for the script runtime: `wincall` (kind 2) and `wincallp`
+// (kind 3, k is the function pointer) on Windows.
 public i64 RawCall(u32 kind, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j, i64 l, i64 m) {
+    if (kind == 3) return windows.CallPointer(k, a, b, c, d, e, f, g, h, i, j, l, m);
     if (kind != 2) return -1;
     return windows.WinCall(k, a, b, c, d, e, f, g, h, i, j, l, m);
 }

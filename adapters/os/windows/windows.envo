@@ -4,9 +4,10 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IGpu, Vertex, IoError};
 use core.text as ct;
 use alloc.text;
+use envo.gpu;
 
 const i64 W_GETSTDHANDLE = 0;
 const i64 W_CREATEFILEW = 2;
@@ -582,6 +583,29 @@ public i64 WinCall(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h
         78 => { return __wincall12(78, a, b, c, d, e, f, g, h, i, j, l, m); }
         _ => { return -1; }
     }
+}
+
+const i64 W_LOADLIBRARYW = 58;
+
+// The address of function name in the DLL named dll, loading the DLL if it is not yet;
+// 0 if there is no such DLL or function.
+public i64 ProcAddress(str dll, str name) {
+    i64 module = 0;
+    unsafe {
+        *u8 wide = Wide(dll);
+        if (wide as usize == 0) return 0;
+        module = Call(W_GETMODULEHANDLEW, Ptr(wide), 0, 0, 0, 0, 0);
+        if (module == 0) module = Call(W_LOADLIBRARYW, Ptr(wide), 0, 0, 0, 0, 0);
+        if (module == 0) return 0;
+        return Call(W_GETPROCADDRESS, module, Ptr(CName(name)), 0, 0, 0, 0);
+    }
+}
+
+// Calls the function at fn with the arguments (Microsoft x64 convention): what a program's
+// own `__wincallp(fn, …)` does.
+public i64 CallPointer(i64 fn, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j, i64 l, i64 m) {
+    if (fn == 0) return 0;
+    return __wincallp(fn, a, b, c, d, e, f, g, h, i, j, l, m);
 }
 
 // ------------------------------------------------------------------ network
@@ -1239,5 +1263,484 @@ impl IWindow for Window {
         Call(W_DESTROYWINDOW, this.Hwnd, 0, 0, 0, 0, 0);
         this.Closed = true;
         this.Hwnd = 0;
+    }
+}
+
+// ------------------------------------------------------------------ GPU (D3D12)
+
+// COM: method k of obj's vtable, called with obj and the arguments.
+i64 Peek64(i64 addr) {
+    unsafe {
+        *u64 p = addr as usize as *u64;
+        return p[0] as i64;
+    }
+}
+
+i64 Com(i64 obj, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g) {
+    i64 fn = Peek64(Peek64(obj) + 8 * k);
+    return __wincallp(fn, obj, a, b, c, d, e, f, g, 0, 0, 0, 0);
+}
+
+void ComRelease(i64 obj) {
+    if (obj != 0) Com(obj, 2, 0, 0, 0, 0, 0, 0, 0);
+}
+
+bool Failed(i64 hr) => (hr as i32) < 0;
+
+// A GUID in memory: d4 is its last eight bytes as written.
+i64 Guid(u32 d1, u32 d2, u32 d3, u64 d4) {
+    unsafe {
+        *u8 p = alloc(16);
+        for (usize i = 0; i < 4; i++) p[i] = (d1 >> (8 * i as u32)) as u8;
+        p[4] = d2 as u8;
+        p[5] = (d2 >> 8) as u8;
+        p[6] = d3 as u8;
+        p[7] = (d3 >> 8) as u8;
+        for (usize i = 0; i < 8; i++) p[8 + i] = (d4 >> (56 - 8 * i as u64)) as u8;
+        return Ptr(p);
+    }
+}
+
+// A zeroed block of n bytes that stays (descriptions handed to the driver).
+*u8 Block(usize n) {
+    unsafe {
+        *u8 p = alloc(n);
+        for (usize i = 0; i < n; i++) p[i] = 0;
+        return p;
+    }
+}
+
+void Put32(*u8 p, usize at, u64 v) {
+    unsafe {
+        for (usize i = 0; i < 4; i++) p[at + i] = (v >> (8 * i as u64)) as u8;
+    }
+}
+
+void Put64(*u8 p, usize at, u64 v) {
+    unsafe {
+        for (usize i = 0; i < 8; i++) p[at + i] = (v >> (8 * i as u64)) as u8;
+    }
+}
+
+i64 Get64At(*u8 p, usize at) {
+    u64 v = 0;
+    unsafe {
+        for (usize i = 0; i < 8; i++) v = v | (p[at + i] as u64) << (8 * i as u64);
+    }
+    return v as i64;
+}
+
+// num / den as an IEEE single (the driver takes floats; Envo-S1 has none yet).
+u32 F32(u64 num, u64 den) {
+    if (num == 0 || den == 0) return 0;
+    u64 n = num;
+    u64 d = den;
+    i32 e = 0;
+    while (n < d << 23) {
+        n = n << 1;
+        e--;
+    }
+    while (n >= d << 24) {
+        d = d << 1;
+        e++;
+    }
+    u64 m = (n + d / 2) / d;
+    if (m >= 1 << 24) {
+        m = m >> 1;
+        e++;
+    }
+    return ((e + 23 + 127) as u32) << 23 | (m & 0x7FFFFF) as u32;
+}
+
+const i64 D3D_FEATURE_LEVEL_11_0 = 0xB000;
+const u64 STATE_RENDER_TARGET = 0x4;
+const u64 STATE_COPY_DEST = 0x400;
+const u64 STATE_COPY_SOURCE = 0x800;
+const u64 STATE_GENERIC_READ = 0xAC3;
+const u64 FORMAT_RGBA8 = 28;            // DXGI_FORMAT_R8G8B8A8_UNORM
+
+str Shaders() => "cbuffer C : register(b0) { uint2 size; };\nstruct VI { int2 pos : POSITION; float4 col : COLOR; };\nstruct VO { float4 pos : SV_Position; float4 col : COLOR; };\nVO vs(VI i) { VO o; o.pos = float4(i.pos.x * 2.0 / size.x - 1.0, 1.0 - i.pos.y * 2.0 / size.y, 0.0, 1.0); o.col = i.col; return o; }\nfloat4 ps(VO i) : SV_Target { return i.col; }\n";
+
+// The GPU through Direct3D 12 (PLAN D46): the first hardware adapter, frames drawn into
+// an off-screen target and copied back. Without one (no GPU, no driver, the script
+// runtime's sandbox), it draws in software.
+public struct Gpu {
+    bool Tried;
+    bool Ready;
+    string Desc;
+    i64 Device;
+    i64 Queue;
+    i64 Alloc;
+    i64 List;
+    i64 Root;
+    i64 Pso;
+    i64 Fence;
+    u64 FenceValue;
+    i64 Heap;
+    i64 Rtv;
+    i64 Target;
+    i64 Readback;
+    i64 Upload;
+    u64 UploadSize;
+    u32 W;
+    u32 H;
+    u32 Pitch;
+    u32 ClearRgba;
+    List<u8> Verts;
+    gpu.Software Soft;
+
+    public static Gpu New() => new Gpu {
+        Tried = false, Ready = false, Desc = string.From("software"), Device = 0, Queue = 0, Alloc = 0, List = 0,
+        Root = 0, Pso = 0, Fence = 0, FenceValue = 0, Heap = 0, Rtv = 0, Target = 0, Readback = 0, Upload = 0,
+        UploadSize = 0, W = 0, H = 0, Pitch = 0, ClearRgba = 0, Verts = List<u8>.New(), Soft = gpu.Software.New(),
+    };
+
+    // A committed resource: a buffer (height 0) or a 2D texture.
+    i64 Resource(ref this, u32 heapType, u64 width, u32 height, u64 state, u32 flags) {
+        *u8 props = Block(20);
+        Put32(props, 0, heapType as u64);
+        *u8 desc = Block(56);
+        if (height == 0) {
+            Put32(desc, 0, 1);                  // D3D12_RESOURCE_DIMENSION_BUFFER
+            Put64(desc, 16, width);
+            Put32(desc, 24, 1);
+            Put32(desc, 32, 0);                 // DXGI_FORMAT_UNKNOWN
+            Put32(desc, 44, 1);                 // D3D12_TEXTURE_LAYOUT_ROW_MAJOR
+        } else {
+            Put32(desc, 0, 3);                  // D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            Put64(desc, 16, width);
+            Put32(desc, 24, height as u64);
+            Put32(desc, 32, FORMAT_RGBA8);
+        }
+        unsafe {
+            desc[28] = 1;                       // DepthOrArraySize
+            desc[30] = 1;                       // MipLevels
+        }
+        Put32(desc, 36, 1);                     // SampleDesc.Count
+        Put32(desc, 48, flags as u64);
+        u8[8] got;
+        i64 hr = 0;
+        unsafe { hr = Com(this.Device, 27, Ptr(props), 0, Ptr(desc), state as i64, 0, IID_RESOURCE(), Ptr(&got[0])); }
+        if (Failed(hr)) return 0;
+        unsafe { return Get64At(&got[0], 0); }
+    }
+
+    // Finds a hardware adapter and builds the pipeline; false (and software) if any
+    // step fails.
+    bool Init(ref this) {
+        i64 createFactory = ProcAddress("dxgi.dll", "CreateDXGIFactory1");
+        i64 createDevice = ProcAddress("d3d12.dll", "D3D12CreateDevice");
+        i64 serialize = ProcAddress("d3d12.dll", "D3D12SerializeRootSignature");
+        i64 compile = ProcAddress("d3dcompiler_47.dll", "D3DCompile");
+        if (createFactory == 0 || createDevice == 0 || serialize == 0 || compile == 0) return false;
+        u8[8] got;
+        i64 factory = 0;
+        unsafe {
+            if (Failed(__wincallp(createFactory, IID_FACTORY1(), Ptr(&got[0]), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) return false;
+            factory = Get64At(&got[0], 0);
+        }
+        *u8 adesc = Block(312);
+        for (i64 i = 0; i < 16 && this.Device == 0; i++) {
+            i64 adapter = 0;
+            unsafe {
+                if (Failed(Com(factory, 12, i, Ptr(&got[0]), 0, 0, 0, 0, 0))) break;    // EnumAdapters1
+                adapter = Get64At(&got[0], 0);
+            }
+            Com(adapter, 10, Ptr(adesc), 0, 0, 0, 0, 0, 0);                         // GetDesc1
+            u32 flags = 0;
+            unsafe { flags = adesc[304] as u32; }
+            if (flags & 2 == 0) {
+                // not DXGI_ADAPTER_FLAG_SOFTWARE
+                unsafe {
+                    if (!Failed(__wincallp(createDevice, adapter, D3D_FEATURE_LEVEL_11_0, IID_DEVICE(), Ptr(&got[0]), 0, 0, 0, 0, 0, 0, 0, 0))) {
+                        this.Device = Get64At(&got[0], 0);
+                        string name = string.From("d3d12: ");
+                        name.Append(Narrow(adesc).AsStr());
+                        this.Desc = name;
+                    }
+                }
+            }
+            ComRelease(adapter);
+        }
+        ComRelease(factory);
+        if (this.Device == 0) return false;
+        i64 dev = this.Device;
+        unsafe {
+            // the queue, allocator and fence
+            *u8 qd = Block(16);
+            if (Failed(Com(dev, 8, Ptr(qd), IID_QUEUE(), Ptr(&got[0]), 0, 0, 0, 0))) return false;
+            this.Queue = Get64At(&got[0], 0);
+            if (Failed(Com(dev, 9, 0, IID_ALLOCATOR(), Ptr(&got[0]), 0, 0, 0, 0))) return false;
+            this.Alloc = Get64At(&got[0], 0);
+            if (Failed(Com(dev, 36, 0, 0, IID_FENCE(), Ptr(&got[0]), 0, 0, 0))) return false;
+            this.Fence = Get64At(&got[0], 0);
+            // a root signature with two constants (the frame's size) and vertex input
+            *u8 param = Block(32);
+            Put32(param, 0, 1);                 // D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS
+            Put32(param, 16, 2);                // Num32BitValues (register b0, space 0)
+            *u8 rs = Block(40);
+            Put32(rs, 0, 1);
+            Put64(rs, 8, Ptr(param) as u64);
+            Put32(rs, 32, 1);                   // ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+            u8[8] err;
+            if (Failed(__wincallp(serialize, Ptr(rs), 1, Ptr(&got[0]), Ptr(&err[0]), 0, 0, 0, 0, 0, 0, 0, 0))) return false;
+            i64 blob = Get64At(&got[0], 0);
+            i64 bp = Com(blob, 3, 0, 0, 0, 0, 0, 0, 0);
+            i64 bn = Com(blob, 4, 0, 0, 0, 0, 0, 0, 0);
+            if (Failed(Com(dev, 16, 0, bp, bn, IID_ROOT(), Ptr(&got[0]), 0, 0))) return false;
+            this.Root = Get64At(&got[0], 0);
+            ComRelease(blob);
+            // the shaders, compiled from HLSL by the system's compiler
+            i64 vs = 0;
+            i64 ps = 0;
+            *u8 src = CName(Shaders());
+            if (Failed(__wincallp(compile, Ptr(src), Shaders().Len as i64, 0, 0, 0, Ptr(CName("vs")), Ptr(CName("vs_5_0")), 0, 0, Ptr(&got[0]), Ptr(&err[0]), 0))) return false;
+            vs = Get64At(&got[0], 0);
+            if (Failed(__wincallp(compile, Ptr(src), Shaders().Len as i64, 0, 0, 0, Ptr(CName("ps")), Ptr(CName("ps_5_0")), 0, 0, Ptr(&got[0]), Ptr(&err[0]), 0))) return false;
+            ps = Get64At(&got[0], 0);
+            // the pipeline: triangles, no culling, alpha blending, one RGBA8 target
+            *u8 elems = Block(64);
+            Put64(elems, 0, Ptr(CName("POSITION")) as u64);
+            Put32(elems, 12, 18);               // DXGI_FORMAT_R32G32_SINT
+            Put64(elems, 32, Ptr(CName("COLOR")) as u64);
+            Put32(elems, 44, FORMAT_RGBA8);
+            Put32(elems, 52, 8);                // AlignedByteOffset
+            *u8 p = Block(656);
+            Put64(p, 0, this.Root as u64);
+            Put64(p, 8, Com(vs, 3, 0, 0, 0, 0, 0, 0, 0) as u64);
+            Put64(p, 16, Com(vs, 4, 0, 0, 0, 0, 0, 0, 0) as u64);
+            Put64(p, 24, Com(ps, 3, 0, 0, 0, 0, 0, 0, 0) as u64);
+            Put64(p, 32, Com(ps, 4, 0, 0, 0, 0, 0, 0, 0) as u64);
+            // BlendState.RenderTarget[0] at 128
+            Put32(p, 128, 1);                   // BlendEnable
+            Put32(p, 136, 5);                   // SrcBlend: SRC_ALPHA
+            Put32(p, 140, 6);                   // DestBlend: INV_SRC_ALPHA
+            Put32(p, 144, 1);                   // BlendOp: ADD
+            Put32(p, 148, 2);                   // SrcBlendAlpha: ONE
+            Put32(p, 152, 6);                   // DestBlendAlpha: INV_SRC_ALPHA
+            Put32(p, 156, 1);                   // BlendOpAlpha: ADD
+            Put32(p, 160, 4);                   // LogicOp: NOOP
+            p[164] = 0xF;                       // RenderTargetWriteMask
+            for (usize k = 1; k < 8; k++) {
+                Put32(p, 128 + 40 * k + 8, 2);  // the other targets: ONE, ZERO, ADD
+                Put32(p, 128 + 40 * k + 12, 1);
+                Put32(p, 128 + 40 * k + 16, 1);
+                Put32(p, 128 + 40 * k + 20, 2);
+                Put32(p, 128 + 40 * k + 24, 1);
+                Put32(p, 128 + 40 * k + 28, 1);
+                Put32(p, 128 + 40 * k + 32, 4);
+                p[128 + 40 * k + 36] = 0xF;
+            }
+            Put32(p, 448, 0xFFFFFFFF);          // SampleMask
+            Put32(p, 452, 3);                   // FillMode: SOLID
+            Put32(p, 456, 1);                   // CullMode: NONE
+            Put32(p, 476, 1);                   // DepthClipEnable
+            Put32(p, 504, 8);                   // DepthFunc: ALWAYS
+            for (usize face = 0; face < 2; face++) {
+                usize at = 516 + 16 * face;     // StencilFailOp, DepthFailOp, PassOp: KEEP; Func: ALWAYS
+                Put32(p, at, 1);
+                Put32(p, at + 4, 1);
+                Put32(p, at + 8, 1);
+                Put32(p, at + 12, 8);
+            }
+            Put64(p, 552, Ptr(elems) as u64);
+            Put32(p, 560, 2);
+            Put32(p, 572, 3);                   // PrimitiveTopologyType: TRIANGLE
+            Put32(p, 576, 1);                   // NumRenderTargets
+            Put32(p, 580, FORMAT_RGBA8);
+            Put32(p, 616, 1);                   // SampleDesc.Count
+            if (Failed(Com(dev, 10, Ptr(p), IID_PSO(), Ptr(&got[0]), 0, 0, 0, 0))) return false;
+            this.Pso = Get64At(&got[0], 0);
+            ComRelease(vs);
+            ComRelease(ps);
+            // the command list (closed until a frame), the target's descriptor heap
+            if (Failed(Com(dev, 12, 0, 0, this.Alloc, this.Pso, IID_LIST(), Ptr(&got[0]), 0))) return false;
+            this.List = Get64At(&got[0], 0);
+            Com(this.List, 9, 0, 0, 0, 0, 0, 0, 0);
+            *u8 hd = Block(16);
+            Put32(hd, 0, 2);                    // D3D12_DESCRIPTOR_HEAP_TYPE_RTV
+            Put32(hd, 4, 1);
+            if (Failed(Com(dev, 14, Ptr(hd), IID_HEAP(), Ptr(&got[0]), 0, 0, 0, 0))) return false;
+            this.Heap = Get64At(&got[0], 0);
+            Com(this.Heap, 9, Ptr(&got[0]), 0, 0, 0, 0, 0, 0);     // GetCPUDescriptorHandleForHeapStart
+            this.Rtv = Get64At(&got[0], 0);
+        }
+        return true;
+    }
+
+    // The target and read-back buffer for a width x height frame.
+    bool Size(ref this, u32 width, u32 height) {
+        if (this.W == width && this.H == height && this.Target != 0) return true;
+        ComRelease(this.Target);
+        ComRelease(this.Readback);
+        this.W = width;
+        this.H = height;
+        this.Pitch = (width * 4 + 255) & ~255;
+        this.Target = this.Resource(1, width as u64, height, STATE_RENDER_TARGET, 1);
+        this.Readback = this.Resource(3, this.Pitch as u64 * height as u64, 0, STATE_COPY_DEST, 0);
+        if (this.Target == 0 || this.Readback == 0) return false;
+        Com(this.Device, 20, this.Target, 0, this.Rtv, 0, 0, 0, 0);    // CreateRenderTargetView
+        return true;
+    }
+
+    void Barrier(ref this, u64 before, u64 after) {
+        *u8 b = Block(32);
+        Put64(b, 8, this.Target as u64);
+        Put32(b, 16, 0xFFFFFFFF);               // all subresources
+        Put32(b, 20, before);
+        Put32(b, 24, after);
+        Com(this.List, 26, 1, Ptr(b), 0, 0, 0, 0, 0);
+    }
+
+    // Draws the frame on the GPU and copies it back.
+    List<u8> Render(ref this) {
+        List<u8> pixels = List<u8>.New();
+        u64 vbytes = this.Verts.Len() as u64;
+        if (vbytes > this.UploadSize) {
+            ComRelease(this.Upload);
+            u64 size = 65536;
+            while (size < vbytes) size = size * 2;
+            this.Upload = this.Resource(2, size, 0, STATE_GENERIC_READ, 0);
+            this.UploadSize = size;
+            if (this.Upload == 0) this.UploadSize = 0;
+        }
+        u8[8] got;
+        unsafe {
+            if (vbytes > 0 && this.Upload != 0) {
+                *u8 empty = Block(16);
+                if (!Failed(Com(this.Upload, 8, 0, Ptr(empty), Ptr(&got[0]), 0, 0, 0, 0))) {
+                    *u8 dst = Get64At(&got[0], 0) as usize as *u8;
+                    u8[] v = this.Verts.AsSlice();
+                    for (usize i = 0; i < v.Len; i++) dst[i] = v[i];
+                    Com(this.Upload, 9, 0, 0, 0, 0, 0, 0, 0);
+                }
+            }
+            Com(this.Alloc, 8, 0, 0, 0, 0, 0, 0, 0);                              // Reset
+            Com(this.List, 10, this.Alloc, this.Pso, 0, 0, 0, 0, 0);              // Reset
+            Com(this.List, 30, this.Root, 0, 0, 0, 0, 0, 0);                      // SetGraphicsRootSignature
+            *u8 size2 = Block(8);
+            Put32(size2, 0, this.W as u64);
+            Put32(size2, 4, this.H as u64);
+            Com(this.List, 36, 0, 2, Ptr(size2), 0, 0, 0, 0);                     // SetGraphicsRoot32BitConstants
+            *u8 vp = Block(24);
+            Put32(vp, 8, F32(this.W as u64, 1) as u64);
+            Put32(vp, 12, F32(this.H as u64, 1) as u64);
+            Put32(vp, 20, F32(1, 1) as u64);
+            Com(this.List, 21, 1, Ptr(vp), 0, 0, 0, 0, 0);                        // RSSetViewports
+            *u8 sc = Block(16);
+            Put32(sc, 8, this.W as u64);
+            Put32(sc, 12, this.H as u64);
+            Com(this.List, 22, 1, Ptr(sc), 0, 0, 0, 0, 0);                        // RSSetScissorRects
+            *u8 rtv = Block(8);
+            Put64(rtv, 0, this.Rtv as u64);
+            Com(this.List, 46, 1, Ptr(rtv), 0, 0, 0, 0, 0);                       // OMSetRenderTargets
+            *u8 color = Block(16);
+            u32 c = this.ClearRgba;
+            Put32(color, 0, F32((c >> 24) as u64, 255) as u64);
+            Put32(color, 4, F32((c >> 16 & 0xFF) as u64, 255) as u64);
+            Put32(color, 8, F32((c >> 8 & 0xFF) as u64, 255) as u64);
+            Put32(color, 12, F32((c & 0xFF) as u64, 255) as u64);
+            Com(this.List, 48, this.Rtv, Ptr(color), 0, 0, 0, 0, 0);              // ClearRenderTargetView
+            if (vbytes > 0 && this.Upload != 0) {
+                Com(this.List, 20, 4, 0, 0, 0, 0, 0, 0);                          // TRIANGLELIST
+                *u8 view = Block(16);
+                Put64(view, 0, Com(this.Upload, 11, 0, 0, 0, 0, 0, 0, 0) as u64); // GetGPUVirtualAddress
+                Put32(view, 8, vbytes);
+                Put32(view, 12, 12);
+                Com(this.List, 44, 0, 1, Ptr(view), 0, 0, 0, 0);                  // IASetVertexBuffers
+                Com(this.List, 12, (vbytes / 12) as i64, 1, 0, 0, 0, 0, 0);       // DrawInstanced
+            }
+            this.Barrier(STATE_RENDER_TARGET, STATE_COPY_SOURCE);
+            *u8 dst = Block(48);
+            Put64(dst, 0, this.Readback as u64);
+            Put32(dst, 8, 1);                   // PLACED_FOOTPRINT
+            Put32(dst, 24, FORMAT_RGBA8);
+            Put32(dst, 28, this.W as u64);
+            Put32(dst, 32, this.H as u64);
+            Put32(dst, 36, 1);
+            Put32(dst, 40, this.Pitch as u64);
+            *u8 srcLoc = Block(48);
+            Put64(srcLoc, 0, this.Target as u64);
+            Com(this.List, 16, Ptr(dst), 0, 0, 0, Ptr(srcLoc), 0, 0);             // CopyTextureRegion
+            this.Barrier(STATE_COPY_SOURCE, STATE_RENDER_TARGET);
+            Com(this.List, 9, 0, 0, 0, 0, 0, 0, 0);                               // Close
+            *u8 lists = Block(8);
+            Put64(lists, 0, this.List as u64);
+            Com(this.Queue, 10, 1, Ptr(lists), 0, 0, 0, 0, 0);                    // ExecuteCommandLists
+            this.FenceValue = this.FenceValue + 1;
+            Com(this.Queue, 14, this.Fence, this.FenceValue as i64, 0, 0, 0, 0, 0);    // Signal
+            Com(this.Fence, 9, this.FenceValue as i64, 0, 0, 0, 0, 0, 0);         // SetEventOnCompletion(null): waits
+            *u8 range = Block(16);
+            Put64(range, 8, this.Pitch as u64 * this.H as u64);
+            if (Failed(Com(this.Readback, 8, 0, Ptr(range), Ptr(&got[0]), 0, 0, 0, 0))) return pixels;
+            *u8 src = Get64At(&got[0], 0) as usize as *u8;
+            for (u32 y = 0; y < this.H; y++) {
+                usize row = (y * this.Pitch) as usize;
+                for (usize i = 0; i < (this.W * 4) as usize; i++) pixels.Push(src[row + i]);
+            }
+            *u8 none = Block(16);
+            Com(this.Readback, 9, 0, Ptr(none), 0, 0, 0, 0, 0);
+        }
+        return pixels;
+    }
+}
+
+i64 IID_DEVICE() => Guid(0x189819f1, 0x1db6, 0x4b57, 0xbe541821339b85f7);
+i64 IID_QUEUE() => Guid(0x0ec870a6, 0x5d7e, 0x4c22, 0x8cfc5baae07616ed);
+i64 IID_ALLOCATOR() => Guid(0x6102dee4, 0xaf59, 0x4b09, 0xb999b44d73f09b24);
+i64 IID_ROOT() => Guid(0xc54a6b66, 0x72df, 0x4ee8, 0x8be5a946a1429214);
+i64 IID_PSO() => Guid(0x765a30f3, 0xf624, 0x4c6f, 0xa828ace948622445);
+i64 IID_LIST() => Guid(0x5b160d0f, 0xac1b, 0x4185, 0x8ba8b3ae42a5a455);
+i64 IID_HEAP() => Guid(0x8efb471d, 0x616c, 0x4f49, 0x90f7127bb763fa51);
+i64 IID_RESOURCE() => Guid(0x696442be, 0xa72e, 0x4059, 0xbc795b5c98040fad);
+i64 IID_FENCE() => Guid(0x0a753dcf, 0xc4d8, 0x4b91, 0xadf6be5a60d95a76);
+i64 IID_FACTORY1() => Guid(0x770aae78, 0xf26f, 0x4dba, 0xa829253c83d1b387);
+
+impl IGpu for Gpu {
+    string Name(ref this) {
+        if (!this.Tried) {
+            this.Tried = true;
+            this.Ready = this.Init();
+            if (!this.Ready) this.Desc = string.From("software");
+        }
+        return string.From(this.Desc.AsStr());
+    }
+
+    bool Begin(ref this, u32 width, u32 height, u32 clearRgba) {
+        if (!this.Tried) {
+            this.Tried = true;
+            this.Ready = this.Init();
+            if (!this.Ready) this.Desc = string.From("software");
+        }
+        if (this.Ready && width > 0 && height > 0 && width <= 16384 && height <= 16384 && this.Size(width, height)) {
+            this.ClearRgba = clearRgba;
+            this.Verts = List<u8>.New();
+            return true;
+        }
+        if (this.Ready) return false;
+        return this.Soft.Begin(width, height, clearRgba);
+    }
+
+    void Triangles(ref this, Vertex[] v) {
+        if (!this.Ready) {
+            this.Soft.Triangles(v);
+            return;
+        }
+        for (usize i = 0; i + 2 < v.Len; i += 3) {
+            for (usize k = 0; k < 3; k++) {
+                Vertex x = v[i + k];
+                for (usize b = 0; b < 4; b++) this.Verts.Push((x.X as u32 >> (8 * b as u32)) as u8);
+                for (usize b = 0; b < 4; b++) this.Verts.Push((x.Y as u32 >> (8 * b as u32)) as u8);
+                this.Verts.Push((x.Rgba >> 24) as u8);
+                this.Verts.Push((x.Rgba >> 16) as u8);
+                this.Verts.Push((x.Rgba >> 8) as u8);
+                this.Verts.Push(x.Rgba as u8);
+            }
+        }
+    }
+
+    List<u8> End(ref this) {
+        if (!this.Ready) return this.Soft.End();
+        return this.Render();
     }
 }

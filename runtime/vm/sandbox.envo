@@ -218,6 +218,9 @@ public struct Sandbox {
         return ok;
     }
 
+    // A Windows call through a function pointer (GPU drivers, COM): only with `all`.
+    public bool AllowPointerCall(ref this) => this.All;
+
     // Was the last Windows call denied? Then GetLastError reports ACCESS_DENIED, once.
     public bool PendingDenied(ref this) {
         bool d = this.LastDenied;

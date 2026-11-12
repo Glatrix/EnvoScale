@@ -46,7 +46,9 @@ flags; `/proc/self/environ` counts as `env`), `creat`, `unlink`, `mkdir`, `rmdir
 `FindFirstFileW`, `CreateProcessW`, `GetEnvironmentVariableW`, and the network calls
 (`net`). The console and terminal calls are always allowed. The loader calls
 (`GetModuleHandleW`, `GetProcAddress`, `LoadLibraryW`) and the window calls (USER32,
-GDI32) need `all`, since each can run code the sandbox does not see. A denied call fails as
+GDI32) need `all`, since each can run code the sandbox does not see. So does any call
+through a function pointer (`wincallp`: GPU drivers, COM); without it the call returns 0,
+and the GPU adapter falls back to drawing in software. A denied call fails as
 the system fails a call it may not make (`-EACCES`; the function's failure value with
 `ERROR_ACCESS_DENIED` from `GetLastError`), so the adapters report `IoError.Denied` and
 the program decides what to do. The first denial of each kind prints a note:

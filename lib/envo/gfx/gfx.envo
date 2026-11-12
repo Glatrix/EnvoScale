@@ -63,6 +63,15 @@ public struct Canvas {
         return c;
     }
 
+    // A canvas holding width x height RGBA pixels (a GPU frame, a decoded image); missing
+    // pixels are transparent.
+    public static Canvas FromRgba(i32 width, i32 height, u8[] rgba) {
+        Canvas c = Canvas.New(width, height);
+        mut u8[] p = c.Px.AsMutSlice();
+        for (usize i = 0; i < p.Len && i < rgba.Len; i++) p[i] = rgba[i];
+        return c;
+    }
+
     public i32 Width(in this) => this.W;
     public i32 Height(in this) => this.H;
     // The pixels, RGBA, rows from the top.

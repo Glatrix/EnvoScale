@@ -478,19 +478,25 @@ struct Gen {
             for (u32 k = 1; k < n; k++) this.LoadOp(m, regs[k - 1], f + k);
             this.LoadOp(m, RAX, f);
             this.A.Syscall();
-        } else if (TextIs(inst.Str, "wincall")) {
+        } else if (TextIs(inst.Str, "wincall") || TextIs(inst.Str, "wincallp")) {
             if (this.Target != TARGET_WINDOWS) Bug("x64: wincall on a non-Windows target");
+            bool viaPointer = TextIs(inst.Str, "wincallp");
             u32 args = n - 1;
             u32 stackArgs = 0;
             if (args > 4) stackArgs = args - 4;
             i32 reserve = ((32 + 8 * stackArgs + 15) & ~15) as i32;
             this.A.AluImm(5, RSP, reserve);
-            // the import's IAT slot: iat + 8 * k, in r10 (not an argument register)
-            this.A.LeaLabel(R10, this.Imports.Iat);
-            this.LoadOp(m, R11, f);
-            this.A.MovRI(RAX, 8);
-            this.A.ImulRR(R11, RAX);
-            this.A.Alu(ALU_ADD, R10, R11);
+            if (viaPointer) {
+                // the function pointer, in r10 (not an argument register)
+                this.LoadOp(m, R10, f);
+            } else {
+                // the import's IAT slot: iat + 8 * k, in r10 (not an argument register)
+                this.A.LeaLabel(R10, this.Imports.Iat);
+                this.LoadOp(m, R11, f);
+                this.A.MovRI(RAX, 8);
+                this.A.ImulRR(R11, RAX);
+                this.A.Alu(ALU_ADD, R10, R11);
+            }
             for (u32 k = 4; k < args; k++) {
                 this.LoadOp(m, RAX, f + 1 + k);
                 this.A.Store(RSP, (32 + 8 * (k - 4)) as i32, RAX, 8);
@@ -501,7 +507,8 @@ struct Gen {
             regs[2] = R8;
             regs[3] = R9;
             for (u32 k = 0; k < args && k < 4; k++) this.LoadOp(m, regs[k], f + 1 + k);
-            this.A.CallMem(R10);
+            if (viaPointer) this.A.CallR(R10);
+            else this.A.CallMem(R10);
             this.A.AluImm(0, RSP, reserve);
         } else {
             Bug("x64: portable intrinsics reach the backend only through the runtime");

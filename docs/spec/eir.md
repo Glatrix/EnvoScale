@@ -220,7 +220,9 @@ Two **target intrinsics** exist only in the runtime's OS layer and only for thei
 target (docs/architecture/stage1.md): `syscall(i64 n, i64 a1, …, i64 a6) -> i64` on Linux
 and `wincall(i64 k, i64 a1, …, i64 a10) -> i64` on Windows, which calls import *k* of the
 image's import address table; `wincall` may also take 12 arguments (`a1` … `a12`), for
-the few imports that need them (`CreateWindowExW`, `SetDIBitsToDevice`).
+the few imports that need them (`CreateWindowExW`, `SetDIBitsToDevice`). On Windows,
+`wincallp(i64 fn, i64 a1, …, i64 a12) -> i64` calls the function at address `fn` the same
+way (functions found at run time: `GetProcAddress`, COM methods).
 
 ### 5.7 Terminators
 

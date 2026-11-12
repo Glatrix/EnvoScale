@@ -97,7 +97,10 @@ executables stay byte-identical:
 
 `__wincall` takes the slot and 10 arguments (`CreateProcessW` has 10); `__wincall12`
 takes the slot and 12 (`CreateWindowExW`, `SetDIBitsToDevice`) and is the same `wincall`
-intrinsic in EIR. The script runtime's sandbox lets the console calls through and refuses
+intrinsic in EIR. `__wincallp(fn, …)` calls a function found at run time (by
+`GetProcAddress`, or a COM method from an object's table) the same way, with 12
+arguments; `os.windows.ProcAddress(dll, name)` and `CallPointer` wrap it. The GPU
+adapter reaches Direct3D 12 this way. The script runtime's sandbox lets the console calls through and refuses
 the loader, USER32 and GDI32 calls unless the program is allowed `all`
 ([`script-runtime.md`](script-runtime.md)).
 

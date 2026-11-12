@@ -81,7 +81,7 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D43 | **A Terminal port** (`ITerminal`): write text, the window's size, raw mode on and off, and input as key events. Windows: the console API (a second KERNEL32 import descriptor, D25), with VT input so keys arrive as on Linux; Linux: `ioctl` (`TCGETS`, `TCSETS`, `TIOCGWINSZ`) and VT sequences. `envo.term` builds a cell buffer with a diffing renderer on it; `envo.cli` (arguments, help, tables, progress) needs only the console. | `lib/envo/term/README.md` |
 | D44 | **`envo.gfx` is a software rasterizer first**: an RGBA canvas with shapes, anti-aliased edges, alpha blending and images, tested by hashing pixels (golden images). The GPU adapters (D46) draw the same commands faster. | `lib/envo/gfx/README.md` |
 | D45 | **A Window port** (`IWindow`): open a window, poll events (keys, mouse, resize, close), present an RGBA framebuffer. The Win32 adapter uses `USER32.dll` and `GDI32.dll` from the import table (both stages, added with D43) and `__wincall12`; the window procedure is `DefWindowProcW`, events are read from the message queue, so no callback into Envo code is needed; `os.none` gives an off-screen window for tests. Linux windows (X11/Wayland) come after M8, as the brief's DoD names Win32 only. | `docs/architecture/graphics.md` |
-| D46 | **`envo.gpu`** is a port with a software adapter (on `envo.gfx`) in M8; the Vulkan and D3D12 adapters load the system's driver library at run time and are the milestone's last increments. | `docs/architecture/graphics.md` |
+| D46 | **`envo.gpu`** is a port (frames of colored triangles, drawn off-screen and read back) with a software adapter in `envo.gpu`, and a Direct3D 12 adapter in `os.windows`. The D3D12 adapter loads the system's libraries at run time through `__wincallp` (a call through a function pointer, in both stages) and compiles its HLSL with the system's `D3DCompile`. Every adapter agrees with the software adapter to within 1 per channel. Vulkan, for Linux GPUs, follows Linux windows after M8, as it needs SPIR-V and the brief's DoD names Win32 windows only. | `docs/architecture/graphics.md` |
 | D47 | **`envo.ui`** is a retained component tree (`Column`, `Row`, `Text`, `Button`, …) with one layout pass, drawn by a desktop renderer (`envo.gfx` into a window) or a terminal renderer (`envo.term` cells). Lumen tokens (`docs/lumen/`) are its default theme. | `lib/envo/ui/README.md` |
 
 ## 3. Open questions
@@ -190,11 +190,11 @@ tokens, `envo.cli`/`envo.term`.
 | [8.1](https://github.com/envoscale/EnvoScale/issues/111) | `envo.term` and the Terminal port (D43): VT output, size, raw mode, key events, a diffing cell buffer | `lib/envo/term/tests/`, conformance | done |
 | [8.2](https://github.com/envoscale/EnvoScale/issues/112) | `envo.cli`: commands, flags and help; tables; progress bars | `lib/envo/cli/tests/` | done |
 | [8.3](https://github.com/envoscale/EnvoScale/issues/113) | `envo.gfx`: the software rasterizer (D44) | golden pixel hashes | done |
-| [8.4](https://github.com/envoscale/EnvoScale/issues/114) | `envo.font`: TrueType outlines rasterized with anti-aliasing | golden glyph hashes || done |
-| [8.5](https://github.com/envoscale/EnvoScale/issues/115) | The Window port and the Win32 adapter (D45) | conformance (off-screen and native) || done |
-| [8.6](https://github.com/envoscale/EnvoScale/issues/116) | `envo.ui` with Lumen tokens: layout, desktop and terminal renderers (D47) | golden renders || done |
-| [8.7](https://github.com/envoscale/EnvoScale/issues/117) | `envo.gpu`: the port and its software adapter (D46) | `lib/envo/gpu/tests/` | |
-| [8.8](https://github.com/envoscale/EnvoScale/issues/118) | The Vulkan and D3D12 adapters | on machines with a GPU | |
+| [8.4](https://github.com/envoscale/EnvoScale/issues/114) | `envo.font`: TrueType outlines rasterized with anti-aliasing | golden glyph hashes | done |
+| [8.5](https://github.com/envoscale/EnvoScale/issues/115) | The Window port and the Win32 adapter (D45) | conformance (off-screen and native) | done |
+| [8.6](https://github.com/envoscale/EnvoScale/issues/116) | `envo.ui` with Lumen tokens: layout, desktop and terminal renderers (D47) | golden renders | done |
+| [8.7](https://github.com/envoscale/EnvoScale/issues/117) | `envo.gpu`: the port and its software adapter (D46) | `lib/envo/gpu/tests/` | done |
+| [8.8](https://github.com/envoscale/EnvoScale/issues/118) | The D3D12 adapter (Vulkan follows Linux windows, after M8) | on machines with a GPU | done |
 | [8.9](https://github.com/envoscale/EnvoScale/issues/119) | Docs and status; M8 complete | CI | |
 
 ## 6. Risks

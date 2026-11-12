@@ -196,3 +196,31 @@ public interface IWindow {
     // Closes the window.
     void Close(ref this);
 }
+
+// A triangle corner for the GPU port: a position in pixels from the top left (corners
+// of pixels, so a pixel's centre is at +0.5) and a color, 0xRRGGBBAA, blended across the
+// triangle.
+public struct Vertex {
+    i32 X;
+    i32 Y;
+    u32 Rgba;
+
+    public static Vertex At(i32 x, i32 y, u32 rgba) => new Vertex { X = x, Y = y, Rgba = rgba };
+}
+
+// A device that draws (PLAN D46): frames of colored triangles, rendered off-screen and
+// read back. The software adapter (envo.gpu) and the GPU adapters (D3D12, Vulkan) draw
+// the same frames; a window presents them.
+public interface IGpu {
+    // Which adapter and device this is: "software", or the API and the GPU's name.
+    string Name(ref this);
+    // Starts a frame of width x height pixels, cleared to clearRgba. False if the
+    // device cannot.
+    bool Begin(ref this, u32 width, u32 height, u32 clearRgba);
+    // Draws triangles: every three vertices make one; pixels whose centres lie inside
+    // (the top-left rule decides edges) take the colors blended across it, alpha-blended
+    // over the frame.
+    void Triangles(ref this, Vertex[] vertices);
+    // Finishes the frame: its pixels, RGBA, rows from the top.
+    List<u8> End(ref this);
+}

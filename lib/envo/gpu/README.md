@@ -1,19 +1,41 @@
 # `envo.gpu`
 
-> **Status:** Not started. Planned for **M8**. Tier when it lands: Experimental.
+> **Status:** Experimental (M8.7, M8.8). Tests: `lib/envo/gpu/tests/`,
+> `tests/conformance/gpu/`.
 
-The explicit GPU layer: devices, queues, buffers, textures, pipelines, bind groups, command encoders, sync. The software adapter is mandatory and must pass every test.
+The GPU port (`ports.IGpu`, PLAN D46) draws frames of colored triangles off-screen and
+reads them back. This module holds the software adapter, which every device has, and
+helpers for building frames. `platform.Gpu()` gives the best adapter: Direct3D 12 on a
+Windows machine with a GPU, software elsewhere.
 
 ## Simple door
 
 ```envo
-var gpu = gpu.Default();
+use ports.{IGpu, Vertex};
+use envo.gpu;
+use platform;
+
+var dev = platform.Gpu();
+List<Vertex> v = List<Vertex>.New();
+gpu.Gradient(ref v, 0, 0, 640, 480, 0x0A66D8FF, 0x4C9BFFFF);
+gpu.Triangle(ref v, Vertex.At(100, 400, 0xFF2D55FF), Vertex.At(320, 60, 0x30D158FF), Vertex.At(540, 400, 0xFFB340FF));
+dev.Begin(640, 480, 0xF5F5F7FF);
+dev.Triangles(v.AsSlice());
+List<u8> frame = dev.End();     // RGBA; a window's Present takes it
 ```
 
 ## Full-control door
 
-Everything Vulkan/Metal/D3D12/WebGPU have in common, with no hidden state.
+- `Software`: the CPU adapter, exact and the same on every machine.
+- `Rect`, `Gradient`, `Triangle` append vertices; `Differing(a, b, tolerance)` compares
+  frames as the conformance suite does.
+
+## Not yet
+
+Textures, index buffers, shaders written by programs, compute, a swap chain (frames are
+read back), and the Vulkan adapter (after M8, with Linux windows). The software adapter
+draws without anti-aliasing, as GPUs do without multisampling.
 
 ## Ports used
 
-GpuDevice
+Gpu (`ports.IGpu`).

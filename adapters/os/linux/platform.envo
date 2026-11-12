@@ -2,6 +2,7 @@
 namespace platform;
 
 use os.linux;
+use envo.gpu;
 
 public linux.Console Console() => linux.Console.New();
 public linux.FileSystem FileSystem() => linux.FileSystem.New();
@@ -13,6 +14,8 @@ public linux.Net Net() => linux.Net.New();
 public linux.Trust Trust() => linux.Trust.New();
 public linux.Terminal Terminal() => linux.Terminal.New();
 public linux.Window Window() => linux.Window.New();
+// The GPU port: the software adapter (D3D12 is Windows', Vulkan comes after M8).
+public gpu.Software Gpu() => gpu.Software.New();
 
 // The host's raw call gate for the script runtime: `syscall` (kind 1) on Linux.
 public i64 RawCall(u32 kind, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j, i64 l, i64 m) {

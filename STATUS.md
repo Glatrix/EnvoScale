@@ -21,7 +21,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M5 | Daily tooling | **Done**: the `envo` binary (the compiler as a library) with `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`; packages; rich diagnostics; `FileSystem.List` and the `Process` port; `envo.eon`, `envo.json` (5.1–5.8) |
 | M6 | Script runtime | **Done**: `envo run` interprets the program's EIR, sandboxed with `--allow` permissions; scripts and `#!/usr/bin/env envo`; `envo repl`; every spec run test and library test passes in both modes (6.1–6.7) |
 | M7 | Crypto and network | **Done** (Experimental, not audited): `envo.crypto` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, a CSPRNG; RSA, ECDSA and X.509 verification), the Net and Trust ports, `envo.http` (HTTP/1.1 client and server), `envo.tls` (a verifying TLS 1.3 client) (7.1–7.8) |
-| M8 | Graphics and UI | **In progress** (`docs/PLAN.md` §5): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port with a Win32 adapter, `envo.ui` on Lumen (8.1–8.6) |
+| M8 | Graphics and UI | **In progress** (`docs/PLAN.md` §5): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port with a Win32 adapter, `envo.ui` on Lumen, `envo.gpu` with software and Direct3D 12 adapters (8.1–8.8) |
 | M9–M13 | | Not started |
 
 ### M0 Definition of Done
@@ -105,8 +105,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
 | **Runtime** (`runtime/`) | Experimental | Startup, panics and the OS layer (`bootstrap/stage1/runtime/`, in every program); the EIR VM (`runtime/vm`) with permissions | ARC, a JIT, floats in the VM | M7 on |
-| **Standard platform** (`lib/`) | Experimental | `core`, `alloc`, `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, `envo.crypto`, `envo.http`, `envo.tls`, `envo.cli`, `envo.term`, `envo.gfx`, `envo.font`, `envo.lumen`, `envo.ui`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M8 on |
-| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process, Net, Trust, Terminal, Window (Win32; Linux after M8); every conformance suite passes on both hosts | GPU, audio, threads, Linux windows | M8 on |
+| **Standard platform** (`lib/`) | Experimental | `core`, `alloc`, `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, `envo.crypto`, `envo.http`, `envo.tls`, `envo.cli`, `envo.term`, `envo.gfx`, `envo.font`, `envo.lumen`, `envo.ui`, `envo.gpu`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M8 on |
+| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process, Net, Trust, Terminal, Window (Win32; Linux after M8), Gpu (Direct3D 12; software elsewhere); every conformance suite passes on both hosts | Vulkan, audio, threads, Linux windows | M8 on |
 | **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run` (script runtime or `--native`), `check`, `test`, `fmt`, `lsp`, `repl`, `explain`, `version`; scripts | `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` | later milestones |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |
 

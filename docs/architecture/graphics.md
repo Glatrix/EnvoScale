@@ -14,7 +14,7 @@ are ports, and everything drawn is computed in memory first:
 | Text | `envo.font`: TrueType, anti-aliased | done (8.4) |
 | Window port (D45) | `ports.IWindow`, adapters in `os.*` | done (8.5) |
 | UI (D47) | `envo.ui` on `envo.lumen` | done (8.6) |
-| GPU (D46) | `envo.gpu` | 8.7, 8.8 |
+| GPU port (D46) | `ports.IGpu`; software adapter in `envo.gpu`, Direct3D 12 in `os.windows` | done (8.7, 8.8) |
 
 ## Exact arithmetic
 
@@ -66,6 +66,32 @@ a test queued (`Queue`). Linux windows (X11, Wayland) come after M8: the Linux a
 In the script runtime the window calls need `--allow all`: a window class names a
 function for Windows to call, which the sandbox cannot check
 ([`script-runtime.md`](script-runtime.md)).
+
+## The GPU port (D46)
+
+`IGpu`: `Name`, `Begin(width, height, clear)`, `Triangles(vertices)`, `End()`. `End` gives
+the frame's RGBA pixels. A vertex is a position in whole pixels and a color, 0xRRGGBBAA.
+Frames are drawn off-screen and read back, and a window presents them like any other
+pixels. Every adapter follows the same rules:
+- a pixel is covered when its centre is inside a triangle;
+- the top-left rule decides edges, so triangles sharing an edge cover each pixel once;
+- colors are interpolated linearly;
+- blending is source-over: color `src·a + dst·(1−a)`, alpha `a + dst·(1−a)`.
+
+`tests/conformance/gpu` checks each adapter against the software adapter: every channel
+of every pixel must agree to within 1, since GPUs round colors slightly differently.
+
+| Adapter | How |
+|---|---|
+| `envo.gpu.Software` | Edge functions in half pixels, colors interpolated exactly and rounded. `platform.Gpu()` on Linux and with `--os none`. |
+| `os.windows.Gpu` | Direct3D 12 on the first hardware adapter (DXGI). HLSL compiled at run time by the system's `D3DCompile`, so no shader binaries are checked in. Vertices go up in an upload buffer, the frame's size as two root constants. The frame is drawn into an RGBA8 render target, copied to a read-back buffer and waited for with a fence. Without a hardware adapter, or in the sandbox, it draws in software. |
+
+Direct3D is reached through `__wincallp`: `GetProcAddress` for the DLLs' exported
+functions, and the objects' method tables for COM. Floats the driver needs (the clear
+color, the viewport) are built bit by bit from integer ratios.
+
+Vulkan (for Linux GPUs) comes after M8, with Linux windows. It needs SPIR-V shaders,
+which have no runtime compiler on the system.
 
 ## UI (D47)
 

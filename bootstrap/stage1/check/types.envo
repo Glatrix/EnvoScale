@@ -103,6 +103,7 @@ const u32 B_WINCALL = 13;
 const u32 B_FREE = 14;              // Envo-S1 built-ins (envo-s1.md section 7)
 const u32 B_SLICE_FROM = 15;
 const u32 B_SLICE_FROM_MUT = 16;
+const u32 B_WINCALLP = 17;         // wincall through a function pointer (D46)
 
 const u64 MAX_TYPE_SIZE = 0x7FFFFFFF;
 

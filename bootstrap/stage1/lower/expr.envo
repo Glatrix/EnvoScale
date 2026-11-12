@@ -372,7 +372,7 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
     Vec args = VecNew(4, 8);
     u32 retTmp = 0;
     bool fromParts = sym.Kind == SK_BUILTIN && (sym.Aux2 == B_STR_FROM || sym.Aux2 == B_SLICE_FROM || sym.Aux2 == B_SLICE_FROM_MUT);
-    bool inline = fromParts || (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL));
+    bool inline = fromParts || (sym.Kind == SK_BUILTIN && (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL || sym.Aux2 == B_WINCALLP));
     if (IsAggregate(l, t) && !inline) {
         retTmp = LSlot(l, LType(l, t));
         unsafe { MemStoreU32(VecPush(&args), retTmp); }
@@ -402,13 +402,14 @@ u32 LowerCall(*Lower l, u32 n, Node node, u32 t) {
             }
             return tmp;
         }
-        if (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL) {
+        if (sym.Aux2 == B_SYSCALL || sym.Aux2 == B_WINCALL || sym.Aux2 == B_WINCALLP) {
             unsafe {
                 EInst inst;
                 inst.Op = 54;
                 inst.Block = l.Block;
                 inst.Str = "syscall";
                 if (sym.Aux2 == B_WINCALL) inst.Str = "wincall";
+                if (sym.Aux2 == B_WINCALLP) inst.Str = "wincallp";
                 inst.FirstOp = ECount(&m.Ops);
                 for (usize k = 0; k < VecLen(&args); k++) *(VecPush(&m.Ops) as *EOp) = OpV(MemLoadU32(VecAt(&args, k)));
                 inst.NOps = VecLen(&args) as u32;

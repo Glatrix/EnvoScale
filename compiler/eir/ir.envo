@@ -513,6 +513,7 @@ public Intrinsic IntrinsicNamed(str name) {
     else if (Same(name, "panic.msg")) { x.N = 2; x.P0 = ET_PTR; x.P1 = ET_U64; }
     else if (Same(name, "syscall")) { x.N = 7; x.AllI64 = true; x.Ret = ET_I64; }
     else if (Same(name, "wincall")) { x.N = 11; x.AllI64 = true; x.Ret = ET_I64; }
+    else if (Same(name, "wincallp")) { x.N = 13; x.AllI64 = true; x.Ret = ET_I64; }
     else x.Name = TextOf("");
     return x;
 }
