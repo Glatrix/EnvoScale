@@ -178,6 +178,8 @@ u32 ResolveTypeEx(*Checker c, u32 n, bool voidOk, bool ifaceOk) {
         }
         u32 saturated = 0x80000000;
         if (count < 0x80000000) saturated = count as u32;
+        // an array's elements are zeroed, not constructed, so none may need a drop
+        if (!CCore(c) && !IsCopy(c, elem) && NeedsDropAt(c, elem)) CNotCore(c, "arrays of values with a drop; use `List<T>`", node.Tok);
         t = TypeDerived(c, TYK_ARRAY, elem, saturated);
     } else {
         t = ResolveTypeName(c, node.Tok, node.E, node.F);

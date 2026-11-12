@@ -105,7 +105,7 @@ bool CheckForeach(*Checker c, u32 n) {
     bool borrow = false;
     if (NKind(c, node.B) == NK_RANGE) {
         Node r = CNode(c, node.B);
-        if (r.A == 0 || r.B == 0) CNotYet(c, "a `foreach` range without both bounds", r.Tok);
+        if (r.A == 0 || r.B == 0) CNotCore(c, "a `foreach` range without both bounds", r.Tok);
         if (IsUntyped(c, r.A) && IsUntyped(c, r.B)) {
             et = T_I32;
             CheckExpr(c, r.A, et);

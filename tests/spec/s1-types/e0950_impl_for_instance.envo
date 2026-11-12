@@ -1,0 +1,5 @@
+// expect-error: E0950 @ 5:12
+// [s1.item.5] an impl covers a whole generic type
+struct Box<T> { T Item; }
+interface I { i64 F(); }
+impl I for Box<i64> { i64 F() => 1; }

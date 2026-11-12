@@ -8,11 +8,12 @@ programming, scripts, desktop apps, websites, terminals, graphics, AI, cryptogra
 networking. It has no third-party dependencies, and its compiler is bootstrapped from
 assembly so the whole chain can be audited.
 
-> **Status: early.** Milestones **M0** and **M1** are done: `envoc0`, the compiler written
-> in assembly, builds Envo-Core programs for Windows and Linux. **M2** is in progress:
-> `envoc1`, written in Envo-Core, already compiles the same programs end to end. Only the
-> console line of the gallery below runs today. [`STATUS.md`](STATUS.md) is the honest,
-> current picture.
+> **Status: early.** Milestones **M0**–**M2** are done: `envoc0`, the compiler written in
+> assembly, builds Envo-Core programs for Windows and Linux, and `envoc1`, written in
+> Envo-Core, compiles Envo-S1 (generics, interfaces, closures, ownership, enums,
+> collections) the same way. **M3**, the self-hosting compiler, is next. Only the console
+> line of the gallery below runs today. [`STATUS.md`](STATUS.md) is the honest, current
+> picture.
 
 ## Why
 

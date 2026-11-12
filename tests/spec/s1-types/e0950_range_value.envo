@@ -1,0 +1,3 @@
+// expect-error: E0950 @ 3:10
+// [s1.expr.5] ranges are for slicing and foreach
+var r = 0..3;

@@ -1,4 +1,4 @@
-// expect-error: E0951 @ 4:34
-// Stage 1: bindings in `|` patterns come with Stage 2
+// expect-error: E0950 @ 4:34
+// [s1.expr.1] Envo-S1 leaves out bindings in a pattern with `|`
 enum Shape { Rect(i64 w, i64 h), Square(i64 side), Empty }
 i64 W(Shape s) => match s { Rect(w, _) | Square(w) => w, Empty => 0 };

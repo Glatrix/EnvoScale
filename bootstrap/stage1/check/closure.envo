@@ -388,7 +388,7 @@ void CheckArgMode(*Checker c, u32 a, bool refParam) {
 // A named function used as a value ([fn.type.1]): its function type, kind `fn`.
 u32 FnItemType(*Checker c, u32 s, u32 tok) {
     Sym sym = SymGet(c, s);
-    if (sym.Flags & (SF_METHOD | SF_GENERIC) != 0) CNotYet(c, "generic functions and methods as values", tok);
+    if (sym.Flags & (SF_METHOD | SF_GENERIC) != 0) CNotCore(c, "generic functions and methods as values; wrap the call in a lambda", tok);
     u32 p = EnvNew(c, sym.Aux);
     u32 m = EnvNew(c, sym.Aux);
     u32 pn = FirstParam(c, s);

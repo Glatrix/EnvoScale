@@ -1,0 +1,3 @@
+// expect-error: E0950 @ 3:21
+// [s1.item.5] Envo-S1 leaves out generic methods in an interface
+interface I { T Get<T>(); }

@@ -1,0 +1,3 @@
+// expect-error: E0950 @ 3:24
+// [life.from.2] Envo-S1 leaves out returning a function-typed parameter
+fn() Keep(fn() f) from f => f;

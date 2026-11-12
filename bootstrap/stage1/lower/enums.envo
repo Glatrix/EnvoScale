@@ -246,6 +246,7 @@ u32 LowerMatchS1(*Lower l, u32 n, bool isExpr) {
             if (kind == MS_OWNED_LOCAL) SetDropFlag(l, NSym(c, m.A), false);
             if (kind == MS_TEMP) SetDropFlag(l, NSym(c, n), false);
             TrackBindings(l, a.A, st);
+            DropSkipped(l, a.A, st, v);
         }
         if (isExpr && NKind(c, a.B) != NK_BLOCK) {
             StoreTo(l, rt, LowerExpr(l, a.B), slot);
@@ -290,6 +291,25 @@ void LowerBindings(*Lower l, u32 pat, u32 t, u32 v) {
                 SetSymSlot(l, s, slot);
             }
         }
+        a = CNode(c, a).Next;
+        f = CNode(c, f).Next;
+        i++;
+    }
+}
+
+// An arm that takes the payload drops the fields its pattern skips (`_`) at once.
+void DropSkipped(*Lower l, u32 pat, u32 t, u32 v) {
+    *Checker c = LC(l);
+    if (NKind(c, pat) != NK_CALL) return;
+    u32 variant = NSym(c, pat);
+    u32 pt = PayloadEType(l, t, variant);
+    u32 pay = PayloadAddr(l, t, v);
+    u32 a = CNode(c, pat).B;
+    u32 f = CNode(c, variant).E;
+    u32 i = 0;
+    while (a != 0) {
+        u32 ft = PayloadType(c, t, f);
+        if (NKind(c, a) == NK_WILD && NeedsDrop(c, ft)) DropValue(l, ft, LField(l, pt, pay, i));
         a = CNode(c, a).Next;
         f = CNode(c, f).Next;
         i++;

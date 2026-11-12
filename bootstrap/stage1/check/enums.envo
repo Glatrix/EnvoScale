@@ -237,7 +237,7 @@ u32 ExpectedVariant(*Checker c, u32 expected, u32 tok) {
 u32 OptionOf(*Checker c, u32 inner, u32 tok) {
     u32 s;
     unsafe { s = c.OptionSym; }
-    if (s == 0) CNotYet(c, "`T?` without the prelude", tok);
+    if (s == 0) Bug("checker: `T?` without the prelude");
     u32 env = EnvNew(c, 1);
     EnvSet(c, env, 0, inner);
     return TypeInstance(c, TYK_UNION, s, env, 1);
@@ -506,16 +506,13 @@ bool CheckTaggedPattern(*Checker c, u32 pat, u32 t, u32 kind, bool several) {
     SetNType(c, pat, t);
     SetNSym(c, pat, v);
     bool moves = false;
-    bool skipsDrop = false;
     u32 a = args;
     u32 f = CNode(c, v).E;
     while (a != 0) {
         u32 pt = PayloadType(c, t, f);
-        if (NKind(c, a) == NK_WILD) {
-            if (NeedsDropAt(c, pt)) skipsDrop = true;
-        } else {
+        if (NKind(c, a) != NK_WILD) {
             if (NKind(c, a) != NK_NAME) CFail(c, NTok(c, a), E_NOT_CONSTANT, "expected a name to bind or `_`");
-            if (several) CNotYet(c, "bindings in a pattern with `|`", NTok(c, a));
+            if (several) CNotCore(c, "bindings in a pattern with `|`; write one arm for each variant", NTok(c, a));
             DeclareLocal(c, a, pt);
             SetNType(c, a, pt);
             u32 s = NSym(c, a);
@@ -532,7 +529,6 @@ bool CheckTaggedPattern(*Checker c, u32 pat, u32 t, u32 kind, bool several) {
         f = CNode(c, f).Next;
     }
     if (moves && HasDropImpl(c, t)) CFail(c, NTok(c, pat), E_MOVE_OUT_OF_BORROW, "cannot move a payload out of a value whose type implements `IDrop`; match on it by borrowing");
-    if (moves && skipsDrop) CNotYet(c, "a pattern that takes some fields of a payload and leaves others that need a drop; bind them all", NTok(c, pat));
     return moves;
 }
 

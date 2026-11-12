@@ -164,7 +164,6 @@ const u32 E_BORROW_CONFLICT = 503;
 const u32 E_MOVED_WHILE_BORROWED = 504;
 const u32 E_BORROW_NOT_DECLARED = 507;
 const u32 E_BAD_FROM = 508;
-const u32 E_NOT_YET = 951;
 
 // The fixed message of an error that has no arguments.
 str CheckMessage(u32 code) {

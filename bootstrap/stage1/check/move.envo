@@ -621,7 +621,7 @@ void MvLambda(*Checker c, *MoveCx x, u32 n) {
         u32 s = CaptureAt(c, first + i);
         u32 t = SymGet(c, s).Type;
         if (copies && !IsCopy(c, t) && NeedsDropAt(c, t)) {
-            CFailName(c, lam.Tok, E_NOT_YET, "not supported by envoc1 yet: a lambda that takes a value with a drop (`", lam.Tok, "`)");
+            CNotCore(c, "a lambda that takes a value with a drop; a function value does not own resources in Envo-S1", lam.Tok);
         }
         UseLocal(c, x, n, s, copies);
     }

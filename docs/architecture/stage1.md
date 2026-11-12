@@ -124,13 +124,10 @@ arguments are written self-delimiting (`0.` pointer, `1.` slice, `2.N.` array, a
 generic instance's argument count before its arguments: `Box.1.i64`), so different
 instances never share a name.
 
-**Not yet (E0951).** Envo-S1 constructs `envoc1` does not compile yet are reported as
-E0951 rather than mis-compiled: generic interface methods, generic functions, methods and
-built-ins used as values, bindings in `|` patterns, `foreach` ranges without both
-bounds, arrays of values with a drop, lambdas that take a value with a drop, and an
-`impl` whose type parameters are not exactly its type's (`impl<T> I for Box<Box<T>>`).
-M2.13 removes the code: each case is either implemented or recorded in `envo-s1.md` as
-not part of Envo-S1 (E0950).
+**Leave-outs.** While M2 was built, Envo-S1 constructs `envoc1` did not compile yet were
+reported as a temporary E0951. M2.13 removed it: every such construct is now compiled, or
+recorded in `envo-s1.md` ([s1.type.3], [s1.item.7], [s1.expr.8]) as not part of
+Envo-S1 and reported as E0950.
 
 ## Closures (M2.9)
 
@@ -202,10 +199,10 @@ Chapter 5 for Envo-S1 ([s1.own.*]), in four parts:
   nothing, so E0506 never applies.
 
 Stage 1 accepts less than chapter 5 allows, never more ([s1.own.3]). Borrows held in
-locals across statements, disjoint field borrows, `once fn` inference (a lambda moving a
-capture is E0502), partial moves out of values that need a drop, and lambdas that take a
-value with a drop (E0951) are Stage 2's. Function values do not free their environments:
-the Stage 1 heap never frees.
+locals across statements (beyond the freezing above), disjoint field borrows, `once fn`
+inference (a lambda moving a capture is E0502) and partial moves out of locals whose type
+needs a drop are Stage 2's. Function values do not free their environments: the Stage 1
+heap never frees.
 
 ## Enums (M2.11)
 

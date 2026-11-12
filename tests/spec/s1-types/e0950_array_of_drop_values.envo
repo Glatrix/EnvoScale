@@ -1,0 +1,5 @@
+// expect-error: E0950 @ 5:2
+// [s1.own.2] array elements are zeroed, so none may need a drop
+struct R { str N; }
+impl IDrop for R { void Drop(ref this) { } }
+R[2] rs;

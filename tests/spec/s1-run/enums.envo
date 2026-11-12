@@ -11,6 +11,9 @@
 // expect: drop a
 // expect: took b
 // expect: drop b
+// expect: drop y
+// expect: took x
+// expect: drop x
 // expect: end
 str Num(i64 v) {
     *u8 buf = alloc(24);
@@ -149,4 +152,17 @@ print(Num(Eval(tree)));
 Slot a = Held(new Res { Name = "a" });
 a = Free;
 Inspect(Held(new Res { Name = "b" }));
+
+// an arm that takes part of a payload drops the skipped fields at once
+enum Two { Both(Res first, Res second), Neither }
+void Partial(Two t) {
+    match t {
+        Both(f, _) => {
+            write(1, "took ");
+            print(f.Name);
+        }
+        Neither => { }
+    }
+}
+Partial(Both(new Res { Name = "x" }, new Res { Name = "y" }));
 print("end");

@@ -1,0 +1,3 @@
+// expect-error: E0950 @ 3:13
+// [s1.type.3] Envo-S1 leaves out built-ins as values
+fn(str) f = print;

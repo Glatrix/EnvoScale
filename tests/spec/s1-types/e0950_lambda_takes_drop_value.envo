@@ -1,0 +1,6 @@
+// expect-error: E0950 @ 6:13
+// [s1.own.2] function values do not own values with a drop
+struct R { str N; }
+impl IDrop for R { void Drop(ref this) { } }
+R r = new R { N = "x" };
+fn() f = () => print(r.N);

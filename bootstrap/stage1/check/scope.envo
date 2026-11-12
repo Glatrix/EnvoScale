@@ -437,17 +437,6 @@ void CNotCore(*Checker c, str what, u32 tok) {
     }
 }
 
-// E0951 for an Envo-S1 construct this version of envoc1 does not compile yet. The code
-// is temporary: M2.11 removes the last use (docs/spec/errors.md).
-void CNotYet(*Checker c, str what, u32 tok) {
-    Buf b = BufNew(64);
-    unsafe {
-        BufStr(&b, "not supported by envoc1 yet: ");
-        BufStr(&b, what);
-        CFail(c, tok, E_NOT_YET, BufView(&b));
-    }
-}
-
 // ------------------------------------------------------------------ program scope
 
 void AddPrimSym(*Checker c, str name, u32 t) {

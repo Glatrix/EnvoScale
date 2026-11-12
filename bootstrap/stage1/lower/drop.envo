@@ -19,7 +19,7 @@ u32 DropFlag(*Lower l, u32 s) {
 void TrackDrop(*Lower l, u32 s, u32 t, bool init, u32 tok) {
     *Checker c = LC(l);
     if (!NeedsDrop(c, t)) return;
-    if (TyKind(c, t) == TYK_ARRAY) CNotYet(c, "arrays of values with a drop", tok);
+    if (TyKind(c, t) == TYK_ARRAY) CNotCore(c, "arrays of values with a drop; use `List<T>`", tok);
     u32 flag = LSlot(l, ET_BOOL);
     u64 v = 0;
     if (init) v = 1;

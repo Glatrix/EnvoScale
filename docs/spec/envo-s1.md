@@ -51,8 +51,11 @@ Everything in Envo-Core (`envo-core.md` §3), plus:
   "generic instantiation too deep".
 - **[s1.type.3]** Not in S1: floats, `char`, `i128`/`u128`, tuples, classes and `weak`,
   dynamic interface values (`in IShape`, `Box<I>`), associated types and constants,
-  const generics, `extern "C" fn`. Dynamic dispatch, where the compiler needs it, uses
-  function values ([fn.pos.4]).
+  const generics, `extern "C" fn`, generic functions, methods and built-ins used as
+  values (wrap the call in a lambda), arrays of values with a drop (use `List<T>`; array
+  elements start zeroed), and lambdas that take a value with a drop (S1 function values
+  own no resources). Dynamic dispatch, where the compiler needs it, uses function values
+  ([fn.pos.4]).
 
 ## 4. Items
 
@@ -81,7 +84,10 @@ Everything in Envo-Core (`envo-core.md` §4), plus:
 - **[s1.item.6] Parameter modes** `in` and `ref` ([own.mode.1]), and `from` clauses
   ([life.from.1], [life.from.4]). Not in S1: `out`, default and named arguments.
 - **[s1.item.7]** Not in S1: classes, properties, attributes, `async`, `extern`,
-  operator overloading, `#if`, `using` blocks.
+  operator overloading, `#if`, `using` blocks, generic methods in an interface, an `impl`
+  for some instances of a generic type (`impl I for Box<i64>`, `impl<T> I for
+  Box<Box<T>>`: an `impl`'s type parameters are exactly its type's), and `from` naming a
+  function-typed parameter.
 
 ## 5. Statements and expressions
 
@@ -120,8 +126,9 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   is an `in` borrow of each element ([own.borrow.4]).
 - **[s1.expr.8]** Not in S1: interpolated strings, `?.`, `is` patterns, tuples and
   destructuring, `new()` without a type, object initializers for classes, `await`,
-  `yield`, `throw`/`try`/`catch` (not in Envo at all), and operators on non-primitive
-  types.
+  `yield`, `throw`/`try`/`catch` (not in Envo at all), operators on non-primitive
+  types, bindings in a pattern with `|` (write one arm for each variant), ranges outside
+  slicing and `foreach`, and `foreach` ranges without both bounds.
 
 ## 5a. Syntax tree
 

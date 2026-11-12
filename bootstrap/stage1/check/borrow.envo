@@ -501,7 +501,7 @@ u64 CheckFromList(*Checker c, *OriginCx x, u32 first, u32 fs) {
         if (s == 0) CFail(c, on.Tok, E_BAD_FROM, "`from` can only name a borrowed parameter or `this`");
         Sym ps = SymGet(c, s);
         if (ps.Flags & SF_BYREF == 0 && !HoldsBorrow(c, ps.Type)) CFail(c, on.Tok, E_BAD_FROM, "`from` can only name a borrowed parameter or `this`");
-        if (TyKind(c, ps.Type) == TYK_FN) CNotYet(c, "`from` naming a function-typed parameter", on.Tok);
+        if (TyKind(c, ps.Type) == TYK_FN) CNotCore(c, "`from` naming a function-typed parameter (a function value cannot be returned from its parameter)", on.Tok);
         unsafe { bits = bits | ParamBit(x, s); }
         o = on.Next;
     }

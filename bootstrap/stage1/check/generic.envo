@@ -178,7 +178,6 @@ u32 DeclareTParams(*Checker c, u32 first, u32 start) {
     u32 p = first;
     while (p != 0) {
         CheckDuplicateInList(c, first, p);
-        if (CNode(c, p).A != 0) CNotYet(c, "constraints in a type parameter list; use `where`", NTok(c, CNode(c, p).A));
         u32 s = SymNew(c, SK_TPARAM, p);
         u32 t = TypeNew(c, TYK_PARAM);
         unsafe {
@@ -315,7 +314,7 @@ u32 DeclareMethod(*Checker c, u32 m, u32 ownerType, u32 ownerTP, u32 nOwn, u32 i
     Node fn = CNode(c, m);
     u32 flags = SF_METHOD;
     if (fn.Flags & NF_STATIC != 0) flags = flags | SF_STATIC;
-    if (iface != 0 && fn.E != 0) CNotYet(c, "generic interface methods", NTok(c, fn.E));
+    if (iface != 0 && fn.E != 0) CNotCore(c, "generic methods in an interface", NTok(c, fn.E));
     u32 own = DeclareTParams(c, fn.E, nOwn);
     u32 p = fn.B;
     if (p != 0 && IsReceiver(c, p)) {
@@ -477,9 +476,9 @@ void DeclareImpl(*Checker c, u32 n) {
             if (EnvGet(c, tt.Args, i) != SymGet(c, NSym(c, p)).Type) exact = false;
             p = CNode(c, p).Next;
         }
-        if (!exact) CNotYet(c, "an `impl` whose type parameters are not exactly its type's", NTok(c, im.A));
+        if (!exact) CNotCore(c, "an `impl` for some instances of a generic type; its type parameters must be exactly the type's", NTok(c, im.A));
     } else if (tt.NArgs > 0) {
-        CNotYet(c, "an `impl` for one instance of a generic type", NTok(c, im.A));
+        CNotCore(c, "an `impl` for one instance of a generic type", NTok(c, im.A));
     }
     if (it != 0) AddImpl(c, target, it, n, im.C, count);
     u32 m = im.C;

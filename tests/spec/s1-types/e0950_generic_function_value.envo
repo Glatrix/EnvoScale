@@ -1,0 +1,4 @@
+// expect-error: E0950 @ 4:20
+// [s1.type.3] Envo-S1 leaves out generic functions as values
+T Id<T>(T x) => x;
+fn(i64) -> i64 f = Id;

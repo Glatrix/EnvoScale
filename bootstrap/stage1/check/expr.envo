@@ -137,7 +137,7 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
             return SymGet(c, s).Type;
         }
         if (sk == SK_FN && !CCore(c)) return FnItemType(c, s, node.Tok);
-        if (sk == SK_BUILTIN && !CCore(c)) CNotYet(c, "built-in functions as values", node.Tok);
+        if (sk == SK_BUILTIN && !CCore(c)) CNotCore(c, "built-in functions as values; wrap the call in a lambda", node.Tok);
         if (sk == SK_FN || sk == SK_BUILTIN) CNotCore(c, "function values", node.Tok);
         CFailName(c, node.Tok, E_NOT_A_VALUE, "`", node.Tok, "` is a type, not a value");
     }
@@ -166,7 +166,7 @@ u32 CheckExprInner(*Checker c, u32 n, u32 expected) {
     }
     if (k == NK_TRY) return CheckTry(c, n);
     if (k == NK_NULL) return CheckNull(c, n, expected);
-    if (k == NK_RANGE) CNotYet(c, "ranges and slicing", node.Tok);
+    if (k == NK_RANGE) CNotCore(c, "ranges outside slicing and `foreach`", node.Tok);
     if (k == NK_MATCH) return CheckMatchS1(c, n, CheckValue(c, node.A, 0), expected, true);
     if (k == NK_BINARY && node.Op == TK_QQ) return CheckCoalesce(c, n, expected);
     if (k == NK_INDEX && !CCore(c) && NKind(c, node.B) == NK_RANGE) return CheckSlice(c, n, expected);

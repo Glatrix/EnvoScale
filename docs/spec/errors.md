@@ -146,7 +146,7 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | Code | Message |
 |---|---|
 | E0950 | not part of Envo-S1: X (the message names the construct; [s1.subset.4]) |
-| E0951 | not supported by envoc1 yet: X. **Temporary**: an Envo-S1 construct a later M2 increment implements (`docs/architecture/stage1.md`); M2.13 removes the code |
+
 
 ## EIR (E0600–E0699)
 
