@@ -1,0 +1,17 @@
+// core.text.ByteSlice: bytes that may not be text, cut anywhere; out of range panics.
+// expect: [ab] [cd] [] [b]
+use core.text as ct;
+
+string s = string.From("ab");
+s.AppendByte(0x80);
+s.Append("cd");
+str t = s.AsStr();
+write(1, "[");
+write(1, ct.ByteSlice(t, 0, 2));
+write(1, "] [");
+write(1, ct.ByteSlice(t, 3, 5));
+write(1, "] [");
+write(1, ct.ByteSlice(t, 5, 5));
+write(1, "] [");
+write(1, ct.ByteSlice(t, 1, 2));
+print("]");

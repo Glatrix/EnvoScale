@@ -1,0 +1,5 @@
+#eon 1
+package {
+    nae = "x"
+    list = [1, 2, "hrbe"]
+}

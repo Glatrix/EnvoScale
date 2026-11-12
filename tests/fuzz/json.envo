@@ -1,0 +1,14 @@
+// Fuzz target (tools/fuzz): json on the bytes of the file named by the first argument.
+// A panic is a bug. Run: envo fuzz tests/fuzz/json.envo --corpus <a copy of corpus/json>
+use std.env;
+use std.fs;
+use envo.json;
+var r = fs.ReadText(env.Arg(1));
+if (r.IsErr()) return;
+string data = r.Unwrap();
+str d = data.AsStr();
+var p = json.Parse(d);
+if (p.IsOk()) {
+    json.Value v = p.Unwrap();
+    string w = json.Write(v);
+}

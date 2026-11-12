@@ -885,6 +885,18 @@ function Invoke-Test {
     [IO.File]::AppendAllText((Join-Path $pk 'reg\greet\1.0.0.envopkg'), ' ')
     $r = Invoke-Tool $envo @('run', 'pk/app2') $envoRun
     if ($r.Code -eq 1 -and $r.Err.Contains("the registry's copy changed")) { Pass 'packages: a changed archive' } else { Bad 'packages: a changed archive' "exit $($r.Code): $($r.Err.Trim())" }
+    # fuzz targets (tests\fuzz): each parser of untrusted input takes a few hundred fuzzed
+    # inputs without a panic
+    Say 'fuzz targets: tests/fuzz, 300 runs each'
+    $frun = Join-Path $Root 'build\run-fuzz'
+    if (Test-Path -LiteralPath $frun) { Remove-Item -Recurse -Force $frun }
+    New-Item -ItemType Directory -Force $frun | Out-Null
+    foreach ($t in (Get-ChildItem -LiteralPath (Join-Path $Root 'tests\fuzz') -Filter '*.envo' | Sort-Object Name)) {
+        $n = $t.BaseName
+        Copy-Item -Recurse (Join-Path $Root "tests\fuzz\corpus\$n") (Join-Path $frun "corpus-$n")
+        $r = Invoke-Tool $envo @('fuzz', $t.FullName, '--runs', '300', '--seed', '1', '--corpus', "corpus-$n", '--max-len', '1024') $frun
+        if ($r.Code -eq 0 -and $r.Out.Contains('no crash')) { Pass "fuzz $n" } else { Bad "fuzz $n" "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    }
     # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
     $replIn = "print(`"hello`")`ni32 Twice(i32 x) {`n    return x * 2;`n}`nuse alloc.text;`nprint(text.Int(Twice(21) as i64).AsStr())`nu8 bad = nope;`n:quit`n"
     $psi = New-Object System.Diagnostics.ProcessStartInfo

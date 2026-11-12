@@ -913,6 +913,21 @@ EOF_ERR
     printf ' ' >> "$erun/pk/reg/greet/1.0.0.envopkg"
     envo_do run pk/app2
     if [ "$rc" -eq 1 ] && grep -q 'the registry.s copy changed' "$TMP/err"; then pass; else bad 'packages: a changed archive' "exit $rc: $(cat "$TMP/err")"; fi
+    # fuzz targets (tests/fuzz): each parser of untrusted input takes a few hundred fuzzed
+    # inputs without a panic
+    say 'fuzz targets: tests/fuzz, 300 runs each'
+    frun="$ROOT/build/run-fuzz"
+    rm -rf "$frun"
+    mkdir -p "$frun"
+    for t in "$ROOT"/tests/fuzz/*.envo; do
+        n=$(basename "$t" .envo)
+        cp -r "$ROOT/tests/fuzz/corpus/$n" "$frun/corpus-$n"
+        set +e
+        (cd "$frun" && "$envo" fuzz "$t" --runs 300 --seed 1 --corpus "corpus-$n" --max-len 1024) > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ] && grep -q '^no crash' "$TMP/out"; then pass; else bad "fuzz $n" "exit $rc: $(head -n 5 "$TMP/out") $(head -n 5 "$TMP/err")"; fi
+    done
     # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
     set +e
     printf 'print("hello")\ni32 Twice(i32 x) {\n    return x * 2;\n}\nuse alloc.text;\nprint(text.Int(Twice(21) as i64).AsStr())\nu8 bad = nope;\n:quit\n' | (cd "$erun" && "$envo" repl) > "$TMP/out" 2> "$TMP/err"

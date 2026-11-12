@@ -48,6 +48,22 @@ public struct Doc {
     }
 }
 
+// src with every byte that does not start a valid UTF-8 character replaced by U+FFFD.
+string Utf8Clean(str src) {
+    string clean = string.New();
+    usize i = 0;
+    while (i < src.Len) {
+        usize ok = ct.Utf8ValidUpTo(ct.ByteSlice(src, i, src.Len));
+        clean.Append(ct.ByteSlice(src, i, i + ok));
+        i += ok;
+        if (i < src.Len) {
+            clean.Append("\u{FFFD}");
+            i++;
+        }
+    }
+    return clean;
+}
+
 // Markdown to HTML, safely (raw HTML escaped).
 public string ToHtml(str src) {
     Doc d = Render(src, Options.Safe());
@@ -56,7 +72,9 @@ public string ToHtml(str src) {
 
 public Doc Render(str src, Options opts) {
     Parser p = new Parser { Opts = opts, Headings = List<Heading>.New(), Ids = List<string>.New() };
-    List<string> lines = SplitLines(src);
+    // bytes that are not UTF-8 become U+FFFD, as browsers do, so the text is all text
+    string clean = Utf8Clean(src);
+    List<string> lines = SplitLines(clean.AsStr());
     string html = string.New();
     p.Blocks(lines.AsSlice(), ref html);
     return new Doc { Html = html, Headings = p.Headings };
@@ -188,6 +206,7 @@ bool ListMarker(str l, ref u8 kind, ref u64 number, ref usize content) {
         while (s + sp < l.Len && l[s + sp] == ' ' && sp < 4) sp++;
         if (sp == 0 || sp == 4 || s + sp >= l.Len) sp = 1;
         content = s + sp;
+        if (content > l.Len) content = l.Len;    // an empty item: `-` alone
         return true;
     }
     usize d = 0;
@@ -207,6 +226,7 @@ bool ListMarker(str l, ref u8 kind, ref u64 number, ref usize content) {
     while (s + sp < l.Len && l[s + sp] == ' ' && sp < 4) sp++;
     if (sp == 0 || sp == 4 || s + sp >= l.Len) sp = 1;
     content = s + sp;
+    if (content > l.Len) content = l.Len;        // an empty item: `1.` alone
     return true;
 }
 

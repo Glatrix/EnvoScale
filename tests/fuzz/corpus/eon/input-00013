@@ -1,0 +1,7 @@
+#eon 1
+Vackage {
+    name = " 1
+package {
+    name = "x"
+    list = [1, 2, "three"]
+}

@@ -153,6 +153,9 @@ public struct JsonError {
 
 // Reads one JSON value, with only white space around it.
 public Result<Value, JsonError> Parse(str src) {
+    // JSON text is UTF-8 (RFC 8259 section 8.1); other bytes are refused before parsing
+    usize valid = ct.Utf8ValidUpTo(src);
+    if (valid < src.Len) return Err(new JsonError { At = valid, Message = string.From("the text is not valid UTF-8") });
     Reader r = new Reader { Src = src, At = 0, Failed = false, ErrAt = 0, Message = string.New(), Depth = 0 };
     r.Space();
     Value v = r.Value();

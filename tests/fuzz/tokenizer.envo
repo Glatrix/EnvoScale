@@ -1,0 +1,13 @@
+// Fuzz target (tools/fuzz): tokenizer on the bytes of the file named by the first argument.
+// A panic is a bug. Run: envo fuzz tests/fuzz/tokenizer.envo --corpus <a copy of corpus/tokenizer>
+use std.env;
+use std.fs;
+use envo.ai.tokenizer;
+var r = fs.ReadText(env.Arg(1));
+if (r.IsErr()) return;
+string data = r.Unwrap();
+str d = data.AsStr();
+tokenizer.Tokenizer t = tokenizer.Tokenizer.Train(d, 8);
+List<u32> ids = t.Encode(d);
+string back = t.Decode(ids.AsSlice());
+if (!back.Equals(d)) panic("the tokenizer does not round trip");

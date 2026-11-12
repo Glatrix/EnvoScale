@@ -1,0 +1,35 @@
+// envo.json on hostile input (found by envo fuzz): bytes that are not UTF-8 are refused
+// with an error, never a panic, wherever they are.
+// expect: invalid UTF-8 after a number: refused at 13
+// expect: invalid UTF-8 in a string: refused at 3
+// expect: a lone continuation byte first: refused at 0
+// expect: valid UTF-8 still parses: 5 bytes
+use envo.json;
+use alloc.text;
+
+void Try(str label, in string src) {
+    write(1, label);
+    var r = json.Parse(src.AsStr());
+    if (r.IsErr()) {
+        json.JsonError e = r.UnwrapErr();
+        write(1, ": refused at ");
+        print(text.Uint(e.Offset() as u64).AsStr());
+    } else print(": accepted");
+}
+
+string a = string.From("{\"a\": [1, 2.5");
+a.AppendByte(0x80);
+a.Append(" \"x\"]}");
+Try("invalid UTF-8 after a number", a);
+string b = string.From("[\"x");
+b.AppendByte(0xE9);
+b.Append("\"]");
+Try("invalid UTF-8 in a string", b);
+string c = string.New();
+c.AppendByte(0xBF);
+c.Append("1");
+Try("a lone continuation byte first", c);
+var ok = json.Parse("\"caf\u{E9}\"");
+write(1, "valid UTF-8 still parses: ");
+write(1, text.Uint(ok.Unwrap().AsStr().Len as u64).AsStr());
+print(" bytes");

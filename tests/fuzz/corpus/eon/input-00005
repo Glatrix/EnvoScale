@@ -1,0 +1,5 @@
+#eon 1
+p¬ckage {
+    name = "x"
+   list = [1, 2, "three"]
+}

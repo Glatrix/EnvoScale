@@ -1,0 +1,5 @@
+#eon 1
+package {
+    name = ""
+    list = [1, 2, 0three"]
+}

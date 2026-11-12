@@ -41,6 +41,18 @@ public bool EndsWith(str s, str suffix) {
     return true;
 }
 
+// The bytes of s from a up to b as a str, whether or not a and b fall between characters:
+// for bytes that may not be text (network data, file formats), where s[a..b] would panic
+// at a position inside a character. Panics only when the range is out of bounds.
+public str ByteSlice(str s, usize a, usize b) {
+    if (a > b || b > s.Len) panic("index out of bounds");
+    if (a == b) return "";
+    unsafe {
+        *u8 p = &s[a] as *u8;
+        return str_from(p, b - a);
+    }
+}
+
 // Does needle occur in s at byte offset at? (Compares bytes: at need not be a character
 // boundary.)
 public bool MatchesAt(str s, usize at, str needle) {

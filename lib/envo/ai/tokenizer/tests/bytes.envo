@@ -1,0 +1,15 @@
+// envo.ai.tokenizer with bytes that are not UTF-8 (found by envo fuzz): training and
+// byte-level BPE round trip any bytes.
+// expect: round trip of 64 bytes, every value from 0x00 by 4
+use envo.ai.tokenizer;
+use alloc.text;
+
+string s = string.New();
+for (u32 i = 0; i < 64; i++) s.AppendByte((i * 4) as u8);
+tokenizer.Tokenizer t = tokenizer.Tokenizer.Train(s.AsStr(), 16);
+List<u32> ids = t.Encode(s.AsStr());
+string back = t.Decode(ids.AsSlice());
+write(1, "round trip of ");
+write(1, text.Uint(back.Len() as u64).AsStr());
+if (back.Equals(s.AsStr())) print(" bytes, every value from 0x00 by 4");
+else print(" bytes: CHANGED");

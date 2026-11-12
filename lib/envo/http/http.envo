@@ -159,7 +159,11 @@ bool SplitHead(str raw, ref List<Header> headers, ref str startLine, ref usize h
     usize? end = ct.IndexOf(raw, "\r\n\r\n");
     if (end.IsNone()) return false;
     headEnd = end.Unwrap() + 4;
-    List<str> lines = text.Split(raw[0..end.Unwrap()], "\r\n");
+    // the head must be text: a message with other bytes in it is malformed (the body may
+    // hold any bytes, and is only ever cut with ct.ByteSlice)
+    str head = ct.ByteSlice(raw, 0, end.Unwrap());
+    if (ct.Utf8ValidUpTo(head) < head.Len) return false;
+    List<str> lines = text.Split(head, "\r\n");
     if (lines.Len() == 0) return false;
     startLine = lines.AsSlice()[0];
     for (usize i = 1; i < lines.Len(); i++) {
@@ -171,10 +175,12 @@ bool SplitHead(str raw, ref List<Header> headers, ref str startLine, ref usize h
     return true;
 }
 
+// The decimal number at the start of s (saturating: a length too big to hold is the largest).
 u64 ParseUint(str s) {
     u64 v = 0;
     for (usize i = 0; i < s.Len; i++) {
         if (s[i] < '0' || s[i] > '9') return v;
+        if (v > (0xFFFFFFFFFFFFFFFF - 9) / 10) return 0xFFFFFFFFFFFFFFFF;
         v = v * 10 + (s[i] - '0') as u64;
     }
     return v;
@@ -183,18 +189,18 @@ u64 ParseUint(str s) {
 // The body that starts at raw[from]: chunked, by Content-Length, or the rest. complete
 // says whether it has all arrived.
 string BodyOf(str raw, usize from, in List<Header> headers, bool untilClose, ref bool complete) {
-    str rest = raw[from..raw.Len];
+    str rest = ct.ByteSlice(raw, from, raw.Len);
     complete = true;
     if (ct.EqualsIgnoreCase(Find(headers, "Transfer-Encoding"), "chunked")) {
         string b = string.New();
         usize at = 0;
         while (true) {
-            usize? eol = ct.IndexOf(rest[at..rest.Len], "\r\n");
+            usize? eol = ct.IndexOf(ct.ByteSlice(rest, at, rest.Len), "\r\n");
             if (eol.IsNone()) {
                 complete = false;
                 return b;
             }
-            str sizeText = rest[at..at + eol.Unwrap()];
+            str sizeText = ct.ByteSlice(rest, at, at + eol.Unwrap());
             u64 size = 0;
             for (usize i = 0; i < sizeText.Len; i++) {
                 u8 c = sizeText[i];
@@ -203,15 +209,20 @@ string BodyOf(str raw, usize from, in List<Header> headers, bool untilClose, ref
                 else if (c >= 'a' && c <= 'f') d = (c - 'a' + 10) as u64;
                 else if (c >= 'A' && c <= 'F') d = (c - 'A' + 10) as u64;
                 if (d == 99) break;
+                if (size > 0x0FFFFFFFFFFFFFFF) {
+                    // a chunk larger than memory: the message cannot be complete
+                    complete = false;
+                    return b;
+                }
                 size = size * 16 + d;
             }
             at += eol.Unwrap() + 2;
             if (size == 0) return b;
-            if (at + size as usize + 2 > rest.Len) {
+            if (size > (rest.Len - at) as u64 || at + size as usize + 2 > rest.Len) {
                 complete = false;
                 return b;
             }
-            b.Append(rest[at..at + size as usize]);
+            b.Append(ct.ByteSlice(rest, at, at + size as usize));
             at += size as usize + 2;
         }
     }
@@ -222,7 +233,7 @@ string BodyOf(str raw, usize from, in List<Header> headers, bool untilClose, ref
             complete = false;
             return string.From(rest);
         }
-        return string.From(rest[0..n]);
+        return string.From(ct.ByteSlice(rest, 0, n));
     }
     complete = !untilClose;
     return string.From(rest);
@@ -234,7 +245,11 @@ public bool ParseRequest(str raw, ref Request req, ref bool bad) {
     List<Header> headers = List<Header>.New();
     str start = "";
     usize headEnd = 0;
-    if (!SplitHead(raw, ref headers, ref start, ref headEnd)) return false;
+    if (!SplitHead(raw, ref headers, ref start, ref headEnd)) {
+        // the head is all there but malformed (not text): a bad request, not one to wait on
+        bad = ct.IndexOf(raw, "\r\n\r\n").IsSome();
+        return false;
+    }
     List<str> parts = text.Split(start, " ");
     if (parts.Len() != 3 || !ct.StartsWith(parts.AsSlice()[2], "HTTP/1.")) {
         bad = true;
@@ -254,9 +269,9 @@ public Result<Response, IoError> ParseResponse(str raw) {
     usize headEnd = 0;
     if (!SplitHead(raw, ref headers, ref start, ref headEnd)) return Err(IoError.Invalid);
     if (!ct.StartsWith(start, "HTTP/1.") || start.Len < 12) return Err(IoError.Invalid);
-    u32 status = ParseUint(start[9..12]) as u32;
+    u32 status = ParseUint(ct.ByteSlice(start, 9, 12)) as u32;
     str reason = "";
-    if (start.Len > 13) reason = start[13..start.Len];
+    if (start.Len > 13) reason = ct.ByteSlice(start, 13, start.Len);
     bool complete = false;
     string body = BodyOf(raw, headEnd, headers, true, ref complete);
     return Ok(new Response { Status = status, Reason = string.From(reason), Headers = headers, Body = body });

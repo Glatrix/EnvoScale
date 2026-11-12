@@ -13,6 +13,7 @@
 namespace envo.ai.tokenizer;
 
 use alloc.map.{Map};
+use core.text as ct;
 
 const u8 BPE = 0;
 const u8 SPM = 1;
@@ -61,10 +62,10 @@ public struct Tokenizer {
                 }
             }
             if (sp == m.Len) continue;
-            u32 a = t.IdOf(m[0..sp]);
-            u32 b = t.IdOf(m[sp + 1..m.Len]);
-            string both = string.From(m[0..sp]);
-            both.Append(m[sp + 1..m.Len]);
+            u32 a = t.IdOf(ct.ByteSlice(m, 0, sp));
+            u32 b = t.IdOf(ct.ByteSlice(m, sp + 1, m.Len));
+            string both = string.From(ct.ByteSlice(m, 0, sp));
+            both.Append(ct.ByteSlice(m, sp + 1, m.Len));
             u32? j = t.Ids.Get(both);
             if (a == NONE || b == NONE || j.IsNone()) continue;
             u64 key = Pair(a, b);
@@ -117,7 +118,7 @@ public struct Tokenizer {
         Map<string, u32> seen = Map<string, u32>.New();
         List<Span> chunks = Words(corpus);
         foreach (var c in chunks.AsSlice()) {
-            string w = string.From(corpus[c.From..c.To]);
+            string w = string.From(ct.ByteSlice(corpus, c.From, c.To));
             u32? at = seen.Get(w);
             if (at.IsSome()) {
                 counts.Set(at.Unwrap() as usize, counts.Get(at.Unwrap() as usize) + 1);
@@ -234,12 +235,12 @@ public struct Tokenizer {
                 i++;
                 continue;
             }
-            if (i > from) this.EncodePart(text[from..i], from == 0, ref got);
+            if (i > from) this.EncodePart(ct.ByteSlice(text, from, i), from == 0, ref got);
             got.Push(sp);
             i += len;
             from = i;
         }
-        if (from < text.Len) this.EncodePart(text[from..text.Len], from == 0, ref got);
+        if (from < text.Len) this.EncodePart(ct.ByteSlice(text, from, text.Len), from == 0, ref got);
         return got;
     }
 
@@ -310,10 +311,10 @@ public struct Tokenizer {
                 usize end = ws.Len;
                 u32 id = NONE;
                 while (end > at) {
-                    id = this.IdOf(ws[at..end]);
+                    id = this.IdOf(ct.ByteSlice(ws, at, end));
                     if (id != NONE) break;
                     end--;
-                    while (end > at && ws[end] >= 0x80 && ws[end] < 0xC0) end--;
+                    while (end > at && ws[end] >= 0x80 && ws[end] < 0xC0) end--;    // whole characters
                 }
                 if (id == NONE) ok = false;
                 else {
@@ -351,7 +352,7 @@ public struct Tokenizer {
             f32 best = 0.0;
             usize at = y.Len;
             for (usize k = 0; k + 1 < y.Len; k++) {
-                u32 id = this.IdOf(s[y[k].From..y[k + 1].To]);
+                u32 id = this.IdOf(ct.ByteSlice(s, y[k].From, y[k + 1].To));
                 if (id == NONE) continue;
                 f32 sc = this.Scores.Get(id as usize);
                 if (at == y.Len || sc > best) {
@@ -371,7 +372,7 @@ public struct Tokenizer {
         }
         List<u32> got = List<u32>.New();
         foreach (var y in sym.AsSlice()) {
-            u32 id = this.IdOf(s[y.From..y.To]);
+            u32 id = this.IdOf(ct.ByteSlice(s, y.From, y.To));
             if (id != NONE) {
                 got.Push(id);
                 continue;
@@ -388,7 +389,7 @@ public struct Tokenizer {
     public string Decode(in this, u32[] ids) {
         string got = string.From("");
         foreach (var id in ids) this.AppendTo(ref got, id);
-        if ((this.Mode == SPM || this.Mode == WPM) && got.Len() > 0 && got.AsStr()[0] == ' ' as u8) return string.From(got.AsStr()[1..got.Len()]);
+        if ((this.Mode == SPM || this.Mode == WPM) && got.Len() > 0 && got.AsStr()[0] == ' ' as u8) return string.From(ct.ByteSlice(got.AsStr(), 1, got.Len()));
         return got;
     }
 

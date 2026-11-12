@@ -1,0 +1,13 @@
+// Fuzz target (tools/fuzz): http on the bytes of the file named by the first argument.
+// A panic is a bug. Run: envo fuzz tests/fuzz/http.envo --corpus <a copy of corpus/http>
+use std.env;
+use std.fs;
+use envo.http;
+var r = fs.ReadText(env.Arg(1));
+if (r.IsErr()) return;
+string data = r.Unwrap();
+str d = data.AsStr();
+http.Request req = http.Request.New("GET", "/");
+bool bad = false;
+http.ParseRequest(d, ref req, ref bad);
+var resp = http.ParseResponse(d);

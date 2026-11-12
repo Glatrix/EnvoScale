@@ -1,0 +1,44 @@
+// envo.http on hostile input (found by envo fuzz): a head that is not UTF-8 is a bad
+// request, a body may hold any bytes, and lengths too big to hold do not overflow.
+// expect: bytes that are not UTF-8 in the head: bad request
+// expect: any bytes in the body: 4 bytes, the first 0x80
+// expect: a huge Content-Length: incomplete, no panic
+// expect: a huge chunk size: incomplete, no panic
+// expect: a response whose status line is cut in a character: status 2
+use envo.http;
+use alloc.text;
+
+void TryRequest(str label, in string raw) {
+    http.Request req = http.Request.New("GET", "/");
+    bool bad = false;
+    bool ok = http.ParseRequest(raw.AsStr(), ref req, ref bad);
+    write(1, label);
+    write(1, ": ");
+    if (ok) {
+        str body = req.BodyText();
+        write(1, text.Uint(body.Len as u64).AsStr());
+        write(1, " bytes, the first 0x");
+        print(text.Hex(body[0] as u64, 2).AsStr());
+    } else if (bad) print("bad request");
+    else print("incomplete, no panic");
+}
+
+string a = string.From("GET /pa");
+a.AppendByte(0xAD);
+a.Append("th HTTP/1.1\r\nHost: x\r\n\r\n");
+TryRequest("bytes that are not UTF-8 in the head", a);
+string b = string.From("POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\n");
+b.AppendByte(0x80);
+b.AppendByte(0xFF);
+b.Append("ok");
+TryRequest("any bytes in the body", b);
+TryRequest("a huge Content-Length", string.From("POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\nabc"));
+TryRequest("a huge chunk size", string.From("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffffffffff\r\nabc"));
+string c = string.From("HTTP/1.1 2\u{E9}0 OK\r\n\r\n");
+var r = http.ParseResponse(c.AsStr());
+write(1, "a response whose status line is cut in a character: ");
+if (r.IsOk()) {
+    http.Response resp = r.Unwrap();
+    write(1, "status ");
+    print(text.Uint(resp.StatusCode() as u64).AsStr());
+} else print("refused");
