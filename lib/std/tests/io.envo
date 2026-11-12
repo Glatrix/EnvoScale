@@ -1,0 +1,18 @@
+// std.io: the simple door prints through the platform's console; the full-control door
+// takes any console.
+// os: none
+// expect: hello from std.io
+// expect: same line
+// expect: captured one two
+use std.io;
+use os.none;
+
+io.Print("hello from std.io");
+io.Write("same ");
+io.Write("line\n");
+none.Console c = none.Console.New();
+io.PrintTo(ref c, "one");
+io.ErrorTo(ref c, "two");
+str out1 = c.Stdout();
+str err1 = c.Stderr();
+if (out1.Len == 4 && err1.Len == 4) print("captured one two");

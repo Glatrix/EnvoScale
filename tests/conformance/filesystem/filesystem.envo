@@ -1,0 +1,70 @@
+// FileSystem conformance: what every IFileSystem adapter promises (lib/ports). Runs
+// against the platform's adapter: the reference one (--os none) and the native one, in a
+// directory it makes and removes under the working directory.
+// expect: filesystem: done
+use ports.{IFileSystem, IoError};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+bool IsErr<T>(Result<T, IoError> r, IoError e) {
+    match r {
+        Ok(_) => { return false; }
+        Err(x) => { return x == e; }
+    }
+}
+
+bool ReadsAs<F>(ref F fs, str path, str want) where F : IFileSystem {
+    Result<string, IoError> r = fs.Read(path);
+    match r {
+        Ok(s) => { return s.Equals(want); }
+        Err(_) => { return false; }
+    }
+}
+
+void Run<F>(ref F fs) where F : IFileSystem {
+    str dir = "conformance-fs";
+    str a = "conformance-fs/a.txt";
+    str uni = "conformance-fs/caf\u{e9} \u{1f600}.txt";
+    // leftovers of a run that stopped early
+    fs.Delete(a);
+    fs.Delete(uni);
+    fs.RemoveDir("conformance-fs/sub");
+    fs.RemoveDir(dir);
+
+    Check(!fs.IsDir(dir) && !fs.IsFile(dir), "nothing there at the start");
+    Check(fs.IsDir(""), "the working directory is a directory");
+    Check(fs.CreateDir(dir).IsOk(), "CreateDir");
+    Check(fs.IsDir(dir) && !fs.IsFile(dir), "a new directory is a directory");
+    Check(IsErr(fs.CreateDir(dir), IoError.Exists), "CreateDir of an existing directory is Exists");
+    Check(IsErr(fs.CreateDir("conformance-fs/x/y"), IoError.NotFound), "CreateDir without its parent is NotFound");
+
+    Check(fs.Write(a, "hello").IsOk(), "Write");
+    Check(fs.IsFile(a) && !fs.IsDir(a), "a written file is a file");
+    Check(ReadsAs(ref fs, a, "hello"), "Read gives what Write wrote");
+    Check(fs.Write(a, "bye").IsOk() && ReadsAs(ref fs, a, "bye"), "Write replaces the content");
+    Check(fs.Write(a, "").IsOk() && ReadsAs(ref fs, a, ""), "an empty file");
+    Check(fs.Write(uni, "\u{e9}").IsOk() && ReadsAs(ref fs, uni, "\u{e9}") && fs.IsFile(uni), "UTF-8 names and content");
+    Check(IsErr(fs.Write("conformance-fs/none/b.txt", "x"), IoError.NotFound), "Write without its directory is NotFound");
+    Check(IsErr(fs.Read("conformance-fs/missing"), IoError.NotFound), "Read of a missing file is NotFound");
+    Check(IsErr(fs.Read(dir), IoError.Invalid), "Read of a directory is Invalid");
+    Check(IsErr(fs.Write("conformance-fs/bad\x00.txt", "x"), IoError.Invalid), "a path with a NUL byte is Invalid");
+    Check(!fs.IsFile("conformance-fs/bad\x00.txt"), "a path with a NUL byte names nothing");
+
+    Check(IsErr(fs.RemoveDir(dir), IoError.NotEmpty), "RemoveDir of a directory with files is NotEmpty");
+    Check(IsErr(fs.Delete(dir), IoError.Invalid), "Delete of a directory is Invalid");
+    Check(fs.Delete(a).IsOk() && !fs.IsFile(a), "Delete");
+    Check(IsErr(fs.Delete(a), IoError.NotFound), "Delete of a missing file is NotFound");
+    Check(fs.Delete(uni).IsOk(), "Delete of a UTF-8 name");
+    Check(fs.RemoveDir(dir).IsOk() && !fs.IsDir(dir), "RemoveDir of an empty directory");
+    Check(IsErr(fs.RemoveDir(dir), IoError.NotFound), "RemoveDir of a missing directory is NotFound");
+}
+
+var fs = platform.FileSystem();
+Run(ref fs);
+print("filesystem: done");

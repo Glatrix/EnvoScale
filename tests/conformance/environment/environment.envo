@@ -1,0 +1,20 @@
+// Environment conformance: there is at least one argument, the program's name.
+// expect: environment: done
+use ports.{IEnvironment};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+void Run<E>(ref E env) where E : IEnvironment {
+    Check(env.ArgCount() >= 1, "at least one argument");
+    Check(env.Arg(0).Len > 0, "the program has a name");
+}
+
+var env = platform.Environment();
+Run(ref env);
+print("environment: done");

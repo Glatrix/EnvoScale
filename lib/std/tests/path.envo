@@ -1,0 +1,30 @@
+// std.path: paths as text.
+// expect: a/b /d /x a/b
+// expect: name report.txt stem report ext txt hidden [] parent dir/sub root /
+// expect: absolute yes yes no
+use std.path;
+
+write(1, path.Join("a", "b"));
+write(1, " ");
+write(1, path.Join("c/", "/d"));     // an absolute second part wins
+write(1, " ");
+write(1, path.Join("c", "/x"));
+write(1, " ");
+print(path.Join("", "a/b"));
+str p = "dir/sub/report.txt";
+write(1, "name ");
+write(1, path.FileName(p));
+write(1, " stem ");
+write(1, path.Stem(p));
+write(1, " ext ");
+write(1, path.Extension(p));
+write(1, " hidden [");
+write(1, path.Extension(".env"));
+write(1, "] parent ");
+write(1, path.Parent(p));
+write(1, " root ");
+print(path.Parent("/x"));
+write(1, "absolute ");
+if (path.IsAbsolute("/usr")) write(1, "yes ");
+if (path.IsAbsolute("C:\\Windows")) write(1, "yes ");
+if (!path.IsAbsolute("rel/x")) print("no");

@@ -1,0 +1,243 @@
+// os.windows: the native adapters for Windows (PLAN D25). They call KERNEL32.dll and
+// ADVAPI32.dll through the `__wincall` intrinsic: import k is slot k of the executable's
+// address table (bootstrap/stage1/x64/image.envo). Text is UTF-8; paths are converted to
+// UTF-16 for the `…W` functions.
+namespace os.windows;
+
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+
+const i64 W_GETLASTERROR = 8;
+const i64 W_MULTIBYTETOWIDECHAR = 10;
+const i64 W_GETSYSTEMTIMEPRECISE = 12;
+const i64 W_QUERYPERFCOUNTER = 13;
+const i64 W_QUERYPERFFREQUENCY = 14;
+const i64 W_DELETEFILEW = 15;
+const i64 W_CREATEDIRECTORYW = 16;
+const i64 W_REMOVEDIRECTORYW = 17;
+const i64 W_GETFILEATTRIBUTESW = 18;
+const i64 W_RTLGENRANDOM = 20;
+
+const u32 ATTR_DIRECTORY = 0x10;
+
+i64 Ptr(*u8 p) {
+    unsafe { return p as isize as i64; }
+}
+
+i64 Call(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __wincall(k, a, b, c, d, e, f, 0, 0);
+
+u32 LastError() => Call(W_GETLASTERROR, 0, 0, 0, 0, 0, 0) as u32;
+
+// path as UTF-16 with a terminating 0, or null for one the system cannot take (a NUL
+// byte, invalid UTF-8, too long).
+*u8 Wide(str path) {
+    unsafe {
+        if (path.Len >= 32768) return 0 as usize as *u8;
+        *u8 z = alloc(path.Len + 1);
+        for (usize i = 0; i < path.Len; i++) {
+            if (path[i] == 0) return 0 as usize as *u8;
+            z[i] = path[i];
+        }
+        *u8 wide = alloc((path.Len + 1) * 2);
+        i64 n = Call(W_MULTIBYTETOWIDECHAR, 65001, 8, Ptr(z), -1, Ptr(wide), (path.Len + 1) as i64);
+        if (n as i32 == 0) return 0 as usize as *u8;
+        return wide;
+    }
+}
+
+// The IoError for a Windows error code.
+IoError ErrorOf(u32 code) {
+    if (code == 2 || code == 3) return IoError.NotFound;         // FILE_NOT_FOUND, PATH_NOT_FOUND
+    if (code == 5 || code == 32) return IoError.Denied;          // ACCESS_DENIED, SHARING_VIOLATION
+    if (code == 80 || code == 183) return IoError.Exists;        // FILE_EXISTS, ALREADY_EXISTS
+    if (code == 145) return IoError.NotEmpty;                    // DIR_NOT_EMPTY
+    if (code == 123 || code == 161 || code == 267) return IoError.Invalid;  // INVALID_NAME, BAD_PATHNAME, DIRECTORY
+    return IoError.Other;
+}
+
+// The attributes of path, or 0xFFFFFFFF if there is nothing there.
+u32 Attributes(str path) {
+    *u8 w = Wide(path);
+    unsafe {
+        if (w as usize == 0) return 0xFFFFFFFF;
+    }
+    return Call(W_GETFILEATTRIBUTESW, Ptr(w), 0, 0, 0, 0, 0) as u32;
+}
+
+// ------------------------------------------------------------------ console
+
+// Standard output, error and input.
+public struct Console {
+    u8 Unused;
+
+    public static Console New() => new Console { Unused = 0 };
+}
+
+impl IConsole for Console {
+    void Out(ref this, str text) => write(1, text);
+    void Err(ref this, str text) => write(2, text);
+
+    usize Read(ref this, mut u8[] into) {
+        if (into.Len == 0) return 0;
+        isize n = 0;
+        unsafe { n = read(0, &into[0], into.Len); }
+        if (n <= 0) return 0;
+        return n as usize;
+    }
+}
+
+// ------------------------------------------------------------------ file system
+
+// The Windows file system. Both `/` and `\` separate a path's parts.
+public struct FileSystem {
+    u8 Unused;
+
+    public static FileSystem New() => new FileSystem { Unused = 0 };
+}
+
+impl IFileSystem for FileSystem {
+    Result<string, IoError> Read(ref this, str path) {
+        i32 fd = open(path, 0);
+        if (fd < 0) {
+            u32 attrs = Attributes(path);
+            if (attrs != 0xFFFFFFFF && attrs & ATTR_DIRECTORY != 0) return Err(IoError.Invalid);
+            if (attrs == 0xFFFFFFFF) return Err(IoError.NotFound);
+            return Err(IoError.Denied);
+        }
+        string s = string.New();
+        u8[4096] buf;
+        while (true) {
+            isize n = 0;
+            unsafe { n = read(fd, &buf[0], 4096); }
+            if (n < 0) {
+                close(fd);
+                return Err(IoError.Other);
+            }
+            if (n == 0) break;
+            for (usize i = 0; i < n as usize; i++) s.AppendByte(buf[i]);
+        }
+        close(fd);
+        return Ok(s);
+    }
+
+    Result<usize, IoError> Write(ref this, str path, str data) {
+        u32 attrs = Attributes(path);
+        if (attrs != 0xFFFFFFFF && attrs & ATTR_DIRECTORY != 0) return Err(IoError.Invalid);
+        i32 fd = open(path, 1);
+        if (fd < 0) {
+            unsafe {
+                if (Wide(path) as usize == 0) return Err(IoError.Invalid);
+            }
+            return Err(IoError.NotFound);
+        }
+        write(fd, data);
+        close(fd);
+        return Ok(data.Len);
+    }
+
+    bool IsFile(ref this, str path) {
+        u32 attrs = Attributes(path);
+        return attrs != 0xFFFFFFFF && attrs & ATTR_DIRECTORY == 0;
+    }
+
+    bool IsDir(ref this, str path) {
+        if (path.Len == 0) return true;
+        u32 attrs = Attributes(path);
+        return attrs != 0xFFFFFFFF && attrs & ATTR_DIRECTORY != 0;
+    }
+
+    Result<bool, IoError> Delete(ref this, str path) {
+        *u8 w = Wide(path);
+        unsafe {
+            if (w as usize == 0) return Err(IoError.Invalid);
+        }
+        if (this.IsDir(path)) return Err(IoError.Invalid);
+        if (Call(W_DELETEFILEW, Ptr(w), 0, 0, 0, 0, 0) as i32 == 0) return Err(ErrorOf(LastError()));
+        return Ok(true);
+    }
+
+    Result<bool, IoError> CreateDir(ref this, str path) {
+        *u8 w = Wide(path);
+        unsafe {
+            if (w as usize == 0) return Err(IoError.Invalid);
+        }
+        if (Call(W_CREATEDIRECTORYW, Ptr(w), 0, 0, 0, 0, 0) as i32 == 0) return Err(ErrorOf(LastError()));
+        return Ok(true);
+    }
+
+    Result<bool, IoError> RemoveDir(ref this, str path) {
+        *u8 w = Wide(path);
+        unsafe {
+            if (w as usize == 0) return Err(IoError.Invalid);
+        }
+        if (!this.IsDir(path)) return Err(IoError.NotFound);
+        if (Call(W_REMOVEDIRECTORYW, Ptr(w), 0, 0, 0, 0, 0) as i32 == 0) return Err(ErrorOf(LastError()));
+        return Ok(true);
+    }
+}
+
+// ------------------------------------------------------------------ clock
+
+// The system clock (GetSystemTimePreciseAsFileTime) and the performance counter.
+public struct Clock {
+    u8 Unused;
+
+    public static Clock New() => new Clock { Unused = 0 };
+}
+
+impl IClock for Clock {
+    i64 NowNanos(ref this) {
+        u64 ft = 0;
+        unsafe { Call(W_GETSYSTEMTIMEPRECISE, &ft as isize as i64, 0, 0, 0, 0, 0); }
+        // 100-ns ticks since 1601-01-01; 1970-01-01 is 11644473600 s later
+        i64 ticks = ft as i64 - 116444736000000000;
+        return ticks * 100;
+    }
+
+    u64 MonoNanos(ref this) {
+        u64 count = 0;
+        u64 freq = 0;
+        unsafe {
+            Call(W_QUERYPERFCOUNTER, &count as isize as i64, 0, 0, 0, 0, 0);
+            Call(W_QUERYPERFFREQUENCY, &freq as isize as i64, 0, 0, 0, 0, 0);
+        }
+        if (freq == 0) return 0;
+        return count / freq * 1000000000 + count % freq * 1000000000 / freq;
+    }
+}
+
+// ------------------------------------------------------------------ entropy
+
+// The system's random generator (RtlGenRandom).
+public struct Entropy {
+    u8 Unused;
+
+    public static Entropy New() => new Entropy { Unused = 0 };
+}
+
+impl IEntropy for Entropy {
+    void Fill(ref this, mut u8[] into) {
+        usize at = 0;
+        while (at < into.Len) {
+            usize n = into.Len - at;
+            if (n > 0x10000000) n = 0x10000000;
+            i64 ok = 0;
+            unsafe { ok = Call(W_RTLGENRANDOM, &into[at] as isize as i64, n as i64, 0, 0, 0, 0); }
+            if (ok as u8 == 0) panic("os.windows: the system random generator failed");
+            at += n;
+        }
+    }
+}
+
+// ------------------------------------------------------------------ environment
+
+// The command line, split as the C runtime does.
+public struct Environment {
+    u8 Unused;
+
+    public static Environment New() => new Environment { Unused = 0 };
+}
+
+impl IEnvironment for Environment {
+    usize ArgCount(ref this) => argc();
+    str Arg(ref this, usize i) => arg(i);
+}

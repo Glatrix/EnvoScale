@@ -1,0 +1,58 @@
+// std.path: paths as text, with no file system involved. Both `/` and `\` count as
+// separators; Join writes `/`, which every supported system accepts.
+namespace std.path;
+
+bool IsSep(u8 c) => c == '/' || c == 0x5C;
+
+// Is p absolute: starting with a separator, or a drive like `C:\`?
+public bool IsAbsolute(str p) {
+    if (p.Len > 0 && IsSep(p[0])) return true;
+    return p.Len >= 3 && p[1] == ':' && IsSep(p[2]);
+}
+
+// a and b with one separator between them; b itself if it is absolute.
+public string Join(str a, str b) {
+    if (a.Len == 0 || IsAbsolute(b)) return string.From(b);
+    string r = string.From(a);
+    if (!IsSep(a[a.Len - 1])) r.AppendByte('/');
+    usize start = 0;
+    while (start < b.Len && IsSep(b[start])) start++;
+    r.Append(b[start..b.Len]);
+    return r;
+}
+
+// The last part of p (after its last separator).
+public str FileName(str p) {
+    usize i = p.Len;
+    while (i > 0 && !IsSep(p[i - 1])) i--;
+    return p[i..p.Len];
+}
+
+// Everything before the last part of p, without the separator; "" if there is none.
+public str Parent(str p) {
+    usize i = p.Len;
+    while (i > 0 && !IsSep(p[i - 1])) i--;
+    if (i == 0) return "";
+    if (i == 1) return p[0..1];         // the root "/"
+    return p[0..i - 1];
+}
+
+// The file name's extension, without the dot; "" if it has none. A leading dot (".env")
+// does not start an extension.
+public str Extension(str p) {
+    str name = FileName(p);
+    usize i = name.Len;
+    while (i > 1) {
+        i--;
+        if (name[i] == '.') return name[i + 1..name.Len];
+    }
+    return "";
+}
+
+// The file name without its extension.
+public str Stem(str p) {
+    str name = FileName(p);
+    str ext = Extension(p);
+    if (ext.Len == 0) return name;
+    return name[0..name.Len - ext.Len - 1];
+}

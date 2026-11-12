@@ -1,0 +1,25 @@
+// Clock conformance: the wall clock is past 2020, and the monotonic clock never goes back.
+// expect: clock: done
+use ports.{IClock};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+void Run<C>(ref C c) where C : IClock {
+    Check(c.NowNanos() > 1577836800000000000, "the wall clock is past 2020-01-01");
+    u64 last = c.MonoNanos();
+    for (u32 i = 0; i < 1000; i++) {
+        u64 now = c.MonoNanos();
+        Check(now >= last, "the monotonic clock never goes back");
+        last = now;
+    }
+}
+
+var c = platform.Clock();
+Run(ref c);
+print("clock: done");

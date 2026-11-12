@@ -1,0 +1,19 @@
+// std through the native adapters: a file in the working directory, the real clock,
+// the system's random generator, the real arguments.
+// expect: fs round trip
+// expect: time after 2025
+// expect: random ok
+// expect: env ok
+use std.fs;
+use std.time;
+use std.random;
+use std.env;
+
+str name = "std-native-test.txt";
+bool ok = fs.WriteText(name, "native").IsOk() && fs.ReadText(name).Unwrap().Equals("native") && fs.Delete(name).IsOk();
+if (ok && !fs.Exists(name)) print("fs round trip");
+if (time.Now().Year >= 2025) print("time after 2025");
+u64 a = random.U64();
+u64 b = random.U64();
+if (a != b && random.Below(10) < 10) print("random ok");
+if (env.ArgCount() >= 1 && env.Arg(0).Len > 0) print("env ok");

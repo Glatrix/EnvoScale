@@ -1,0 +1,51 @@
+// std.io: the console. The simple door uses the platform's console; the full-control
+// door (…To, …From) takes any IConsole, such as os.none.Console in a test.
+namespace std.io;
+
+use ports.{IConsole};
+use platform;
+
+// text and a line break, on standard output.
+public void Print(str text) {
+    var c = platform.Console();
+    PrintTo(ref c, text);
+}
+
+// text on standard output, as it is.
+public void Write(str text) {
+    var c = platform.Console();
+    c.Out(text);
+}
+
+// text and a line break, on standard error.
+public void Error(str text) {
+    var c = platform.Console();
+    ErrorTo(ref c, text);
+}
+
+// All of standard input, until its end.
+public string ReadAll() {
+    var c = platform.Console();
+    return ReadAllFrom(ref c);
+}
+
+public void PrintTo<C>(ref C console, str text) where C : IConsole {
+    console.Out(text);
+    console.Out("\n");
+}
+
+public void ErrorTo<C>(ref C console, str text) where C : IConsole {
+    console.Err(text);
+    console.Err("\n");
+}
+
+public string ReadAllFrom<C>(ref C console) where C : IConsole {
+    string all = string.New();
+    u8[4096] buf;
+    while (true) {
+        usize n = console.Read(buf[0..4096]);
+        if (n == 0) break;
+        for (usize i = 0; i < n; i++) all.AppendByte(buf[i]);
+    }
+    return all;
+}

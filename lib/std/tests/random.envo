@@ -1,0 +1,21 @@
+// std.random: platform entropy (seeded with 0 under --os none) and Rng.
+// os: none
+// expect: first e220a8397b1dcdaf rng same
+// expect: below in range, every value seen
+use std.random;
+use alloc.text;
+
+u64 first = random.U64();
+write(1, "first ");
+write(1, text.Hex(first, 16));
+random.Rng r = random.Rng.Seeded(0);
+if (r.Next() == first) print(" rng same");
+bool inRange = true;
+bool[6] seen;
+for (u32 i = 0; i < 600; i++) {
+    u64 v = random.Below(6);
+    if (v >= 6) inRange = false;
+    else seen[v] = true;
+}
+bool all = seen[0] && seen[1] && seen[2] && seen[3] && seen[4] && seen[5];
+if (inRange && all) print("below in range, every value seen");

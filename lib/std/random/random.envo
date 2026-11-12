@@ -1,0 +1,72 @@
+// std.random: random numbers. Fill, U64 and Below use the platform's entropy (the system
+// generator natively; seeded with --os none). Rng is a fast generator from a seed, for
+// simulations and tests where a run must repeat; it is never for keys.
+namespace std.random;
+
+use ports.{IEntropy};
+use platform;
+
+// Fills into with random bytes.
+public void Fill(mut u8[] into) {
+    var e = platform.Entropy();
+    e.Fill(into);
+}
+
+public u64 U64() {
+    var e = platform.Entropy();
+    return U64From(ref e);
+}
+
+// A random number in [0, n) with every value equally likely; n must not be 0.
+public u64 Below(u64 n) {
+    var e = platform.Entropy();
+    return BelowFrom(ref e, n);
+}
+
+public u64 U64From<E>(ref E e) where E : IEntropy {
+    u8[8] b;
+    e.Fill(b[0..8]);
+    u64 v = 0;
+    for (u64 i = 0; i < 8; i++) v = v | (b[i] as u64 << (8 * i));
+    return v;
+}
+
+public u64 BelowFrom<E>(ref E e, u64 n) where E : IEntropy {
+    if (n == 0) panic("std.random: Below(0)");
+    // reject the top values that would make some results more likely
+    u64 limit = 0xFFFFFFFFFFFFFFFF - (0xFFFFFFFFFFFFFFFF % n + 1) % n;
+    while (true) {
+        u64 v = U64From(ref e);
+        if (v <= limit) return v % n;
+    }
+    return 0;
+}
+
+// SplitMix64: a small, fast generator with a 64-bit state.
+public struct Rng {
+    u64 State;
+
+    public static Rng Seeded(u64 seed) => new Rng { State = seed };
+
+    // A generator seeded from the platform's entropy.
+    public static Rng FromEntropy() => new Rng { State = U64() };
+
+    public u64 Next(ref this) {
+        this.State = this.State +% 0x9E3779B97F4A7C15;
+        u64 z = this.State;
+        z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+        z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
+        return z ^ (z >> 31);
+    }
+
+    // A number in [0, n), every value equally likely; n must not be 0.
+    public u64 Below(ref this, u64 n) {
+        if (n == 0) panic("std.random: Below(0)");
+        u64 limit = 0xFFFFFFFFFFFFFFFF - (0xFFFFFFFFFFFFFFFF % n + 1) % n;
+        while (true) {
+            u64 v = this.Next();
+            if (v <= limit) return v % n;
+        }
+        return 0;
+    }
+}

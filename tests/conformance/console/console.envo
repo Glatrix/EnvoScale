@@ -1,0 +1,16 @@
+// Console conformance: what Out writes reaches standard output, in order. (Err and Read
+// are checked against the reference console in adapters/os/none/tests.)
+// expect: console: one two
+// expect: console: done
+use ports.{IConsole};
+use platform;
+
+void Run<C>(ref C c) where C : IConsole {
+    c.Out("console: one");
+    c.Out(" two\n");
+    c.Err("");
+}
+
+var c = platform.Console();
+Run(ref c);
+print("console: done");

@@ -1,0 +1,26 @@
+// std.time: dates from Unix time, and the platform clock (fixed at 2026-01-01 with
+// --os none).
+// os: none
+// expect: now 2026-01-01T00:00:00Z weekday 4
+// expect: epoch 1970-01-01T00:00:00Z before 1969-12-31T23:59:59Z
+// expect: leap 2000-02-29T12:34:56Z end 9999-12-31T23:59:59Z
+// expect: stopwatch 250
+use std.time;
+use os.none;
+
+time.Date now = time.Now();
+write(1, "now ");
+write(1, time.Iso(now));
+if (now.Weekday == 4) print(" weekday 4");
+write(1, "epoch ");
+write(1, time.Iso(time.FromUnixNanos(0)));
+write(1, " before ");
+print(time.Iso(time.FromUnixNanos(-1)));
+write(1, "leap ");
+write(1, time.Iso(time.FromUnixNanos(951827696 * time.NANOS_PER_SECOND)));
+write(1, " end ");
+print(time.Iso(time.FromUnixSeconds(253402300799, 0)));
+none.Clock c = none.Clock.At(0);
+time.Stopwatch w = time.Stopwatch.StartWith(ref c);
+c.Advance(250);
+if (w.ElapsedNanosWith(ref c) == 250) print("stopwatch 250");

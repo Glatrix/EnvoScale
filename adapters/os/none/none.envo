@@ -112,6 +112,14 @@ public struct FileSystem {
     }
 }
 
+// Does path hold a NUL byte? Native systems cannot take one, so neither does this.
+bool BadPath(str path) {
+    for (usize i = 0; i < path.Len; i++) {
+        if (path[i] == 0) return true;
+    }
+    return false;
+}
+
 // path in the form the file system compares.
 string Clean(str path) {
     string r = string.New();
@@ -150,6 +158,7 @@ string Parent(str path) {
 
 impl IFileSystem for FileSystem {
     Result<string, IoError> Read(ref this, str path) {
+        if (BadPath(path)) return Err(IoError.Invalid);
         string p = Clean(path);
         unsafe {
             string[] v = this.State[0].Files.View(p);
@@ -162,6 +171,7 @@ impl IFileSystem for FileSystem {
     }
 
     Result<usize, IoError> Write(ref this, str path, str data) {
+        if (BadPath(path)) return Err(IoError.Invalid);
         string p = Clean(path);
         if (p.Len() == 0) return Err(IoError.Invalid);
         string parent = Parent(p.AsStr());
@@ -174,17 +184,20 @@ impl IFileSystem for FileSystem {
     }
 
     bool IsFile(ref this, str path) {
+        if (BadPath(path)) return false;
         string p = Clean(path);
         unsafe { return this.State[0].Files.Has(p); }
     }
 
     bool IsDir(ref this, str path) {
+        if (BadPath(path)) return false;
         string p = Clean(path);
         if (p.Len() == 0) return true;
         unsafe { return this.State[0].Dirs.Has(p); }
     }
 
     Result<bool, IoError> Delete(ref this, str path) {
+        if (BadPath(path)) return Err(IoError.Invalid);
         string p = Clean(path);
         unsafe {
             if (this.State[0].Files.Remove(p).IsSome()) return Ok(true);
@@ -194,6 +207,7 @@ impl IFileSystem for FileSystem {
     }
 
     Result<bool, IoError> CreateDir(ref this, str path) {
+        if (BadPath(path)) return Err(IoError.Invalid);
         string p = Clean(path);
         if (p.Len() == 0) return Err(IoError.Exists);
         string parent = Parent(p.AsStr());
@@ -206,6 +220,7 @@ impl IFileSystem for FileSystem {
     }
 
     Result<bool, IoError> RemoveDir(ref this, str path) {
+        if (BadPath(path)) return Err(IoError.Invalid);
         string p = Clean(path);
         unsafe {
             if (!this.State[0].Dirs.Has(p)) return Err(IoError.NotFound);

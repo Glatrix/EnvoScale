@@ -1,0 +1,35 @@
+// Entropy conformance: Fill fills the whole view, two fills differ, and an empty view is
+// fine.
+// expect: entropy: done
+use ports.{IEntropy};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+void Run<E>(ref E e) where E : IEntropy {
+    u8[64] a;
+    u8[64] b;
+    e.Fill(a[0..64]);
+    e.Fill(b[0..64]);
+    bool differ = false;
+    u32 zeros = 0;
+    for (usize i = 0; i < 64; i++) {
+        if (a[i] != b[i]) differ = true;
+        if (a[i] == 0) zeros++;
+    }
+    Check(differ, "two fills differ");
+    Check(zeros < 16, "a fill is not mostly zeros");
+    u8[1] none;
+    e.Fill(none[0..0]);
+    u8[7] odd;
+    e.Fill(odd[0..7]);
+}
+
+var e = platform.Entropy();
+Run(ref e);
+print("entropy: done");

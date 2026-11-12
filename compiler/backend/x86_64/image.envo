@@ -1,6 +1,8 @@
 // Executable images: one read-write-execute section at IMAGE_BASE. Follows Stage 1's
-// bootstrap/stage1/x64/image.envo. Windows images import from KERNEL32.dll; the runtime
-// reaches import k through `wincall`.
+// bootstrap/stage1/x64/image.envo. Windows images import from KERNEL32.dll and
+// ADVAPI32.dll; import k is the k-th slot of the address table, reached through `wincall`:
+// KERNEL32's functions are 0-18, slot 19 ends them, and ADVAPI32's SystemFunction036
+// (RtlGenRandom) is slot 20 (PLAN D25).
 namespace envoc.x64;
 
 use envoc.util;
@@ -13,9 +15,9 @@ const u64 PE_SECTION_RVA = 0x1000;
 const u32 TARGET_LINUX = 1;
 const u32 TARGET_WINDOWS = 2;
 
-const u32 WIN_IMPORTS = 12;
+const u32 WIN_IMPORTS = 19;        // from KERNEL32.dll; then ADVAPI32's one, at slot 20
 
-// The KERNEL32.dll functions the Windows runtime calls, by wincall index.
+// The KERNEL32.dll functions, by wincall index.
 str WinImport(u32 k) {
     match k {
         0 => { return "GetStdHandle"; }
@@ -29,21 +31,32 @@ str WinImport(u32 k) {
         8 => { return "GetLastError"; }
         9 => { return "ExitProcess"; }
         10 => { return "MultiByteToWideChar"; }
-        _ => { return "WideCharToMultiByte"; }
+        11 => { return "WideCharToMultiByte"; }
+        12 => { return "GetSystemTimePreciseAsFileTime"; }
+        13 => { return "QueryPerformanceCounter"; }
+        14 => { return "QueryPerformanceFrequency"; }
+        15 => { return "DeleteFileW"; }
+        16 => { return "CreateDirectoryW"; }
+        17 => { return "RemoveDirectoryW"; }
+        _ => { return "GetFileAttributesW"; }
     }
 }
 
 struct WinImports {
-    u32 Dir;        // the import directory (two descriptors, 40 bytes)
+    u32 Dir;        // the import directory (three descriptors, 60 bytes)
     u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
 }
 
 // The import directory, lookup and address tables, hint/name entries and DLL name, in the
 // data. Returns the labels the PE header and wincall need.
 WinImports EmitImports(ref Asm a) {
-    u32[12] names;
+    u32[19] names;
     u32 ilt = a.NewLabel();
     u32 dll = a.NewLabel();
+    u32 ilt2 = a.NewLabel();
+    u32 dll2 = a.NewLabel();
+    u32 iat2 = a.NewLabel();
+    u32 name2 = a.NewLabel();
     u32 dir = a.NewLabel();
     u32 iat = a.NewLabel();
     for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = a.NewLabel();
@@ -54,13 +67,24 @@ WinImports EmitImports(ref Asm a) {
     a.DataU32(0);               // ForwarderChain
     a.DataRva(dll, 4);          // Name
     a.DataRva(iat, 4);          // FirstThunk
+    a.DataRva(ilt2, 4);         // ADVAPI32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll2, 4);
+    a.DataRva(iat2, 4);
     a.DataZeros(20);            // the null descriptor
     a.DataAlign(8);
     a.BindData(ilt);
     for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
     a.DataZeros(8);
+    a.BindData(ilt2);
+    a.DataRva(name2, 8);
+    a.DataZeros(8);
     a.BindData(iat);
     for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
+    a.DataZeros(8);             // slot 19 ends KERNEL32's
+    a.BindData(iat2);           // slot 20
+    a.DataRva(name2, 8);
     a.DataZeros(8);
     for (u32 k = 0; k < WIN_IMPORTS; k++) {
         a.DataAlign(2);
@@ -70,9 +94,19 @@ WinImports EmitImports(ref Asm a) {
         for (usize i = 0; i < name.Len; i++) a.DataByte(name[i]);
         a.DataByte(0);
     }
+    a.DataAlign(2);
+    a.BindData(name2);
+    a.DataZeros(2);
+    str random = "SystemFunction036";
+    for (usize i = 0; i < random.Len; i++) a.DataByte(random[i]);
+    a.DataByte(0);
     a.BindData(dll);
     str kernel = "KERNEL32.dll";
     for (usize i = 0; i < kernel.Len; i++) a.DataByte(kernel[i]);
+    a.DataByte(0);
+    a.BindData(dll2);
+    str advapi = "ADVAPI32.dll";
+    for (usize i = 0; i < advapi.Len; i++) a.DataByte(advapi[i]);
     a.DataByte(0);
     return new WinImports { Dir = dir, Iat = iat };
 }
@@ -126,7 +160,7 @@ string WriteImage(ref Asm a, u32 target, WinImports imports) {
         Put64(ref f, 0xB8, 0x1000);                 // heap commit
         Put32(ref f, 0xC4, 16);                     // NumberOfRvaAndSizes
         Put32(ref f, 0xD0, PE_SECTION_RVA + a.LabelOffset(imports.Dir, dataStart));
-        Put32(ref f, 0xD4, 40);
+        Put32(ref f, 0xD4, 60);
         Put32(ref f, 0x148, 0x7865742E);            // ".tex"
         Put16(ref f, 0x14C, 0x74);                  // "t"
         Put32(ref f, 0x150, size);                  // VirtualSize

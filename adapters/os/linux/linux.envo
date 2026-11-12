@@ -1,0 +1,225 @@
+// os.linux: the native adapters for Linux on x86-64 (PLAN D25). They make system calls
+// through the `__syscall` intrinsic. Paths are passed as NUL-terminated copies; a path
+// holding a NUL byte is refused.
+namespace os.linux;
+
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+
+const i64 SYS_MKDIR = 83;
+const i64 SYS_RMDIR = 84;
+const i64 SYS_UNLINK = 87;
+const i64 SYS_CLOCK_GETTIME = 228;
+const i64 SYS_NEWFSTATAT = 262;
+const i64 SYS_GETRANDOM = 318;
+
+const i64 AT_FDCWD = -100;
+const u32 S_IFMT = 0xF000;
+const u32 S_IFDIR = 0x4000;
+const u32 S_IFREG = 0x8000;
+
+i64 Ptr(*u8 p) {
+    unsafe { return p as isize as i64; }
+}
+
+i64 Sys(i64 n, i64 a, i64 b, i64 c, i64 d) => __syscall(n, a, b, c, d, 0, 0);
+
+// path as a NUL-terminated copy, or null if it holds a NUL byte.
+*u8 CPath(str path) {
+    unsafe {
+        *u8 z = alloc(path.Len + 1);
+        for (usize i = 0; i < path.Len; i++) {
+            if (path[i] == 0) return 0 as usize as *u8;
+            z[i] = path[i];
+        }
+        return z;
+    }
+}
+
+// The IoError for a negative errno result.
+IoError ErrorOf(i64 r) {
+    if (r == -2 || r == -20) return IoError.NotFound;       // ENOENT, ENOTDIR
+    if (r == -13 || r == -1) return IoError.Denied;         // EACCES, EPERM
+    if (r == -17) return IoError.Exists;                    // EEXIST
+    if (r == -39) return IoError.NotEmpty;                  // ENOTEMPTY
+    if (r == -21 || r == -22 || r == -36) return IoError.Invalid;   // EISDIR, EINVAL, ENAMETOOLONG
+    return IoError.Other;
+}
+
+// The file type bits of path (S_IFDIR, S_IFREG, …), or 0 if there is nothing there.
+u32 Kind(str path) {
+    *u8 p = CPath(path);
+    unsafe {
+        if (p as usize == 0) return 0;
+        *u8 st = alloc(144);        // struct stat on x86-64; st_mode is the u32 at 24
+        i64 r = Sys(SYS_NEWFSTATAT, AT_FDCWD, Ptr(p), Ptr(st), 0);
+        if (r != 0) return 0;
+        u32 mode = st[24] as u32 | (st[25] as u32 << 8) | (st[26] as u32 << 16) | (st[27] as u32 << 24);
+        return mode & S_IFMT;
+    }
+}
+
+// ------------------------------------------------------------------ console
+
+// Standard output, error and input.
+public struct Console {
+    u8 Unused;
+
+    public static Console New() => new Console { Unused = 0 };
+}
+
+impl IConsole for Console {
+    void Out(ref this, str text) => write(1, text);
+    void Err(ref this, str text) => write(2, text);
+
+    usize Read(ref this, mut u8[] into) {
+        if (into.Len == 0) return 0;
+        isize n = 0;
+        unsafe { n = read(0, &into[0], into.Len); }
+        if (n <= 0) return 0;
+        return n as usize;
+    }
+}
+
+// ------------------------------------------------------------------ file system
+
+// The Linux file system.
+public struct FileSystem {
+    u8 Unused;
+
+    public static FileSystem New() => new FileSystem { Unused = 0 };
+}
+
+impl IFileSystem for FileSystem {
+    Result<string, IoError> Read(ref this, str path) {
+        u32 kind = Kind(path);
+        if (kind == S_IFDIR) return Err(IoError.Invalid);
+        i32 fd = open(path, 0);
+        if (fd < 0) {
+            if (kind == 0) return Err(IoError.NotFound);
+            return Err(IoError.Denied);
+        }
+        string s = string.New();
+        u8[4096] buf;
+        while (true) {
+            isize n = 0;
+            unsafe { n = read(fd, &buf[0], 4096); }
+            if (n < 0) {
+                close(fd);
+                return Err(IoError.Other);
+            }
+            if (n == 0) break;
+            for (usize i = 0; i < n as usize; i++) s.AppendByte(buf[i]);
+        }
+        close(fd);
+        return Ok(s);
+    }
+
+    Result<usize, IoError> Write(ref this, str path, str data) {
+        if (Kind(path) == S_IFDIR) return Err(IoError.Invalid);
+        i32 fd = open(path, 1);
+        if (fd < 0) {
+            unsafe {
+                if (CPath(path) as usize == 0) return Err(IoError.Invalid);
+            }
+            return Err(ErrorOf(fd as i64));
+        }
+        write(fd, data);
+        close(fd);
+        return Ok(data.Len);
+    }
+
+    bool IsFile(ref this, str path) => Kind(path) == S_IFREG;
+
+    bool IsDir(ref this, str path) {
+        if (path.Len == 0) return true;
+        return Kind(path) == S_IFDIR;
+    }
+
+    Result<bool, IoError> Delete(ref this, str path) {
+        *u8 p = CPath(path);
+        unsafe {
+            if (p as usize == 0) return Err(IoError.Invalid);
+        }
+        if (Kind(path) == S_IFDIR) return Err(IoError.Invalid);
+        i64 r = Sys(SYS_UNLINK, Ptr(p), 0, 0, 0);
+        if (r < 0) return Err(ErrorOf(r));
+        return Ok(true);
+    }
+
+    Result<bool, IoError> CreateDir(ref this, str path) {
+        *u8 p = CPath(path);
+        unsafe {
+            if (p as usize == 0) return Err(IoError.Invalid);
+        }
+        i64 r = Sys(SYS_MKDIR, Ptr(p), 0x1ED, 0, 0);       // 0755
+        if (r < 0) return Err(ErrorOf(r));
+        return Ok(true);
+    }
+
+    Result<bool, IoError> RemoveDir(ref this, str path) {
+        *u8 p = CPath(path);
+        unsafe {
+            if (p as usize == 0) return Err(IoError.Invalid);
+        }
+        i64 r = Sys(SYS_RMDIR, Ptr(p), 0, 0, 0);
+        if (r < 0) return Err(ErrorOf(r));
+        return Ok(true);
+    }
+}
+
+// ------------------------------------------------------------------ clock
+
+// CLOCK_REALTIME and CLOCK_MONOTONIC.
+public struct Clock {
+    u8 Unused;
+
+    public static Clock New() => new Clock { Unused = 0 };
+}
+
+// The time on clock id in nanoseconds.
+i64 ClockNanos(i64 id) {
+    i64[2] ts;      // tv_sec, tv_nsec
+    unsafe { Sys(SYS_CLOCK_GETTIME, id, &ts[0] as isize as i64, 0, 0); }
+    return ts[0] * 1000000000 + ts[1];
+}
+
+impl IClock for Clock {
+    i64 NowNanos(ref this) => ClockNanos(0);
+    u64 MonoNanos(ref this) => ClockNanos(1) as u64;
+}
+
+// ------------------------------------------------------------------ entropy
+
+// The kernel's random generator (getrandom).
+public struct Entropy {
+    u8 Unused;
+
+    public static Entropy New() => new Entropy { Unused = 0 };
+}
+
+impl IEntropy for Entropy {
+    void Fill(ref this, mut u8[] into) {
+        usize at = 0;
+        while (at < into.Len) {
+            i64 r = 0;
+            unsafe { r = Sys(SYS_GETRANDOM, &into[at] as isize as i64, (into.Len - at) as i64, 0, 0); }
+            if (r == -4) continue;      // EINTR
+            if (r <= 0) panic("os.linux: getrandom failed");
+            at += r as usize;
+        }
+    }
+}
+
+// ------------------------------------------------------------------ environment
+
+// The arguments the program was started with.
+public struct Environment {
+    u8 Unused;
+
+    public static Environment New() => new Environment { Unused = 0 };
+}
+
+impl IEnvironment for Environment {
+    usize ArgCount(ref this) => argc();
+    str Arg(ref this, usize i) => arg(i);
+}

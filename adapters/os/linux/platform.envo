@@ -1,0 +1,10 @@
+// The platform binding for Linux (PLAN D23): the native adapters.
+namespace platform;
+
+use os.linux;
+
+public linux.Console Console() => linux.Console.New();
+public linux.FileSystem FileSystem() => linux.FileSystem.New();
+public linux.Clock Clock() => linux.Clock.New();
+public linux.Entropy Entropy() => linux.Entropy.New();
+public linux.Environment Environment() => linux.Environment.New();

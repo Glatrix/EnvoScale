@@ -1,0 +1,123 @@
+// std.time: clocks, a stopwatch, and dates on the UTC calendar. The simple door uses the
+// platform's clock; the full-control door (…With) takes any IClock, such as the manual
+// os.none.Clock in a test.
+namespace std.time;
+
+use ports.{IClock};
+use platform;
+use core.fmt;
+
+public const i64 NANOS_PER_SECOND = 1000000000;
+
+// The wall clock: nanoseconds since 1970-01-01 00:00 UTC.
+public i64 NowNanos() {
+    var c = platform.Clock();
+    return c.NowNanos();
+}
+
+// A monotonic time in nanoseconds, for measuring durations.
+public u64 MonoNanos() {
+    var c = platform.Clock();
+    return c.MonoNanos();
+}
+
+// Measures elapsed time on the monotonic clock.
+public struct Stopwatch {
+    u64 Started;
+
+    public static Stopwatch Start() => new Stopwatch { Started = MonoNanos() };
+
+    public static Stopwatch StartWith<C>(ref C clock) where C : IClock => new Stopwatch { Started = clock.MonoNanos() };
+
+    public u64 ElapsedNanos(in this) => MonoNanos() - this.Started;
+
+    public u64 ElapsedNanosWith<C>(in this, ref C clock) where C : IClock => clock.MonoNanos() - this.Started;
+}
+
+// A moment on the UTC calendar (the proleptic Gregorian calendar).
+public struct Date {
+    i64 Year;
+    u32 Month;      // 1-12
+    u32 Day;        // 1-31
+    u32 Hour;
+    u32 Minute;
+    u32 Second;
+    u32 Nanos;
+    u32 Weekday;    // 0 is Sunday
+}
+
+// The date at nanos since 1970-01-01 00:00 UTC. (An i64 of nanoseconds reaches the years
+// 1677 to 2262; FromUnixSeconds covers any year.)
+public Date FromUnixNanos(i64 nanos) {
+    i64 secs = nanos / NANOS_PER_SECOND;
+    i64 rem = nanos % NANOS_PER_SECOND;
+    if (rem < 0) {
+        rem += NANOS_PER_SECOND;
+        secs -= 1;
+    }
+    return FromUnixSeconds(secs, rem as u32);
+}
+
+// The date at secs seconds and nanos nanoseconds (below a second) since 1970-01-01 00:00
+// UTC (H. Hinnant's days-to-civil algorithm).
+public Date FromUnixSeconds(i64 secs, u32 nanos) {
+    i64 rem = nanos as i64;
+    i64 days = secs / 86400;
+    i64 sod = secs % 86400;
+    if (sod < 0) {
+        sod += 86400;
+        days -= 1;
+    }
+    i64 z = days + 719468;
+    i64 era = z / 146097;
+    if (z < 0 && z % 146097 != 0) era -= 1;
+    i64 doe = z - era * 146097;
+    i64 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    i64 y = yoe + era * 400;
+    i64 doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    i64 mp = (5 * doy + 2) / 153;
+    i64 d = doy - (153 * mp + 2) / 5 + 1;
+    i64 m = mp + 3;
+    if (mp >= 10) m = mp - 9;
+    if (m <= 2) y += 1;
+    i64 wd = (days + 4) % 7;          // 1970-01-01 was a Thursday
+    if (wd < 0) wd += 7;
+    return new Date {
+        Year = y, Month = m as u32, Day = d as u32, Hour = (sod / 3600) as u32, Minute = (sod % 3600 / 60) as u32,
+        Second = (sod % 60) as u32, Nanos = rem as u32, Weekday = wd as u32
+    };
+}
+
+// The current date, from the platform's clock.
+public Date Now() => FromUnixNanos(NowNanos());
+
+void Two(ref string s, u32 v) {
+    s.AppendByte((48 + v / 10) as u8);
+    s.AppendByte((48 + v % 10) as u8);
+}
+
+// The date as ISO 8601: "2026-01-01T00:00:00Z" (seconds; the fraction is left out).
+public string Iso(in Date d) {
+    string s = string.New();
+    u8[24] buf;
+    i64 y = d.Year;
+    if (y < 0) {
+        s.AppendByte('-');
+        y = 0 - y;
+    }
+    usize n = fmt.WriteI64(buf[0..24], y);
+    for (usize i = n; i < 4; i++) s.AppendByte('0');
+    for (usize i = 0; i < n; i++) s.AppendByte(buf[i]);
+    s.AppendByte('-');
+    Two(ref s, d.Month);
+    s.AppendByte('-');
+    Two(ref s, d.Day);
+    s.AppendByte('T');
+    Two(ref s, d.Hour);
+    s.AppendByte(':');
+    Two(ref s, d.Minute);
+    s.AppendByte(':');
+    Two(ref s, d.Second);
+    s.AppendByte('Z');
+    return s;
+}

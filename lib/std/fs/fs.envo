@@ -1,0 +1,74 @@
+// std.fs: files and directories. The simple door uses the platform's file system; the
+// full-control door (…With) takes any IFileSystem: the in-memory os.none.FileSystem in a
+// test, or a restricted one wrapping another.
+namespace std.fs;
+
+use ports.{IFileSystem, IoError};
+use platform;
+
+public Result<string, IoError> ReadText(str path) {
+    var fs = platform.FileSystem();
+    return fs.Read(path);
+}
+
+public Result<usize, IoError> WriteText(str path, str text) {
+    var fs = platform.FileSystem();
+    return fs.Write(path, text);
+}
+
+// Is there a file or a directory at path?
+public bool Exists(str path) {
+    var fs = platform.FileSystem();
+    return ExistsWith(ref fs, path);
+}
+
+public bool IsFile(str path) {
+    var fs = platform.FileSystem();
+    return fs.IsFile(path);
+}
+
+public bool IsDir(str path) {
+    var fs = platform.FileSystem();
+    return fs.IsDir(path);
+}
+
+public Result<bool, IoError> Delete(str path) {
+    var fs = platform.FileSystem();
+    return fs.Delete(path);
+}
+
+public Result<bool, IoError> CreateDir(str path) {
+    var fs = platform.FileSystem();
+    return fs.CreateDir(path);
+}
+
+// Creates path and every missing directory above it; fine if it is already there.
+public Result<bool, IoError> CreateDirAll(str path) {
+    var fs = platform.FileSystem();
+    return CreateDirAllWith(ref fs, path);
+}
+
+public Result<bool, IoError> RemoveDir(str path) {
+    var fs = platform.FileSystem();
+    return fs.RemoveDir(path);
+}
+
+public bool ExistsWith<F>(ref F fs, str path) where F : IFileSystem => fs.IsFile(path) || fs.IsDir(path);
+
+public Result<bool, IoError> CreateDirAllWith<F>(ref F fs, str path) where F : IFileSystem {
+    if (path.Len == 0 || fs.IsDir(path)) return Ok(true);
+    // the directories from the top down: every prefix that ends before a separator
+    for (usize i = 1; i < path.Len; i++) {
+        u8 c = path[i];
+        if (c != '/' && c != 0x5C) continue;
+        if (path[i - 1] == '/' || path[i - 1] == 0x5C || path[i - 1] == ':') continue;   // "//", a root, "C:\"
+        str prefix = path[0..i];
+        if (!fs.IsDir(prefix)) {
+            Result<bool, IoError> r = fs.CreateDir(prefix);
+            if (r.IsErr() && !fs.IsDir(prefix)) return r;
+        }
+    }
+    Result<bool, IoError> last = fs.CreateDir(path);
+    if (last.IsErr() && fs.IsDir(path)) return Ok(true);
+    return last;
+}

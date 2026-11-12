@@ -1,0 +1,19 @@
+// std.fs over the platform's file system (in memory with --os none).
+// os: none
+// expect: write 5 read hello
+// expect: exists yes, dir no, missing no
+// expect: dirs a a/b a/b/c
+// expect: removed
+use std.fs;
+use alloc.text;
+
+Result<usize, ports.IoError> w = fs.WriteText("notes.txt", "hello");
+write(1, "write ");
+write(1, text.Uint(w.Unwrap() as u64));
+write(1, " read ");
+print(fs.ReadText("notes.txt").Unwrap());
+if (fs.Exists("notes.txt") && !fs.IsDir("notes.txt") && !fs.Exists("nope")) print("exists yes, dir no, missing no");
+fs.CreateDirAll("a/b/c");
+if (fs.IsDir("a") && fs.IsDir("a/b") && fs.IsDir("a/b/c")) print("dirs a a/b a/b/c");
+bool ok = fs.CreateDirAll("a/b/c").IsOk() && fs.Delete("notes.txt").IsOk() && fs.RemoveDir("a/b/c").IsOk();
+if (ok && !fs.Exists("notes.txt")) print("removed");
