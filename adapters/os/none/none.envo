@@ -7,7 +7,7 @@
 // share it (the heap never frees in Envo-S1, so nothing is lost).
 namespace os.none;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
 use alloc.map.{Map};
 use alloc.set.{Set};
 use alloc.text;
@@ -900,5 +900,122 @@ impl ITerminal for Terminal {
             this.State[0].InAt = at + n;
         }
         return n;
+    }
+}
+
+// ------------------------------------------------------------------ window
+
+struct WindowState {
+    bool Opened;
+    string Title;
+    u32 W;
+    u32 H;
+    List<Event> Queue;
+    usize At;
+    List<u8> Frame;
+    u32 FrameW;
+    u32 FrameH;
+    u32 Frames;
+}
+
+// An off-screen window: it keeps the last frame presented, and gives the events a test
+// queues (D45).
+public struct Window {
+    *WindowState State;
+
+    public static Window New() {
+        unsafe {
+            *WindowState p = alloc(sizeof(WindowState)) as *WindowState;
+            p[0] = new WindowState { Opened = false, Title = string.New(), W = 0, H = 0, Queue = List<Event>.New(), At = 0, Frame = List<u8>.New(), FrameW = 0, FrameH = 0, Frames = 0 };
+            return new Window { State = p };
+        }
+    }
+
+    // An event for Poll to give, after those already waiting. Close closes the window
+    // as it is given; Resize changes its size.
+    public void Queue(ref this, Event e) {
+        unsafe { this.State[0].Queue.Push(e); }
+    }
+
+    public str Title(in this) {
+        unsafe { return this.State[0].Title.AsStr(); }
+    }
+
+    // The last frame presented, RGBA, and its size; how many frames so far.
+    public u8[] Frame(in this) {
+        unsafe { return this.State[0].Frame.AsSlice(); }
+    }
+
+    public u32 FrameWidth(in this) {
+        unsafe { return this.State[0].FrameW; }
+    }
+
+    public u32 FrameHeight(in this) {
+        unsafe { return this.State[0].FrameH; }
+    }
+
+    public u32 Frames(in this) {
+        unsafe { return this.State[0].Frames; }
+    }
+}
+
+impl IWindow for Window {
+    bool Open(ref this, str title, u32 width, u32 height) {
+        unsafe {
+            if (this.State[0].Opened) return false;
+            this.State[0].Opened = true;
+            this.State[0].Title = string.From(title);
+            this.State[0].W = width;
+            this.State[0].H = height;
+        }
+        return true;
+    }
+
+    bool IsOpen(ref this) {
+        unsafe { return this.State[0].Opened; }
+    }
+
+    u32 Width(ref this) {
+        unsafe { return this.State[0].W; }
+    }
+
+    u32 Height(ref this) {
+        unsafe { return this.State[0].H; }
+    }
+
+    Event Poll(ref this) {
+        unsafe {
+            usize at = this.State[0].At;
+            if (!this.State[0].Opened || at >= this.State[0].Queue.Len()) return Event.Nothing();
+            Event e = this.State[0].Queue.Get(at);
+            this.State[0].At = at + 1;
+            if (e.Is(EventKind.Close)) this.State[0].Opened = false;
+            if (e.Is(EventKind.Resize)) {
+                this.State[0].W = e.X() as u32;
+                this.State[0].H = e.Y() as u32;
+            }
+            return e;
+        }
+    }
+
+    void Present(ref this, u8[] rgba, u32 width, u32 height) {
+        unsafe {
+            if (!this.State[0].Opened) return;
+            List<u8> f = List<u8>.New();
+            usize n = (width * height * 4) as usize;
+            for (usize i = 0; i < n && i < rgba.Len; i++) f.Push(rgba[i]);
+            this.State[0].Frame = f;
+            this.State[0].FrameW = width;
+            this.State[0].FrameH = height;
+            this.State[0].Frames = this.State[0].Frames + 1;
+        }
+    }
+
+    void SetTitle(ref this, str title) {
+        unsafe { this.State[0].Title = string.From(title); }
+    }
+
+    void Close(ref this) {
+        unsafe { this.State[0].Opened = false; }
     }
 }

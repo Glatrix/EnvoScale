@@ -1,7 +1,7 @@
 # Port conformance suites
 
 > **Status:** M4–M8: one suite per port in `lib/ports` (`filesystem/`, `console/`,
-> `clock/`, `entropy/`, `environment/`, `process/`, `net/`, `term/`).
+> `clock/`, `entropy/`, `environment/`, `process/`, `net/`, `term/`, `window/`).
 
 Each suite is a program that gets its adapter from `platform` and checks what the port
 promises, printing only failures and a final line. The test scripts run every suite

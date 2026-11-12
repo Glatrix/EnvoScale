@@ -16,6 +16,7 @@ public none.Process Process() => none.SharedProcess();
 public none.Net Net() => none.SharedNet();
 public none.Trust Trust() => none.Trust.New();
 public none.Terminal Terminal() => none.Terminal.New();
+public none.Window Window() => none.Window.New();
 
 // The reference adapters have no system to call: the script runtime runs only on a
 // native platform.

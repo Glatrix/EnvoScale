@@ -12,6 +12,7 @@ public windows.Process Process() => windows.Process.New();
 public windows.Net Net() => windows.Net.New();
 public windows.Trust Trust() => windows.Trust.New();
 public windows.Terminal Terminal() => windows.Terminal.New();
+public windows.Window Window() => windows.Window.New();
 
 // The host's raw call gate for the script runtime: `wincall` (kind 2) on Windows.
 public i64 RawCall(u32 kind, i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j, i64 l, i64 m) {

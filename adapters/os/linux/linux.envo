@@ -3,7 +3,7 @@
 // holding a NUL byte is refused.
 namespace os.linux;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -907,5 +907,28 @@ impl ITerminal for Terminal {
         unsafe { n = read(0, &into[0], into.Len); }
         if (n <= 0) return 0;
         return n as usize;
+    }
+}
+
+// ------------------------------------------------------------------ window
+
+// Linux windows (X11, Wayland) come after M8 (PLAN D45): Open says no.
+public struct Window {
+    u8 Unused;
+
+    public static Window New() => new Window { Unused = 0 };
+}
+
+impl IWindow for Window {
+    bool Open(ref this, str title, u32 width, u32 height) => false;
+    bool IsOpen(ref this) => false;
+    u32 Width(ref this) => 0;
+    u32 Height(ref this) => 0;
+    Event Poll(ref this) => Event.Nothing();
+    void Present(ref this, u8[] rgba, u32 width, u32 height) {
+    }
+    void SetTitle(ref this, str title) {
+    }
+    void Close(ref this) {
     }
 }

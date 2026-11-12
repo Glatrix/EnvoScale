@@ -42,7 +42,7 @@ values (D13, D22). Each adapter is a struct that implements the port:
 
 | Namespace | Folder | Adapters |
 |---|---|---|
-| `os.none` | `adapters/os/none` | reference: captured `Console`, pass-through `Stdio`, in-memory `FileSystem`, manual `Clock`, seeded `Entropy`, fixed `Environment`, scripted `Process` (echoing programs known by name), a sized in-memory `Terminal` |
+| `os.none` | `adapters/os/none` | reference: captured `Console`, pass-through `Stdio`, in-memory `FileSystem`, manual `Clock`, seeded `Entropy`, fixed `Environment`, scripted `Process` (echoing programs known by name), a sized in-memory `Terminal`, an off-screen `Window` |
 | `os.windows` | `adapters/os/windows` | KERNEL32 and ADVAPI32 through `__wincall` |
 | `os.linux` | `adapters/os/linux` | system calls through `__syscall` |
 
@@ -50,7 +50,7 @@ values (D13, D22). Each adapter is a struct that implements the port:
 one place where `lib/` meets an adapter. It loads `adapters/os/<os>/platform.envo`, where
 `<os>` is the target's operating system or `none` with `--os none`. Every binding
 provides the same constructors: `platform.Console()`, `FileSystem()`, `Clock()`,
-`Entropy()`, `Environment()`, `Process()`, `Net()`, `Trust()`, `Terminal()`. Code that uses them writes `var fs = platform.FileSystem();`
+`Entropy()`, `Environment()`, `Process()`, `Net()`, `Trust()`, `Terminal()`, `Window()`. Code that uses them writes `var fs = platform.FileSystem();`
 and works with any binding.
 
 Each `std` module has two doors. The simple door (`fs.ReadText(path)`) uses the platform

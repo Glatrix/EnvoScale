@@ -4,7 +4,7 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -1019,5 +1019,225 @@ impl ITerminal for Terminal {
         for (usize i = take; i < p.Len; i++) rest.Push(p[i]);
         this.Pending = rest;
         return take;
+    }
+}
+
+// ------------------------------------------------------------------ window
+
+const i64 W_GETMODULEHANDLEW = 56;
+const i64 W_GETPROCADDRESS = 57;
+const i64 W_REGISTERCLASSEXW = 62;
+const i64 W_CREATEWINDOWEXW = 63;
+const i64 W_PEEKMESSAGEW = 64;
+const i64 W_TRANSLATEMESSAGE = 65;
+const i64 W_DISPATCHMESSAGEW = 66;
+const i64 W_ISWINDOW = 67;
+const i64 W_DESTROYWINDOW = 68;
+const i64 W_GETCLIENTRECT = 69;
+const i64 W_GETDC = 70;
+const i64 W_RELEASEDC = 71;
+const i64 W_LOADCURSORW = 72;
+const i64 W_ADJUSTWINDOWRECT = 73;
+const i64 W_SETWINDOWTEXTW = 74;
+const i64 W_SETPROCESSDPIAWARE = 76;
+const i64 W_SETDIBITSTODEVICE = 78;
+
+const i64 WS_OVERLAPPEDWINDOW = 0x00CF0000;
+const i64 WS_VISIBLE = 0x10000000;
+
+void Le32At(mut u8[] b, usize at, u64 v) {
+    for (usize i = 0; i < 4; i++) b[at + i] = (v >> (8 * i as u64)) as u8;
+}
+
+void Le64At(mut u8[] b, usize at, u64 v) {
+    for (usize i = 0; i < 8; i++) b[at + i] = (v >> (8 * i as u64)) as u8;
+}
+
+u64 Get64(u8[] b, usize at) {
+    u64 v = 0;
+    for (usize i = 0; i < 8; i++) v = v | (b[at + i] as u64) << (8 * i as u64);
+    return v;
+}
+
+// A NUL-terminated byte string, for GetProcAddress.
+*u8 CName(str s) {
+    unsafe {
+        *u8 p = alloc(s.Len + 1);
+        for (usize i = 0; i < s.Len; i++) p[i] = s[i];
+        p[s.Len] = 0;
+        return p;
+    }
+}
+
+// A Win32 window (PLAN D45). Its window procedure is DefWindowProcW itself, so no call
+// comes back into Envo code: events are read from the message queue, a closed window is
+// one that no longer exists, and a new size is seen by asking for it.
+public struct Window {
+    i64 Hwnd;
+    u32 W;
+    u32 H;
+    bool Closed;        // the Close event was given
+    List<u8> Bgra;      // the frame, converted for GDI
+    u32 High;           // a UTF-16 high surrogate waiting for its pair
+
+    public static Window New() => new Window { Hwnd = 0, W = 0, H = 0, Closed = false, Bgra = List<u8>.New(), High = 0 };
+
+    // The client area's size, from the system.
+    void Measure(ref this, ref u32 w, ref u32 h) {
+        u8[16] rc;
+        unsafe { Call(W_GETCLIENTRECT, this.Hwnd, Ptr(&rc[0]), 0, 0, 0, 0); }
+        w = rc[8] as u32 | (rc[9] as u32) << 8 | (rc[10] as u32) << 16 | (rc[11] as u32) << 24;
+        h = rc[12] as u32 | (rc[13] as u32) << 8 | (rc[14] as u32) << 16 | (rc[15] as u32) << 24;
+    }
+}
+
+impl IWindow for Window {
+    bool Open(ref this, str title, u32 width, u32 height) {
+        if (this.Hwnd != 0) return false;
+        Call(W_SETPROCESSDPIAWARE, 0, 0, 0, 0, 0, 0);
+        i64 inst = Call(W_GETMODULEHANDLEW, 0, 0, 0, 0, 0, 0);
+        i64 user32 = 0;
+        i64 proc = 0;
+        unsafe {
+            user32 = Call(W_GETMODULEHANDLEW, Ptr(Wide("USER32.dll")), 0, 0, 0, 0, 0);
+            proc = Call(W_GETPROCADDRESS, user32, Ptr(CName("DefWindowProcW")), 0, 0, 0, 0);
+        }
+        if (proc == 0) return false;
+        *u8 className = Wide("EnvoWindow");
+        u8[80] wc;      // WNDCLASSEXW
+        Le32At(wc[0..80], 0, 80);
+        Le32At(wc[0..80], 4, 3);        // CS_HREDRAW | CS_VREDRAW
+        Le64At(wc[0..80], 8, proc as u64);
+        Le64At(wc[0..80], 24, inst as u64);
+        Le64At(wc[0..80], 40, Call(W_LOADCURSORW, 0, 32512, 0, 0, 0, 0) as u64);      // IDC_ARROW
+        unsafe {
+            Le64At(wc[0..80], 64, Ptr(className) as u64);
+            Call(W_REGISTERCLASSEXW, Ptr(&wc[0]), 0, 0, 0, 0, 0);     // already registered: fine
+        }
+        // the outer size that gives a width x height client area
+        u8[16] rc;
+        Le32At(rc[0..16], 8, width as u64);
+        Le32At(rc[0..16], 12, height as u64);
+        unsafe { Call(W_ADJUSTWINDOWRECT, Ptr(&rc[0]), WS_OVERLAPPEDWINDOW, 0, 0, 0, 0); }
+        i32 left = (rc[0] as u32 | (rc[1] as u32) << 8 | (rc[2] as u32) << 16 | (rc[3] as u32) << 24) as i32;
+        i32 top = (rc[4] as u32 | (rc[5] as u32) << 8 | (rc[6] as u32) << 16 | (rc[7] as u32) << 24) as i32;
+        i32 right = (rc[8] as u32 | (rc[9] as u32) << 8 | (rc[10] as u32) << 16 | (rc[11] as u32) << 24) as i32;
+        i32 bottom = (rc[12] as u32 | (rc[13] as u32) << 8 | (rc[14] as u32) << 16 | (rc[15] as u32) << 24) as i32;
+        i64 hwnd = 0;
+        unsafe {
+            hwnd = __wincall12(W_CREATEWINDOWEXW, 0, Ptr(className), Ptr(Wide(title)), WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0x80000000, 0x80000000, (right - left) as i64, (bottom - top) as i64, 0, 0, inst, 0);
+        }
+        if (hwnd == 0) return false;
+        this.Hwnd = hwnd;
+        this.Closed = false;
+        u32 w = 0;
+        u32 h = 0;
+        this.Measure(ref w, ref h);
+        this.W = w;
+        this.H = h;
+        return true;
+    }
+
+    bool IsOpen(ref this) => this.Hwnd != 0 && Call(W_ISWINDOW, this.Hwnd, 0, 0, 0, 0, 0) != 0;
+
+    u32 Width(ref this) => this.W;
+    u32 Height(ref this) => this.H;
+
+    Event Poll(ref this) {
+        if (this.Hwnd == 0) return Event.Nothing();
+        u8[48] msg;     // MSG
+        while (true) {
+            if (Call(W_ISWINDOW, this.Hwnd, 0, 0, 0, 0, 0) == 0) {
+                if (this.Closed) return Event.Nothing();
+                this.Closed = true;
+                return Event.Of(EventKind.Close, 0, 0, 0);
+            }
+            u32 w = 0;
+            u32 h = 0;
+            this.Measure(ref w, ref h);
+            if ((w != this.W || h != this.H) && w > 0 && h > 0) {
+                this.W = w;
+                this.H = h;
+                return Event.Of(EventKind.Resize, w as i32, h as i32, 0);
+            }
+            i64 got = 0;
+            unsafe { got = Call(W_PEEKMESSAGEW, Ptr(&msg[0]), 0, 0, 0, 1, 0); }    // PM_REMOVE
+            if (got == 0) return Event.Nothing();
+            unsafe {
+                Call(W_TRANSLATEMESSAGE, Ptr(&msg[0]), 0, 0, 0, 0, 0);
+                Call(W_DISPATCHMESSAGEW, Ptr(&msg[0]), 0, 0, 0, 0, 0);
+            }
+            u32 m = msg[8] as u32 | (msg[9] as u32) << 8 | (msg[10] as u32) << 16 | (msg[11] as u32) << 24;
+            u64 wp = Get64(msg[0..48], 16);
+            u64 lp = Get64(msg[0..48], 24);
+            i32 x = (lp & 0xFFFF) as u16 as i16 as i32;
+            i32 y = (lp >> 16 & 0xFFFF) as u16 as i16 as i32;
+            if (m == 0x100 || m == 0x104) return Event.Of(EventKind.KeyDown, 0, 0, wp as u32);
+            if (m == 0x101 || m == 0x105) return Event.Of(EventKind.KeyUp, 0, 0, wp as u32);
+            if (m == 0x102) {
+                u32 u = (wp & 0xFFFF) as u32;
+                if (u >= 0xD800 && u < 0xDC00) {
+                    this.High = u;
+                    continue;
+                }
+                if (u >= 0xDC00 && u < 0xE000) {
+                    if (this.High == 0) continue;
+                    u = 0x10000 + ((this.High - 0xD800) << 10) + (u - 0xDC00);
+                }
+                this.High = 0;
+                return Event.Of(EventKind.Char, 0, 0, u);
+            }
+            if (m == 0x200) return Event.Of(EventKind.MouseMove, x, y, 0);
+            if (m == 0x201) return Event.Of(EventKind.MouseDown, x, y, 1);
+            if (m == 0x202) return Event.Of(EventKind.MouseUp, x, y, 1);
+            if (m == 0x204) return Event.Of(EventKind.MouseDown, x, y, 2);
+            if (m == 0x205) return Event.Of(EventKind.MouseUp, x, y, 2);
+            if (m == 0x207) return Event.Of(EventKind.MouseDown, x, y, 3);
+            if (m == 0x208) return Event.Of(EventKind.MouseUp, x, y, 3);
+            if (m == 0x20A) return Event.Of(EventKind.Wheel, 0, 0, ((wp >> 16 & 0xFFFF) as u16 as i16 as i32) as u32);
+            // anything else was handled by the window procedure: look again
+        }
+        return Event.Nothing();
+    }
+
+    void Present(ref this, u8[] rgba, u32 width, u32 height) {
+        if (this.Hwnd == 0 || width == 0 || height == 0) return;
+        usize n = (width * height * 4) as usize;
+        if (rgba.Len < n) return;
+        if (this.Bgra.Len() != n) {
+            this.Bgra = List<u8>.New();
+            for (usize i = 0; i < n; i++) this.Bgra.Push(0);
+        }
+        mut u8[] px = this.Bgra.AsMutSlice();
+        for (usize i = 0; i < n; i += 4) {
+            px[i] = rgba[i + 2];
+            px[i + 1] = rgba[i + 1];
+            px[i + 2] = rgba[i];
+            px[i + 3] = 255;
+        }
+        u8[44] bmi;     // BITMAPINFO: a BITMAPINFOHEADER and no color table
+        Le32At(bmi[0..44], 0, 40);
+        Le32At(bmi[0..44], 4, width as u64);
+        Le32At(bmi[0..44], 8, (0 - height as i64) as u64);     // negative: rows from the top
+        bmi[12] = 1;        // planes
+        bmi[14] = 32;       // bits per pixel
+        i64 dc = Call(W_GETDC, this.Hwnd, 0, 0, 0, 0, 0);
+        if (dc == 0) return;
+        unsafe {
+            __wincall12(W_SETDIBITSTODEVICE, dc, 0, 0, width as i64, height as i64, 0, 0, 0, height as i64, Ptr(&this.Bgra.AsMutSlice()[0]), Ptr(&bmi[0]), 0);
+        }
+        Call(W_RELEASEDC, this.Hwnd, dc, 0, 0, 0, 0);
+    }
+
+    void SetTitle(ref this, str title) {
+        if (this.Hwnd == 0) return;
+        unsafe { Call(W_SETWINDOWTEXTW, this.Hwnd, Ptr(Wide(title)), 0, 0, 0, 0); }
+    }
+
+    void Close(ref this) {
+        if (this.Hwnd == 0) return;
+        Call(W_DESTROYWINDOW, this.Hwnd, 0, 0, 0, 0, 0);
+        this.Closed = true;
+        this.Hwnd = 0;
     }
 }

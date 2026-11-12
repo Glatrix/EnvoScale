@@ -1,6 +1,6 @@
 # Network (M7)
 
-> **Status:** M7, in progress. Decisions D40–D42 in [`PLAN.md`](../PLAN.md).
+> **Status:** M7, done. Decisions D40–D42 in [`PLAN.md`](../PLAN.md).
 
 ## The Net port (D40)
 

@@ -142,3 +142,57 @@ public interface ITerminal {
     // (negative: as long as it takes); 0 if none came.
     usize Read(ref this, mut u8[] into, i32 waitMs);
 }
+
+// What happened to a window.
+public enum EventKind {
+    None,           // nothing waiting
+    Close,          // the window was closed
+    Resize,         // the drawable area has a new size: Width, Height
+    KeyDown,        // a key went down (or repeats): Code is the key (Win32 virtual-key numbers)
+    KeyUp,          // a key went up: Code
+    Char,           // a character was typed: Code is its code point
+    MouseMove,      // the pointer moved: X, Y
+    MouseDown,      // a button went down: Code (1 left, 2 right, 3 middle), X, Y
+    MouseUp,        // a button went up: Code, X, Y
+    Wheel,          // the wheel turned: Code is the distance (120 a notch, up positive, as two's complement)
+}
+
+// One window event. Positions are pixels from the top left of the drawable area.
+public struct Event {
+    EventKind K;
+    i32 PX;
+    i32 PY;
+    u32 C;
+
+    public static Event Of(EventKind k, i32 x, i32 y, u32 code) => new Event { K = k, PX = x, PY = y, C = code };
+    public static Event Nothing() => new Event { K = EventKind.None, PX = 0, PY = 0, C = 0 };
+
+    public EventKind Kind(in this) => this.K;
+    public i32 X(in this) => this.PX;
+    public i32 Y(in this) => this.PY;
+    public u32 Code(in this) => this.C;
+    // The wheel's distance, signed.
+    public i32 Delta(in this) => this.C as i32;
+    public bool Is(in this, EventKind k) => this.K == k;
+}
+
+// A window on the desktop (PLAN D45): a title, a drawable area of pixels, and events.
+// The program draws into memory (envo.gfx) and presents whole frames.
+public interface IWindow {
+    // Opens the window with a drawable area of width x height pixels (a system may make
+    // a small window larger: Width and Height tell). False if this system cannot open
+    // one (no desktop, or windows not supported yet).
+    bool Open(ref this, str title, u32 width, u32 height);
+    // Is the window open (opened and not yet closed, by the program or the user)?
+    bool IsOpen(ref this);
+    // The drawable area's size in pixels.
+    u32 Width(ref this);
+    u32 Height(ref this);
+    // The next event, without waiting; EventKind.None when there is none.
+    Event Poll(ref this);
+    // Shows a frame: width x height pixels, RGBA, rows from the top.
+    void Present(ref this, u8[] rgba, u32 width, u32 height);
+    void SetTitle(ref this, str title);
+    // Closes the window.
+    void Close(ref this);
+}
