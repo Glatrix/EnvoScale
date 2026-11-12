@@ -112,6 +112,7 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D74 | **The editor core is UI-free**: `envo.edit` holds text buffers, cursors and selections, undo and search, tested without a window; `envo.ui`'s code editor draws and drives it. | §6 |
 | D75 | **Language intelligence through the language server**: `envo query` indexes a checked program (declarations, references, types and doc comments); `envo lsp` answers completion, hover, go-to-definition and symbols from the last good index of each package. Editors, the IDE included, use it over LSP. | §6 |
 | D76 | **The runtime's heap frees**: `__rt_alloc` takes blocks from per-size free lists (powers of two, 16 bytes to 1 MiB, each with a 16-byte header) and `__rt_free` returns them; memory stays zeroed when handed out, as before. Long-running programs (an IDE, a server) stop growing. Frees of pointers the heap did not hand out, or twice, are ignored. | §6 |
+| D77 | **The browser host yields through JSPI**: a windowed program keeps its blocking `while (w.IsOpen())` loop on every host. In a page, `envo.js` wraps its one import in `WebAssembly.Suspending` and starts the program through `WebAssembly.promising`, so a `Poll` that finds no event waits for the next animation frame and the page stays responsive. The compiler and the program are unchanged (no second import, no Asyncify). Where a browser lacks JSPI, `EnvoWeb.canYield()` is false and a page says so instead of freezing. | `adapters/interop/js/README.md` |
 
 ## 3. Open questions
 

@@ -1,0 +1,22 @@
+// The browser host under JSPI (test-wasm.js, where Node can turn it on): a program's loop
+// that never ends on its own gives the page its turn each idle poll, so a key the page
+// sends later still arrives, and Escape ends it.
+use ports.{IWindow, Event, EventKind};
+use platform;
+use alloc.text;
+
+var w = platform.Window();
+w.Open("loop", 2, 2);
+u32 idle = 0;
+List<u8> frame = List<u8>.New();
+for (usize i = 0; i < 16; i++) frame.Push(255);
+while (w.IsOpen()) {
+    Event e = w.Poll();
+    if (e.Is(EventKind.None)) {
+        idle++;
+        w.Present(frame.AsSlice(), 2, 2);
+        continue;
+    }
+    if (e.Is(EventKind.KeyDown) && e.Code() == 27) w.Close();
+}
+if (idle > 1) print("yielded to the page, then closed on Escape");

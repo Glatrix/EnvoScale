@@ -49,8 +49,9 @@ character and mouse event carries the modifier keys held (`Event.Mods`, `MOD_SHI
 `MOD_CTRL`, `MOD_ALT`, `MOD_META`). The codes match Win32's virtual keys, so the Windows
 adapter passes them through; other adapters translate. The Clipboard port
 (`ports.IClipboard`, `std.clipboard`) holds text: Windows' through `CF_UNICODETEXT`, the
-reference adapters' in memory. Linux (X11 selections) and the browser have none yet: an
-empty clipboard that keeps nothing.
+reference adapters' in memory, the browser host's within the page (and written to the
+system's where the browser allows). Linux (X11 selections, #167) has none yet: an empty
+clipboard that keeps nothing.
 
 The Win32 adapter needs no callback from Windows into Envo code. Its window class uses
 `DefWindowProcW` itself as the window procedure, so:

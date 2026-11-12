@@ -99,6 +99,71 @@ if (process.argv.length <= 3) {
 // envoc.wasm, under Node.js, rebuilds itself to the same bytes (the fixed point, D18, in
 // WebAssembly); and it compiles and runs a program in memory, as the website's sandbox
 // page does.
+// The browser host (M14.8): a windowed program on a stand-in canvas, with the page's
+// events queued as it opens. Node has no JSPI by default, so the program's polls do not
+// wait: it reads what is queued and goes on.
+async function pagePhase() {
+  const EnvoWeb = require('./envo.js');
+  const name = 'wasm the browser host (adapters/interop/js/window-page.envo)';
+  const prog = path.join(work, 'window-page.wasm');
+  const b = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', '--lib', root, path.join(__dirname, 'window-page.envo'), '-o', prog], { encoding: 'utf8' });
+  if (b.status !== 0) {
+    bad(name, `build failed: ${(b.stderr || '').slice(0, 400)}`);
+    return;
+  }
+  const listeners = {};
+  let pixels = null;
+  const canvas = {
+    width: 0, height: 0, tabIndex: -1, clientWidth: 0, clientHeight: 0,
+    addEventListener(type, f) { (listeners[type] = listeners[type] || []).push(f); },
+    removeEventListener(type, f) { listeners[type] = (listeners[type] || []).filter((g) => g !== f); },
+    focus() {},
+    getContext() {
+      return {
+        createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+        putImageData: (img) => { pixels = img.data; },
+      };
+    },
+  };
+  const fire = (type, e) => (listeners[type] || []).forEach((f) => f({ preventDefault() {}, ...e }));
+  let title = '';
+  let out = '';
+  const code = await EnvoWeb.run(fs.readFileSync(prog), {
+    canvas,
+    stdout: (x) => { out += new TextDecoder().decode(x); },
+    onTitle: (t) => { title = t; },
+    onOpen: () => {
+      fire('keydown', { key: 'A', code: 'KeyA', shiftKey: true });
+      fire('keydown', { key: 'ArrowLeft', code: 'ArrowLeft', ctrlKey: true });
+      fire('mousemove', { offsetX: 2, offsetY: 1 });
+      fire('mousedown', { button: 2, offsetX: 3, offsetY: 2 });
+      fire('wheel', { deltaY: -40, offsetX: 1, offsetY: 1 });
+      fire('keyup', { key: 'a', code: 'KeyA' });
+    },
+  });
+  const want = 'open 4x3\nkeydown 0 0 65 1\nchar 0 0 65 1\nkeydown 0 0 37 2\nmove 2 1 0 0\ndown 3 2 2 0\nwheel 1 1 120 0\nkeyup 0 0 65 0\nclipboard ok\nclosed\n';
+  if (code !== 0 || out !== want) bad(name, `exit ${code}, output:\n${out}`);
+  else if (!pixels || pixels.length !== 48 || pixels[4 * 5] !== 5 || pixels[4 * 5 + 1] !== 10 || pixels[4 * 5 + 3] !== 255) bad(name, 'the frame did not reach the canvas');
+  else if (title !== 'titled') bad(name, `title ${JSON.stringify(title)}`);
+  else if (Object.values(listeners).some((l) => l.length > 0)) bad(name, 'listeners left on the canvas after Close');
+  else pass++;
+
+  // under JSPI the loop yields to the page (where this Node can turn JSPI on)
+  const loopName = 'wasm the browser host yields under JSPI (window-loop.envo)';
+  const loop = path.join(work, 'window-loop.wasm');
+  const lb = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', '--lib', root, path.join(__dirname, 'window-loop.envo'), '-o', loop], { encoding: 'utf8' });
+  if (lb.status !== 0) {
+    bad(loopName, `build failed: ${(lb.stderr || '').slice(0, 400)}`);
+    return;
+  }
+  const lr = spawnSync(process.execPath, ['--experimental-wasm-jspi', path.join(__dirname, 'window-loop.js'), loop], { encoding: 'utf8', timeout: 60000 });
+  const lout = (lr.stdout || '').replace(/\r/g, '');
+  if (lr.status !== 0 && /bad option|unknown|not allowed/i.test(lr.stderr || '')) return;    // no such flag here
+  if (lout === 'no JSPI\n') return;
+  if (lr.status !== 0 || lout !== 'yielded to the page, then closed on Escape\n') bad(loopName, `exit ${lr.status}: ${lout}${(lr.stderr || '').slice(0, 400)}`);
+  else pass++;
+}
+
 async function compilerPhase() {
   const EnvoWeb = require('./envo.js');
   const compilerDir = path.join(root, 'compiler');
@@ -130,7 +195,10 @@ async function compilerPhase() {
 }
 
 (async () => {
-  if (process.argv.length <= 3) await compilerPhase();
+  if (process.argv.length <= 3) {
+    await pagePhase();
+    await compilerPhase();
+  }
   process.stdout.write(`wasm: ${pass} passed, ${fail} failed\n`);
   process.exitCode = fail === 0 ? 0 : 1;
 })();

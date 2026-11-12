@@ -3,10 +3,16 @@
 // functions are listed in compiler/runtime/wasm.envo, and runs it.
 //
 // Node.js:  node envo.js program.wasm [arguments…]
-// Browser:  const r = await EnvoWeb.run(bytes, { args, stdout, stderr });
+// Browser:  const r = await EnvoWeb.run(bytes, { args, stdout, stderr, canvas });
 //
 // Standard output and error go to callbacks (in Node, to the process's own); files open
 // through Node's fs where there is one. The program's exit code is the result of run.
+//
+// With a canvas, the program's Window port draws on it and gets its keys and pointer
+// (the browser host, PLAN D72, M14.8). A program's loop polls for events without end; in
+// a browser with JSPI (WebAssembly.Suspending), a poll that finds nothing waits for the
+// next animation frame, so the page stays alive. Without JSPI a windowed program would
+// hold the page: EnvoWeb.canYield() tells a page to say so instead of running it.
 'use strict';
 
 const EnvoWeb = (() => {
@@ -28,6 +34,9 @@ const EnvoWeb = (() => {
     const files = new Map();       // fd -> Node fd
     let nextFd = 3;
     let staged = new Uint8Array(0); // the last result too long to return (names, values)
+    const win = options.canvas ? canvasWindow(options.canvas, options) : null;
+    const yields = win !== null && canYield();
+    let clip = null;                // the clipboard, within the page
     // a path the program gave; "" is the working directory
     const text = (p, len) => new TextDecoder().decode(view().slice(Number(p), Number(p) + Number(len))) || '.';
     // an fs error as an error kind: 1 not found, 2 exists, 3 not empty, 4 denied, 5 invalid, 6 other
@@ -147,20 +156,164 @@ const EnvoWeb = (() => {
         case 19:                   // the working directory, staged
           staged = encoder.encode(options.cwd || (typeof process !== 'undefined' ? process.cwd() : '/'));
           return BigInt(staged.length);
+        case 20:                   // window open(title ptr, len, width, height): 1, or 0 for none
+          if (!win || win.isOpen()) return 0n;
+          win.open(new TextDecoder().decode(view().slice(n(a), n(a) + n(b))), n(c), n(d));
+          return 1n;
+        case 21: {                 // window poll(ptr): 1 and an event there, or 0
+          if (!win || !win.isOpen()) return 0n;
+          const e = win.next();
+          if (e) {
+            const v = new DataView(memory.buffer, n(a), 20);
+            e.forEach((x, i) => v.setInt32(4 * i, x, true));
+            return 1n;
+          }
+          // nothing: wait for the next frame, if the program can wait
+          if (yields) return new Promise((done) => win.frame(() => done(0n)));
+          return 0n;
+        }
+        case 22:                   // window present(ptr, width, height)
+          if (win && win.isOpen()) win.present(view().slice(n(a), n(a) + n(b) * n(c) * 4), n(b), n(c));
+          return 0n;
+        case 23:                   // window title(ptr, len)
+          if (win) win.title(new TextDecoder().decode(view().slice(n(a), n(a) + n(b))));
+          return 0n;
+        case 24:                   // window close
+          if (win) win.close();
+          return 0n;
+        case 25:                   // window size: width << 16 | height
+          return win ? BigInt(win.width()) * 65536n + BigInt(win.height()) : 0n;
+        case 26:                   // clipboard text: its length staged, or -1
+          if (clip === null) return -1n;
+          staged = encoder.encode(clip);
+          return BigInt(staged.length);
+        case 27:                   // clipboard set(ptr, len)
+          clip = new TextDecoder().decode(view().slice(n(a), n(a) + n(b)));
+          try {
+            if (typeof navigator !== 'undefined' && navigator.clipboard) navigator.clipboard.writeText(clip).catch(() => {});
+          } catch (e) { /* the page keeps its own copy */ }
+          return 1n;
         default:
           return -1n;
       }
     }
 
-    const { instance } = await WebAssembly.instantiate(bytes, { envo: { host } });
+    const imports = { envo: { host: yields ? new WebAssembly.Suspending(host) : host } };
+    const { instance } = await WebAssembly.instantiate(bytes, imports);
     memory = instance.exports.memory;
     try {
-      instance.exports._start();
+      if (yields) await WebAssembly.promising(instance.exports._start)();
+      else instance.exports._start();
       return 0;
     } catch (e) {
       if (e instanceof Exit) return e.code;
       throw e;
+    } finally {
+      if (win) win.close();
     }
+  }
+
+  // Whether a program can wait for the page (JSPI): windowed programs need it.
+  function canYield() {
+    return typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+  }
+
+  // The port's key codes (lib/ports: KEY_*) for KeyboardEvent.key and .code.
+  const KEYS = {
+    Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18, Escape: 27, ' ': 32,
+    PageUp: 33, PageDown: 34, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39,
+    ArrowDown: 40, Insert: 45, Delete: 46,
+  };
+  function keyCode(e) {
+    if (KEYS[e.key] !== undefined) return KEYS[e.key];
+    const c = e.code || '';
+    if (/^Key[A-Z]$/.test(c)) return c.charCodeAt(3);
+    if (/^Digit[0-9]$/.test(c)) return c.charCodeAt(5);
+    const f = /^F([0-9]+)$/.exec(e.key || '');
+    if (f && +f[1] >= 1 && +f[1] <= 12) return 111 + +f[1];
+    return 0;
+  }
+  const mods = (e) => (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+
+  // The Window port on a canvas: events as the port's (kind, x, y, code, mods), kinds
+  // numbered as ports.EventKind is: Close 1, Resize 2, KeyDown 3, KeyUp 4, Char 5,
+  // MouseMove 6, MouseDown 7, MouseUp 8, Wheel 9.
+  function canvasWindow(canvas, options) {
+    let open = false;
+    let queue = [];
+    const listeners = [];
+    const listen = (type, f) => {
+      canvas.addEventListener(type, f);
+      listeners.push([type, f]);
+    };
+    // pointer positions in the canvas's pixels, whatever size the page shows it at
+    const at = (e) => {
+      const sx = canvas.clientWidth ? canvas.width / canvas.clientWidth : 1;
+      const sy = canvas.clientHeight ? canvas.height / canvas.clientHeight : 1;
+      return [Math.floor((e.offsetX || 0) * sx), Math.floor((e.offsetY || 0) * sy)];
+    };
+    const button = (b) => (b === 0 ? 1 : b === 2 ? 2 : b === 1 ? 3 : 0);
+    const push = (...e) => queue.push(e);
+    const frame = options.frame || ((f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16)));
+    const win = {
+      isOpen: () => open,
+      width: () => canvas.width,
+      height: () => canvas.height,
+      open(title, w, h) {
+        canvas.width = w;
+        canvas.height = h;
+        if (canvas.tabIndex !== undefined && canvas.tabIndex < 0) canvas.tabIndex = 0;
+        open = true;
+        queue = [];
+        listen('keydown', (e) => {
+          const k = keyCode(e);
+          if (k) push(3, 0, 0, k, mods(e));
+          const ch = e.key && [...e.key].length === 1 && !e.ctrlKey && !e.metaKey ? e.key.codePointAt(0) : 0;
+          if (ch) push(5, 0, 0, ch, mods(e));
+          // keys the program takes are not the page's (Tab, arrows, Space, shortcuts)
+          if ((k || ch) && e.preventDefault) e.preventDefault();
+        });
+        listen('keyup', (e) => {
+          const k = keyCode(e);
+          if (k) push(4, 0, 0, k, mods(e));
+        });
+        listen('mousemove', (e) => push(6, ...at(e), 0, mods(e)));
+        listen('mousedown', (e) => {
+          if (canvas.focus) canvas.focus();
+          const b = button(e.button);
+          if (b) push(7, ...at(e), b, mods(e));
+        });
+        listen('mouseup', (e) => {
+          const b = button(e.button);
+          if (b) push(8, ...at(e), b, mods(e));
+        });
+        listen('wheel', (e) => {
+          if (e.deltaY) push(9, ...at(e), e.deltaY < 0 ? 120 : -120, mods(e));
+          if (e.preventDefault) e.preventDefault();
+        });
+        listen('contextmenu', (e) => e.preventDefault && e.preventDefault());
+        win.title(title);
+        if (options.onOpen) options.onOpen(canvas);
+      },
+      next: () => queue.shift(),
+      frame,
+      present(rgba, w, h) {
+        const g = canvas.getContext('2d');
+        const img = g.createImageData(w, h);
+        img.data.set(rgba);
+        g.putImageData(img, 0, 0);
+      },
+      title(t) {
+        if (options.onTitle) options.onTitle(t);
+      },
+      close() {
+        for (const [type, f] of listeners) canvas.removeEventListener(type, f);
+        listeners.length = 0;
+        open = false;
+        queue = [];
+      },
+    };
+    return win;
   }
 
   // A file system in memory, for a page (or a test): files maps paths to bytes, and the
@@ -223,7 +376,7 @@ const EnvoWeb = (() => {
     };
   }
 
-  return { run, memoryFs };
+  return { run, memoryFs, canYield };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = EnvoWeb;

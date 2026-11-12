@@ -4,7 +4,7 @@
 // there are none, and the program has its console, clock, entropy and arguments.
 namespace os.wasm;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, IClipboard, Event, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, IClipboard, Event, EventKind, IoError};
 
 // host functions past the runtime's (0-8)
 const i64 H_STAT = 9;           // (ptr, len): 0 nothing, 1 a file, 2 a directory
@@ -18,6 +18,14 @@ const i64 H_MONO = 16;          // nanoseconds, never going back
 const i64 H_RANDOM = 17;        // (ptr, len): random bytes from the host's generator
 const i64 H_GETENV = 18;        // (ptr, len): the value's length staged, or -1
 const i64 H_CWD = 19;           // the working directory's length staged
+const i64 H_WIN_OPEN = 20;      // (title ptr, len, width, height): 1, or 0 with no canvas
+const i64 H_WIN_POLL = 21;      // (ptr): 1 and the event (kind, x, y, code, mods as i32) there, or 0
+const i64 H_WIN_PRESENT = 22;   // (ptr, width, height): RGBA
+const i64 H_WIN_TITLE = 23;     // (ptr, len)
+const i64 H_WIN_CLOSE = 24;
+const i64 H_WIN_SIZE = 25;      // width << 16 | height
+const i64 H_CLIP_TEXT = 26;     // the clipboard's length staged, or -1
+const i64 H_CLIP_SET = 27;      // (ptr, len): 1
 
 i64 Ptr(*u8 p) {
     unsafe { return p as isize as i64; }
@@ -276,28 +284,85 @@ impl ITerminal for Terminal {
     usize Read(ref this, mut u8[] into, i32 waitMs) => 0;
 }
 
-// A page draws through the DOM or a canvas (envo.web, M9), not a window.
+// A window in a page is a canvas the page gives the host (envo.js, PLAN D72, M14.8): its
+// keys and pointer are the window's events, and frames are drawn on it. With no canvas
+// (Node.js, or a page that gave none) Open says no.
 public struct Window {
-    u8 Unused;
+    bool Live;
+    u32 W;
+    u32 H;
 
-    public static Window New() => new Window { Unused = 0 };
+    public static Window New() => new Window { Live = false, W = 0, H = 0 };
 }
+
+// ports.EventKind from the host's number for it.
+EventKind KindOf(i32 k) {
+    if (k == 1) return EventKind.Close;
+    if (k == 2) return EventKind.Resize;
+    if (k == 3) return EventKind.KeyDown;
+    if (k == 4) return EventKind.KeyUp;
+    if (k == 5) return EventKind.Char;
+    if (k == 6) return EventKind.MouseMove;
+    if (k == 7) return EventKind.MouseDown;
+    if (k == 8) return EventKind.MouseUp;
+    if (k == 9) return EventKind.Wheel;
+    return EventKind.None;
+}
+
+i32 I32At(u8[] b, usize at) => (b[at] as u32 | (b[at + 1] as u32 << 8) | (b[at + 2] as u32 << 16) | (b[at + 3] as u32 << 24)) as i32;
 
 impl IWindow for Window {
-    bool Open(ref this, str title, u32 width, u32 height) => false;
-    bool IsOpen(ref this) => false;
-    u32 Width(ref this) => 0;
-    u32 Height(ref this) => 0;
-    Event Poll(ref this) => Event.Nothing();
+    bool Open(ref this, str title, u32 width, u32 height) {
+        if (this.Live || width == 0 || height == 0) return false;
+        if (__hostcall(H_WIN_OPEN, StrPtr(title), title.Len as i64, width as i64, height as i64) == 0) return false;
+        this.Live = true;
+        i64 size = __hostcall(H_WIN_SIZE, 0, 0, 0, 0);
+        this.W = (size >> 16) as u32;
+        this.H = (size & 0xFFFF) as u32;
+        return true;
+    }
+
+    bool IsOpen(ref this) => this.Live;
+    u32 Width(ref this) => this.W;
+    u32 Height(ref this) => this.H;
+
+    Event Poll(ref this) {
+        if (!this.Live) return Event.Nothing();
+        u8[20] e;
+        i64 got = 0;
+        unsafe { got = __hostcall(H_WIN_POLL, Ptr(&e[0]), 0, 0, 0); }
+        if (got == 0) return Event.Nothing();
+        EventKind k = KindOf(I32At(e[0..20], 0));
+        i32 x = I32At(e[0..20], 4);
+        i32 y = I32At(e[0..20], 8);
+        u32 code = I32At(e[0..20], 12) as u32;
+        u32 mods = I32At(e[0..20], 16) as u32;
+        if (k == EventKind.Close) this.Live = false;
+        if (k == EventKind.Resize) {
+            this.W = x as u32;
+            this.H = y as u32;
+        }
+        return Event.Of(k, x, y, code).WithMods(mods);
+    }
+
     void Present(ref this, u8[] rgba, u32 width, u32 height) {
+        if (!this.Live || rgba.Len < (width * height * 4) as usize || rgba.Len == 0) return;
+        unsafe { __hostcall(H_WIN_PRESENT, Ptr(&rgba[0]), width as i64, height as i64, 0); }
     }
+
     void SetTitle(ref this, str title) {
+        if (this.Live) __hostcall(H_WIN_TITLE, StrPtr(title), title.Len as i64, 0, 0);
     }
+
     void Close(ref this) {
+        if (!this.Live) return;
+        __hostcall(H_WIN_CLOSE, 0, 0, 0, 0);
+        this.Live = false;
     }
 }
 
-// No clipboard yet: it comes with the browser host (M14.8). Text is always None and SetText says no.
+// The page's clipboard: text copied in the program stays in the page, and goes to the
+// system's clipboard where the browser lets a page write it.
 public struct Clipboard {
     bool Unused;
 
@@ -305,6 +370,11 @@ public struct Clipboard {
 }
 
 impl IClipboard for Clipboard {
-    string? Text(ref this) => None;
-    bool SetText(ref this, str text) => false;
+    string? Text(ref this) {
+        i64 n = __hostcall(H_CLIP_TEXT, 0, 0, 0, 0);
+        if (n < 0) return null;
+        return Some(Staged(n));
+    }
+
+    bool SetText(ref this, str text) => __hostcall(H_CLIP_SET, StrPtr(text), text.Len as i64, 0, 0) == 1;
 }
