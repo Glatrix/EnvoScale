@@ -1,5 +1,6 @@
 // expect-error: E0503 @ 5:1
-// [expr.slice.4] an array cannot change while a view of it is kept
+// [expr.slice.4] an array cannot change while a view of it is kept (used later)
 i64[3] a;
 i64[] v = a[0..2];
 a[0] = 1;
+i64 x = v[0];

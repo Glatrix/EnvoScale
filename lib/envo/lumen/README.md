@@ -5,7 +5,7 @@
 
 The Lumen design language's tokens as typed values: color roles for a light and a dark
 scheme, the type scale, the 4-pixel spacing scale, corner radii, control metrics and
-motion durations. [`tokens.eon`](tokens.eon) is the source; `Light()` and `Dark()` hold
+motion durations. [`tokens.envon`](tokens.envon) is the source; `Light()` and `Dark()` hold
 the same values, and the tests check that they agree. Every color pair the spec promises
 meets WCAG 2.2 AA contrast.
 
@@ -21,7 +21,7 @@ u32 accent = th.C.Accent;      // 0xRRGGBB
 ## Full-control door
 
 A theme is a plain value: change any field. `FromTokens(eonText, "light" | "dark")`
-reads tokens in `tokens.eon`'s shape over Lumen's own, so a program can ship its own
+reads tokens in `tokens.envon`'s shape over Lumen's own, so a program can ship its own
 token file. `Describe()` lists every value.
 
 ## Ports used

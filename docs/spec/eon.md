@@ -73,8 +73,9 @@ known, is a valid Envo initializer for that type: `[Derive(Eon)]` types round-tr
 through EON, and `Config c = { name = "x", port = 8080 };` is valid Envo when `Config`
 has those fields. Blocks are anonymous initializers; arrays are collection literals.
 
-*Open question (RFC):* whether Envo accepts the `key { … }` shorthand in initializers,
-or only `key = { … }`. EON accepts both.
+Envo initializers accept only `key = { … }`; EON accepts both forms
+([RFC 0007](../rfcs/0007-eon-block-shorthand.md)). A block written with the shorthand
+becomes an Envo initializer by inserting `=` before its `{`.
 
 ## 5. Canonical form
 

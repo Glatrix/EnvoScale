@@ -1,0 +1,6 @@
+// expect-error: E0503 @ 5:1
+// [own.borrow.2] a view used after a change: the borrow lasts to its last use
+string text = string.From("abc");
+str s = text.AsStr();
+text.Append("d");
+print(s);

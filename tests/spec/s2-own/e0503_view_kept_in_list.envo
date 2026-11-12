@@ -1,0 +1,11 @@
+// expect-error: E0503 @ 10:1
+// [own.borrow.2] a view given to a call that can change a local able to hold views (a
+// `ref` receiver such as List<str>.Push) is kept there, even past its own block
+string text = string.From("abc");
+List<str> items = List<str>.New();
+{
+    str s = text.AsStr();
+    items.Push(s);
+}
+text.Append("x");
+print(items.Get(0));

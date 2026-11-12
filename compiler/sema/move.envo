@@ -309,9 +309,10 @@ impl Checker {
     }
 
     // A change to place n (assignment, `++`, `ref`): not while a binding borrows its local.
-    void MvMutate(in this, in MoveCx x, u32 n) {
+    void MvMutate(ref this, in MoveCx x, u32 n) {
         u32 root = this.PlaceRoot(n);
         if (root == 0 || this.NSym(root) == 0) return;
+        this.NoteUse(this.NSym(root));
         if (x.IsFrozen(this.NSym(root))) this.BorrowError(this.NTok(root), this.NSym(root), E_BORROW_CONFLICT, "` is borrowed here (by a view, a `foreach` element or a `match` binding), so it cannot change");
     }
 
@@ -412,6 +413,7 @@ impl Checker {
 
     // A use of the whole of local s at node n; move: the use takes ownership.
     void UseLocal(ref this, ref MoveCx x, u32 n, u32 s, bool move) {
+        this.NoteUse(s);
         Sym sym = this.SymAt(s);
         u32 tok = this.NTok(n);
         u8 st = x.PlaceState(s, 0);
@@ -432,6 +434,7 @@ impl Checker {
     // A use of field k of local s, through member node top; move: the field is taken;
     // direct: the use is of top itself, not of a field inside it.
     void UseField(ref this, ref MoveCx x, u32 top, u32 s, u32 k, bool move, bool direct) {
+        this.NoteUse(s);
         Sym sym = this.SymAt(s);
         u32 tok = this.NTok(top);
         u8 st = x.PlaceState(s, 0);
@@ -608,8 +611,16 @@ impl Checker {
                 this.MvExpr(ref x, obj, byValue);
             }
             u32 p = this.FirstParam(cs);
+            // the locals this call can change that can hold views ([own.borrow.2]): a value
+            // that views a local, given to the call, may be kept in them
+            List<u32> keepers = List<u32>.New();
+            if (fs.Flags & SF_METHOD != 0 && fs.Flags & SF_STATIC == 0 && fs.Flags & SF_RECV_REF != 0 && this.NKind(node.A) == NK_MEMBER) this.AddKeeper(ref keepers, this.NodeAt(node.A).A);
+            u32 a0 = a;
             while (a != 0) {
-                if (this.NodeAt(p).Flags & NF_REF != 0) this.MvMutate(x, a);
+                if (this.NodeAt(p).Flags & NF_REF != 0) {
+                    this.MvMutate(x, a);
+                    this.AddKeeper(ref keepers, a);
+                }
                 bool take = this.NodeAt(p).Flags & (NF_IN | NF_REF) == 0;
                 // [view.4] a `mut T[]` passed to a `mut T[]` parameter is reborrowed
                 if (this.IsMutView(this.NType(p)) && this.IsMutView(this.NType(a))) take = false;
@@ -619,6 +630,21 @@ impl Checker {
                 x.DirectArg = outer;
                 a = this.NNext(a);
                 p = this.NNext(p);
+            }
+            if (keepers.Len() > 0) {
+                a = a0;
+                while (a != 0) {
+                    u32 r = this.ViewOfLocal(x, a);
+                    if (r != 0) {
+                        foreach (var keeper in keepers.AsSlice()) {
+                            if (keeper != r) {
+                                x.ViewLocals.Push(keeper);
+                                x.ViewLocals.Push(r);
+                            }
+                        }
+                    }
+                    a = this.NNext(a);
+                }
             }
             return;
         }
@@ -674,6 +700,8 @@ impl Checker {
         Node node = this.NodeAt(n);
         u16 k = node.Kind;
         if (x.St.Dead) return;      // unreachable code moves nothing
+        this.MvStamp++;
+        if (this.MvEarly) this.EndDeadBorrows(ref x);
         if (k == NK_BLOCK) {
             u32 s = node.A;
             while (s != 0) {
@@ -738,9 +766,10 @@ impl Checker {
             x.St = after;
             return;
         }
+        if (k == NK_VAR && this.NSym(n) != 0) this.NoteDecl(this.NSym(n));
         if (k == NK_VAR && this.NSym(n) != 0 && this.SymAt(this.NSym(n)).Flags & SF_BYREF != 0) {
             // [own.borrow.4] a local that borrows a place reads it, and the place's local
-            // may not change or move until the block ends (M3.10)
+            // may not change or move until the local's last use (EndDeadBorrows)
             u32 s = this.NSym(n);
             this.MvExpr(ref x, node.B, false);
             x.PlaceReset(s);
@@ -830,6 +859,18 @@ impl Checker {
     }
 
     void MvLoopParts(ref this, ref MoveCx x, u32 cond, u32 body, u32 step, bool forever) {
+        u32 loopStart = this.MvStamp;
+        this.MvLoopRounds(ref x, cond, body, step, forever);
+        // a local from before the loop that the loop uses is used until the loop ends: the
+        // next round uses it again
+        if (this.MvRecord) {
+            for (usize s = 0; s < this.MvLast.Len(); s++) {
+                if (this.MvLast.Get(s) > loopStart && this.DeclStamp(s as u32) <= loopStart) this.MvLast.Set(s, this.MvStamp);
+            }
+        }
+    }
+
+    void MvLoopRounds(ref this, ref MoveCx x, u32 cond, u32 body, u32 step, bool forever) {
         MoveSnap entry = x.St.Copy();
         MoveSnap head = entry.Copy();
         MoveSnap exit = MoveSnap.DeadEnd();
@@ -853,6 +894,14 @@ impl Checker {
 
     // The move check of function symbol s (its body is checked; its bounds are current).
     void MoveCheckFn(ref this, u32 s) {
+        this.MvBegin();
+        this.MoveCheckFnPass(s);
+        this.MvSecond();
+        this.MoveCheckFnPass(s);
+        this.MvEnd();
+    }
+
+    void MoveCheckFnPass(ref this, u32 s) {
         Sym sym = this.SymAt(s);
         Node fn = this.NodeAt(sym.Node);
         MoveCx x = MoveCx.New();
@@ -862,11 +911,134 @@ impl Checker {
 
     // The move check of the top-level statements, in order.
     void MoveCheckMain(ref this, u32 first) {
+        this.MvBegin();
+        this.MoveCheckMainPass(first);
+        this.MvSecond();
+        this.MoveCheckMainPass(first);
+        this.MvEnd();
+    }
+
+    void MoveCheckMainPass(ref this, u32 first) {
         MoveCx x = MoveCx.New();
         u32 n = first;
         while (n != 0) {
             if (!NodeIsItem(this.NKind(n))) this.MvStmt(ref x, n);
             n = this.NNext(n);
+        }
+    }
+
+    // ------------------------------------------------------------------ last uses
+    // A borrow held in a local (a view, or a local that borrows a place, [own.borrow.4])
+    // ends at the local's last use rather than at the end of its block ([own.borrow.2]).
+    // The move check runs twice over a function: the first pass, quiet, numbers the
+    // statements in the order it visits them (MvStamp) and notes where each local is used
+    // last; the second visits them in the same order and ends a borrow before the first
+    // statement after its holder's last use. A use inside a loop lasts to the loop's end,
+    // since the next round may use the local again; a local that a lambda captures, or that
+    // another kept borrow rests on, keeps its borrow to the end of its block.
+
+    void MvBegin(ref this) {
+        this.MvQuiet = true;
+        this.MvRecord = true;
+        this.MvEarly = false;
+        this.MvStamp = 0;
+        this.MvLast = List<u32>.New();
+        this.MvDecl = List<u32>.New();
+    }
+
+    void MvSecond(ref this) {
+        this.MvQuiet = false;
+        this.MvRecord = false;
+        this.MvEarly = true;
+        this.MvStamp = 0;
+    }
+
+    void MvEnd(ref this) {
+        this.MvEarly = false;
+    }
+
+    void NoteUse(ref this, u32 s) {
+        if (!this.MvRecord) return;
+        while (this.MvLast.Len() <= s as usize) this.MvLast.Push(0);
+        if (this.MvLast.Get(s as usize) < this.MvStamp) this.MvLast.Set(s as usize, this.MvStamp);
+    }
+
+    void NoteDecl(ref this, u32 s) {
+        if (!this.MvRecord) return;
+        while (this.MvDecl.Len() <= s as usize) this.MvDecl.Push(0);
+        this.MvDecl.Set(s as usize, this.MvStamp);
+    }
+
+    u32 DeclStamp(in this, u32 s) {
+        if (s as usize >= this.MvDecl.Len()) return 0;
+        return this.MvDecl.Get(s as usize);
+    }
+
+    u32 LastUse(in this, u32 s) {
+        if (s as usize >= this.MvLast.Len()) return 0;
+        return this.MvLast.Get(s as usize);
+    }
+
+    // Is local s captured by any lambda?
+    bool Captured(in this, u32 s) {
+        foreach (var c in this.Captures.AsSlice()) {
+            if (c == s) return true;
+        }
+        return false;
+    }
+
+    // Notes the local at the root of place n as one a call may store views in, if its type
+    // can hold them.
+    void AddKeeper(ref this, ref List<u32> keepers, u32 n) {
+        u32 root = this.PlaceRoot(n);
+        if (root == 0 || this.NSym(root) == 0) return;
+        u32 s = this.NSym(root);
+        if (this.SymKind(s) != SK_LOCAL || !this.CanKeepViews(this.SymAt(s).Type)) return;
+        keepers.Push(s);
+    }
+
+    // Can a value of type t keep a view: hold a borrow itself, or be a generic instance
+    // (a List<str>, a Map<K, str>) whose type arguments can, through its storage? A bare
+    // type parameter is not counted: generic code that fills a buffer through `ref T`
+    // (a terminal's Read) would otherwise freeze it for good. Its instances are checked
+    // where they are concrete.
+    bool CanKeepViews(ref this, u32 t) {
+        Type ty = this.TypeAt(t);
+        if (ty.Kind == TYK_PARAM) return false;
+        if (this.HoldsBorrow(t)) return true;
+        if (ty.Kind == TYK_PTR) return this.CanKeepViews(ty.Elem);
+        if (ty.Kind != TYK_STRUCT && ty.Kind != TYK_UNION) return false;
+        for (u32 i = 0; i < ty.NArgs; i++) {
+            if (this.CanKeepViews(this.EnvGet(ty.Args, i))) return true;
+        }
+        return false;
+    }
+
+    // Ends the borrows whose holders are not used from here on.
+    void EndDeadBorrows(ref this, ref MoveCx x) {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            usize i = 0;
+            while (i < x.ViewLocals.Len()) {
+                u32 holder = x.ViewLocals.Get(i);
+                bool live = this.LastUse(holder) >= this.MvStamp || this.Captured(holder);
+                if (!live) {
+                    // another kept borrow resting on this holder keeps it
+                    for (usize j = 0; j < x.ViewLocals.Len(); j += 2) {
+                        if (j != i && x.ViewLocals.Get(j + 1) == holder) live = true;
+                    }
+                }
+                if (live) {
+                    i += 2;
+                    continue;
+                }
+                usize last = x.ViewLocals.Len() - 2;
+                for (usize k = i; k < last; k++) x.ViewLocals.Set(k, x.ViewLocals.Get(k + 2));
+                x.ViewLocals.Pop();
+                x.ViewLocals.Pop();
+                changed = true;
+            }
         }
     }
 

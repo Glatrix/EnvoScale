@@ -1,0 +1,8 @@
+// expect-error: E0503 @ 7:1
+// [own.borrow.2] a view a lambda captures is borrowed until the end of its block: the
+// lambda may run later
+string text = string.From("abc");
+str v = text.AsStr();
+var f = () => v.Len;
+text.Append("x");
+usize k = f();

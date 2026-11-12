@@ -1,0 +1,34 @@
+// Borrows held in locals end at their last use ([own.borrow.2]; issue #79): a view or a
+// local that borrows a place frees what it borrows after its last use, not at the end of
+// its block. A use in a loop lasts to the end of the loop.
+// stage1-error: E0503 (Stage 1 keeps such borrows to the end of the block)
+// expect: abc
+// expect: abcd
+// expect: first was a
+// expect: three names
+// expect: looped over three bytes
+// expect: abcdxyz
+string text = string.From("abc");
+str s = text.AsStr();
+print(s);
+text.Append("d");               // s is not used again: text may change
+print(text.AsStr());
+
+List<string> names = List<string>.New();
+names.Push(string.From("a"));
+names.Push(string.From("b"));
+string[] all = names.AsSlice();        // a view of names
+var first = all[0];                     // borrows an element of it
+write(1, "first was ");
+print(first.AsStr());
+names.Push(string.From("c"));           // neither is used again
+if (names.Len() == 3) print("three names");
+
+str v = text.AsStr();
+u32 n = 0;
+for (usize i = 0; i < 3; i++) {
+    if (v[i] != 0) n++;                 // v is used in every round
+}
+text.Append("xyz");                     // after the loop, v is done
+if (n == 3) print("looped over three bytes");
+print(text.AsStr());

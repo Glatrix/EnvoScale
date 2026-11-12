@@ -924,6 +924,20 @@ function Invoke-Test {
     $sbText = ''
     if (Test-Path -LiteralPath $sb) { $sbText = [IO.File]::ReadAllText($sb) }
     if ($r.Code -eq 0 -and $sbText -match '"spdxVersion":\s*"SPDX-2.3"' -and $sbText -match '"name":\s*"greet"' -and $sbText.Contains('2025-11-12T00:00:00Z')) { Pass 'envo build --sbom' } else { Bad 'envo build --sbom' "exit $($r.Code): $($r.Err.Trim())" }
+    # releases (docs\guides\offline-install.md): envo archive gives the same bytes on every
+    # OS (the digest is pinned in both scripts); envo sign and envo verify
+    $RelTarSha = 'edfd900569a71a7c78d7ac53a36d0e885411c10e3591f9f66b07a76ceed1128b'
+    $env:SOURCE_DATE_EPOCH = '1762905600'
+    $r = Invoke-Tool $envo @('archive', 'pk/greet', 'pk/greet.tar') $envoRun
+    Remove-Item Env:SOURCE_DATE_EPOCH
+    $relTar = Join-Path $pk 'greet.tar'
+    $relSha = ''
+    if (Test-Path -LiteralPath $relTar) { $relSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $relTar).Hash.ToLowerInvariant() }
+    if ($r.Code -eq 0 -and $relSha -eq $RelTarSha) { Pass 'envo archive (reproducible)' } else { Bad 'envo archive (reproducible)' "exit $($r.Code): $relSha $($r.Err.Trim())" }
+    $r1 = Invoke-Tool $envo @('sign', 'pk/greet.tar', '--key', 'pk/publisher.key') $envoRun
+    $r2 = Invoke-Tool $envo @('verify', 'pk/greet.tar', '--key', $pub) $envoRun
+    $r = Invoke-Tool $envo @('verify', 'pk/greet.tar', '--key', $other) $envoRun
+    if ($r1.Code -eq 0 -and $r2.Code -eq 0 -and $r.Code -eq 1) { Pass 'envo sign, envo verify' } else { Bad 'envo sign, envo verify' "exit $($r1.Code), $($r2.Code), $($r.Code): $($r1.Err.Trim()) $($r2.Err.Trim())" }
     # fuzz targets (tests\fuzz): each parser of untrusted input takes a few hundred fuzzed
     # inputs without a panic
     Say 'fuzz targets: tests/fuzz, 300 runs each'
@@ -1165,15 +1179,40 @@ function Invoke-Check {
     Say "check: ok ($dirs layout folders, $entries gallery programs, no lib->adapters imports)"
 }
 
+# ------------------------------------------------------------------- dist
+# dist: the release archive (docs/guides/offline-install.md); the same bytes as bootstrap.sh's.
+function Invoke-Dist {
+    Invoke-Build
+    $v = ([regex]::Match([IO.File]::ReadAllText((Join-Path $Root 'tools\envo\main.envo')), 'const str ENVO_VERSION = "([^"]*)"')).Groups[1].Value
+    $dist = Join-Path $Root 'build\dist'
+    if (Test-Path -LiteralPath $dist) { Remove-Item -Recurse -Force $dist }
+    $top = Join-Path $dist "envoscale-$v"
+    New-Item -ItemType Directory -Force (Join-Path $top 'bin') | Out-Null
+    foreach ($f in @('build\envo\envo', 'build\envo\envo.exe', 'build\stage2\envoc', 'build\stage2\envoc.exe')) { Copy-Item (Join-Path $Root $f) (Join-Path $top 'bin') }
+    foreach ($d in @('lib', 'adapters', 'docs', 'LICENSES')) { Copy-Item -Recurse (Join-Path $Root $d) (Join-Path $top $d) }
+    foreach ($f in @('LICENSE', 'LICENSING.md', 'README.md', 'SECURITY.md')) { Copy-Item (Join-Path $Root $f) $top }
+    $env:SOURCE_DATE_EPOCH = '0'
+    $r = Invoke-Tool (Join-Path $Root 'build\envo\envo.exe') @('archive', "envoscale-$v", "envoscale-$v.tar") $dist
+    Remove-Item Env:SOURCE_DATE_EPOCH
+    if ($r.Code -ne 0) { Fail "envo archive failed: $($r.Err.Trim())" }
+    $tar = Join-Path $dist "envoscale-$v.tar"
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tar).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS'), "$hash  envoscale-$v.tar`n", (New-Object System.Text.UTF8Encoding($false)))
+    Say "dist      build\dist\envoscale-$v.tar"
+    Say "          sha256 $hash"
+}
+
 switch ($Command) {
     'build' { Invoke-Build }
+    'dist'  { Invoke-Dist }
     'test'  { Invoke-Test }
     'fixedpoint' { Invoke-FixedPoint }
     'check' { Invoke-Check }
     'clean' { if (Test-Path -LiteralPath (Join-Path $Root 'build')) { Remove-Item -Recurse -Force (Join-Path $Root 'build') }; Say 'removed build/' }
     default {
-        Say 'usage: .\bootstrap.ps1 <build|test|fixedpoint|check|clean|help>'
-        Say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md), then build Stage 1'
+        Say 'usage: .\bootstrap.ps1 <build|test|fixedpoint|check|dist|clean|help>'
+        Say '  build   assemble Stage 0 (with NASM, or the hex seed in bootstrap\seed without it), then build Stages 1 and 2'
+        Say '  dist    build, then the release archive build\dist\envoscale-<version>.tar and SHA256SUMS'
         Say '  test    build, then run the Stage 0 and Stage 1 tests'
         Say '  fixedpoint  build, then Stage 2 by itself twice at -O2 (build\stage2b, build\stage2c); they must match'
         Say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'

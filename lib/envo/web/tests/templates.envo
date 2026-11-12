@@ -46,8 +46,8 @@ void Yes(str label, bool v) {
 
 string css = templates.Css(lumen.Light(), lumen.Dark());
 write(1, "css:");
-Yes(" light accent", Has(css.AsStr(), "--accent: #0a66d8;"));
-Yes(", dark accent", Has(css.AsStr(), "--accent: #4c9bff;"));
+Yes(" light accent", Has(css.AsStr(), "--accent: #0a64d4;"));
+Yes(", dark accent", Has(css.AsStr(), "--accent: #60a6ff;"));
 Yes(", focus ring", Has(css.AsStr(), ":focus-visible"));
 Yes(", reduced motion", Has(css.AsStr(), "prefers-reduced-motion"));
 print("");

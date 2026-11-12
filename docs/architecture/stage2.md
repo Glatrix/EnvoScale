@@ -100,12 +100,26 @@ still gives:
   taking the value would move out of a borrow (an array element, an element of a shared
   view, a value behind an `in` or `ref` local), binds `x` as a read-only borrow, as a
   `foreach` element is ([own.borrow.4]). Lowering makes `x` the place's address. The
-  place's local cannot change or move until `x`'s block ends (`s2-own/`). That is
-  lexical, not flow-sensitive, so it accepts less than [own.borrow.2] allows. An element
-  of a `mut T[]` is not borrowed this way, since the view could change it.
+  place's local cannot change or move until `x`'s last use. An element of a `mut T[]` is
+  not borrowed this way, since the view could change it.
 
-Still to come: inferring `once fn` from the body ([fn.type.2]), and making borrows held
-in locals end at their last use instead of at the end of the block.
+- **Borrows end at their last use** ([own.borrow.2], issue #79). A view or a borrowing
+  local frees what it borrows after its last use, not at the end of its block. The move
+  check runs twice over each function: a quiet first pass numbers the statements and
+  notes each local's last use; the second ends a borrow before the first statement after
+  it. A use inside a loop lasts to the end of the loop; a local a lambda captures, or one
+  another kept borrow rests on, keeps its borrow to the end of its block
+  (`s2-run/borrow_last_use.envo`, `s2-own/e0503_view_*.envo`).
+- **Views kept by calls.** A value that views a local, passed to a call that can change
+  a local able to hold views (a `ref` receiver or `ref` argument of a type that holds
+  borrows, or a generic instance such as `List<str>` whose type arguments do), is kept
+  there: that local now views it (`s2-own/e0503_view_kept_in_list.envo`). Before M13 a
+  view pushed into a list declared in an outer block could outlive its source. A bare
+  type parameter is not counted (generic code that fills a buffer through `ref T` would
+  otherwise never compile), so a view passed into a `ref T` inside generic code is not
+  tracked yet: a known gap, closed when instances are checked one by one.
+
+Still to come: inferring `once fn` from the body ([fn.type.2]).
 
 ## EIR (M3.6)
 

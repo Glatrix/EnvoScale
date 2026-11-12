@@ -948,6 +948,17 @@ EOF_ERR
     SOURCE_DATE_EPOCH=1762905600 envo_do build --sbom pk/app
     sb="$erun/pk/app/build/app$(host_suffix).spdx.json"
     if [ "$rc" -eq 0 ] && [ -f "$sb" ] && grep -q '"spdxVersion": *"SPDX-2.3"' "$sb" && grep -q '"name": *"greet"' "$sb" && grep -q '2025-11-12T00:00:00Z' "$sb"; then pass; else bad 'envo build --sbom' "exit $rc: $(cat "$TMP/err")"; fi
+    # releases (docs/guides/offline-install.md): envo archive gives the same bytes on every
+    # OS (the digest is pinned in both scripts); envo sign and envo verify
+    REL_TAR_SHA=edfd900569a71a7c78d7ac53a36d0e885411c10e3591f9f66b07a76ceed1128b
+    SOURCE_DATE_EPOCH=1762905600 envo_do archive pk/greet pk/greet.tar
+    if [ "$rc" -eq 0 ] && [ "$(sha256 "$erun/pk/greet.tar")" = "$REL_TAR_SHA" ]; then pass; else bad 'envo archive (reproducible)' "exit $rc: $(sha256 "$erun/pk/greet.tar") $(cat "$TMP/err")"; fi
+    envo_do sign pk/greet.tar --key pk/publisher.key
+    src=$rc
+    envo_do verify pk/greet.tar --key "$pub"
+    vrc=$rc
+    envo_do verify pk/greet.tar --key "$other"
+    if [ "$src" -eq 0 ] && [ "$vrc" -eq 0 ] && [ "$rc" -eq 1 ]; then pass; else bad 'envo sign, envo verify' "exit $src, $vrc, $rc: $(cat "$TMP/err")"; fi
     # fuzz targets (tests/fuzz): each parser of untrusted input takes a few hundred fuzzed
     # inputs without a panic
     say 'fuzz targets: tests/fuzz, 300 runs each'
@@ -1246,16 +1257,38 @@ do_compare() {
     [ "$differ" -eq 0 ] || fail "the builds are not byte-identical"
 }
 
+# ------------------------------------------------------------------- dist
+# dist: the release archive (docs/guides/offline-install.md): build/dist/envoscale-<v>.tar
+# with bin/ (envo and envoc for both OSes), lib/, adapters/, docs/ and the licenses, packed
+# reproducibly by `envo archive`, and SHA256SUMS. Signing it is the release manager's step
+# (`envo sign`), with the project's key.
+do_dist() {
+    do_build
+    v=$(sed -n 's/^const str ENVO_VERSION = "\(.*\)";.*/\1/p' "$ROOT/tools/envo/main.envo" | tr -d '\r')
+    dist="$ROOT/build/dist"
+    rm -rf "$dist"
+    mkdir -p "$dist/envoscale-$v/bin"
+    cp "$ROOT/build/envo/envo" "$ROOT/build/envo/envo.exe" "$BUILD2/envoc" "$BUILD2/envoc.exe" "$dist/envoscale-$v/bin/"
+    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/docs" "$ROOT/LICENSES" "$dist/envoscale-$v/"
+    cp "$ROOT/LICENSE" "$ROOT/LICENSING.md" "$ROOT/README.md" "$ROOT/SECURITY.md" "$dist/envoscale-$v/"
+    (cd "$dist" && SOURCE_DATE_EPOCH=0 "$ROOT/build/envo/envo$(host_suffix)" archive "envoscale-$v" "envoscale-$v.tar") || fail "envo archive failed"
+    (cd "$dist" && printf '%s  %s\n' "$(sha256 "envoscale-$v.tar")" "envoscale-$v.tar" > SHA256SUMS)
+    say "dist      build/dist/envoscale-$v.tar"
+    say "          sha256 $(sha256 "$dist/envoscale-$v.tar")"
+}
+
 case "${1:-help}" in
     build) do_build ;;
+    dist)  do_dist ;;
     compare) shift; do_compare "$@" ;;
     fixedpoint) do_fixedpoint ;;
     test)  do_test ;;
     check) do_check ;;
     clean) rm -rf "$ROOT/build"; say 'removed build/' ;;
     help|*)
-        say 'usage: ./bootstrap.sh <build|test|fixedpoint|check|clean|help>'
-        say '  build   assemble Stage 0 (needs NASM; see adapters/bootstrap/nasm/README.md), then build Stage 1'
+        say 'usage: ./bootstrap.sh <build|test|fixedpoint|check|dist|clean|help>'
+        say '  build   assemble Stage 0 (with NASM, or the hex seed in bootstrap/seed without it), then build Stages 1 and 2'
+        say '  dist    build, then the release archive build/dist/envoscale-<version>.tar and SHA256SUMS'
         say '  test    build, then run the Stage 0 and Stage 1 tests'
         say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
         say '  fixedpoint  build, then Stage 2 by itself twice at -O2 (build/stage2b, build/stage2c); they must match'

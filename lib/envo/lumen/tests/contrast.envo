@@ -1,0 +1,64 @@
+// envo.lumen meets WCAG 2.2 AA contrast (docs/lumen/README.md, principle 3): every text
+// color reaches 4.5:1 on every surface, control edges 3:1, and text on the accent 4.5:1,
+// in both schemes. Contrast is (L1 + 0.05) / (L2 + 0.05) of the colors' relative
+// luminances (sRGB).
+// expect: light: 30 pairs meet AA
+// expect: dark: 30 pairs meet AA
+use envo.lumen;
+use core.math as cm;
+use alloc.text;
+
+f64 Channel(u32 c) {
+    f64 v = c as f64 / 255.0;
+    if (v <= 0.04045) return v / 12.92;
+    return cm.PowF((v + 0.055) / 1.055, 2.4);
+}
+
+f64 Luminance(u32 rgb) => 0.2126 * Channel((rgb >> 16) & 255) + 0.7152 * Channel((rgb >> 8) & 255) + 0.0722 * Channel(rgb & 255);
+
+f64 Contrast(u32 a, u32 b) {
+    f64 la = Luminance(a);
+    f64 lb = Luminance(b);
+    if (la < lb) return (lb + 0.05) / (la + 0.05);
+    return (la + 0.05) / (lb + 0.05);
+}
+
+// One pair; counts it, and reports it when it falls short.
+void Meets(ref u32 count, str scheme, str what, u32 fg, u32 bg, f64 need) {
+    count++;
+    if (Contrast(fg, bg) >= need) return;
+    write(1, scheme);
+    write(1, ": ");
+    write(1, what);
+    write(1, " is ");
+    write(1, text.Float(Contrast(fg, bg), 2).AsStr());
+    write(1, ":1, under ");
+    print(text.Float(need, 1).AsStr());
+}
+
+void Check(str scheme, in lumen.Theme t) {
+    u32 count = 0;
+    List<u32> surfaces = List<u32>.New();
+    surfaces.Push(t.C.Background);
+    surfaces.Push(t.C.Surface);
+    surfaces.Push(t.C.SurfaceRaised);
+    surfaces.Push(t.C.SurfacePressed);
+    foreach (var s in surfaces.AsSlice()) {
+        Meets(ref count, scheme, "text", t.C.Text, s, 4.5);
+        Meets(ref count, scheme, "secondary text", t.C.TextSecondary, s, 4.5);
+        Meets(ref count, scheme, "accent", t.C.Accent, s, 4.5);
+        Meets(ref count, scheme, "danger", t.C.Danger, s, 4.5);
+        Meets(ref count, scheme, "success", t.C.Success, s, 4.5);
+        Meets(ref count, scheme, "warning", t.C.Warning, s, 4.5);
+        Meets(ref count, scheme, "control edge", t.C.ControlEdge, s, 3.0);
+    }
+    Meets(ref count, scheme, "text on the accent", t.C.OnAccent, t.C.Accent, 4.5);
+    Meets(ref count, scheme, "text on the hovered accent", t.C.OnAccent, t.C.AccentHover, 4.5);
+    write(1, scheme);
+    write(1, ": ");
+    write(1, text.Uint(count as u64).AsStr());
+    print(" pairs meet AA");
+}
+
+Check("light", lumen.Light());
+Check("dark", lumen.Dark());

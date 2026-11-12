@@ -1,0 +1,189 @@
+// Releases and offline installation (issues #41, #38): `envo archive` packs a folder into a
+// reproducible tar file (the same bytes for the same files, on every OS), `envo sign` signs
+// a file with an Ed25519 key, and `envo verify` checks a file against a signature and a
+// public key. A release is an archive, its SHA-256 and its signature; installing it needs
+// no network (docs/guides/offline-install.md).
+use std.env;
+use std.fs;
+use std.path;
+use core.text as ct;
+use core.fmt;
+use alloc.text;
+use envo.crypto;
+use envo.crypto.curve25519;
+use ports.{IoError};
+
+// `envo archive <folder> <file.tar>`: the folder's files (sorted by path, under the
+// folder's name) as a POSIX ustar archive with fixed metadata: mode 0644, or 0755 for
+// programs (files in a bin/ folder, or ending .exe or .sh), owner 0, and the time
+// SOURCE_DATE_EPOCH (or 0).
+i32 CmdEnvoArchive(usize from) {
+    if (from + 2 != env.ArgCount()) EnvoFail("usage: envo archive <folder> <file.tar>", 2);
+    str dir = env.Arg(from);
+    str outFile = env.Arg(from + 1);
+    if (!fs.IsDir(dir)) EnvoFail("the first argument must be a folder", 2);
+    // the archive's top folder: the folder's own name
+    string top = string.From(path.FileName(dir));
+    if (top.Len() == 0 || Eq(top.AsStr(), ".")) top = string.From("archive");
+    List<string> files = List<string>.New();
+    Collect(dir, "", ref files);
+    text.Sort(ref files);
+    u64 mtime = 0;
+    string? e = env.Var("SOURCE_DATE_EPOCH");
+    if (e.IsSome()) {
+        string v = e.Unwrap();
+        u64? n = fmt.ParseU64(ct.Trim(v.AsStr()));
+        if (n.IsSome()) mtime = n.Unwrap();
+    }
+    string tar = string.New();
+    foreach (var rel in files.AsSlice()) {
+        string full = path.Join(dir, rel.AsStr());
+        var r = fs.ReadText(full.AsStr());
+        if (r.IsErr()) {
+            string msg = string.From("cannot read ");
+            msg.Append(full.AsStr());
+            EnvoFail(msg.AsStr(), 1);
+        }
+        string body = r.Unwrap();
+        string name = string.From(top.AsStr());
+        name.AppendByte('/');
+        name.Append(rel.AsStr());
+        if (!TarHeader(ref tar, name.AsStr(), body.Len() as u64, IsProgram(rel.AsStr()), mtime)) {
+            string msg = string.From("a path too long for a tar archive: ");
+            msg.Append(name.AsStr());
+            EnvoFail(msg.AsStr(), 1);
+        }
+        tar.Append(body.AsStr());
+        while (tar.Len() % 512 != 0) tar.AppendByte(0);
+    }
+    for (usize i = 0; i < 1024; i++) tar.AppendByte(0);    // two empty blocks end it
+    if (fs.WriteText(outFile, tar.AsStr()).IsErr()) EnvoFail("cannot write the archive", 1);
+    write(1, outFile);
+    write(1, ": ");
+    write(1, text.Uint(files.Len() as u64).AsStr());
+    write(1, " files, sha256 ");
+    string digest = crypto.Sha256(tar.AsStr()).Hex();
+    print(digest.AsStr());
+    return 0;
+}
+
+bool IsProgram(str rel) {
+    if (ct.EndsWith(rel, ".exe") || ct.EndsWith(rel, ".sh")) return true;
+    if (ct.StartsWith(rel, "bin/") && ct.IndexOfByte(rel[4..rel.Len], '.').IsNone()) return true;
+    return false;
+}
+
+// Appends a ustar header for a regular file; false if the name does not fit (100 bytes,
+// or a prefix of up to 155 and a name of up to 100 split at a `/`).
+bool TarHeader(ref string tar, str name, u64 size, bool program, u64 mtime) {
+    str prefix = "";
+    str last = name;
+    if (name.Len > 100) {
+        usize cut = name.Len;
+        for (usize i = 0; i < name.Len; i++) {
+            if (name[i] == '/' && i <= 155 && name.Len - i - 1 <= 100) {
+                cut = i;
+                break;
+            }
+        }
+        if (cut == name.Len) return false;
+        prefix = name[0..cut];
+        last = name[cut + 1..name.Len];
+    }
+    List<u8> h = List<u8>.New();
+    for (usize i = 0; i < 512; i++) h.Push(0);
+    mut u8[] b = h.AsMutSlice();
+    for (usize i = 0; i < last.Len; i++) b[i] = last[i];
+    Octal(b, 100, 8, 0x1ED);                    // mode 0755
+    if (!program) Octal(b, 100, 8, 0x1A4);      // or 0644
+    Octal(b, 108, 8, 0);                        // uid
+    Octal(b, 116, 8, 0);                        // gid
+    Octal(b, 124, 12, size);
+    Octal(b, 136, 12, mtime);
+    for (usize i = 148; i < 156; i++) b[i] = ' ';   // the checksum counts as spaces
+    b[156] = '0';                               // a regular file
+    str magic = "ustar";
+    for (usize i = 0; i < magic.Len; i++) b[257 + i] = magic[i];
+    b[263] = '0';
+    b[264] = '0';
+    for (usize i = 0; i < prefix.Len; i++) b[345 + i] = prefix[i];
+    u64 sum = 0;
+    foreach (var c in b) sum += c as u64;
+    Octal(b, 148, 7, sum);                      // six digits, NUL, then the space already there
+    foreach (var c in b) tar.AppendByte(c);
+    return true;
+}
+
+// v in octal, zero-padded to width - 1 digits, then NUL.
+void Octal(mut u8[] b, usize at, usize width, u64 v) {
+    u64 x = v;
+    usize i = width - 1;
+    b[at + i] = 0;
+    while (i > 0) {
+        i--;
+        b[at + i] = ('0' as u64 + (x & 7)) as u8;
+        x = x >> 3;
+    }
+}
+
+// `envo sign <file> --key <keyfile>`: writes <file>.sig, the Ed25519 signature of the
+// file's SHA-256 (as hex), and prints the digest.
+i32 CmdEnvoSign(usize from) {
+    string reg = string.New();
+    string key = string.New();
+    str file = PkgDir(from, ref reg, ref key);
+    if (key.Len() == 0 || !fs.IsFile(file)) EnvoFail("usage: envo sign <file> --key <keyfile>", 2);
+    var r = fs.ReadText(file);
+    if (r.IsErr()) EnvoFail("cannot read the file", 1);
+    string body = r.Unwrap();
+    string digest = crypto.Sha256(body.AsStr()).Hex();
+    var kr = fs.ReadText(key.AsStr());
+    if (kr.IsErr()) EnvoFail("cannot read the key file", 1);
+    string ktext = kr.Unwrap();
+    List<u8> secret = Unhex(ct.Trim(ktext.AsStr()));
+    if (secret.Len() != 32) EnvoFail("the key file must hold 64 hex digits (an Ed25519 secret key)", 1);
+    List<u8> msg = List<u8>.New();
+    foreach (var c in digest.AsStr()) msg.Push(c);
+    u8[64] s;
+    curve25519.Ed25519Sign(secret.AsSlice(), msg.AsSlice(), s[0..64]);
+    string sig = HexBytes(s[0..64]);
+    sig.AppendByte('\n');
+    string out0 = string.From(file);
+    out0.Append(".sig");
+    fs.WriteText(out0.AsStr(), sig.AsStr());
+    write(1, out0.AsStr());
+    write(1, ": signed sha256 ");
+    print(digest.AsStr());
+    return 0;
+}
+
+// `envo verify <file> --key <public key hex>`: checks <file>.sig; exit 0 if it is the
+// key's signature of the file's SHA-256, else 1.
+i32 CmdEnvoVerify(usize from) {
+    string reg = string.New();
+    string key = string.New();
+    str file = PkgDir(from, ref reg, ref key);
+    if (key.Len() == 0 || !fs.IsFile(file)) EnvoFail("usage: envo verify <file> --key <public key hex>", 2);
+    var r = fs.ReadText(file);
+    if (r.IsErr()) EnvoFail("cannot read the file", 1);
+    string body = r.Unwrap();
+    string digest = crypto.Sha256(body.AsStr()).Hex();
+    string sigFile = string.From(file);
+    sigFile.Append(".sig");
+    var sr = fs.ReadText(sigFile.AsStr());
+    if (sr.IsErr()) EnvoFail("no signature file beside it (<file>.sig)", 1);
+    string stext = sr.Unwrap();
+    List<u8> sig = Unhex(ct.Trim(stext.AsStr()));
+    List<u8> pub = Unhex(ct.Trim(key.AsStr()));
+    List<u8> msg = List<u8>.New();
+    foreach (var c in digest.AsStr()) msg.Push(c);
+    if (sig.Len() == 64 && pub.Len() == 32 && curve25519.Ed25519Verify(pub.AsSlice(), msg.AsSlice(), sig.AsSlice())) {
+        write(1, file);
+        write(1, ": good signature, sha256 ");
+        print(digest.AsStr());
+        return 0;
+    }
+    write(2, file);
+    write(2, ": the signature does not match this file and key\n");
+    return 1;
+}

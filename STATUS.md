@@ -103,7 +103,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | `envo.font` | TrueType parsing and anti-aliased rendering; system fonts; robustness tests | Done |
 | Win32 window adapter | `ports.IWindow`; `os.windows.Window`; `tests/conformance/window` | Done |
 | `envo.ui` with desktop and terminal renderers | `envo.ui`: one layout for pixels and cells, focus and input | Done |
-| Lumen tokens | `docs/lumen/`, `lib/envo/lumen/tokens.eon`, `envo.lumen` (WCAG 2.2 AA pairs) | Done |
+| Lumen tokens | `docs/lumen/`, `lib/envo/lumen/tokens.envon`, `envo.lumen` (WCAG 2.2 AA pairs) | Done |
 | `envo.cli` / `envo.term` | `envo.cli`; `ports.ITerminal` and `envo.term` | Done |
 
 ### M9 Definition of Done

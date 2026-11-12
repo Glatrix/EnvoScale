@@ -7,14 +7,14 @@
 // expect: row 32,129 176x32
 // expect: no 99,129 48x32
 // expect: yes 155,129 53x32
-// expect: 9ebc6cf9517b154a2e418f911abc30eb7bf6b09734135afcb74ad871fcb8f292
+// expect: 2b05d82982f9d151c8ba8addd128301f0dfaa59b28c27f5cc1db9cbed7ece14a
 // expect: checkbox clicked, focused, on
 // expect: release elsewhere: no click
 // expect: pressing focuses
 // expect: tab twice: around to the other button
 // expect: enter activates it
-// expect: c7887c15aa83dd18676b98edea0ec99acf3aa88c51ba67ae1c39c66bdcfb7720
-// expect: 783abbd30f44e61fc88e5fb775a2145d12dea36cf0c809247ff5738328985025
+// expect: af56075636ba7719c9b40aa9d9e73ad49f74367b0fc80625bbd3112e986af198
+// expect: 5da4dc139325b9a8e86f7550b9053231d9bd74e41886c8e0dc9ec1737ef04270
 use envo.ui;
 use envo.gfx;
 use envo.font;

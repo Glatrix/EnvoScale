@@ -1,6 +1,6 @@
 # Lumen design language
 
-> **Status:** Version 1 (M8.6). Tokens: [`lib/envo/lumen/tokens.eon`](../../lib/envo/lumen/tokens.eon);
+> **Status:** Version 1 (M8.6). Tokens: [`lib/envo/lumen/tokens.envon`](../../lib/envo/lumen/tokens.envon);
 > code: `envo.lumen`; used by `envo.ui` as its default theme.
 
 Lumen is how Envo programs look by default: calm surfaces, one accent color, type on the
@@ -20,7 +20,7 @@ program can override any of them.
 
 ## Color roles
 
-Each role has a light and a dark value (`tokens.eon`, blocks `light` and `dark`).
+Each role has a light and a dark value (`tokens.envon`, blocks `light` and `dark`).
 
 | Role | Use |
 |---|---|

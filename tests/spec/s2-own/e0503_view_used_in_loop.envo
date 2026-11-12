@@ -1,0 +1,10 @@
+// expect-error: E0503 @ 8:5
+// [own.borrow.2] a view used in a loop is borrowed for the whole loop: the next round
+// reads it again
+string text = string.From("abc");
+str v = text.AsStr();
+u32 n = 0;
+for (usize i = 0; i < 3; i++) {
+    text.Append("x");
+    if (v[i] != 0) n++;
+}

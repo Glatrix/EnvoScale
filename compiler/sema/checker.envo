@@ -70,6 +70,14 @@ public struct Checker {
     StrMap<u32> TokSym;     // token index -> the item a qualified name resolved to
     List<string> Owned;     // text made by the checker (joined names), kept for good
     StrMap<u64> Summaries;  // function symbol -> its storage summary (summary.envo)
+    // borrows held in locals end at their last use (move.envo, [own.borrow.2]): a first,
+    // quiet pass of the move check numbers the statements and notes each local's last use
+    bool MvQuiet;           // the first pass: errors are not reported
+    bool MvRecord;          // the first pass: note uses
+    bool MvEarly;           // the second pass: end borrows after their holder's last use
+    u32 MvStamp;            // statements so far, in the order the move check visits them
+    List<u32> MvLast;       // per symbol: the stamp of its last use
+    List<u32> MvDecl;       // per symbol: the stamp of its declaration
 
     // A checker for a parsed program.
     public static Checker New(in Sources src, Tree tree, bool core, bool runtime) {
@@ -90,7 +98,9 @@ public struct Checker {
             PreludeFile = 0xFFFFFFFF, F32 = 0, F64 = 0, CopySym = 0, DropSym = 0, OptionSym = 0, ResultSym = 0,
             StringSym = 0, PreludeScope = StrMap<u32>.New(),
             FileNs = List<Text>.New(), NsSet = StrMap<u32>.New(), Uses = List<u32>.New(),
-            TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New()
+            TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New(),
+            MvQuiet = false, MvRecord = false, MvEarly = false, MvStamp = 0, MvLast = List<u32>.New(),
+            MvDecl = List<u32>.New()
         };
         c.TypeArgs.Push(0);     // index 0: "no environment"
         for (usize f = 0; f < src.Count(); f++) {
@@ -404,6 +414,7 @@ public struct Checker {
     // ------------------------------------------------------------------ diagnostics
 
     void Fail(in this, u32 tok, u32 code, str msg) {
+        if (this.MvQuiet) return;
         Token t = this.Tok(tok);
         FailAt(TextStr(this.Paths.Get(t.File as usize)), TextStr(this.Texts.Get(t.File as usize)), t.Start as usize, code, msg);
     }

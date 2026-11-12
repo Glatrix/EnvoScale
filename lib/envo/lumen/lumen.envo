@@ -1,5 +1,5 @@
 // envo.lumen: the Lumen design language's tokens as typed values (docs/lumen/README.md).
-// tokens.eon is the source; Light and Dark here are the same values, and the tests check
+// tokens.envon is the source; Light and Dark here are the same values, and the tests check
 // that they agree. A theme is a Theme value: change any field to restyle a program.
 namespace envo.lumen;
 
@@ -132,20 +132,20 @@ Theme Shared(bool dark, Colors c) => new Theme {
 // Lumen's light scheme.
 public Theme Light() => Shared(false, new Colors {
     Background = 0xf5f5f7, Surface = 0xffffff, SurfaceRaised = 0xffffff, SurfacePressed = 0xe8e8ed,
-    Text = 0x1d1d1f, TextSecondary = 0x6e6e73, Separator = 0xc7c7cc, ControlEdge = 0x86868b,
-    Accent = 0x0a66d8, AccentHover = 0x0858bd, OnAccent = 0xffffff,
-    Danger = 0xd70015, Success = 0x248a3d, Warning = 0xb25000,
+    Text = 0x1d1d1f, TextSecondary = 0x68686c, Separator = 0xc7c7cc, ControlEdge = 0x85858a,
+    Accent = 0x0a64d4, AccentHover = 0x0858bd, OnAccent = 0xffffff,
+    Danger = 0xd30015, Success = 0x1f7835, Warning = 0xab4d00,
 });
 
 // Lumen's dark scheme.
 public Theme Dark() => Shared(true, new Colors {
     Background = 0x000000, Surface = 0x1c1c1e, SurfaceRaised = 0x2c2c2e, SurfacePressed = 0x3a3a3c,
-    Text = 0xf5f5f7, TextSecondary = 0xa1a1a6, Separator = 0x48484a, ControlEdge = 0x8e8e93,
-    Accent = 0x4c9bff, AccentHover = 0x6eafff, OnAccent = 0x000000,
-    Danger = 0xff6961, Success = 0x30d158, Warning = 0xffb340,
+    Text = 0xf5f5f7, TextSecondary = 0xa3a3a8, Separator = 0x48484a, ControlEdge = 0x8e8e93,
+    Accent = 0x60a6ff, AccentHover = 0x6eafff, OnAccent = 0x000000,
+    Danger = 0xff7b74, Success = 0x30d158, Warning = 0xffb340,
 });
 
-// A theme from tokens written in EON (tokens.eon's shape), for scheme "light" or "dark".
+// A theme from tokens written in EON (tokens.envon's shape), for scheme "light" or "dark".
 // A value the tokens leave out keeps Lumen's.
 public Result<Theme, string> FromTokens(str src, str scheme) {
     Result<eon.Value, eon.ParseError> r = eon.Parse(src);

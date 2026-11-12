@@ -1,8 +1,9 @@
 // expect-error: E0503 @ 7:5
-// [own.borrow.4] a borrow through a `ref` parameter keeps it from changing in the
-// borrowing local's block
+// [own.borrow.4] a borrow through a `ref` parameter keeps it from changing until the
+// borrowing local's last use
 struct Task { u64 Cost; fn() Run; }
 void Bump(ref Task[2] all) {
     var t = all[0];
     all[1].Cost = 2;
+    u64 c = t.Cost;
 }
