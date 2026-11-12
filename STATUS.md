@@ -20,8 +20,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M4 | Foundations | **Done**: `core`, `alloc`, `ports`, `std` in Envo-S1 through `envoc --lib`; reference, Windows and Linux adapters; conformance suites passing on both hosts (4.1–4.7) |
 | M5 | Daily tooling | **Done**: the `envo` binary (the compiler as a library) with `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`; packages; rich diagnostics; `FileSystem.List` and the `Process` port; `envo.eon`, `envo.json` (5.1–5.8) |
 | M6 | Script runtime | **Done**: `envo run` interprets the program's EIR, sandboxed with `--allow` permissions; scripts and `#!/usr/bin/env envo`; `envo repl`; every spec run test and library test passes in both modes (6.1–6.7) |
-| M7 | Crypto and network | **Next** (`docs/PLAN.md` §5) |
-| M8–M13 | | Not started |
+| M7 | Crypto and network | **Done** (Experimental, not audited): `envo.crypto` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, a CSPRNG; RSA, ECDSA and X.509 verification), the Net and Trust ports, `envo.http` (HTTP/1.1 client and server), `envo.tls` (a verifying TLS 1.3 client) (7.1–7.8) |
+| M8 | Graphics and UI | **In progress** (`docs/PLAN.md` §5): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx` (8.1–8.3) |
+| M9–M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -76,6 +77,19 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | Sandbox permissions | `--allow read, write, fs (:path), env, run, net, all` (D34); `tests/sandbox` | Done |
 | Every spec test in both modes | every spec run and multi-file program, and every library test, in the VM too (D35); green on both hosts | Done |
 
+### M7 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| Hashes, AEADs | `envo.crypto`: SHA-256/384/512, HMAC, HKDF; ChaCha20-Poly1305, AES-128/256-GCM | Done |
+| X25519, Ed25519 | `envo.crypto.curve25519` | Done |
+| CSPRNG | `envo.crypto.random`: ChaCha20 keyed from the Entropy port, fast key erasure | Done |
+| TLS 1.3 client | `envo.tls`: X25519, both SHA-256 suites, chain, name, CertificateVerify and Finished verified; `tests/tls` against `openssl s_server` | Done |
+| TCP/DNS | `ports.INet` with reference, Windows (Winsock) and Linux (syscalls, own DNS client) adapters; `tests/conformance/net` | Done |
+| HTTP/1.1 client and server | `envo.http`, `https://` through `envo.tls` | Done |
+| All crypto test vectors pass | every vector in `tests/vectors/README.md`, natively and (where fast enough) in the script runtime | Done |
+| Marked Experimental | READMEs, `SECURITY.md` (not audited) | Done |
+
 ## Subsystems
 
 | Subsystem | Tier | Works | Missing | Next |
@@ -91,8 +105,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
 | **Runtime** (`runtime/`) | Experimental | Startup, panics and the OS layer (`bootstrap/stage1/runtime/`, in every program); the EIR VM (`runtime/vm`) with permissions | ARC, a JIT, floats in the VM | M7 on |
-| **Standard platform** (`lib/`) | Experimental | `core` (text, fmt, math, hash), `alloc` (Map, Set, Box, text), `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M6 on |
-| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process; every conformance suite passes on both hosts | Window, GPU, audio, network, threads | M6 on |
+| **Standard platform** (`lib/`) | Experimental | `core`, `alloc`, `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, `envo.crypto`, `envo.http`, `envo.tls`, `envo.cli`, `envo.term`, `envo.gfx`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M8 on |
+| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process, Net, Trust, Terminal; every conformance suite passes on both hosts | Window, GPU, audio, threads | M8 on |
 | **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run` (script runtime or `--native`), `check`, `test`, `fmt`, `lsp`, `repl`, `explain`, `version`; scripts | `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` | later milestones |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |
 

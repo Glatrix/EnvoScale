@@ -171,7 +171,8 @@ impl Module {
             for (u32 k = 0; k + 1 < n; k++) this.VOpType(f + k);
         } else if (sh == SH_INTRINSIC) {
             Intrinsic x = IntrinsicNamed(TextStr(inst.Str));
-            if (n != x.N) this.VFail(pos, 610, "wrong number of arguments");
+            // wincall takes the slot and 10 arguments, or 12 (`__wincall12`)
+            if (n != x.N && !(x.AllI64 && x.N == 11 && n == 13)) this.VFail(pos, 610, "wrong number of arguments");
             if (x.AllI64) {
                 for (u32 k = 0; k < n; k++) this.VExpect(f + k, ET_I64, "the target intrinsics take `i64` arguments");
             } else {

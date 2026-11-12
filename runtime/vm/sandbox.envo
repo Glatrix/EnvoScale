@@ -207,6 +207,12 @@ public struct Sandbox {
             ok = this.May(CAP_ENV, "");                              // GetEnvironmentVariableW
         } else if (k == 32 || k == 40) {
             ok = this.May(CAP_NET, "");                              // socket, getaddrinfo
+        } else if ((k >= 56 && k <= 58) || (k >= 62 && k <= 78)) {
+            // GetModuleHandleW, GetProcAddress, LoadLibraryW and the USER32 and GDI32
+            // calls: each can reach code outside the sandbox (a window class names a
+            // function to call), so only programs allowed `all` make them. The console
+            // calls (51-55), PeekNamedPipe and Sleep (59, 60) are allowed.
+            ok = false;
         }
         if (!ok) this.LastDenied = true;
         return ok;

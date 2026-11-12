@@ -7,7 +7,7 @@
 // share it (the heap never frees in Envo-S1, so nothing is lost).
 namespace os.none;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IoError};
 use alloc.map.{Map};
 use alloc.set.{Set};
 use alloc.text;
@@ -72,13 +72,13 @@ impl IConsole for Console {
 
 // The process's own standard streams, through the language runtime: what `platform`
 // gives as the console with `--os none`, so a program's output can still be read.
-public struct Terminal {
+public struct Stdio {
     u8 Unused;
 
-    public static Terminal New() => new Terminal { Unused = 0 };
+    public static Stdio New() => new Stdio { Unused = 0 };
 }
 
-impl IConsole for Terminal {
+impl IConsole for Stdio {
     void Out(ref this, str text) => write(1, text);
     void Err(ref this, str text) => write(2, text);
 
@@ -810,5 +810,95 @@ impl ITrust for Trust {
             }
         }
         return all;
+    }
+}
+
+// ------------------------------------------------------------------ terminal
+
+struct TerminalState {
+    string Out;
+    string In;
+    usize InAt;
+    u32 C;
+    u32 R;
+    bool IsRaw;
+}
+
+// A terminal of a given size that keeps what is written to it and reads from text given
+// to it: what envo.term's tests drive.
+public struct Terminal {
+    *TerminalState State;
+
+    public static Terminal New() => Terminal.Sized(80, 24);
+
+    public static Terminal Sized(u32 cols, u32 rows) {
+        unsafe {
+            *TerminalState p = alloc(sizeof(TerminalState)) as *TerminalState;
+            p[0] = new TerminalState { Out = string.New(), In = string.New(), InAt = 0, C = cols, R = rows, IsRaw = false };
+            return new Terminal { State = p };
+        }
+    }
+
+    // Everything written so far.
+    public str Output(in this) {
+        unsafe { return this.State[0].Out.AsStr(); }
+    }
+
+    // Forgets what was written so far.
+    public void ClearOutput(ref this) {
+        unsafe { this.State[0].Out = string.New(); }
+    }
+
+    // Input for Read to give, after what is already waiting.
+    public void Type(ref this, str input) {
+        unsafe { this.State[0].In.Append(input); }
+    }
+
+    // Is raw mode on?
+    public bool InRaw(in this) {
+        unsafe { return this.State[0].IsRaw; }
+    }
+
+    // The window changes size.
+    public void Resize(ref this, u32 cols, u32 rows) {
+        unsafe {
+            this.State[0].C = cols;
+            this.State[0].R = rows;
+        }
+    }
+}
+
+impl ITerminal for Terminal {
+    bool IsTerminal(ref this) => true;
+
+    u32 Cols(ref this) {
+        unsafe { return this.State[0].C; }
+    }
+
+    u32 Rows(ref this) {
+        unsafe { return this.State[0].R; }
+    }
+
+    bool Raw(ref this, bool on) {
+        unsafe { this.State[0].IsRaw = on; }
+        return true;
+    }
+
+    void Write(ref this, str text) {
+        unsafe { this.State[0].Out.Append(text); }
+    }
+
+    usize Read(ref this, mut u8[] into, i32 waitMs) {
+        usize n = 0;
+        unsafe {
+            str input = this.State[0].In.AsStr();
+            usize at = this.State[0].InAt;
+            while (n < into.Len && at + n < input.Len) {
+                into[n] = input[at + n];
+                n++;
+            }
+            this.State[0].InAt = at + n;
+        }
+        return n;
     }
 }

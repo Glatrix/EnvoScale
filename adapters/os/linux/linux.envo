@@ -3,7 +3,7 @@
 // holding a NUL byte is refused.
 namespace os.linux;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -811,5 +811,101 @@ impl ITrust for Trust {
             break;
         }
         return all;
+    }
+}
+
+// ------------------------------------------------------------------ terminal
+
+const i64 SYS_IOCTL = 16;
+const i64 SYS_POLL = 7;
+const i64 TCGETS = 0x5401;
+const i64 TCSETS = 0x5402;
+const i64 TIOCGWINSZ = 0x5413;
+
+u32 Le32(u8[] b, usize at) => b[at] as u32 | (b[at + 1] as u32) << 8 | (b[at + 2] as u32) << 16 | (b[at + 3] as u32) << 24;
+
+void PutLe32(mut u8[] b, usize at, u32 v) {
+    b[at] = v as u8;
+    b[at + 1] = (v >> 8) as u8;
+    b[at + 2] = (v >> 16) as u8;
+    b[at + 3] = (v >> 24) as u8;
+}
+
+// The window's size from TIOCGWINSZ: rows (which 0) or columns (which 1); 0 if unknown.
+u32 WinSize(usize which) {
+    u8[8] ws;
+    i64 r = 0;
+    unsafe { r = Sys(SYS_IOCTL, 1, TIOCGWINSZ, Ptr(&ws[0]), 0); }
+    if (r != 0) return 0;
+    return ws[2 * which] as u32 | (ws[2 * which + 1] as u32) << 8;
+}
+
+// The terminal through ioctl (TCGETS, TCSETS, TIOCGWINSZ) and poll (PLAN D43).
+public struct Terminal {
+    List<u8> Saved;     // the termios found, given back when raw mode ends
+    bool IsRaw;
+
+    public static Terminal New() => new Terminal { Saved = List<u8>.New(), IsRaw = false };
+}
+
+impl ITerminal for Terminal {
+    bool IsTerminal(ref this) {
+        u8[64] t;
+        unsafe { return Sys(SYS_IOCTL, 1, TCGETS, Ptr(&t[0]), 0) == 0; }
+    }
+
+    u32 Cols(ref this) {
+        u32 c = WinSize(1);
+        if (c == 0) return 80;
+        return c;
+    }
+
+    u32 Rows(ref this) {
+        u32 r = WinSize(0);
+        if (r == 0) return 24;
+        return r;
+    }
+
+    bool Raw(ref this, bool on) {
+        u8[64] t;
+        if (on) {
+            if (this.IsRaw) return true;
+            i64 r = 0;
+            unsafe { r = Sys(SYS_IOCTL, 0, TCGETS, Ptr(&t[0]), 0); }
+            if (r != 0) return false;
+            this.Saved = List<u8>.New();
+            for (usize i = 0; i < 64; i++) this.Saved.Push(t[i]);
+            // no BRKINT, ICRNL, INPCK, ISTRIP, IXON, INLCR, IGNCR, PARMRK, IGNBRK
+            PutLe32(t[0..64], 0, Le32(t[0..64], 0) & ~(0x1 | 0x2 | 0x8 | 0x10 | 0x20 | 0x40 | 0x80 | 0x100 | 0x400));
+            // no ECHO, ECHONL, ICANON, ISIG, IEXTEN
+            PutLe32(t[0..64], 12, Le32(t[0..64], 12) & ~(0x1 | 0x2 | 0x8 | 0x40 | 0x8000));
+            t[17 + 6] = 1;      // VMIN
+            t[17 + 5] = 0;      // VTIME
+            unsafe { r = Sys(SYS_IOCTL, 0, TCSETS, Ptr(&t[0]), 0); }
+            if (r != 0) return false;
+            this.IsRaw = true;
+            return true;
+        }
+        if (!this.IsRaw) return true;
+        u8[] saved = this.Saved.AsSlice();
+        for (usize i = 0; i < 64 && i < saved.Len; i++) t[i] = saved[i];
+        unsafe { Sys(SYS_IOCTL, 0, TCSETS, Ptr(&t[0]), 0); }
+        this.IsRaw = false;
+        return true;
+    }
+
+    void Write(ref this, str text) => write(1, text);
+
+    usize Read(ref this, mut u8[] into, i32 waitMs) {
+        if (into.Len == 0) return 0;
+        u8[8] pfd;          // struct pollfd: fd 0, events POLLIN
+        pfd[4] = 1;
+        i64 r = 0;
+        unsafe { r = Sys(SYS_POLL, Ptr(&pfd[0]), 1, waitMs as i64, 0); }
+        if (r <= 0) return 0;
+        isize n = 0;
+        unsafe { n = read(0, &into[0], into.Len); }
+        if (n <= 0) return 0;
+        return n as usize;
     }
 }

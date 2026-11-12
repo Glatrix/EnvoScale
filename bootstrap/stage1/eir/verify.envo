@@ -161,7 +161,8 @@ void VInst(*Module m, u32 i, u32 func) {
         for (u32 k = 0; k + 1 < n; k++) VOpType(m, f + k);
     } else if (sh == SH_INTRINSIC) {
         Intrinsic x = IntrinsicNamed(inst.Str);
-        if (n != x.N) VFail(m, pos, 610, "wrong number of arguments");
+        // wincall takes the slot and 10 arguments, or 12 (`__wincall12`)
+        if (n != x.N && !(x.AllI64 && x.N == 11 && n == 13)) VFail(m, pos, 610, "wrong number of arguments");
         if (x.AllI64) {
             for (u32 k = 0; k < n; k++) VExpect(m, f + k, ET_I64, "the target intrinsics take `i64` arguments");
         } else {

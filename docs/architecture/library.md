@@ -42,7 +42,7 @@ values (D13, D22). Each adapter is a struct that implements the port:
 
 | Namespace | Folder | Adapters |
 |---|---|---|
-| `os.none` | `adapters/os/none` | reference: captured `Console`, pass-through `Terminal`, in-memory `FileSystem`, manual `Clock`, seeded `Entropy`, fixed `Environment`, scripted `Process` (echoing programs known by name) |
+| `os.none` | `adapters/os/none` | reference: captured `Console`, pass-through `Stdio`, in-memory `FileSystem`, manual `Clock`, seeded `Entropy`, fixed `Environment`, scripted `Process` (echoing programs known by name), a sized in-memory `Terminal` |
 | `os.windows` | `adapters/os/windows` | KERNEL32 and ADVAPI32 through `__wincall` |
 | `os.linux` | `adapters/os/linux` | system calls through `__syscall` |
 
@@ -50,7 +50,7 @@ values (D13, D22). Each adapter is a struct that implements the port:
 one place where `lib/` meets an adapter. It loads `adapters/os/<os>/platform.envo`, where
 `<os>` is the target's operating system or `none` with `--os none`. Every binding
 provides the same constructors: `platform.Console()`, `FileSystem()`, `Clock()`,
-`Entropy()`, `Environment()`, `Process()`. Code that uses them writes `var fs = platform.FileSystem();`
+`Entropy()`, `Environment()`, `Process()`, `Net()`, `Trust()`, `Terminal()`. Code that uses them writes `var fs = platform.FileSystem();`
 and works with any binding.
 
 Each `std` module has two doors. The simple door (`fs.ReadText(path)`) uses the platform
@@ -87,9 +87,19 @@ executables stay byte-identical:
   generator, and slot 30 ends it;
 - M7 (D40) added WS2_32's Winsock functions at slots 31–45, ended by slot 46, and
   (D41) CRYPT32's certificate store functions at slots 47–49, ended by slot 50
-  ([`network.md`](network.md)).
+  ([`network.md`](network.md));
+- M8 (D43, D45) added a second KERNEL32 descriptor at slots 51–60, ended by 61:
+  `GetConsoleMode`, `SetConsoleMode`, `GetConsoleScreenBufferInfo`, `SetConsoleOutputCP`,
+  `ReadConsoleInputW`, `GetModuleHandleW`, `GetProcAddress`, `LoadLibraryW`,
+  `PeekNamedPipe`, `Sleep`; USER32's window functions at slots 62–76, ended by 77; and
+  GDI32's `SetDIBitsToDevice` at slot 78, ended by 79. A DLL may have more than one
+  descriptor, so the earlier slots keep their numbers.
 
-`__wincall` takes the slot and up to 10 arguments (`CreateProcessW` has 10).
+`__wincall` takes the slot and 10 arguments (`CreateProcessW` has 10); `__wincall12`
+takes the slot and 12 (`CreateWindowExW`, `SetDIBitsToDevice`) and is the same `wincall`
+intrinsic in EIR. The script runtime's sandbox lets the console calls through and refuses
+the loader, USER32 and GDI32 calls unless the program is allowed `all`
+([`script-runtime.md`](script-runtime.md)).
 
 Paths reach Windows as UTF-16 and Linux as NUL-terminated copies. Both refuse a path that
 holds a NUL byte.

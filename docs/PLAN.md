@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M7 (crypto and network). M0–M6 are done; their records are in §4.
+- **Current milestone:** M8 (graphics and UI). M0–M7 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -78,6 +78,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D40 | **A `Net` port** for TCP (connect, listen, accept, read, write, close) and name lookup. Windows: `ws2_32.dll` joins the import table in both stages (D25); Linux: system calls, and a DNS client in Envo reading `/etc/hosts` and `/etc/resolv.conf`. The script runtime gates it with `--allow net`. | `docs/architecture/network.md` |
 | D41 | **TLS 1.3 client** (RFC 8446) with X25519 and `TLS_CHACHA20_POLY1305_SHA256` / `TLS_AES_128_GCM_SHA256`; certificates are verified (X.509 chain to the system's roots, names, validity; RSA and ECDSA P-256 signatures) before any application data. A connection that cannot be verified fails; there is no "insecure" switch in M7. | `docs/architecture/network.md` |
 | D42 | **HTTP/1.1** client and server in `envo.http` over the Net port (and TLS for `https`), sharing request and response types. The brief's `serve(8080) { get("/") => … }` door needs trailing blocks, which Envo-S1 lacks; M7 gives the same server as calls (`Router`, `Get`, `Serve`) and the door follows when the language has it. | `lib/envo/http/README.md` |
+| D43 | **A Terminal port** (`ITerminal`): write text, the window's size, raw mode on and off, and input as key events. Windows: the console API (a second KERNEL32 import descriptor, D25), with VT input so keys arrive as on Linux; Linux: `ioctl` (`TCGETS`, `TCSETS`, `TIOCGWINSZ`) and VT sequences. `envo.term` builds a cell buffer with a diffing renderer on it; `envo.cli` (arguments, help, tables, progress) needs only the console. | `lib/envo/term/README.md` |
+| D44 | **`envo.gfx` is a software rasterizer first**: an RGBA canvas with shapes, anti-aliased edges, alpha blending and images, tested by hashing pixels (golden images). The GPU adapters (D46) draw the same commands faster. | `lib/envo/gfx/README.md` |
+| D45 | **A Window port** (`IWindow`): open a window, poll events (keys, mouse, resize, close), present an RGBA framebuffer. The Win32 adapter uses `USER32.dll` and `GDI32.dll` from the import table (both stages, added with D43) and `__wincall12`; the window procedure is `DefWindowProcW`, events are read from the message queue, so no callback into Envo code is needed; `os.none` gives an off-screen window for tests. Linux windows (X11/Wayland) come after M8, as the brief's DoD names Win32 only. | `docs/architecture/graphics.md` |
+| D46 | **`envo.gpu`** is a port with a software adapter (on `envo.gfx`) in M8; the Vulkan and D3D12 adapters load the system's driver library at run time and are the milestone's last increments. | `docs/architecture/graphics.md` |
+| D47 | **`envo.ui`** is a retained component tree (`Column`, `Row`, `Text`, `Button`, …) with one layout pass, drawn by a desktop renderer (`envo.gfx` into a window) or a terminal renderer (`envo.term` cells). Lumen tokens (`docs/lumen/`) are its default theme. | `lib/envo/ui/README.md` |
 
 ## 3. Open questions
 
@@ -168,23 +173,29 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   (D35). Increments 6.1–6.7; design in
   [`architecture/script-runtime.md`](architecture/script-runtime.md).
 
-## 5. M7 — Crypto and network
+- **M7 — Crypto and network.** `envo.crypto` in Envo-S1, constant time where secrets
+  are involved (D37), every vector passing (D38), a CSPRNG (D39); RSA, ECDSA and X.509
+  verification; the Net and Trust ports with Winsock, Linux syscalls and an own DNS
+  client (D40); `envo.http` (D42); a verifying TLS 1.3 client (D41). Increments
+  7.1–7.8; design in [`architecture/network.md`](architecture/network.md).
 
-**DoD (brief §16):** hashes, AEADs, X25519/Ed25519, CSPRNG, TLS 1.3 client, TCP/DNS,
-HTTP/1.1 client and server. All crypto test vectors pass. Marked Experimental. Read here
-as: `envo.crypto` (D37) passing every vector it implements (D38), with a CSPRNG (D39); a
-Net port with native adapters (D40); a verifying TLS 1.3 client (D41); `envo.http` (D42).
+## 5. M8 — Graphics and UI (desktop and terminal)
+
+**DoD (brief §16):** `envo.gpu` with software + Vulkan/D3D12 adapters, `envo.gfx`,
+`envo.font`, Win32 window adapter, `envo.ui` with desktop and terminal renderers, Lumen
+tokens, `envo.cli`/`envo.term`.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [7.1](https://github.com/envoscale/EnvoScale/issues/103) | Hashes and MACs: SHA-256, SHA-512, HMAC, HKDF | `lib/envo/crypto/tests/` || done |
-| [7.2](https://github.com/envoscale/EnvoScale/issues/104) | AEADs: ChaCha20-Poly1305, AES-128/256-GCM | `lib/envo/crypto/tests/` || done |
-| [7.3](https://github.com/envoscale/EnvoScale/issues/105) | X25519 and Ed25519 | `lib/envo/crypto/tests/` || done |
-| [7.4](https://github.com/envoscale/EnvoScale/issues/106) | The CSPRNG and the `envo.crypto` simple door | `lib/envo/crypto/tests/` || done |
-| [7.5](https://github.com/envoscale/EnvoScale/issues/107) | The Net port: TCP and name lookup, reference and native adapters | `tests/conformance/net/` || done |
-| [7.6](https://github.com/envoscale/EnvoScale/issues/108) | `envo.http`: HTTP/1.1 client and server | `lib/envo/http/tests/` || done |
-| [7.7](https://github.com/envoscale/EnvoScale/issues/109) | TLS 1.3 client with certificate verification | `lib/envo/tls/tests/` | |
-| [7.8](https://github.com/envoscale/EnvoScale/issues/110) | Docs and status; M7 complete | CI | |
+| [8.1](https://github.com/envoscale/EnvoScale/issues/111) | `envo.term` and the Terminal port (D43): VT output, size, raw mode, key events, a diffing cell buffer | `lib/envo/term/tests/`, conformance | done |
+| [8.2](https://github.com/envoscale/EnvoScale/issues/112) | `envo.cli`: commands, flags and help; tables; progress bars | `lib/envo/cli/tests/` | done |
+| [8.3](https://github.com/envoscale/EnvoScale/issues/113) | `envo.gfx`: the software rasterizer (D44) | golden pixel hashes | done |
+| [8.4](https://github.com/envoscale/EnvoScale/issues/114) | `envo.font`: TrueType outlines rasterized with anti-aliasing | golden glyph hashes | |
+| [8.5](https://github.com/envoscale/EnvoScale/issues/115) | The Window port and the Win32 adapter (D45) | conformance (off-screen and native) | |
+| [8.6](https://github.com/envoscale/EnvoScale/issues/116) | `envo.ui` with Lumen tokens: layout, desktop and terminal renderers (D47) | golden renders | |
+| [8.7](https://github.com/envoscale/EnvoScale/issues/117) | `envo.gpu`: the port and its software adapter (D46) | `lib/envo/gpu/tests/` | |
+| [8.8](https://github.com/envoscale/EnvoScale/issues/118) | The Vulkan and D3D12 adapters | on machines with a GPU | |
+| [8.9](https://github.com/envoscale/EnvoScale/issues/119) | Docs and status; M8 complete | CI | |
 
 ## 6. Risks
 

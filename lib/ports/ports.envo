@@ -121,3 +121,24 @@ public interface ITrust {
     // The DER of each trusted root certificate.
     List<List<u8>> Roots(ref this);
 }
+
+// The terminal a program runs in (PLAN D43): its size, raw input and VT output. Output is
+// UTF-8 with VT escape sequences (colors, cursor moves), which every supported terminal
+// understands once the adapter has switched them on. Input arrives as bytes, keys as the
+// VT sequences terminals send (envo.term decodes them).
+public interface ITerminal {
+    // Is standard output a terminal (not a file or a pipe)?
+    bool IsTerminal(ref this);
+    // The window's width in cells; 80 when it cannot be told.
+    u32 Cols(ref this);
+    // The window's height in cells; 24 when it cannot be told.
+    u32 Rows(ref this);
+    // Raw mode on (true): input comes a key at a time, not echoed, Ctrl+C included. Off
+    // (false) gives back the mode found. False if this is not a terminal.
+    bool Raw(ref this, bool on);
+    // Writes text (UTF-8, VT sequences included).
+    void Write(ref this, str text);
+    // Up to into.Len bytes of input, waiting at most waitMs milliseconds for the first
+    // (negative: as long as it takes); 0 if none came.
+    usize Read(ref this, mut u8[] into, i32 waitMs);
+}

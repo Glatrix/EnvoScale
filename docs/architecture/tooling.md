@@ -63,7 +63,7 @@ output goes to files when asked: `envo test` captures each test's output that wa
 | `os.linux` | `fork`, `dup2`, `chdir`, `execve` (with the parent's environment from `/proc/self/environ`), `wait4`; PATH lookup as a shell does |
 
 The Windows import table grew to 28 KERNEL32 slots in both Stage 1 and Stage 2, and
-`__wincall` takes up to 10 arguments ([`library.md`](library.md)). The conformance suite
+`__wincall` takes 10 arguments (`__wincall12` takes 12) ([`library.md`](library.md)). The conformance suite
 (`tests/conformance/process`) runs itself as the child, so it needs no other program.
 
 `IEnvironment` gained `Var` (environment variables) and `CurrentDir`, which `envo` uses

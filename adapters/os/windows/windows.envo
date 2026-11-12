@@ -4,7 +4,7 @@
 // UTF-16 for the `…W` functions.
 namespace os.windows;
 
-use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, IoError};
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IoError};
 use core.text as ct;
 use alloc.text;
 
@@ -505,55 +505,81 @@ impl IProcess for Process {
 // Calls import k of the executable's table with the arguments: what a program's own
 // `__wincall(k, …)` does. The script runtime forwards its programs' calls here (PLAN
 // D32); k must be one of the slots the table has, else the result is -1.
-public i64 WinCall(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j) {
+public i64 WinCall(i64 k, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f, i64 g, i64 h, i64 i, i64 j, i64 l, i64 m) {
     match k {
-        0 => { return __wincall(0, a, b, c, d, e, f, g, h, i, j); }
-        1 => { return __wincall(1, a, b, c, d, e, f, g, h, i, j); }
-        2 => { return __wincall(2, a, b, c, d, e, f, g, h, i, j); }
-        3 => { return __wincall(3, a, b, c, d, e, f, g, h, i, j); }
-        4 => { return __wincall(4, a, b, c, d, e, f, g, h, i, j); }
-        5 => { return __wincall(5, a, b, c, d, e, f, g, h, i, j); }
-        6 => { return __wincall(6, a, b, c, d, e, f, g, h, i, j); }
-        7 => { return __wincall(7, a, b, c, d, e, f, g, h, i, j); }
-        8 => { return __wincall(8, a, b, c, d, e, f, g, h, i, j); }
-        9 => { return __wincall(9, a, b, c, d, e, f, g, h, i, j); }
-        10 => { return __wincall(10, a, b, c, d, e, f, g, h, i, j); }
-        11 => { return __wincall(11, a, b, c, d, e, f, g, h, i, j); }
-        12 => { return __wincall(12, a, b, c, d, e, f, g, h, i, j); }
-        13 => { return __wincall(13, a, b, c, d, e, f, g, h, i, j); }
-        14 => { return __wincall(14, a, b, c, d, e, f, g, h, i, j); }
-        15 => { return __wincall(15, a, b, c, d, e, f, g, h, i, j); }
-        16 => { return __wincall(16, a, b, c, d, e, f, g, h, i, j); }
-        17 => { return __wincall(17, a, b, c, d, e, f, g, h, i, j); }
-        18 => { return __wincall(18, a, b, c, d, e, f, g, h, i, j); }
-        19 => { return __wincall(19, a, b, c, d, e, f, g, h, i, j); }
-        20 => { return __wincall(20, a, b, c, d, e, f, g, h, i, j); }
-        21 => { return __wincall(21, a, b, c, d, e, f, g, h, i, j); }
-        22 => { return __wincall(22, a, b, c, d, e, f, g, h, i, j); }
-        23 => { return __wincall(23, a, b, c, d, e, f, g, h, i, j); }
-        24 => { return __wincall(24, a, b, c, d, e, f, g, h, i, j); }
-        25 => { return __wincall(25, a, b, c, d, e, f, g, h, i, j); }
-        26 => { return __wincall(26, a, b, c, d, e, f, g, h, i, j); }
-        27 => { return __wincall(27, a, b, c, d, e, f, g, h, i, j); }
-        29 => { return __wincall(29, a, b, c, d, e, f, g, h, i, j); }
-        31 => { return __wincall(31, a, b, c, d, e, f, g, h, i, j); }
-        32 => { return __wincall(32, a, b, c, d, e, f, g, h, i, j); }
-        33 => { return __wincall(33, a, b, c, d, e, f, g, h, i, j); }
-        34 => { return __wincall(34, a, b, c, d, e, f, g, h, i, j); }
-        35 => { return __wincall(35, a, b, c, d, e, f, g, h, i, j); }
-        36 => { return __wincall(36, a, b, c, d, e, f, g, h, i, j); }
-        37 => { return __wincall(37, a, b, c, d, e, f, g, h, i, j); }
-        38 => { return __wincall(38, a, b, c, d, e, f, g, h, i, j); }
-        39 => { return __wincall(39, a, b, c, d, e, f, g, h, i, j); }
-        40 => { return __wincall(40, a, b, c, d, e, f, g, h, i, j); }
-        41 => { return __wincall(41, a, b, c, d, e, f, g, h, i, j); }
-        42 => { return __wincall(42, a, b, c, d, e, f, g, h, i, j); }
-        43 => { return __wincall(43, a, b, c, d, e, f, g, h, i, j); }
-        44 => { return __wincall(44, a, b, c, d, e, f, g, h, i, j); }
-        45 => { return __wincall(45, a, b, c, d, e, f, g, h, i, j); }
-        47 => { return __wincall(47, a, b, c, d, e, f, g, h, i, j); }
-        48 => { return __wincall(48, a, b, c, d, e, f, g, h, i, j); }
-        49 => { return __wincall(49, a, b, c, d, e, f, g, h, i, j); }
+        0 => { return __wincall12(0, a, b, c, d, e, f, g, h, i, j, l, m); }
+        1 => { return __wincall12(1, a, b, c, d, e, f, g, h, i, j, l, m); }
+        2 => { return __wincall12(2, a, b, c, d, e, f, g, h, i, j, l, m); }
+        3 => { return __wincall12(3, a, b, c, d, e, f, g, h, i, j, l, m); }
+        4 => { return __wincall12(4, a, b, c, d, e, f, g, h, i, j, l, m); }
+        5 => { return __wincall12(5, a, b, c, d, e, f, g, h, i, j, l, m); }
+        6 => { return __wincall12(6, a, b, c, d, e, f, g, h, i, j, l, m); }
+        7 => { return __wincall12(7, a, b, c, d, e, f, g, h, i, j, l, m); }
+        8 => { return __wincall12(8, a, b, c, d, e, f, g, h, i, j, l, m); }
+        9 => { return __wincall12(9, a, b, c, d, e, f, g, h, i, j, l, m); }
+        10 => { return __wincall12(10, a, b, c, d, e, f, g, h, i, j, l, m); }
+        11 => { return __wincall12(11, a, b, c, d, e, f, g, h, i, j, l, m); }
+        12 => { return __wincall12(12, a, b, c, d, e, f, g, h, i, j, l, m); }
+        13 => { return __wincall12(13, a, b, c, d, e, f, g, h, i, j, l, m); }
+        14 => { return __wincall12(14, a, b, c, d, e, f, g, h, i, j, l, m); }
+        15 => { return __wincall12(15, a, b, c, d, e, f, g, h, i, j, l, m); }
+        16 => { return __wincall12(16, a, b, c, d, e, f, g, h, i, j, l, m); }
+        17 => { return __wincall12(17, a, b, c, d, e, f, g, h, i, j, l, m); }
+        18 => { return __wincall12(18, a, b, c, d, e, f, g, h, i, j, l, m); }
+        19 => { return __wincall12(19, a, b, c, d, e, f, g, h, i, j, l, m); }
+        20 => { return __wincall12(20, a, b, c, d, e, f, g, h, i, j, l, m); }
+        21 => { return __wincall12(21, a, b, c, d, e, f, g, h, i, j, l, m); }
+        22 => { return __wincall12(22, a, b, c, d, e, f, g, h, i, j, l, m); }
+        23 => { return __wincall12(23, a, b, c, d, e, f, g, h, i, j, l, m); }
+        24 => { return __wincall12(24, a, b, c, d, e, f, g, h, i, j, l, m); }
+        25 => { return __wincall12(25, a, b, c, d, e, f, g, h, i, j, l, m); }
+        26 => { return __wincall12(26, a, b, c, d, e, f, g, h, i, j, l, m); }
+        27 => { return __wincall12(27, a, b, c, d, e, f, g, h, i, j, l, m); }
+        29 => { return __wincall12(29, a, b, c, d, e, f, g, h, i, j, l, m); }
+        31 => { return __wincall12(31, a, b, c, d, e, f, g, h, i, j, l, m); }
+        32 => { return __wincall12(32, a, b, c, d, e, f, g, h, i, j, l, m); }
+        33 => { return __wincall12(33, a, b, c, d, e, f, g, h, i, j, l, m); }
+        34 => { return __wincall12(34, a, b, c, d, e, f, g, h, i, j, l, m); }
+        35 => { return __wincall12(35, a, b, c, d, e, f, g, h, i, j, l, m); }
+        36 => { return __wincall12(36, a, b, c, d, e, f, g, h, i, j, l, m); }
+        37 => { return __wincall12(37, a, b, c, d, e, f, g, h, i, j, l, m); }
+        38 => { return __wincall12(38, a, b, c, d, e, f, g, h, i, j, l, m); }
+        39 => { return __wincall12(39, a, b, c, d, e, f, g, h, i, j, l, m); }
+        40 => { return __wincall12(40, a, b, c, d, e, f, g, h, i, j, l, m); }
+        41 => { return __wincall12(41, a, b, c, d, e, f, g, h, i, j, l, m); }
+        42 => { return __wincall12(42, a, b, c, d, e, f, g, h, i, j, l, m); }
+        43 => { return __wincall12(43, a, b, c, d, e, f, g, h, i, j, l, m); }
+        44 => { return __wincall12(44, a, b, c, d, e, f, g, h, i, j, l, m); }
+        45 => { return __wincall12(45, a, b, c, d, e, f, g, h, i, j, l, m); }
+        47 => { return __wincall12(47, a, b, c, d, e, f, g, h, i, j, l, m); }
+        48 => { return __wincall12(48, a, b, c, d, e, f, g, h, i, j, l, m); }
+        49 => { return __wincall12(49, a, b, c, d, e, f, g, h, i, j, l, m); }
+        51 => { return __wincall12(51, a, b, c, d, e, f, g, h, i, j, l, m); }
+        52 => { return __wincall12(52, a, b, c, d, e, f, g, h, i, j, l, m); }
+        53 => { return __wincall12(53, a, b, c, d, e, f, g, h, i, j, l, m); }
+        54 => { return __wincall12(54, a, b, c, d, e, f, g, h, i, j, l, m); }
+        55 => { return __wincall12(55, a, b, c, d, e, f, g, h, i, j, l, m); }
+        56 => { return __wincall12(56, a, b, c, d, e, f, g, h, i, j, l, m); }
+        57 => { return __wincall12(57, a, b, c, d, e, f, g, h, i, j, l, m); }
+        58 => { return __wincall12(58, a, b, c, d, e, f, g, h, i, j, l, m); }
+        59 => { return __wincall12(59, a, b, c, d, e, f, g, h, i, j, l, m); }
+        60 => { return __wincall12(60, a, b, c, d, e, f, g, h, i, j, l, m); }
+        62 => { return __wincall12(62, a, b, c, d, e, f, g, h, i, j, l, m); }
+        63 => { return __wincall12(63, a, b, c, d, e, f, g, h, i, j, l, m); }
+        64 => { return __wincall12(64, a, b, c, d, e, f, g, h, i, j, l, m); }
+        65 => { return __wincall12(65, a, b, c, d, e, f, g, h, i, j, l, m); }
+        66 => { return __wincall12(66, a, b, c, d, e, f, g, h, i, j, l, m); }
+        67 => { return __wincall12(67, a, b, c, d, e, f, g, h, i, j, l, m); }
+        68 => { return __wincall12(68, a, b, c, d, e, f, g, h, i, j, l, m); }
+        69 => { return __wincall12(69, a, b, c, d, e, f, g, h, i, j, l, m); }
+        70 => { return __wincall12(70, a, b, c, d, e, f, g, h, i, j, l, m); }
+        71 => { return __wincall12(71, a, b, c, d, e, f, g, h, i, j, l, m); }
+        72 => { return __wincall12(72, a, b, c, d, e, f, g, h, i, j, l, m); }
+        73 => { return __wincall12(73, a, b, c, d, e, f, g, h, i, j, l, m); }
+        74 => { return __wincall12(74, a, b, c, d, e, f, g, h, i, j, l, m); }
+        75 => { return __wincall12(75, a, b, c, d, e, f, g, h, i, j, l, m); }
+        76 => { return __wincall12(76, a, b, c, d, e, f, g, h, i, j, l, m); }
+        78 => { return __wincall12(78, a, b, c, d, e, f, g, h, i, j, l, m); }
         _ => { return -1; }
     }
 }
@@ -811,5 +837,187 @@ void AddStore(ref List<List<u8>> all, str storeName) {
             }
         }
         Call(W_CERTCLOSESTORE, store, 0, 0, 0, 0, 0);
+    }
+}
+
+// ------------------------------------------------------------------ terminal
+
+const i64 W_GETCONSOLEMODE = 51;
+const i64 W_SETCONSOLEMODE = 52;
+const i64 W_GETCONSOLESCREENBUFFERINFO = 53;
+const i64 W_SETCONSOLEOUTPUTCP = 54;
+const i64 W_READCONSOLEINPUTW = 55;
+const i64 W_PEEKNAMEDPIPE = 59;
+const i64 W_SLEEP = 60;
+
+i64 StdHandle(i64 which) => Call(W_GETSTDHANDLE, which, 0, 0, 0, 0, 0);
+
+// The console mode of handle h; -1 if h is not a console.
+i64 ConsoleMode(i64 h) {
+    u8[4] m;
+    i64 ok = 0;
+    unsafe { ok = Call(W_GETCONSOLEMODE, h, Ptr(&m[0]), 0, 0, 0, 0); }
+    if (ok == 0) return -1;
+    return (m[0] as i64) | (m[1] as i64) << 8 | (m[2] as i64) << 16 | (m[3] as i64) << 24;
+}
+
+i64 SetConsoleMode(i64 h, i64 mode) => Call(W_SETCONSOLEMODE, h, mode, 0, 0, 0, 0);
+
+// The visible window of the console's screen buffer: left, top, right, bottom.
+i32 WindowEdge(u32 which, i32 otherwise) {
+    u8[24] info;
+    i64 ok = 0;
+    unsafe { ok = Call(W_GETCONSOLESCREENBUFFERINFO, StdHandle(-11), Ptr(&info[0]), 0, 0, 0, 0); }
+    if (ok == 0) return otherwise;
+    usize at = 10 + 2 * which as usize;
+    return ((info[at] as u32 | (info[at + 1] as u32) << 8) as u16 as i16) as i32;
+}
+
+// The console (PLAN D43): VT output switched on, and VT input in raw mode, so keys arrive
+// as the same sequences a Linux terminal sends.
+public struct Terminal {
+    i64 InMode;         // the input mode found, given back when raw mode ends
+    bool IsRaw;
+    bool Ready;         // VT output and UTF-8 switched on
+    u32 High;           // a UTF-16 high surrogate waiting for its pair
+    List<u8> Pending;   // input decoded but not yet read
+
+    public static Terminal New() => new Terminal { InMode = 0, IsRaw = false, Ready = false, High = 0, Pending = List<u8>.New() };
+
+    // VT sequences and UTF-8 output on, once.
+    void Prepare(ref this) {
+        if (this.Ready) return;
+        this.Ready = true;
+        i64 ho = StdHandle(-11);
+        i64 m = ConsoleMode(ho);
+        if (m < 0) return;
+        SetConsoleMode(ho, m | 0x1 | 0x4);       // ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        Call(W_SETCONSOLEOUTPUTCP, 65001, 0, 0, 0, 0, 0);
+    }
+
+    // One UTF-16 unit of a key, as UTF-8 into Pending.
+    void PutUnit(ref this, u32 u) {
+        if (u >= 0xD800 && u < 0xDC00) {
+            this.High = u;
+            return;
+        }
+        u32 cp = u;
+        if (u >= 0xDC00 && u < 0xE000) {
+            if (this.High == 0) return;
+            cp = 0x10000 + ((this.High - 0xD800) << 10) + (u - 0xDC00);
+        }
+        this.High = 0;
+        if (cp < 0x80) {
+            this.Pending.Push(cp as u8);
+        } else if (cp < 0x800) {
+            this.Pending.Push((0xC0 | cp >> 6) as u8);
+            this.Pending.Push((0x80 | cp & 0x3F) as u8);
+        } else if (cp < 0x10000) {
+            this.Pending.Push((0xE0 | cp >> 12) as u8);
+            this.Pending.Push((0x80 | cp >> 6 & 0x3F) as u8);
+            this.Pending.Push((0x80 | cp & 0x3F) as u8);
+        } else {
+            this.Pending.Push((0xF0 | cp >> 18) as u8);
+            this.Pending.Push((0x80 | cp >> 12 & 0x3F) as u8);
+            this.Pending.Push((0x80 | cp >> 6 & 0x3F) as u8);
+            this.Pending.Push((0x80 | cp & 0x3F) as u8);
+        }
+    }
+}
+
+impl ITerminal for Terminal {
+    bool IsTerminal(ref this) => ConsoleMode(StdHandle(-11)) >= 0;
+
+    u32 Cols(ref this) {
+        i32 left = WindowEdge(0, 0);
+        i32 right = WindowEdge(2, 79);
+        if (right < left) return 80;
+        return (right - left + 1) as u32;
+    }
+
+    u32 Rows(ref this) {
+        i32 top = WindowEdge(1, 0);
+        i32 bottom = WindowEdge(3, 23);
+        if (bottom < top) return 24;
+        return (bottom - top + 1) as u32;
+    }
+
+    bool Raw(ref this, bool on) {
+        i64 hi = StdHandle(-10);
+        if (on) {
+            if (this.IsRaw) return true;
+            i64 im = ConsoleMode(hi);
+            if (im < 0 || ConsoleMode(StdHandle(-11)) < 0) return false;
+            this.InMode = im;
+            // ENABLE_WINDOW_INPUT and ENABLE_VIRTUAL_TERMINAL_INPUT; no line input, echo
+            // or Ctrl+C handling
+            if (SetConsoleMode(hi, 0x8 | 0x200) == 0) return false;
+            this.Prepare();
+            this.IsRaw = true;
+            return true;
+        }
+        if (!this.IsRaw) return true;
+        SetConsoleMode(hi, this.InMode);
+        this.IsRaw = false;
+        return true;
+    }
+
+    void Write(ref this, str text) {
+        this.Prepare();
+        write(1, text);
+    }
+
+    usize Read(ref this, mut u8[] into, i32 waitMs) {
+        if (into.Len == 0) return 0;
+        i64 hi = StdHandle(-10);
+        if (this.Pending.Len() == 0 && ConsoleMode(hi) < 0) {
+            // not a console. A pipe: wait (in steps of 10 ms) until it has bytes or has
+            // closed; a file is read as it comes.
+            i32 waited = 0;
+            while (true) {
+                u8[4] avail;
+                i64 isPipe = 0;
+                unsafe { isPipe = Call(W_PEEKNAMEDPIPE, hi, 0, 0, 0, Ptr(&avail[0]), 0); }
+                if (isPipe == 0) break;     // not a pipe, or one whose other end has closed
+                if (avail[0] != 0 || avail[1] != 0 || avail[2] != 0 || avail[3] != 0) break;
+                if (waitMs >= 0 && waited >= waitMs) return 0;
+                Call(W_SLEEP, 10, 0, 0, 0, 0, 0);
+                waited += 10;
+            }
+            isize n = 0;
+            unsafe { n = read(0, &into[0], into.Len); }
+            if (n <= 0) return 0;
+            return n as usize;
+        }
+        u8[320] recs;       // 16 INPUT_RECORDs of 20 bytes
+        u8[4] got;
+        while (this.Pending.Len() == 0) {
+            i64 wait = 0xFFFFFFFF;
+            if (waitMs >= 0) wait = waitMs as i64;
+            if (Call(W_WAITFORSINGLEOBJECT, hi, wait, 0, 0, 0, 0) != 0) return 0;    // WAIT_TIMEOUT
+            i64 ok = 0;
+            unsafe { ok = Call(W_READCONSOLEINPUTW, hi, Ptr(&recs[0]), 16, Ptr(&got[0]), 0, 0); }
+            if (ok == 0) return 0;
+            u32 n = got[0] as u32 | (got[1] as u32) << 8;
+            for (u32 r = 0; r < n && r < 16; r++) {
+                usize at = (r * 20) as usize;
+                u32 kind = recs[at] as u32 | (recs[at + 1] as u32) << 8;
+                if (kind != 1) continue;    // KEY_EVENT only; the size is asked for
+                bool down = recs[at + 4] != 0 || recs[at + 5] != 0;
+                u32 repeat = recs[at + 8] as u32 | (recs[at + 9] as u32) << 8;
+                u32 ch = recs[at + 14] as u32 | (recs[at + 15] as u32) << 8;
+                if (!down || ch == 0) continue;
+                if (repeat == 0) repeat = 1;
+                for (u32 k = 0; k < repeat; k++) this.PutUnit(ch);
+            }
+        }
+        usize take = this.Pending.Len();
+        if (take > into.Len) take = into.Len;
+        u8[] p = this.Pending.AsSlice();
+        for (usize i = 0; i < take; i++) into[i] = p[i];
+        List<u8> rest = List<u8>.New();
+        for (usize i = take; i < p.Len; i++) rest.Push(p[i]);
+        this.Pending = rest;
+        return take;
     }
 }

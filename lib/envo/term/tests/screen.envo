@@ -1,0 +1,63 @@
+// envo.term: a screen renders its first frame in full, then only the cells that
+// changed; styles are set once per run of cells; the reference terminal receives it.
+// os: none
+// expect: first: ^[[0m^[[2J^[[1;1HHi^[[1;4H^[[0;1;38;2;26;115;232mOK^[[0m
+// expect: unchanged:
+// expect: next: ^[[1;2Ho^[[3;1H^[[0;7mé!^[[0m
+// expect: ┌──┐
+// expect: │  │
+// expect: └──┘
+// expect: resized: ^[[0m^[[2J^[[1;1Habcd
+// expect: styled: ^[[0;4;48;2;0;0;0mx^[[0m
+// expect: presented: ^[[0m^[[2J^[[1;1Habcd
+// expect: Up
+// expect: Escape
+// expect: no more keys
+use envo.term;
+use platform;
+
+// The escape character shown as `^[`, so the frames can be compared as text.
+void ShowFrame(str label, str frame) {
+    write(1, label);
+    write(1, ":");
+    if (frame.Len > 0) write(1, " ");
+    string s = string.New();
+    for (usize i = 0; i < frame.Len; i++) {
+        if (frame[i] == 27) s.Append("^[");
+        else s.AppendByte(frame[i]);
+    }
+    print(s.AsStr());
+}
+
+term.Screen scr = term.Screen.New(10, 3);
+term.Style plain = term.Style.Plain();
+term.Style title = term.Style.Plain().Bold().Fg(0x1a73e8);
+scr.Put(0, 0, "Hi", plain);
+scr.Put(3, 0, "OK", title);
+string first = scr.Render();
+ShowFrame("first", first.AsStr());
+string none = scr.Render();
+ShowFrame("unchanged", none.AsStr());
+scr.Put(1, 0, "o", plain);
+scr.Put(0, 2, "é!", plain.Reverse());
+string next = scr.Render();
+ShowFrame("next", next.AsStr());
+scr.Clear();
+scr.Box(0, 0, 4, 3, plain);
+write(1, scr.Text().AsStr());
+scr.Resize(4, 1);
+scr.Put(0, 0, "abcdef", plain);
+ShowFrame("resized", scr.Render().AsStr());
+ShowFrame("styled", term.Styled("x", term.Style.Plain().Underline().Bg(0x000000)).AsStr());
+
+var t = platform.Terminal();
+scr.Invalidate();
+scr.Present(ref t);
+ShowFrame("presented", t.Output());
+term.Keys keys = term.Keys.New();
+t.Type("\x1b[A");
+term.Key? k = term.ReadKey(ref t, ref keys, 0);
+print(k.Unwrap().Name().AsStr());
+t.Type("\x1b");
+print(term.ReadKey(ref t, ref keys, 0).Unwrap().Name().AsStr());
+if (term.ReadKey(ref t, ref keys, 0).IsNone()) print("no more keys");

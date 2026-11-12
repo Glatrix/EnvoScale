@@ -591,17 +591,17 @@ public struct Vm {
     // ------------------------------------------------------------------ intrinsics
 
     u64 Intrinsic(ref this, usize fb, u32 first, u32 o, u32 n, str name) {
-        u64[11] a;
-        for (u32 k = 0; k < n && k < 11; k++) a[k] = this.Operand(fb, first, o + k);
+        u64[13] a;
+        for (u32 k = 0; k < n && k < 13; k++) a[k] = this.Operand(fb, first, o + k);
         if (Same(name, "syscall")) {
             if (!this.Box.AllowSyscall(a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64)) return Denied(1);
-            return platform.RawCall(1, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, 0, 0, 0, 0) as u64;
+            return platform.RawCall(1, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, 0, 0, 0, 0, 0, 0) as u64;
         }
         if (Same(name, "wincall")) {
             if (a[0] == 8 && this.Box.PendingDenied()) return 5;       // GetLastError after a denial: ACCESS_DENIED
             if (a[0] == 42 && this.Box.PendingDenied()) return 10013;  // WSAGetLastError: WSAEACCES
             if (!this.Box.AllowWincall(a[0] as i64, a[1] as i64, a[2] as i64, a[5] as i64)) return DeniedWin(a[0]);
-            return platform.RawCall(2, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, a[7] as i64, a[8] as i64, a[9] as i64, a[10] as i64) as u64;
+            return platform.RawCall(2, a[0] as i64, a[1] as i64, a[2] as i64, a[3] as i64, a[4] as i64, a[5] as i64, a[6] as i64, a[7] as i64, a[8] as i64, a[9] as i64, a[10] as i64, a[11] as i64, a[12] as i64) as u64;
         }
         write(2, "envo: error: the script runtime does not handle the intrinsic ");
         write(2, name);

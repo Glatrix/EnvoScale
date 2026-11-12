@@ -1,0 +1,32 @@
+// Terminal conformance: what every ITerminal adapter promises (lib/ports). Run with
+// output to a file or pipe, as the suites are: a native adapter then is not a terminal,
+// so raw mode is refused and the size is the default; the reference adapter pretends to
+// be an 80 x 24 terminal.
+// expect: term: done
+use ports.{ITerminal};
+use platform;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+void Run<T>(ref T t) where T : ITerminal {
+    Check(t.Cols() > 0 && t.Rows() > 0, "a size of at least one cell");
+    if (t.IsTerminal()) {
+        Check(t.Raw(true), "raw mode on");
+        Check(t.Raw(false), "raw mode off");
+    } else {
+        Check(!t.Raw(true), "no raw mode off a terminal");
+        Check(t.Cols() == 80 && t.Rows() == 24, "80 x 24 when the size cannot be told");
+    }
+    Check(t.Raw(false), "raw mode off when it is off");
+    u8[4] buf;
+    Check(t.Read(buf[0..0], 0) == 0, "reading into nothing reads nothing");
+}
+
+var term = platform.Terminal();
+Run(ref term);
+print("term: done");
