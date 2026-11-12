@@ -474,6 +474,18 @@ do_test() {
     tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_WASM = /' > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
     else bad 'envoc embedded wasm runtime' 'compiler/driver/runtime_wasm.envo is stale: regenerate it with envoc1 embed compiler/runtime/wasm.envo, renaming RUNTIME_0 to RUNTIME_WASM'; fi
+    # and the AArch64 Linux OS layer, as RUNTIME_A64 (compiler/driver/runtime_a64.envo; M10)
+    run "$ROOT" embed compiler/runtime/linux_aarch64.envo
+    tr -d '\r' < "$ROOT/compiler/driver/runtime_a64.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_A64 = /' > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc embedded aarch64 runtime' 'compiler/driver/runtime_a64.envo is stale: regenerate it with envoc1 embed compiler/runtime/linux_aarch64.envo, renaming RUNTIME_0 to RUNTIME_A64'; fi
+    # and the macOS OS layer, as RUNTIME_MACOS (compiler/driver/runtime_macos.envo; M10)
+    run "$ROOT" embed compiler/runtime/macos_aarch64.envo
+    tr -d '\r' < "$ROOT/compiler/driver/runtime_macos.envo" > "$TMP/expected"
+    tr -d '\r' < "$TMP/out" | sed 's/^const str RUNTIME_0 = /const str RUNTIME_MACOS = /' > "$TMP/actual"
+    if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+    else bad 'envoc embedded macOS runtime' 'compiler/driver/runtime_macos.envo is stale: regenerate it with envoc1 embed compiler/runtime/macos_aarch64.envo, renaming RUNTIME_0 to RUNTIME_MACOS'; fi
 
     # The x86-64 encoder and image writer: a minimal native program must exit with 42.
     case "$ENVOC1" in *.exe) host_os=windows ;; *) host_os=linux ;; esac
@@ -858,6 +870,11 @@ EOF_ERR
     else
         say 'wasm: skipped (no Node.js on this machine)'
     fi
+    # AArch64 Linux (M10, PLAN D69): programs build as AArch64 ELF executables, with and
+    # without the library; CI runs the run and library tests on an arm64 machine
+    # (bootstrap.sh cross, cross-run)
+    run "$ROOT" build "$ROOT/tests/spec/hello/console.envo" --lib "$ROOT" -o "$TMP/hello-a64" --target aarch64-linux
+    if [ "$rc" -eq 0 ] && [ "$(od -A n -t x1 -j 16 -N 4 "$TMP/hello-a64" | tr -d ' \n')" = "0300b700" ]; then pass; else bad 'aarch64-linux build' "exit $rc: $(cat "$TMP/err")"; fi
     # The website, written in Envo (website/README.md): it builds, and its pages are there
     say 'website: website/site.envo builds the site, with the sandbox (envoc.wasm)'
     cfiles=$(grep -v '^#' "$ROOT/compiler/files.txt" | tr -d '\r' | grep -v '^$' | tr '\n' ' ')
@@ -1309,9 +1326,111 @@ do_dist() {
     say "          sha256 $(sha256 "$dist/envoscale-$v.tar")"
 }
 
+# ------------------------------------------------------------------- cross
+# cross (M10, PLAN D69, D70): the run programs (tests/spec/core-run, s1-run, s2-run) and
+# the library's tests (lib/**/tests) built for aarch64-linux and aarch64-macos at -O0 and
+# -O2, each with its expected stdout, exit code and panic message, in build/cross/<target>.
+# On Linux the library's tests use the Linux adapter (`// os: none` ones the reference
+# adapters); on macOS only the `// os: none` ones are built until the macOS adapters exist.
+# cross-run <dir> runs them on such a machine (CI's arm64 Linux and macOS runners) in a
+# checkout, which needs no compiler: the library's tests in build/envo-test/run, as
+# `envo test` runs them.
+cross_target() {
+    target=$1
+    out="$ROOT/build/cross/$target"
+    rm -rf "$out"
+    mkdir -p "$out"
+    n=0
+    for suite in core-run s1-run s2-run; do
+        for f in "$ROOT"/tests/spec/$suite/*.envo; do
+            base="$suite-$(basename "$f" .envo)"
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$out/$base.expected"
+            code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
+            panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+            [ -n "$code" ] || code=0
+            [ -z "$panic" ] || code=101
+            printf '%s\n' "$code" > "$out/$base.exit"
+            printf '%s' "$panic" > "$out/$base.panic"
+            for o in O0 O2; do
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" "$f" -o "$out/$base-$o" --target "$target") \
+                    || fail "building $f for $target (-$o) failed"
+            done
+            n=$((n + 1))
+        done
+    done
+    for f in "$ROOT"/lib/*/tests/*.envo "$ROOT"/lib/*/*/tests/*.envo "$ROOT"/lib/*/*/*/tests/*.envo; do
+        [ -f "$f" ] || continue
+        os=$(sed -n 's|^// os: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
+        [ "$target" = aarch64-macos ] && [ "$os" != none ] && continue
+        rel=${f#"$ROOT"/lib/}
+        base="lib-$(printf '%s' "${rel%.envo}" | tr '/' '-')"
+        sed -n -e 's|^// expect: \(.*\)$|\1|p' -e 's|^// expect:$||p' "$f" | tr -d '\r' > "$out/$base.expected"
+        printf '0\n' > "$out/$base.exit"
+        printf '' > "$out/$base.panic"
+        for o in O0 O2; do
+            if [ -n "$os" ]; then
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" --os "$os" "$f" -o "$out/$base-$o" --target "$target") \
+                    || fail "building $f for $target (-$o) failed"
+            else
+                (cd "$ROOT" && "$BUILD2/envoc$(host_suffix)" build "-$o" --lib "$ROOT" "$f" -o "$out/$base-$o" --target "$target") \
+                    || fail "building $f for $target (-$o) failed"
+            fi
+        done
+        n=$((n + 1))
+    done
+    say "cross     $n programs, at -O0 and -O2, for $target in build/cross/$target"
+}
+
+do_cross() {
+    do_build
+    cross_target aarch64-linux
+    cross_target aarch64-macos
+}
+
+do_cross_run() {
+    [ "$#" -eq 1 ] || fail "usage: ./bootstrap.sh cross-run <dir>"
+    dir=$(cd "$1" && pwd)
+    t=$(mktemp -d)
+    passed=0
+    failed=0
+    for p in "$dir"/*-O0 "$dir"/*-O2; do
+        [ -f "$p" ] || continue
+        name=${p##*/}
+        base=${name%-O?}
+        chmod +x "$p"
+        rundir=$dir
+        case "$base" in lib-*) rundir="$ROOT/build/envo-test/run"; mkdir -p "$rundir" ;; esac
+        set +e
+        (cd "$rundir" && "$p") > "$t/out" 2> "$t/err"
+        rc=$?
+        set -e
+        want=$(cat "$dir/$base.exit")
+        panic=$(cat "$dir/$base.panic")
+        if ! cmp -s "$dir/$base.expected" "$t/out"; then
+            say "FAIL $name: stdout differs"
+            diff "$dir/$base.expected" "$t/out" | head -n 10 || true
+            failed=$((failed + 1))
+        elif [ "$rc" -ne "$want" ]; then
+            say "FAIL $name: exit code $rc, expected $want: $(head -c 300 "$t/err")"
+            failed=$((failed + 1))
+        elif [ -n "$panic" ] && ! grep -q -F "panic: $panic" "$t/err"; then
+            say "FAIL $name: stderr: $(head -c 300 "$t/err")"
+            failed=$((failed + 1))
+        else
+            passed=$((passed + 1))
+        fi
+    done
+    rm -rf "$t"
+    say ''
+    say "$passed passed, $failed failed"
+    [ "$failed" -eq 0 ] || exit 1
+}
+
 case "${1:-help}" in
     build) do_build ;;
     dist)  do_dist ;;
+    cross) do_cross ;;
+    cross-run) shift; do_cross_run "$@" ;;
     compare) shift; do_compare "$@" ;;
     fixedpoint) do_fixedpoint ;;
     test)  do_test ;;
@@ -1321,6 +1440,8 @@ case "${1:-help}" in
         say 'usage: ./bootstrap.sh <build|test|fixedpoint|check|dist|clean|help>'
         say '  build   assemble Stage 0 (with NASM, or the hex seed in bootstrap/seed without it), then build Stages 1 and 2'
         say '  dist    build, then the release archive build/dist/envoscale-<version>.tar and SHA256SUMS'
+        say '  cross   build, then the run and library tests for aarch64-linux and aarch64-macos in build/cross'
+        say '  cross-run <dir>  run those on an AArch64 Linux or macOS machine'
         say '  test    build, then run the Stage 0 and Stage 1 tests'
         say '  check   repository layout, lib->adapters imports, Hello World Gallery limits'
         say '  fixedpoint  build, then Stage 2 by itself twice at -O2 (build/stage2b, build/stage2c); they must match'

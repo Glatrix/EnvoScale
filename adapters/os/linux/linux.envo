@@ -1,33 +1,17 @@
-// os.linux: the native adapters for Linux on x86-64 (PLAN D25). They make system calls
-// through the `__syscall` intrinsic. Paths are passed as NUL-terminated copies; a path
-// holding a NUL byte is refused.
+// os.linux: the native adapters for Linux on x86-64 and AArch64 (PLAN D25, D69). They
+// make system calls through the `__syscall` intrinsic; the numbers, and the calls whose
+// form differs between architectures, are in os.linux.sys (one file per architecture).
+// Paths are passed as NUL-terminated copies; a path holding a NUL byte is refused.
 namespace os.linux;
 
 use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IProcess, INet, ITrust, ITerminal, IWindow, Event, EventKind, IoError};
 use core.text as ct;
 use alloc.text;
-
-const i64 SYS_OPEN = 2;
-const i64 SYS_CLOSE = 3;
-const i64 SYS_DUP2 = 33;
-const i64 SYS_FORK = 57;
-const i64 SYS_EXECVE = 59;
-const i64 SYS_WAIT4 = 61;
-const i64 SYS_GETCWD = 79;
-const i64 SYS_CHDIR = 80;
-const i64 SYS_MKDIR = 83;
-const i64 SYS_RMDIR = 84;
-const i64 SYS_UNLINK = 87;
-const i64 SYS_CLOCK_GETTIME = 228;
-const i64 SYS_NEWFSTATAT = 262;
-const i64 SYS_GETDENTS64 = 217;
-const i64 SYS_EXIT_GROUP = 231;
-const i64 SYS_GETRANDOM = 318;
+use os.linux.sys;
 
 const i64 O_WRONLY = 1;
 const i64 O_CREAT = 0x40;
 const i64 O_TRUNC = 0x200;
-const i64 O_DIRECTORY = 0x10000;
 const i64 O_CLOEXEC = 0x80000;
 
 const i64 AT_FDCWD = -100;
@@ -69,10 +53,11 @@ u32 Kind(str path) {
     *u8 p = CPath(path);
     unsafe {
         if (p as usize == 0) return 0;
-        *u8 st = alloc(144);        // struct stat on x86-64; st_mode is the u32 at 24
-        i64 r = Sys(SYS_NEWFSTATAT, AT_FDCWD, Ptr(p), Ptr(st), 0);
+        *u8 st = alloc(sys.STAT_SIZE);      // struct stat; st_mode is the u32 at STAT_MODE
+        i64 r = Sys(sys.NEWFSTATAT, AT_FDCWD, Ptr(p), Ptr(st), 0);
         if (r != 0) return 0;
-        u32 mode = st[24] as u32 | (st[25] as u32 << 8) | (st[26] as u32 << 16) | (st[27] as u32 << 24);
+        usize m = sys.STAT_MODE;
+        u32 mode = st[m] as u32 | (st[m + 1] as u32 << 8) | (st[m + 2] as u32 << 16) | (st[m + 3] as u32 << 24);
         return mode & S_IFMT;
     }
 }
@@ -161,7 +146,7 @@ impl IFileSystem for FileSystem {
             if (p as usize == 0) return Err(IoError.Invalid);
         }
         if (Kind(path) == S_IFDIR) return Err(IoError.Invalid);
-        i64 r = Sys(SYS_UNLINK, Ptr(p), 0, 0, 0);
+        i64 r = sys.Unlink(Ptr(p));
         if (r < 0) return Err(ErrorOf(r));
         return Ok(true);
     }
@@ -171,7 +156,7 @@ impl IFileSystem for FileSystem {
         unsafe {
             if (p as usize == 0) return Err(IoError.Invalid);
         }
-        i64 r = Sys(SYS_MKDIR, Ptr(p), 0x1ED, 0, 0);       // 0755
+        i64 r = sys.Mkdir(Ptr(p), 0x1ED);       // 0755
         if (r < 0) return Err(ErrorOf(r));
         return Ok(true);
     }
@@ -181,7 +166,7 @@ impl IFileSystem for FileSystem {
         unsafe {
             if (p as usize == 0) return Err(IoError.Invalid);
         }
-        i64 r = Sys(SYS_RMDIR, Ptr(p), 0, 0, 0);
+        i64 r = sys.Rmdir(Ptr(p));
         if (r < 0) return Err(ErrorOf(r));
         return Ok(true);
     }
@@ -194,14 +179,14 @@ impl IFileSystem for FileSystem {
         unsafe {
             if (p as usize == 0) return Err(IoError.Invalid);
             if (Kind(dir) == S_IFREG) return Err(IoError.Invalid);
-            i64 fd = Sys(SYS_OPEN, Ptr(p), O_DIRECTORY | O_CLOEXEC, 0, 0);
+            i64 fd = sys.Open(Ptr(p), sys.O_DIRECTORY | O_CLOEXEC, 0);
             if (fd < 0) return Err(ErrorOf(fd));
             *u8 buf = alloc(8192);
             while (true) {
-                i64 n = Sys(SYS_GETDENTS64, fd, Ptr(buf), 8192, 0);
+                i64 n = Sys(sys.GETDENTS64, fd, Ptr(buf), 8192, 0);
                 if (n == -4) continue;      // EINTR
                 if (n < 0) {
-                    Sys(SYS_CLOSE, fd, 0, 0, 0);
+                    Sys(sys.CLOSE, fd, 0, 0, 0);
                     return Err(ErrorOf(n));
                 }
                 if (n == 0) break;
@@ -216,7 +201,7 @@ impl IFileSystem for FileSystem {
                     at += reclen;
                 }
             }
-            Sys(SYS_CLOSE, fd, 0, 0, 0);
+            Sys(sys.CLOSE, fd, 0, 0, 0);
         }
         text.Sort(ref names);
         return Ok(names);
@@ -235,7 +220,7 @@ public struct Clock {
 // The time on clock id in nanoseconds.
 i64 ClockNanos(i64 id) {
     i64[2] ts;      // tv_sec, tv_nsec
-    unsafe { Sys(SYS_CLOCK_GETTIME, id, &ts[0] as isize as i64, 0, 0); }
+    unsafe { Sys(sys.CLOCK_GETTIME, id, &ts[0] as isize as i64, 0, 0); }
     return ts[0] * 1000000000 + ts[1];
 }
 
@@ -258,7 +243,7 @@ impl IEntropy for Entropy {
         usize at = 0;
         while (at < into.Len) {
             i64 r = 0;
-            unsafe { r = Sys(SYS_GETRANDOM, &into[at] as isize as i64, (into.Len - at) as i64, 0, 0); }
+            unsafe { r = Sys(sys.GETRANDOM, &into[at] as isize as i64, (into.Len - at) as i64, 0, 0); }
             if (r == -4) continue;      // EINTR
             if (r <= 0) panic("os.linux: getrandom failed");
             at += r as usize;
@@ -326,7 +311,7 @@ string Absolute(str path) {
     string s = string.New();
     unsafe {
         *u8 buf = alloc(4096);
-        i64 n = Sys(SYS_GETCWD, Ptr(buf), 4096, 0, 0);
+        i64 n = Sys(sys.GETCWD, Ptr(buf), 4096, 0, 0);
         if (n <= 1) return string.From(path);
         for (usize i = 0; i + 1 < n as usize; i++) s.AppendByte(buf[i]);
     }
@@ -370,7 +355,7 @@ i64 OpenForChild(str path) {
         if (p as usize == 0) return -22;
     }
     if (Kind(path) == S_IFDIR) return -21;
-    return Sys(SYS_OPEN, Ptr(p), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0x1A4, 0);      // 0644
+    return sys.Open(Ptr(p), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0x1A4);      // 0644
 }
 
 impl IProcess for Process {
@@ -399,7 +384,7 @@ impl IProcess for Process {
             } else {
                 ferr = OpenForChild(errPath);
                 if (ferr < 0) {
-                    if (fout >= 0) Sys(SYS_CLOSE, fout, 0, 0, 0);
+                    if (fout >= 0) Sys(sys.CLOSE, fout, 0, 0, 0);
                     return Err(ErrorOf(ferr));
                 }
             }
@@ -429,20 +414,20 @@ impl IProcess for Process {
             }
             envp[count] = 0;
             *u8 path = CPath(exe.AsStr());
-            i64 pid = Sys(SYS_FORK, 0, 0, 0, 0);
+            i64 pid = sys.Fork();
             if (pid == 0) {
                 // the child: its standard streams, then the program
-                if (fout >= 0) Sys(SYS_DUP2, fout, 1, 0, 0);
-                if (ferr >= 0) Sys(SYS_DUP2, ferr, 2, 0, 0);
-                if (workDir.Len > 0 && Sys(SYS_CHDIR, Ptr(wdir), 0, 0, 0) < 0) Sys(SYS_EXIT_GROUP, 127, 0, 0, 0);
-                Sys(SYS_EXECVE, Ptr(path), argv as isize as i64, envp as isize as i64, 0);
-                Sys(SYS_EXIT_GROUP, 127, 0, 0, 0);
+                if (fout >= 0) sys.Dup2(fout, 1);
+                if (ferr >= 0) sys.Dup2(ferr, 2);
+                if (workDir.Len > 0 && Sys(sys.CHDIR, Ptr(wdir), 0, 0, 0) < 0) Sys(sys.EXIT_GROUP, 127, 0, 0, 0);
+                Sys(sys.EXECVE, Ptr(path), argv as isize as i64, envp as isize as i64, 0);
+                Sys(sys.EXIT_GROUP, 127, 0, 0, 0);
             }
-            if (fout >= 0) Sys(SYS_CLOSE, fout, 0, 0, 0);
-            if (ferr >= 0 && ferr != fout) Sys(SYS_CLOSE, ferr, 0, 0, 0);
+            if (fout >= 0) Sys(sys.CLOSE, fout, 0, 0, 0);
+            if (ferr >= 0 && ferr != fout) Sys(sys.CLOSE, ferr, 0, 0, 0);
             if (pid < 0) return Err(ErrorOf(pid));
             while (true) {
-                i64 r = Sys(SYS_WAIT4, pid, &status as isize as i64, 0, 0);
+                i64 r = Sys(sys.WAIT4, pid, &status as isize as i64, 0, 0);
                 if (r == -4) continue;      // EINTR
                 if (r < 0) return Err(ErrorOf(r));
                 break;
@@ -461,16 +446,6 @@ impl IProcess for Process {
 public i64 SysCall(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) => __syscall(n, a, b, c, d, e, f);
 
 // ------------------------------------------------------------------ network
-
-const i64 SYS_SOCKET = 41;
-const i64 SYS_CONNECT = 42;
-const i64 SYS_ACCEPT = 43;
-const i64 SYS_SENDTO = 44;
-const i64 SYS_RECVFROM = 45;
-const i64 SYS_BIND = 49;
-const i64 SYS_LISTEN = 50;
-const i64 SYS_GETSOCKNAME = 51;
-const i64 SYS_SETSOCKOPT = 54;
 
 // The IoError for a negative errno from a socket call.
 IoError NetErrorOf(i64 r) {
@@ -600,17 +575,17 @@ void FromDns(str host, ref List<string> found) {
     q.Push(1);
     q.Push(0);
     q.Push(1);
-    i64 fd = Sys(SYS_SOCKET, 2, 2 | 0x80000, 0, 0);        // AF_INET, SOCK_DGRAM | SOCK_CLOEXEC
+    i64 fd = Sys(sys.SOCKET, 2, 2 | 0x80000, 0, 0);        // AF_INET, SOCK_DGRAM | SOCK_CLOEXEC
     if (fd < 0) return;
     unsafe {
         i64[2] timeout;
         timeout[0] = 5;
-        Sys6(SYS_SETSOCKOPT, fd, 1, 20, &timeout[0] as isize as i64, 16, 0);      // SO_RCVTIMEO
+        Sys6(sys.SETSOCKOPT, fd, 1, 20, &timeout[0] as isize as i64, 16, 0);      // SO_RCVTIMEO
         *u8 sa = SockAddr(ns[0..4], 53);
-        Sys6(SYS_SENDTO, fd, Ptr(&q.AsSlice()[0]), q.Len() as i64, 0, Ptr(sa), 16);
+        Sys6(sys.SENDTO, fd, Ptr(&q.AsSlice()[0]), q.Len() as i64, 0, Ptr(sa), 16);
         *u8 buf = alloc(1500);
-        i64 n = Sys6(SYS_RECVFROM, fd, Ptr(buf), 1500, 0, 0, 0);
-        Sys(SYS_CLOSE, fd, 0, 0, 0);
+        i64 n = Sys6(sys.RECVFROM, fd, Ptr(buf), 1500, 0, 0, 0);
+        Sys(sys.CLOSE, fd, 0, 0, 0);
         if (n < 12 || buf[0] != 0x45 || buf[1] != 0x6e) return;
         usize count = ((buf[6] as usize) << 8) | buf[7] as usize;
         usize at = 12;
@@ -675,14 +650,14 @@ impl INet for Net {
         foreach (var t in addrs.AsSlice()) {
             u8[4] a;
             if (!ParseIpv4(t.AsStr(), a[0..4])) continue;
-            i64 fd = Sys(SYS_SOCKET, 2, 1 | 0x80000, 0, 0);    // AF_INET, SOCK_STREAM | SOCK_CLOEXEC
+            i64 fd = Sys(sys.SOCKET, 2, 1 | 0x80000, 0, 0);    // AF_INET, SOCK_STREAM | SOCK_CLOEXEC
             if (fd < 0) return Err(NetErrorOf(fd));
             *u8 sa = SockAddr(a[0..4], port);
-            i64 r = Sys(SYS_CONNECT, fd, Ptr(sa), 16, 0);
-            while (r == -4) r = Sys(SYS_CONNECT, fd, Ptr(sa), 16, 0);
+            i64 r = Sys(sys.CONNECT, fd, Ptr(sa), 16, 0);
+            while (r == -4) r = Sys(sys.CONNECT, fd, Ptr(sa), 16, 0);
             if (r == 0) return Ok(fd);
             last = NetErrorOf(r);
-            Sys(SYS_CLOSE, fd, 0, 0, 0);
+            Sys(sys.CLOSE, fd, 0, 0, 0);
         }
         return Err(last);
     }
@@ -691,15 +666,15 @@ impl INet for Net {
         List<string> addrs = this.Resolve(host)?;
         u8[4] a;
         if (!ParseIpv4(addrs.AsSlice()[0].AsStr(), a[0..4])) return Err(IoError.Invalid);
-        i64 fd = Sys(SYS_SOCKET, 2, 1 | 0x80000, 0, 0);
+        i64 fd = Sys(sys.SOCKET, 2, 1 | 0x80000, 0, 0);
         if (fd < 0) return Err(NetErrorOf(fd));
         u32 one = 1;
-        unsafe { Sys6(SYS_SETSOCKOPT, fd, 1, 2, &one as isize as i64, 4, 0); }   // SO_REUSEADDR
+        unsafe { Sys6(sys.SETSOCKOPT, fd, 1, 2, &one as isize as i64, 4, 0); }   // SO_REUSEADDR
         *u8 sa = SockAddr(a[0..4], port);
-        i64 r = Sys(SYS_BIND, fd, Ptr(sa), 16, 0);
-        if (r == 0) r = Sys(SYS_LISTEN, fd, 128, 0, 0);
+        i64 r = Sys(sys.BIND, fd, Ptr(sa), 16, 0);
+        if (r == 0) r = Sys(sys.LISTEN, fd, 128, 0, 0);
         if (r != 0) {
-            Sys(SYS_CLOSE, fd, 0, 0, 0);
+            Sys(sys.CLOSE, fd, 0, 0, 0);
             return Err(NetErrorOf(r));
         }
         return Ok(fd);
@@ -709,14 +684,14 @@ impl INet for Net {
         unsafe {
             *u8 sa = alloc(16);
             u32 len = 16;
-            if (Sys(SYS_GETSOCKNAME, listener, Ptr(sa), &len as isize as i64, 0) != 0) return 0;
+            if (Sys(sys.GETSOCKNAME, listener, Ptr(sa), &len as isize as i64, 0) != 0) return 0;
             return ((sa[2] as u16) << 8) | sa[3] as u16;
         }
     }
 
     Result<i64, IoError> Accept(ref this, i64 listener) {
-        i64 fd = Sys(SYS_ACCEPT, listener, 0, 0, 0);
-        while (fd == -4) fd = Sys(SYS_ACCEPT, listener, 0, 0, 0);
+        i64 fd = Sys(sys.ACCEPT, listener, 0, 0, 0);
+        while (fd == -4) fd = Sys(sys.ACCEPT, listener, 0, 0, 0);
         if (fd < 0) return Err(NetErrorOf(fd));
         return Ok(fd);
     }
@@ -726,7 +701,7 @@ impl INet for Net {
         while (at < data.Len) {
             i64 r = 0;
             // MSG_NOSIGNAL: a closed peer is an error, not a signal that ends the program
-            unsafe { r = Sys6(SYS_SENDTO, conn, &data[at] as isize as i64, (data.Len - at) as i64, 0x4000, 0, 0); }
+            unsafe { r = Sys6(sys.SENDTO, conn, &data[at] as isize as i64, (data.Len - at) as i64, 0x4000, 0, 0); }
             if (r == -4) continue;
             if (r < 0) return Err(NetErrorOf(r));
             at += r as usize;
@@ -738,7 +713,7 @@ impl INet for Net {
         if (into.Len == 0) return Ok(0);
         while (true) {
             i64 r = 0;
-            unsafe { r = Sys6(SYS_RECVFROM, conn, &into[0] as isize as i64, into.Len as i64, 0, 0, 0); }
+            unsafe { r = Sys6(sys.RECVFROM, conn, &into[0] as isize as i64, into.Len as i64, 0, 0, 0); }
             if (r == -4) continue;
             if (r < 0) return Err(NetErrorOf(r));
             return Ok(r as usize);
@@ -747,7 +722,7 @@ impl INet for Net {
     }
 
     void Close(ref this, i64 handle) {
-        Sys(SYS_CLOSE, handle, 0, 0, 0);
+        Sys(sys.CLOSE, handle, 0, 0, 0);
     }
 }
 
@@ -816,8 +791,6 @@ impl ITrust for Trust {
 
 // ------------------------------------------------------------------ terminal
 
-const i64 SYS_IOCTL = 16;
-const i64 SYS_POLL = 7;
 const i64 TCGETS = 0x5401;
 const i64 TCSETS = 0x5402;
 const i64 TIOCGWINSZ = 0x5413;
@@ -835,7 +808,7 @@ void PutLe32(mut u8[] b, usize at, u32 v) {
 u32 WinSize(usize which) {
     u8[8] ws;
     i64 r = 0;
-    unsafe { r = Sys(SYS_IOCTL, 1, TIOCGWINSZ, Ptr(&ws[0]), 0); }
+    unsafe { r = Sys(sys.IOCTL, 1, TIOCGWINSZ, Ptr(&ws[0]), 0); }
     if (r != 0) return 0;
     return ws[2 * which] as u32 | (ws[2 * which + 1] as u32) << 8;
 }
@@ -851,7 +824,7 @@ public struct Terminal {
 impl ITerminal for Terminal {
     bool IsTerminal(ref this) {
         u8[64] t;
-        unsafe { return Sys(SYS_IOCTL, 1, TCGETS, Ptr(&t[0]), 0) == 0; }
+        unsafe { return Sys(sys.IOCTL, 1, TCGETS, Ptr(&t[0]), 0) == 0; }
     }
 
     u32 Cols(ref this) {
@@ -871,7 +844,7 @@ impl ITerminal for Terminal {
         if (on) {
             if (this.IsRaw) return true;
             i64 r = 0;
-            unsafe { r = Sys(SYS_IOCTL, 0, TCGETS, Ptr(&t[0]), 0); }
+            unsafe { r = Sys(sys.IOCTL, 0, TCGETS, Ptr(&t[0]), 0); }
             if (r != 0) return false;
             this.Saved = List<u8>.New();
             for (usize i = 0; i < 64; i++) this.Saved.Push(t[i]);
@@ -881,7 +854,7 @@ impl ITerminal for Terminal {
             PutLe32(t[0..64], 12, Le32(t[0..64], 12) & ~(0x1 | 0x2 | 0x8 | 0x40 | 0x8000));
             t[17 + 6] = 1;      // VMIN
             t[17 + 5] = 0;      // VTIME
-            unsafe { r = Sys(SYS_IOCTL, 0, TCSETS, Ptr(&t[0]), 0); }
+            unsafe { r = Sys(sys.IOCTL, 0, TCSETS, Ptr(&t[0]), 0); }
             if (r != 0) return false;
             this.IsRaw = true;
             return true;
@@ -889,7 +862,7 @@ impl ITerminal for Terminal {
         if (!this.IsRaw) return true;
         u8[] saved = this.Saved.AsSlice();
         for (usize i = 0; i < 64 && i < saved.Len; i++) t[i] = saved[i];
-        unsafe { Sys(SYS_IOCTL, 0, TCSETS, Ptr(&t[0]), 0); }
+        unsafe { Sys(sys.IOCTL, 0, TCSETS, Ptr(&t[0]), 0); }
         this.IsRaw = false;
         return true;
     }
@@ -901,7 +874,7 @@ impl ITerminal for Terminal {
         u8[8] pfd;          // struct pollfd: fd 0, events POLLIN
         pfd[4] = 1;
         i64 r = 0;
-        unsafe { r = Sys(SYS_POLL, Ptr(&pfd[0]), 1, waitMs as i64, 0); }
+        unsafe { r = sys.Poll(Ptr(&pfd[0]), 1, waitMs as i64); }
         if (r <= 0) return 0;
         isize n = 0;
         unsafe { n = read(0, &into[0], into.Len); }

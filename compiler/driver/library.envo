@@ -4,7 +4,9 @@
 // `<root>/lib/a/b/b.envo`, and the files it loads are scanned the same way, until nothing
 // new is used. Two namespaces are adapters, found under `<root>/adapters/os/`: `os.<name>`
 // is `adapters/os/<name>/<name>.envo`, and `platform` is the binding for the target's
-// operating system (or `--os none`): `adapters/os/<os>/platform.envo`. A file of the
+// operating system (or `--os none`): `adapters/os/<os>/platform.envo`. A module may have
+// a file per architecture (PLAN D69): `<dir>/<name>.<arch>.envo` (arch x86_64 or aarch64)
+// is taken for that architecture's targets before `<dir>/<name>.envo`. A file of the
 // standard platform (under `<root>/lib/`) may use `platform` but no `os.*` namespace:
 // the library reaches the outside world only through ports (E0215).
 
@@ -128,8 +130,18 @@ bool InLib(str root, str path) {
     return true;
 }
 
-// Loads the library modules the files in src use, transitively (D21, D23).
-void LoadLibraries(ref Sources src, str root, str os, bool core) {
+// path, a module file `<dir>/<name>.envo`, as its file for arch: `<dir>/<name>.<arch>.envo`.
+string ArchFile(str path, str arch) {
+    string p = string.From(path[0..path.Len - 5]);
+    p.AppendByte('.');
+    p.Append(arch);
+    p.Append(".envo");
+    return p;
+}
+
+// Loads the library modules the files in src use, transitively (D21, D23), for the
+// architecture arch (D69).
+void LoadLibraries(ref Sources src, str root, str os, str arch, bool core) {
     LexTables tables = LexTables.New();
     List<string> declared = List<string>.New();
     List<string> wanted = List<string>.New();       // namespaces asked for, in order
@@ -168,7 +180,10 @@ void LoadLibraries(ref Sources src, str root, str os, bool core) {
             if (HasText(declared, ns) || HasText(tried, ns)) continue;
             tried.Push(string.From(ns));
             string file = ModuleFile(root, ns, os);
-            string? text = ReadFile(file.AsStr());
+            string archFile = ArchFile(file.AsStr(), arch);
+            string? text = ReadFile(archFile.AsStr());
+            if (text.IsSome()) file = archFile;
+            else text = ReadFile(file.AsStr());
             if (text.IsNone()) {
                 string msg = string.From("no module `");
                 msg.Append(ns);

@@ -1,0 +1,64 @@
+// AArch64 Linux executables (M10, PLAN D69): as for x86-64 (PLAN D68), code and data in
+// separate pages, the code read and execute, the data read and write (W^X), and the
+// program position-independent (ET_DYN), relocating its few absolute addresses itself
+// (Asm.RelocStub), so the system loads it at a random address (ASLR). Pages here are
+// 64 KiB, the largest AArch64 Linux uses, so the same file runs on kernels with 4, 16 or
+// 64 KiB pages.
+namespace envoc.a64;
+
+use envoc.util;
+
+void Put16(ref string f, usize at, u64 v) => PutBytes(ref f, at, v, 2);
+void Put32(ref string f, usize at, u64 v) => PutBytes(ref f, at, v & 0xFFFFFFFF, 4);
+void Put64(ref string f, usize at, u64 v) => PutBytes(ref f, at, v, 8);
+
+// Links the code and data and returns a complete executable. The code starts with the
+// entry point. data0 and relocs are the labels of RelocStub.
+string WriteImageA64(ref Asm a, u32 data0, u32 relocs) {
+    // the table RelocStub reads: the count, then the data offset of each absolute address
+    a.DataAlign(4);
+    a.BindData(relocs);
+    u32 count = 0;
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind == FX_ABS64 && x.InData) count++;
+    }
+    a.DataU32(count as u64);
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind == FX_ABS64 && x.InData) a.DataU32(x.At as u64);
+    }
+    a.BindDataStart(data0);
+    u64 dataStart = 0;
+    string section = a.Link(A64_HEADERS, ref dataStart);
+    u64 codeEnd = A64_HEADERS + dataStart;          // page-aligned
+    u64 fileSize = A64_HEADERS + section.Len() as u64;
+    string f = string.New();
+    for (u64 i = 0; i < A64_HEADERS; i++) f.AppendByte(0);
+    f.Append(section);
+    Put32(ref f, 0, 0x464C457F);                    // 0x7F 'E' 'L' 'F'
+    Put32(ref f, 4, 0x00010102);                    // 64-bit, little-endian, version 1
+    Put16(ref f, 16, 3);                            // ET_DYN: position-independent
+    Put16(ref f, 18, 183);                          // EM_AARCH64
+    Put32(ref f, 20, 1);
+    Put64(ref f, 24, A64_HEADERS);                  // entry point: the start of the code
+    Put64(ref f, 32, 64);                           // program headers follow
+    Put16(ref f, 52, 64);
+    Put16(ref f, 54, 56);
+    Put16(ref f, 56, 3);
+    Put32(ref f, 64, 1);                            // PT_LOAD, R | X: the headers and the code
+    Put32(ref f, 68, 5);
+    Put64(ref f, 96, codeEnd);
+    Put64(ref f, 104, codeEnd);
+    Put64(ref f, 112, PAGE);
+    Put32(ref f, 120, 1);                           // PT_LOAD, R | W: the data
+    Put32(ref f, 124, 6);
+    Put64(ref f, 128, codeEnd);
+    Put64(ref f, 136, codeEnd);
+    Put64(ref f, 144, codeEnd);
+    Put64(ref f, 152, fileSize - codeEnd);
+    Put64(ref f, 160, fileSize - codeEnd);
+    Put64(ref f, 168, PAGE);
+    Put32(ref f, 176, 0x6474E551);                  // PT_GNU_STACK, R | W
+    Put32(ref f, 180, 6);
+    Put64(ref f, 224, 16);
+    return f;
+}

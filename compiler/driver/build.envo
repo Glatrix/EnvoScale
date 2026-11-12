@@ -12,6 +12,7 @@ use envoc.eir;
 use envoc.lower;
 use envoc.x64;
 use envoc.wasm;
+use envoc.a64;
 use envoc.opt;
 
 const usize MAX_SOURCE = 16 << 20;      // 16 MiB per file, as in Stages 0 and 1
@@ -79,14 +80,23 @@ i32 WriteOut(str path, in string data, bool executable) {
     return EXIT_OK;
 }
 
+// The architecture of target, as module files name it (D69).
+str ArchOf(u32 target) {
+    if (target == TARGET_A64 || target == TARGET_MACOS) return "aarch64";
+    if (target == TARGET_WASM) return "wasm32";
+    return "x86_64";
+}
+
 // The adapters `platform` binds: os, or the target's operating system (D23).
 str PlatformOs(str os, u32 target) {
     if (os.Len == 0) {
         if (target == TARGET_WINDOWS) return "windows";
         if (target == TARGET_WASM) return "wasm";
+        if (target == TARGET_MACOS) ToolFail("aarch64-macos programs use the libraries with `--os none` for now: the macOS adapters are not written yet (M10)", EXIT_USAGE);
         return "linux";
     }
-    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && target == TARGET_LINUX) || (Same(os, "wasm") && target == TARGET_WASM);
+    bool linux = target == TARGET_LINUX || target == TARGET_A64;
+    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && linux) || (Same(os, "wasm") && target == TARGET_WASM);
     if (!ok) ToolFail("--os must be `none` or the target's operating system", EXIT_USAGE);
     return os;
 }
@@ -97,10 +107,12 @@ str PlatformOs(str os, u32 target) {
 // lib is the folder holding lib/ and adapters/ (D21), "" for none; os as for PlatformOs.
 Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool core, bool verify, i32 unit, bool opt, str lib, str os) {
     foreach (var p in paths.AsSlice()) LoadSource(ref src, p.AsStr());
-    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), core);
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), ArchOf(target), core);
     src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
     if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
     else if (target == TARGET_WASM) src.Add("<runtime>/wasm.envo", string.From(RUNTIME_WASM));
+    else if (target == TARGET_A64) src.Add("<runtime>/linux_aarch64.envo", string.From(RUNTIME_A64));
+    else if (target == TARGET_MACOS) src.Add("<runtime>/macos_aarch64.envo", string.From(RUNTIME_MACOS));
     else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
     u32 prelude = 0xFFFFFFFF;
     if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
@@ -129,6 +141,8 @@ Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool c
 // Module m's code for target: an executable, or a WebAssembly module (D48).
 string GenFor(ref Module m, u32 target, bool opt, bool wantMap, ref string map) {
     if (target == TARGET_WASM) return GenWasm(m);
+    if (target == TARGET_A64) return GenModuleA64(ref m, false, opt, wantMap, ref map);
+    if (target == TARGET_MACOS) return GenModuleA64(ref m, true, opt, wantMap, ref map);
     return GenModule(ref m, target, opt, wantMap, ref map);
 }
 
@@ -148,7 +162,7 @@ i32 BuildProgram(in List<string> paths, str output, u32 target, bool opt, str li
 i32 CheckProgram(in List<string> paths, str lib, str os, u32 target) {
     Sources src = Sources.New();
     foreach (var p in paths.AsSlice()) LoadSource(ref src, p.AsStr());
-    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), false);
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), ArchOf(target), false);
     u32 prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
     List<usize> starts = List<usize>.New();
     List<Token> toks = LexAll(src, ref starts, false);

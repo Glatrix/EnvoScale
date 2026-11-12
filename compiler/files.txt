@@ -1,6 +1,8 @@
 driver/main.envo
 driver/runtime.envo
 driver/runtime_wasm.envo
+driver/runtime_a64.envo
+driver/runtime_macos.envo
 driver/library.envo
 driver/build.envo
 util/text.envo
@@ -50,3 +52,8 @@ backend/x86_64/image.envo
 backend/x86_64/regalloc.envo
 backend/x86_64/gen.envo
 backend/wasm/wasm.envo
+backend/aarch64/asm.envo
+backend/aarch64/image.envo
+backend/aarch64/macho.envo
+backend/aarch64/regalloc.envo
+backend/aarch64/gen.envo
