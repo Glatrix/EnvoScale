@@ -86,7 +86,7 @@ than its limit. Each becomes runnable at the milestone shown ([`docs/PLAN.md`](d
 | [`compiler/`](compiler/README.md) | Stage 2 `envoc`, the real compiler |
 | [`runtime/`](runtime/README.md) | Startup, panics, ARC, the EIR VM and JIT |
 | [`lib/`](lib/README.md) | The standard platform: pure code and port interfaces |
-| [`adapters/`](adapters/README.md) | All platform-specific code |
+| [`adapters/`](adapters/README.md) | All platform-specific code, and editor support (the VS Code extension) |
 | [`tools/`](tools/README.md) | `envo` CLI, LSP, formatter, debugger |
 | [`templates/`](templates/README.md) | Project and site templates |
 | [`examples/`](examples/README.md) | Small runnable programs |

@@ -12,8 +12,9 @@ are ports, and everything drawn is computed in memory first:
 | Command-line programs | `envo.cli` | done (8.2) |
 | 2D drawing (D44) | `envo.gfx`: an RGBA canvas, in software | done (8.3) |
 | Text | `envo.font`: TrueType, anti-aliased | done (8.4) |
-| Window port (D45) | `ports.IWindow`, adapters in `os.*` | done (8.5) |
-| UI (D47) | `envo.ui` on `envo.lumen` | done (8.6) |
+| Window port (D45) | `ports.IWindow`, adapters in `os.*`: Win32, X11 (14.7), a page's canvas (14.8) | done (8.5, 14.7, 14.8) |
+| UI (D47) | `envo.ui` on `envo.lumen`; application components on `envo.edit` | done (8.6, 14.6) |
+| Input and clipboard (D73) | `ports.KEY_*`, `Event.Mods`, `ports.IClipboard`, `std.clipboard` | done (14.2) |
 | GPU port (D46) | `ports.IGpu`; software adapter in `envo.gpu`, Direct3D 12 in `os.windows` | done (8.7, 8.8) |
 
 ## Exact arithmetic

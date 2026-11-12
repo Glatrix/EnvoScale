@@ -305,16 +305,18 @@ names, logos and look-and-feel of other products are not copied (legal review, #
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [14.1](https://github.com/envoscale/EnvoScale/issues/149) | A heap that frees (D76) | every suite and the fixed point, with memory reused | |
-| [14.2](https://github.com/envoscale/EnvoScale/issues/150) | Input in EnvoScale's terms: key codes, modifiers, a clipboard port (D73) | the reference adapters; the Windows adapter | |
-| [14.3](https://github.com/envoscale/EnvoScale/issues/151) | Processes with pipes: spawn, write, read without blocking, wait, kill | conformance tests on Windows and Linux | |
-| [14.4](https://github.com/envoscale/EnvoScale/issues/152) | Language intelligence: `envo query`; completion, hover, definition and symbols in `envo lsp` (D75) | `tests/lsp` sessions | |
-| [14.5](https://github.com/envoscale/EnvoScale/issues/153) | `envo.edit`: buffers, cursors, selections, undo, search (D74) | `lib/envo/edit/tests` | |
-| [14.6](https://github.com/envoscale/EnvoScale/issues/154) | `envo.ui` for applications: scrolling, lists and trees, tabs, split panes, the code editor, a command palette | pixel and cell tests | |
-| [14.7](https://github.com/envoscale/EnvoScale/issues/155) | Linux windows: X11 over its socket, in `adapters/os/linux` | CI under Xvfb | |
-| [14.8](https://github.com/envoscale/EnvoScale/issues/156) | The browser host: `envo.ui` programs in a page (D72) | the wasm tests; a page in the site | |
-| [14.9](https://github.com/envoscale/EnvoScale/issues/157) | A VS Code extension (`adapters/editors/vscode`): grammar, editor settings, an LSP client with no npm dependencies | the extension's own tests in CI | |
-| [14.10](https://github.com/envoscale/EnvoScale/issues/158) | Docs and status; M14 complete | CI | |
+| [14.1](https://github.com/envoscale/EnvoScale/issues/149) | A heap that frees (D76) | every suite and the fixed point, with memory reused | Done |
+| [14.2](https://github.com/envoscale/EnvoScale/issues/150) | Input in EnvoScale's terms: key codes, modifiers, a clipboard port (D73) | the reference adapters; the Windows adapter | Done |
+| [14.3](https://github.com/envoscale/EnvoScale/issues/151) | Processes with pipes: spawn, write, read without blocking, wait, kill | conformance tests on Windows and Linux | Done |
+| [14.4](https://github.com/envoscale/EnvoScale/issues/152) | Language intelligence: `envo query`; completion, hover, definition and symbols in `envo lsp` (D75) | `tests/lsp` sessions | Done |
+| [14.5](https://github.com/envoscale/EnvoScale/issues/153) | `envo.edit`: buffers, cursors, selections, undo, search (D74) | `lib/envo/edit/tests` | Done |
+| [14.6](https://github.com/envoscale/EnvoScale/issues/154) | `envo.ui` for applications: scrolling, lists and trees, tabs, split panes, the code editor, a command palette | pixel and cell tests | Done |
+| [14.7](https://github.com/envoscale/EnvoScale/issues/155) | Linux windows: X11 over its socket, in `adapters/os/linux` | CI under Xvfb | Done |
+| [14.7b](https://github.com/envoscale/EnvoScale/issues/167) | The Linux clipboard: the X11 `CLIPBOARD` selection | the clipboard test under Xvfb | |
+| [14.8](https://github.com/envoscale/EnvoScale/issues/156) | The browser host: `envo.ui` programs in a page (D72) | the wasm tests; a page in the site | Done |
+| [14.8b](https://github.com/envoscale/EnvoScale/issues/168) | A font for pages, then an editor demo on the site (owner decision: which font ships) | a page in the site | Needs Decision |
+| [14.9](https://github.com/envoscale/EnvoScale/issues/157) | A VS Code extension (`adapters/editors/vscode`): grammar, editor settings, an LSP client with no npm dependencies | the extension's own tests in CI | Done |
+| [14.10](https://github.com/envoscale/EnvoScale/issues/158) | Docs and status; M14 complete | CI | Done |
 
 **M15: Envo Studio, the IDE** (its own repository, D71):
 
