@@ -33,6 +33,11 @@ jobs:
       # X11 window through the Linux adapter.
       - run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
       - run: xvfb-run -a ./bootstrap.sh test
+      # ...and a window must really open there (the suite also passes where Open says no)
+      - run: |
+          out=$(ENVO_WINDOW_REQUIRED=1 xvfb-run -a build/envo/envo run --native tests/conformance/window/window.envo)
+          echo "$out"
+          [ "$out" = "window: done" ]
       # The VS Code extension (adapters/editors/vscode, M14.9) against the envo just built
       - run: ENVO=build/envo/envo node --test adapters/editors/vscode/test/*.test.js
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

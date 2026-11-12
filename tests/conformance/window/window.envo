@@ -1,10 +1,12 @@
 // Window conformance: what every IWindow adapter promises (lib/ports). A system that
 // cannot open windows says so from Open and then has no window; one that can opens a
 // small window for a moment: its drawable area has the size asked for, it takes a frame
-// and events, and it is gone once closed.
+// and events, and it is gone once closed. With ENVO_WINDOW_REQUIRED set (CI under Xvfb), a
+// window that does not open is a failure.
 // expect: window: done
 use ports.{IWindow, Event, EventKind};
 use platform;
+use std.env;
 
 void Check(bool ok, str what) {
     if (!ok) {
@@ -18,6 +20,7 @@ void Run<W>(ref W w) where W : IWindow {
     Check(w.Poll().Is(EventKind.None), "no events before Open");
     if (!w.Open("Envo conformance", 400, 300)) {
         Check(!w.IsOpen(), "not open when Open says no");
+        Check(env.Var("ENVO_WINDOW_REQUIRED").IsNone(), "a window opens (ENVO_WINDOW_REQUIRED is set)");
         return;
     }
     Check(w.IsOpen(), "open after Open");
