@@ -27,6 +27,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M11 | 3D | **Done** (Experimental; ahead of M10): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR: the same frame bit for bit in every build), glTF 2.0 import, the 3D gallery program in a window (11.1–11.6) |
 | M12 | AI | **Done** (Experimental): `envo.ai` tensors, autograd and optimizers; BPE, SentencePiece and WordPiece tokenizers; GGUF loading (11 tensor types); local inference for the Llama family; a text encoder (nomic-bert), exact and HNSW vector search; a matrix product on the GPU through `IGpu` (12.1–12.7) |
 | M13 | Ecosystem | **Done** (Experimental): `envo prof`, `envo fuzz` (coverage-guided), `envo dbg` (source-level), package dependencies with a lock, signed archives and a registry adapter, and the hex seed: Stage 0 built from commented hex with the OS alone, byte-identical to NASM (13.1–13.6) |
+| M14 | The application platform | **Next** (PLAN §6): a heap that frees, input and clipboard ports, processes with pipes, language intelligence in `envo lsp`, `envo.edit`, application widgets, Linux windows, the browser host, a VS Code extension |
+| M15 | Envo Studio, the IDE | **Planned** (PLAN §6): its own repository, built on M14 |
 
 ### M0 Definition of Done
 

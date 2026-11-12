@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M10 (AArch64 and macOS, §5): AArch64 Linux (D69) and macOS executables (D70) are done; the macOS adapters are next. M0–M9 and M11–M13 are done (records in §4).
+- **Current milestones:** M14, the application platform, then M15, the IDE (§6, phase 2: applications). M10 (AArch64 and macOS, §5) continues alongside: AArch64 Linux (D69) and macOS executables (D70) are done; the macOS adapters are next. M0–M9 and M11–M13 are done (records in §4).
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -106,6 +106,12 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D68 | **Stage 1 and Stage 2 executables are W^X and ASLR-enabled** (issue #80): code and data on separate pages with their own protections; Linux programs are `ET_DYN` and relocate their 8-byte absolute addresses with a stub at the entry (no dynamic loader needed); Windows programs carry `.reloc` and `DYNAMIC_BASE`/`HIGH_ENTROPY_VA`. Both stages write identical bytes, so the D17 comparisons hold. Stage 0's own executables keep D2's layout. | `docs/architecture/stage1.md` |
 | D69 | **AArch64 Linux, tested on an arm64 machine in CI** (M10): `--target aarch64-linux`; a backend that follows the x86-64 one at -O0 instruction for instruction (values in frame slots, arguments on the stack, the same checks and NaN rules), ELF `ET_DYN` with 64 KiB pages and the D68 self-relocation stub; the runtime's OS layer is `compiler/runtime/linux_aarch64.envo`. A library module may have a file per architecture, `<name>.<arch>.envo`, taken before `<name>.envo` (the Linux adapter's `os.linux.sys`). Programs are cross-built on x86-64 (`bootstrap.sh cross`) and run on GitHub's arm64 runner (`cross-run`), free since the repository is public. | `compiler/backend/aarch64/README.md` |
 | D70 | **macOS on arm64 by raw system calls, for now** (M10): `--target aarch64-macos` writes a position-independent Mach-O `MH_EXECUTE` that dyld starts (`LC_MAIN`, linked to libSystem but importing nothing), with W^X segments and an ad-hoc code signature (SHA-256 per 4 KiB page, as the linker signs), since macOS runs no unsigned arm64 code. The runtime calls the kernel directly (`svc #0x80`). Apple does not promise that interface across releases; calling libSystem through imports is the planned replacement, before the macOS adapters grow. Run in CI on GitHub's macOS runner. | `compiler/backend/aarch64/README.md` |
+| D71 | **Applications live in their own repositories** (phase 2): each app (the IDE first) is a separate repository built with the toolchain (a pinned EnvoScale commit in its CI until releases exist) and the standard platform it ships. An app holds only its own code: anything it needs from an operating system, a GPU or a host is a port in `lib/ports` with adapters in this repository's `adapters/`, never in the app. What several apps need goes into the standard platform. | §6 |
+| D72 | **One UI, many hosts**: apps draw with `envo.ui` into a canvas (`envo.gfx`). A desktop window (the Window port's adapters), a browser page (the wasm adapter over a canvas) and a terminal (cells) are hosts for the same code, so web and desktop versions of an app come from one program. | §6 |
+| D73 | **Ports speak EnvoScale's terms**: key codes and modifier keys are defined by `ports`, not by an operating system; adapters translate Win32 virtual keys, X11 keysyms and DOM key names to them. The same goes for every new port (clipboard, processes with pipes). | §6 |
+| D74 | **The editor core is UI-free**: `envo.edit` holds text buffers, cursors and selections, undo and search, tested without a window; `envo.ui`'s code editor draws and drives it. | §6 |
+| D75 | **Language intelligence through the language server**: `envo query` indexes a checked program (declarations, references, types and doc comments); `envo lsp` answers completion, hover, go-to-definition and symbols from the last good index of each package. Editors, the IDE included, use it over LSP. | §6 |
+| D76 | **The runtime's heap frees**: `__rt_alloc` takes blocks from per-size free lists (powers of two, 16 bytes to 1 MiB, each with a 16-byte header) and `__rt_free` returns them; memory stays zeroed when handed out, as before. Long-running programs (an IDE, a server) stop growing. Frees of pointers the heap did not hand out, or twice, are ignored. | §6 |
 
 ## 3. Open questions
 
@@ -283,14 +289,54 @@ Before the runners were free, work moved to what M11 and M12 needed first:
 | [13.5](https://github.com/envoscale/EnvoScale/issues/145) | The hex seed (D67) | asm0 from the hex rebuilds both asm0s and both envoc0s byte for byte | done |
 | [13.6](https://github.com/envoscale/EnvoScale/issues/146) | Docs and status; M13 complete | CI | done |
 
-## 6. Risks
+## 6. Phase 2: applications (M14, M15)
+
+The direction after M13: replace commercial software bit by bit with EnvoScale
+applications, each in its own repository (D71), adding to the platform whatever they
+need. The IDE comes first: it needs only text, UI and language intelligence, it is used
+every day, and it pushes the UI toolkit hardest in the right places. Then, as the
+platform grows: a disassembler and debugger, an image editor, a game engine and a 3D
+studio (they need GPU rendering on every OS and faster code), and a music studio (it
+needs audio on every OS and real-time behaviour). Apps take inspiration, not trade dress:
+names, logos and look-and-feel of other products are not copied (legal review, #35).
+
+**M14: the application platform** (this repository):
+
+| # | Increment | Tested by | State |
+|---|---|---|---|
+| [14.1](https://github.com/envoscale/EnvoScale/issues/149) | A heap that frees (D76) | every suite and the fixed point, with memory reused | |
+| [14.2](https://github.com/envoscale/EnvoScale/issues/150) | Input in EnvoScale's terms: key codes, modifiers, a clipboard port (D73) | the reference adapters; the Windows adapter | |
+| [14.3](https://github.com/envoscale/EnvoScale/issues/151) | Processes with pipes: spawn, write, read without blocking, wait, kill | conformance tests on Windows and Linux | |
+| [14.4](https://github.com/envoscale/EnvoScale/issues/152) | Language intelligence: `envo query`; completion, hover, definition and symbols in `envo lsp` (D75) | `tests/lsp` sessions | |
+| [14.5](https://github.com/envoscale/EnvoScale/issues/153) | `envo.edit`: buffers, cursors, selections, undo, search (D74) | `lib/envo/edit/tests` | |
+| [14.6](https://github.com/envoscale/EnvoScale/issues/154) | `envo.ui` for applications: scrolling, lists and trees, tabs, split panes, the code editor, a command palette | pixel and cell tests | |
+| [14.7](https://github.com/envoscale/EnvoScale/issues/155) | Linux windows: X11 over its socket, in `adapters/os/linux` | CI under Xvfb | |
+| [14.8](https://github.com/envoscale/EnvoScale/issues/156) | The browser host: `envo.ui` programs in a page (D72) | the wasm tests; a page in the site | |
+| [14.9](https://github.com/envoscale/EnvoScale/issues/157) | A VS Code extension (`adapters/editors/vscode`): grammar, editor settings, an LSP client with no npm dependencies | the extension's own tests in CI | |
+| [14.10](https://github.com/envoscale/EnvoScale/issues/158) | Docs and status; M14 complete | CI | |
+
+**M15: Envo Studio, the IDE** (its own repository, D71):
+
+| # | Increment | Tested by | State |
+|---|---|---|---|
+| [15.1](https://github.com/envoscale/EnvoScale/issues/159) | The repository: CI against a pinned toolchain; the app shell in a window | CI on Windows and Linux | |
+| [15.2](https://github.com/envoscale/EnvoScale/issues/160) | Files: an explorer, tabs, open and save, the code editor | UI tests | |
+| [15.3](https://github.com/envoscale/EnvoScale/issues/161) | Language: diagnostics, completion, hover, definition through `envo lsp` | scripted sessions | |
+| [15.4](https://github.com/envoscale/EnvoScale/issues/162) | Build, run and test with an output panel; a terminal panel | scripted sessions | |
+| [15.5](https://github.com/envoscale/EnvoScale/issues/163) | Debugging through `envo dbg` | a scripted session | |
+| [15.6](https://github.com/envoscale/EnvoScale/issues/164) | The web version, through the browser host | the wasm build | |
+
+macOS windows wait on M10's libSystem imports ([10.4](https://github.com/envoscale/EnvoScale/issues/165), [10.5](https://github.com/envoscale/EnvoScale/issues/166)).
+
+## 7. Risks
 
 - **Envo-S1 is a small language for a library.** No floats, no dynamic interface
   values, no classes; lambdas own no resources. Mitigation: M4's layers use what S1 has
   (static dispatch, D22), and each module's README says what changes when `envoc`
   accepts more of Envo. APIs are designed for full Envo and implemented in S1 now.
-- **The heap never frees** (Stage 1's runtime). Library code allocates freely; fine at
-  test scale, and the allocator port arrives with `alloc`'s allocator interface.
+- **The heap never freed** (Stage 1's runtime) until D76. Freeing memory can expose
+  code that used memory after giving it back; the suites, the fuzzers and the fixed point
+  are the guard.
 - **OS behaviour differs.** Conformance suites define the behaviour each port promises,
   and run against every adapter on both hosts in CI. A difference is an adapter bug or a
   suite that promised too much.
