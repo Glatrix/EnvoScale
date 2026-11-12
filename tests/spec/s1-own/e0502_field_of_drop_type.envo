@@ -1,0 +1,9 @@
+// expect-error: E0502 @ 9:11
+// [own.move.3] a field cannot be moved out of a value whose type has its own `Drop`:
+// the `Drop` method needs all of it
+struct Res { str Name; }
+struct Owner { Res A; }
+impl IDrop for Res { void Drop(ref this) { } }
+impl IDrop for Owner { void Drop(ref this) { } }
+Owner o = new Owner { A = new Res { Name = "a" } };
+Res a = o.A;

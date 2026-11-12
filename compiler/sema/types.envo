@@ -96,6 +96,7 @@ public const u32 SF_BYREF = 32;         // a local reached through a pointer (`i
 public const u32 SF_READONLY = 64;      // an `in` local
 public const u32 SF_PRELUDE = 128;      // a prelude item: a program's own item of the same name hides it
 public const u32 SF_PUBLIC = 256;       // `public` or `internal`
+public const u32 SF_PARTLY = 512;       // a local a field of which is moved out: dropped field by field (M3.10)
 
 // Built-in ids (envo-core.md section 6), from 1.
 public const u32 B_EXIT = 7;

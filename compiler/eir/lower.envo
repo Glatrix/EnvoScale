@@ -87,6 +87,8 @@ public struct Lower {
     List<u32> Drops;        // the locals with a drop flag, in scope order
     List<u32> Temps;        // pairs (type, address): the statement's temporaries to drop
     List<u32> FlagSyms;     // the locals given a drop flag in the current function
+    List<u32> FieldFlags;   // per checker symbol: 1 + where a partly moved local's field flags start
+    List<u32> FieldFlagSlots; // per field of such a local: its drop flag slot, 0 if it needs none
 
     public static Lower New(Checker c, u32 target) => new Lower {
         C = c, M = Module.New(), Func = 0, Block = 0, Entry = 0, Body = 0,
@@ -95,7 +97,8 @@ public struct Lower {
         Strings = StrMap<u32>.New(), Loops = List<u32>.New(), StrType = 0, RetSlot = 0, RetType = 0,
         Top = false, Target = target, Env = 0, NEnv = 0, FnvType = 0, LamCount = 0,
         PendingLams = List<u32>.New(), PendingThunks = List<u32>.New(), Thunks = StrMap<u32>.New(),
-        DropFlags = List<u32>.New(), Drops = List<u32>.New(), Temps = List<u32>.New(), FlagSyms = List<u32>.New()
+        DropFlags = List<u32>.New(), Drops = List<u32>.New(), Temps = List<u32>.New(), FlagSyms = List<u32>.New(),
+        FieldFlags = List<u32>.New(), FieldFlagSlots = List<u32>.New()
     };
 
     // The module, handed out once lowering is done.

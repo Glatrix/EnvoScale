@@ -4,6 +4,10 @@
 // locals of the scopes being left are dropped, newest first. A value that needs a drop
 // but is not moved anywhere (a temporary, NMove 2) is dropped at the end of its statement.
 // Dropping calls the type's `Drop`, then drops the fields that need it, in order.
+//
+// A local a field of which is moved out (SF_PARTLY, M3.10) also gets a flag per field that
+// needs a drop. Moving the field clears its flag (NMove 3 on the member), and the local
+// is dropped field by field. Its type has no `Drop` of its own (the checker makes sure).
 namespace envoc.lower;
 
 use envoc.util;
@@ -31,6 +35,47 @@ impl Lower {
         this.DropFlags.Set(s as usize, flag);
         this.Drops.Push(s);
         this.FlagSyms.Push(s);
+        if (this.C.SymAt(s).Flags & SF_PARTLY != 0) this.TrackFields(s, init);
+    }
+
+    // Field drop flags for partly moved local s.
+    void TrackFields(ref this, u32 s, bool init) {
+        u32 t = this.LSubst(this.C.SymAt(s).Type);
+        u32 start = this.FieldFlagSlots.Len() as u32;
+        u64 v = 0;
+        if (init) v = 1;
+        u32 f = this.C.NodeAt(this.C.SymAt(this.C.TypeAt(t).Sym).Node).A;
+        while (f != 0) {
+            u32 flag = 0;
+            if (this.C.NeedsDrop(this.C.FieldType(t, f))) {
+                flag = this.Slot(ET_BOOL);
+                u32 c = this.Const(ET_BOOL, v);
+                this.Store(ET_BOOL, c, flag);
+            }
+            this.FieldFlagSlots.Push(flag);
+            f = this.C.NNext(f);
+        }
+        while (this.FieldFlags.Len() <= s as usize) this.FieldFlags.Push(0);
+        this.FieldFlags.Set(s as usize, start + 1);
+    }
+
+    // The drop flag of field i of local s, or 0.
+    u32 FieldFlag(in this, u32 s, u32 i) {
+        if (this.FieldFlags.Len() <= s as usize || this.FieldFlags.Get(s as usize) == 0) return 0;
+        return this.FieldFlagSlots.Get((this.FieldFlags.Get(s as usize) - 1 + i) as usize);
+    }
+
+    bool HasFieldFlags(in this, u32 s) => this.FieldFlags.Len() > s as usize && this.FieldFlags.Get(s as usize) != 0;
+
+    // Member node n moves its field out of a partly moved local: the field's flag goes off.
+    void ClearFieldFlag(ref this, u32 n) {
+        u32 top = 0;
+        u32 s = this.C.MemberRoot(n, ref top);
+        if (s == 0) return;
+        u32 flag = this.FieldFlag(s, this.C.MemberIndex(top));
+        if (flag == 0) return;
+        u32 off = this.Const(ET_BOOL, 0);
+        this.Store(ET_BOOL, off, flag);
     }
 
     // Sets (or clears) local s's drop flag, if it has one.
@@ -41,12 +86,29 @@ impl Lower {
         if (live) v = 1;
         u32 c = this.Const(ET_BOOL, v);
         this.Store(ET_BOOL, c, flag);
+        if (!this.HasFieldFlags(s)) return;
+        u32 first = this.FieldFlags.Get(s as usize) - 1;
+        u32 t = this.LSubst(this.C.SymAt(s).Type);
+        u32 f = this.C.NodeAt(this.C.SymAt(this.C.TypeAt(t).Sym).Node).A;
+        u32 i = 0;
+        while (f != 0) {
+            u32 ff = this.FieldFlagSlots.Get((first + i) as usize);
+            if (ff != 0) {
+                u32 fc = this.Const(ET_BOOL, v);
+                this.Store(ET_BOOL, fc, ff);
+            }
+            i++;
+            f = this.C.NNext(f);
+        }
     }
 
     // A new function: no local has a drop flag yet. (Flags are kept per symbol, and one
     // generic body is lowered once per instance, so the last instance's must go.)
     void ResetDropFlags(ref this) {
-        foreach (var s in this.FlagSyms.AsSlice()) this.DropFlags.Set(s as usize, 0);
+        foreach (var s in this.FlagSyms.AsSlice()) {
+            this.DropFlags.Set(s as usize, 0);
+            if (this.FieldFlags.Len() > s as usize) this.FieldFlags.Set(s as usize, 0);
+        }
         while (this.FlagSyms.Len() > 0) this.FlagSyms.Pop();
         while (this.Drops.Len() > 0) this.Drops.Pop();
     }
@@ -77,9 +139,35 @@ impl Lower {
         u32 off = this.Const(ET_BOOL, 0);
         this.Store(ET_BOOL, off, flag);
         u32 t = this.LSubst(this.C.SymAt(s).Type);
-        this.DropValue(t, this.SymSlot(s));
+        if (this.HasFieldFlags(s)) this.DropFields(s, t, this.SymSlot(s));
+        else this.DropValue(t, this.SymSlot(s));
         this.Br(join);
         this.Start(join);
+    }
+
+    // Drops the fields of partly moved local s (type t, at p) that it still holds, in order.
+    void DropFields(ref this, u32 s, u32 t, u32 p) {
+        u32 et = this.LType(t);
+        u32 f = this.C.NodeAt(this.C.SymAt(this.C.TypeAt(t).Sym).Node).A;
+        u32 i = 0;
+        while (f != 0) {
+            u32 flag = this.FieldFlag(s, i);
+            if (flag != 0) {
+                u32 yes = this.NewBlock();
+                u32 join = this.NewBlock();
+                u32 live = this.Load(ET_BOOL, flag);
+                this.CondBr(live, yes, join);
+                this.Start(yes);
+                u32 off = this.Const(ET_BOOL, 0);
+                this.Store(ET_BOOL, off, flag);
+                u32 at = this.Field(et, p, i);
+                this.DropValue(this.C.FieldType(t, f), at);
+                this.Br(join);
+                this.Start(join);
+            }
+            i++;
+            f = this.C.NNext(f);
+        }
     }
 
     // Drops the value of concrete type t at address p: its own `Drop`, then its fields.

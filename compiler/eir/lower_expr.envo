@@ -116,7 +116,9 @@ impl Lower {
                 return this.Load(ET_PTR, this.Field(this.StrType, obj, 0));
             }
             u32 p = this.LowerPlace(n);
-            return this.LoadPlace(t, p);
+            u32 v = this.LoadPlace(t, p);
+            if (this.C.NMove.Get(n as usize) == 3) this.ClearFieldFlag(n);
+            return v;
         }
         if (k == NK_INDEX && this.C.NKind(node.B) == NK_RANGE) return this.LowerSlice(n, t);
         if (k == NK_INDEX) {

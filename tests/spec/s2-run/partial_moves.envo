@@ -1,0 +1,58 @@
+// [own.move.2], [own.drop.1] A field may be moved out of a local whose type needs a drop,
+// unless the type has a `Drop` of its own: the new owner drops the field, and the local
+// drops the fields it still holds, one by one. Stage 1 has one drop flag per local and
+// rejects this (M3.10).
+// stage1-error: E0502
+// expect: took a
+// expect: drop a
+// expect: drop b
+// expect: scope: end
+// expect: drop c
+// expect: maybe: end
+// expect: drop d
+// expect: drop e
+// expect: assign: end
+// expect: drop g
+// expect: drop f
+// expect: end of main
+
+struct Res {
+    str Name;
+    static Res Of(str name) => new Res { Name = name };
+}
+
+impl IDrop for Res {
+    void Drop(ref this) {
+        write(1, "drop ");
+        print(this.Name);
+    }
+}
+
+// no `Drop` of its own: each field drops by itself
+struct Two {
+    Res A;
+    Res B;
+}
+
+void Take(Res r) { }
+
+{
+    Two t = new Two { A = Res.Of("a"), B = Res.Of("b") };
+    Res x = t.A;
+    print("took a");
+}
+print("scope: end");
+
+{
+    Two t = new Two { A = Res.Of("c"), B = Res.Of("d") };
+    if (argc() > 0) Take(t.A);
+    print("maybe: end");
+}
+
+{
+    Two t = new Two { A = Res.Of("e"), B = Res.Of("f") };
+    Take(t.A);
+    t.A = Res.Of("g");
+    print("assign: end");
+}
+print("end of main");

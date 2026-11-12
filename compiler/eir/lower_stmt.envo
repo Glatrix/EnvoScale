@@ -180,14 +180,24 @@ impl Lower {
         u32 top = 0;
         u32 s = this.C.MemberRoot(a, ref top);
         if (s != 0 && this.DropFlag(s) != 0) {
+            // a partly moved local: the field's own flag says whether it holds a value, and
+            // assigning the field itself makes it hold one again
+            u32 flag = this.DropFlag(s);
+            u32 fieldFlag = 0;
+            if (this.HasFieldFlags(s)) fieldFlag = this.FieldFlag(s, this.C.MemberIndex(top));
+            if (fieldFlag != 0) flag = fieldFlag;
             u32 yes = this.NewBlock();
             u32 join = this.NewBlock();
-            u32 live = this.Load(ET_BOOL, this.DropFlag(s));
+            u32 live = this.Load(ET_BOOL, flag);
             this.CondBr(live, yes, join);
             this.Start(yes);
             this.DropValue(t, p);
             this.Br(join);
             this.Start(join);
+            if (fieldFlag != 0 && a == top) {
+                u32 on = this.Const(ET_BOOL, 1);
+                this.Store(ET_BOOL, on, fieldFlag);
+            }
             return;
         }
         this.DropValue(t, p);

@@ -1,0 +1,9 @@
+// expect-error: E0502 @ 9:11
+// [own.move.3] drop flags go one field deep: a field of a field that needs a drop
+// cannot be moved out of a local; move the outer field
+struct Res { str Name; }
+impl IDrop for Res { void Drop(ref this) { } }
+struct Inner { Res A; Res B; }
+struct Outer { Inner I; }
+Outer o = new Outer { I = new Inner { A = new Res { Name = "a" }, B = new Res { Name = "b" } } };
+Res a = o.I.A;

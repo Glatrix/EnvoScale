@@ -426,8 +426,9 @@ impl Checker {
         this.NMove.Set(n as usize, 1);
     }
 
-    // A use of field k of local s, through member node top; move: the field is taken.
-    void UseField(ref this, ref MoveCx x, u32 top, u32 s, u32 k, bool move) {
+    // A use of field k of local s, through member node top; move: the field is taken;
+    // direct: the use is of top itself, not of a field inside it.
+    void UseField(ref this, ref MoveCx x, u32 top, u32 s, u32 k, bool move, bool direct) {
         Sym sym = this.SymAt(s);
         u32 tok = this.NTok(top);
         u8 st = x.PlaceState(s, 0);
@@ -437,9 +438,14 @@ impl Checker {
         if (!move || this.IsCopy(this.NType(top))) return;
         if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "a field of ", s, ", which is borrowed");
         if (this.IsCapture(x, s)) this.MoveOutOfBorrow(tok, "a field of ", s, ", which this lambda captures");
-        // the rest of a partly moved value would be dropped field by field; one drop flag
-        // per local allows partial moves only where nothing needs a drop
-        if (this.NeedsDropAt(sym.Type)) this.MoveOutOfBorrow(tok, "a field of ", s, ", whose type has a drop; move the whole value");
+        // the rest of a partly moved value is dropped field by field, with a drop flag per
+        // field (M3.10; Stage 1 has one flag per local and rejects this). A type with its
+        // own `Drop` needs all of itself, and flags go one level deep only.
+        if (this.NeedsDropAt(sym.Type)) {
+            if (this.HasDropImpl(sym.Type) || !direct) this.MoveOutOfBorrow(tok, "a field of ", s, ", whose type has a drop; move the whole value");
+            this.NMove.Set(top as usize, 3);
+            this.AddSymFlags(s, SF_PARTLY);
+        }
         x.PlaceSet(s, k + 1, PS_MOVED);
     }
 
@@ -498,7 +504,7 @@ impl Checker {
             if (s != 0) {
                 // tracked per first-level field: taking x.a.b takes x.a
                 bool take = move && !this.IsCopy(this.NType(n));
-                this.UseField(ref x, top, s, this.MemberIndex(top), take);
+                this.UseField(ref x, top, s, this.MemberIndex(top), take, n == top);
                 return;
             }
             this.MvExpr(ref x, node.A, false);

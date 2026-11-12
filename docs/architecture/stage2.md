@@ -72,8 +72,27 @@ as long as the checker.
 The move checker (`move.envo`), call borrows and closure origins (`borrow.envo`) and
 storage summaries (`summary.envo`) follow Stage 1's. The per-function state (`MoveCx`,
 its snapshots and loop frames, `OriginCx`) is owned data passed `ref` next to the
-`Checker`. Stage 2 accepts and rejects exactly what Stage 1 does; accepting what chapter 5
-allows beyond that is increment 3.10, after the fixed point.
+`Checker`. Up to the fixed point Stage 2 accepted and rejected exactly what Stage 1
+does.
+
+### Beyond Stage 1 (M3.10)
+
+Stage 2 now accepts some programs chapter 5 allows and Stage 1 rejects. Each has a test
+in `tests/spec/s2-run/` that Stage 2 builds and runs, and that names the error `envoc1`
+still gives:
+
+- **Disjoint field borrows** (`disjoint_fields.envo`). A call may borrow different fields
+  of one local, `F(ref p.A, ref p.B)`. Each use carries its field path, and two uses
+  conflict only when one path is a prefix of the other.
+- **Partial moves out of values that need a drop** (`partial_moves.envo`). A field may be
+  moved out of a local whose type needs a drop, unless the type has its own `Drop`. Such
+  a local (`SF_PARTLY`) gets a drop flag per field that needs one. Moving the field
+  clears its flag (NMove 3 on the member), assigning the field sets it again, and the
+  local is dropped field by field. Flags go one level deep, so moving `o.I.A` is still
+  E0502.
+
+Still to come: borrows held in locals across statements ([own.borrow.4]) and `once fn`
+inference ([fn.type.2]).
 
 ## EIR (M3.6)
 
