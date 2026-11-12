@@ -1,0 +1,6 @@
+// expect-error: E0509 @ 5:3
+// [own.temp.1] a view of a temporary cannot be stored in a variable that already exists
+string Make() => string.From("hello");
+str s = "x";
+s = Make().AsStr();
+print(s);

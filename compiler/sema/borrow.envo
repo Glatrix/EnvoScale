@@ -12,6 +12,8 @@
 //   Returning it, storing it, or giving it to anything else is E0507.
 // - `from` clauses name borrowed parameters or `this` (E0508); a function with one may
 //   return only borrows of what it names (E0507).
+// - A view of a temporary ([own.temp.1]) may initialize a local, whose block then keeps
+//   the temporary; returning it, or storing it anywhere else, is E0509.
 namespace envoc.sema;
 
 use envoc.util;
@@ -21,6 +23,9 @@ const u32 BK_READ = 0;      // a plain read (a copy): not a borrow
 const u32 BK_IN = 1;        // a shared borrow for the call
 const u32 BK_REF = 2;       // an exclusive borrow for the call
 const u32 BK_MOVE = 3;      // the call takes it
+
+// The origin of a value that views a temporary ([own.temp.1]); parameters use the other bits.
+const u64 ORIGIN_TEMP = 0x8000000000000000;
 
 struct OriginCx {
     List<u32> Params;       // the local symbol of each parameter, receiver first (a bit each)
@@ -317,6 +322,22 @@ impl Checker {
         return false;
     }
 
+    // Is expression n a temporary that owns what it holds (a call's or `new`'s value that
+    // needs a drop and is not moved anywhere: dropped at the end of its statement)?
+    bool IsTempOwner(ref this, u32 n) {
+        u16 k = this.NKind(n);
+        if (k != NK_CALL && k != NK_NEW) return false;
+        return this.NMove.Get(n as usize) == 2 && this.NeedsDrop(this.NType(n));
+    }
+
+    // E0509 if a value with origins o, which view a temporary, would outlive it at tok.
+    void TempViewEscapes(in this, in OriginCx x, u32 tok, u64 o, str what) {
+        if (!x.Report || o & ORIGIN_TEMP == 0) return;
+        string b = string.From(what);
+        b.Append(", which is dropped at the end of its statement; keep the value in a local of its own first");
+        this.Fail(tok, E_TEMP_VIEW_ESCAPES, b);
+    }
+
     // E0507 for a borrowed closure parameter that would escape at tok.
     void ClosureEscapes(in this, in OriginCx x, u32 tok, u64 o) {
         if (!x.Report || o & x.NoEscape == 0) return;
@@ -351,11 +372,16 @@ impl Checker {
             Type ft = this.TypeAt(this.NType(node.A));
             if (cs != 0 && this.SymKind(cs) == SK_FN) {
                 p = this.FirstParam(cs);
-                if (this.NKind(node.A) == NK_MEMBER) o = this.OriginOf(ref x, this.NodeAt(node.A).A);
+                if (this.NKind(node.A) == NK_MEMBER) {
+                    u32 recv = this.NodeAt(node.A).A;
+                    o = this.OriginOf(ref x, recv);
+                    if (this.IsTempOwner(recv)) o = o | ORIGIN_TEMP;
+                }
             }
             u32 i = 0;
             while (a != 0) {
                 u64 ao = this.OriginOf(ref x, a);
+                if (this.IsTempOwner(a)) ao = ao | ORIGIN_TEMP;
                 bool fnParam = false;
                 if (p != 0) fnParam = this.TyKind(this.NType(p)) == TYK_FN;
                 else if (ft.Kind == TYK_FN) fnParam = this.TyKind(this.EnvGet(ft.Args, i)) == TYK_FN;
@@ -444,17 +470,23 @@ impl Checker {
             u32 t = node.A;
             u16 tk = this.NKind(t);
             if ((tk == NK_NAME || tk == NK_THIS) && this.NSym(t) != 0 && this.SymKind(this.NSym(t)) == SK_LOCAL) {
+                this.TempViewEscapes(x, node.Tok, o, "this stores a view of a temporary in a variable that outlives it");
                 x.AddLocalOrigins(this.NSym(t), o);
                 return;
             }
             // stored somewhere that outlives this call
             this.ClosureEscapes(x, node.Tok, o);
+            this.TempViewEscapes(x, node.Tok, o, "this stores a view of a temporary somewhere that outlives it");
             return;
         }
         if (k == NK_EXPR) this.OriginOf(ref x, node.A);
         if (k == NK_FOREACH) {
             u64 o = this.OriginOf(ref x, node.B);
-            x.AddLocalOrigins(this.NSym(node.A), o);
+            // an element copied out of the sequence views what the elements view, not the
+            // sequence's container: a temporary container does not follow it
+            u32 es = this.NSym(node.A);
+            if (es != 0 && this.SymAt(es).Flags & SF_BYREF == 0) o = o & ~ORIGIN_TEMP;
+            x.AddLocalOrigins(es, o);
             this.OriginStmt(ref x, node.C);
         }
     }
@@ -493,8 +525,9 @@ impl Checker {
         u64 o = this.OriginOf(ref x, e);
         if (e == 0) return;
         this.ClosureEscapes(x, this.NTok(e), o);
+        this.TempViewEscapes(x, this.NTok(e), o, "this returns a view of a temporary");
         if (!x.Report || !x.HasFrom) return;
-        u64 extra = o & ~x.From;
+        u64 extra = o & ~x.From & ~ORIGIN_TEMP;
         if (extra == 0) return;
         u32 s = x.ParamOfBit(extra);
         string b = string.From("this returns (or stores) a borrow of `");
@@ -555,6 +588,26 @@ impl Checker {
         this.OriginBody(ref x, fn.C, sym.Type != T_VOID);
     }
 
+    // The same for the program's top-level statements ([own.temp.1]: views of temporaries).
+    void OriginCheckMain(ref this, u32 first) {
+        OriginCx x = OriginCx.New();
+        for (u32 round = 0; round < 8; round++) {
+            x.Changed = false;
+            u32 n = first;
+            while (n != 0) {
+                if (!NodeIsItem(this.NKind(n))) this.OriginStmt(ref x, n);
+                n = this.NNext(n);
+            }
+            if (!x.Changed) break;
+        }
+        x.Report = true;
+        u32 n = first;
+        while (n != 0) {
+            if (!NodeIsItem(this.NKind(n))) this.OriginStmt(ref x, n);
+            n = this.NNext(n);
+        }
+    }
+
     // The same for a lambda's body: its function-typed parameters may hold borrowed
     // closures.
     void OriginCheckLambda(ref this, u32 n) {
@@ -574,7 +627,6 @@ impl Checker {
     // Origins of locals until stable, then a pass that reports. exprReturns: an expression
     // body is the result.
     void OriginBody(ref this, ref OriginCx x, u32 body, bool exprReturns) {
-        if (x.NoEscape == 0 && !x.HasFrom) return;
         for (u32 round = 0; round < 8; round++) {
             x.Changed = false;
             if (this.NKind(body) == NK_BLOCK) this.OriginStmt(ref x, body);

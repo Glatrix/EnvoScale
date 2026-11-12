@@ -1,0 +1,24 @@
+// [own.temp.1] A struct local holding a view of a temporary keeps the temporary for its
+// block; the sequence a foreach walks lives until the loop ends.
+// expect: held: hello
+// expect: alpha
+// expect: beta
+// expect: gamma
+struct Holder { str V; }
+string Make() => string.From("hello");
+List<string> Words() {
+    List<string> l = List<string>.New();
+    l.Push(string.From("alpha"));
+    l.Push(string.From("beta"));
+    l.Push(string.From("gamma"));
+    return l;
+}
+Holder h = new Holder { V = Make().AsStr() };
+string noise = string.From("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+write(1, "held: ");
+print(h.V);
+foreach (var w in Words().AsSlice()) {
+    string more = string.From("qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
+    more.Append("q");
+    print(w.AsStr());
+}

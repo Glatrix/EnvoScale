@@ -18,6 +18,7 @@ public const u32 E_USE_AFTER_MOVE = 501;
 public const u32 E_BORROW_CONFLICT = 503;
 public const u32 E_MOVED_WHILE_BORROWED = 504;
 public const u32 E_BORROW_NOT_DECLARED = 507;
+public const u32 E_TEMP_VIEW_ESCAPES = 509;
 public const u32 E_BAD_FROM = 508;
 
 // The state of every tracked place at one point of the body.

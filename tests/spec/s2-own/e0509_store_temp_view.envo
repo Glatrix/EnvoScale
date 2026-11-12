@@ -1,0 +1,7 @@
+// expect-error: E0509 @ 6:5
+// [own.temp.1] a view of a temporary cannot be stored in a field
+struct Holder { str V; }
+string Make() => string.From("hello");
+Holder h = new Holder { V = "x" };
+h.V = Make().AsStr();
+print(h.V);

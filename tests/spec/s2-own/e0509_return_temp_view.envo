@@ -1,0 +1,7 @@
+// expect-error: E0509 @ 5:24
+// [own.temp.1] a view of a temporary cannot be returned: the temporary is dropped first
+string Make() => string.From("hello");
+str Leak() {
+    return Make().AsStr();
+}
+print(Leak());

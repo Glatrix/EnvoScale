@@ -52,14 +52,13 @@ void ResetDropFlags(*Lower l) {
     }
 }
 
-// [own.temp.1] A local of a view type (str, a slice) may borrow from a temporary of its
-// initializer (`str s = Make().AsStr();`): the statement's temporaries then live until the
+// [own.temp.1] A local whose type can hold a view (str, a slice, a struct holding one) may
+// borrow from a temporary of its initializer (`str s = Make().AsStr();`): the statement's temporaries then live until the
 // end of the local's block, dropped with its locals. In Drops such a temporary is its
 // index in KeptTemps with the top bit set.
-void KeepTemps(*Lower l, u32 t) {
+void KeepTemps(*Lower l, u32 t, bool always) {
     *Checker c = LC(l);
-    u8 k = TyKind(c, t);
-    if (k != TYK_STR && k != TYK_SLICE) return;
+    if (!always && !HoldsBorrow(c, t)) return;
     unsafe {
         usize n = VecLen(&l.Temps);
         for (usize i = 0; i + 1 < n; i += 2) {

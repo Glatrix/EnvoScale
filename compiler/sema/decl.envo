@@ -66,7 +66,10 @@ impl Checker {
             }
             n = this.NNext(n);
         }
-        if (!this.Core) this.MoveCheckMain(first);
+        if (!this.Core) {
+            this.MoveCheckMain(first);
+            this.OriginCheckMain(first);
+        }
         this.CollectInstances();
     }
 

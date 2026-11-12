@@ -114,16 +114,13 @@ impl Lower {
         while (this.KeptTemps.Len() > 0) this.KeptTemps.Pop();
     }
 
-    // [own.temp.1] A local of a view type (str, a slice) may borrow from a temporary of its
-    // initializer (`str s = Make().AsStr();`), and a borrowing local (SF_BYREF) may be a
-    // place in one: the statement's temporaries then live until the end of the local's
+    // [own.temp.1] A local whose type can hold a view (str, a slice, a struct holding one)
+    // may borrow from a temporary of its initializer (`str s = Make().AsStr();`), and a
+    // borrowing local (SF_BYREF) may be a place in one: the statement's temporaries then live until the end of the local's
     // block, dropped with its locals. In Drops such a temporary is its index in KeptTemps
     // with the top bit set.
     void KeepTemps(ref this, u32 t, bool always) {
-        if (!always) {
-            u8 k = this.C.TyKind(t);
-            if (k != TYK_STR && k != TYK_SLICE) return;
-        }
+        if (!always && !this.C.HoldsBorrow(t)) return;
         usize n = this.Temps.Len();
         for (usize i = 0; i + 1 < n; i += 2) {
             u32 at = (this.KeptTemps.Len() / 2) as u32;

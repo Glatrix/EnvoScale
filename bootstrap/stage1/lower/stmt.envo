@@ -237,7 +237,7 @@ void LowerSimple(*Lower l, u32 n) {
         else LZero(l, slot, ESizeOf(l, LType(l, t)) as u64);
         // a local without an initializer holds nothing to drop until it is assigned
         TrackDrop(l, VarSym(l, n), t, node.B != 0, node.Tok);
-        KeepTemps(l, t);
+        KeepTemps(l, t, false);
         DropTemps(l);
         return;
     }

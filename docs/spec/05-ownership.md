@@ -26,11 +26,13 @@ declaration order after the struct's own `Drop` method, if any. A type gets cust
 behaviour by implementing `IDrop`.
 
 **[own.temp.1]** A temporary (a value an expression makes and nothing takes) drops at the
-end of its statement, with one exception: when a local's initializer is borrowed from a
-temporary (a local of type `str` or a slice, or a local that borrows a place), the
-statement's temporaries live until the end of the local's block and drop with its
-locals, newest first. So `str s = Make().AsStr();` is sound: `s` views a `string` that
-lives as long as `s` does.
+end of its statement, with two exceptions. When a local's initializer is borrowed from a
+temporary (a local whose type can hold a view, such as `str`, a slice or a struct holding
+one, or a local that borrows a place), the statement's temporaries live until the end of
+the local's block and drop with its locals, newest first: `str s = Make().AsStr();` is
+sound. And the sequence a `foreach` walks lives until the loop ends: `foreach (var x in
+Make().AsSlice())` is sound. Returning a view of a temporary, or storing it in a variable
+or place that already exists, is an error (E0509): the temporary would be gone first.
 
 ## 5.2 Parameter modes
 

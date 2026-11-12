@@ -121,6 +121,9 @@ void LowerForeach(*Lower l, u32 n) {
     u32 ptr;
     u32 len;
     unsafe { LowerSequence(l, node.B, &ptr, &len); }
+    // the sequence may view a temporary: it lives until the loop ends ([own.temp.1])
+    usize mark = DropMark(l);
+    KeepTemps(l, 0, true);
     bool borrow = SymGet(c, s).Flags & SF_BYREF != 0;
     u32 idx = LSlot(l, ET_U64);
     LStore(l, ET_U64, LConst(l, ET_U64, 0), idx);
@@ -145,5 +148,6 @@ void LowerForeach(*Lower l, u32 n) {
     LStore(l, ET_U64, LBin(l, 5, ET_U64, LLoad(l, ET_U64, idx), LConst(l, ET_U64, 1)), idx);
     LBr(l, head);
     LStart(l, exit);
+    DropDownTo(l, mark, false);
     DropTemps(l);
 }

@@ -142,6 +142,7 @@ help: `out` is a keyword, so it cannot be a name; choose another
 | E0506 | cannot infer the lifetime of a returned borrow |
 | E0507 | this returns (or stores) a borrow of `x`, but the signature does not say `from x` ([life.from.3], RFC 0004) |
 | E0508 | `from` can only name a borrowed parameter or `this` ([life.from.2], RFC 0004) |
+| E0509 | a view of a temporary would outlive it: returned, or stored anywhere but a new local ([own.temp.1]) |
 | E0510 | allocation in a `[NoAlloc]` function |
 
 ## Not part of Envo-Core (E0900–E0949)

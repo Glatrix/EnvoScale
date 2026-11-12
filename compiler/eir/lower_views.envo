@@ -147,6 +147,9 @@ impl Lower {
         u32 ptr = 0;
         u32 len = 0;
         this.LowerSequence(node.B, ref ptr, ref len);
+        // the sequence may view a temporary: it lives until the loop ends ([own.temp.1])
+        usize mark = this.DropMark();
+        this.KeepTemps(0, true);
         bool borrow = this.C.SymAt(s).Flags & SF_BYREF != 0;
         u32 idx = this.Slot(ET_U64);
         u32 zero = this.Const(ET_U64, 0);
@@ -178,6 +181,7 @@ impl Lower {
         this.Store(ET_U64, inc, idx);
         this.Br(head);
         this.Start(exit);
+        this.DropDownTo(mark, false);
         this.DropTemps();
     }
 }
