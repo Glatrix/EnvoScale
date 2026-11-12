@@ -99,6 +99,13 @@ function Invoke-Tool([string]$exe, [string[]]$argv, [string]$cwd) {
     return [pscustomobject]@{ Code = $p.ExitCode; Out = $out; Err = $err }
 }
 
+# True if the files at a and b hold the same bytes.
+function Test-SameBytes([string]$a, [string]$b) {
+    if (-not (Test-Path -LiteralPath $a) -or -not (Test-Path -LiteralPath $b)) { return $false }
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    return [string]::Equals($latin1.GetString([IO.File]::ReadAllBytes($a)), $latin1.GetString([IO.File]::ReadAllBytes($b)))
+}
+
 function Normalize([string]$s) { return ($s -replace "`r`n", "`n") }
 
 # Shows the first line where two texts differ.
@@ -199,14 +206,17 @@ function Invoke-Test {
     # `// expect-panic: <reason>` (exit 101 and "panic: <reason>" on stderr).
     # Programs compiled and run: by Stage 0, then by Stage 1, which must give the same
     # output and exit codes (M2.7, PLAN D14).
+    # Then by Stage 2, whose executables must be byte-identical to Stage 1's (M3.6).
     $stage0Exe = $exe
-    foreach ($compiler in @('envoc0', 'envoc1')) {
-    if ($compiler -eq 'envoc1') { $exe = Join-Path $Build1 'envoc1.exe' } else { $exe = $stage0Exe }
+    foreach ($compiler in @('envoc0', 'envoc1', 'envoc')) {
+    if ($compiler -eq 'envoc1') { $exe = Join-Path $Build1 'envoc1.exe' }
+    elseif ($compiler -eq 'envoc') { $exe = Join-Path $Build2 'envoc.exe' }
+    else { $exe = $stage0Exe }
         $runDir = Join-Path $Root "build\run-$compiler"
         New-Item -ItemType Directory -Force $runDir | Out-Null
-        # Envo-S1 programs (tests/spec/s1-run) run under Stage 1 only.
+        # Envo-S1 programs (tests/spec/s1-run) run under Stages 1 and 2 only.
         $runSuites = @('core-run')
-        if ($compiler -eq 'envoc1') { $runSuites += 's1-run' }
+        if ($compiler -ne 'envoc0') { $runSuites += 's1-run' }
         foreach ($suite in $runSuites) {
         Say "run tests ($compiler): tests/spec/$suite"
         foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envo' | Sort-Object Name) {
@@ -223,6 +233,9 @@ function Invoke-Test {
             $program = Join-Path $runDir ($f.BaseName + '.exe')
             $r = Invoke-Tool $exe @('build', $f.FullName, '-o', $program) $runDir
             if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+            if ($compiler -eq 'envoc' -and -not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) {
+                Bad $name 'the executable differs from the envoc1 build'; continue
+            }
             $r = Invoke-Tool $program @() $runDir
             $out = Normalize $r.Out
             if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
@@ -235,9 +248,9 @@ function Invoke-Test {
         # Multi-file programs: one folder per test. main.envo is the entry file and holds
         # the annotations; the other .envo files follow in name order. Either
         # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
-        # Envo-S1 programs of several files (tests/spec/s1-multi) under Stage 1 only.
+        # Envo-S1 programs of several files (tests/spec/s1-multi) under Stages 1 and 2 only.
         $multiSuites = @('core-multi')
-        if ($compiler -eq 'envoc1') { $multiSuites += 's1-multi' }
+        if ($compiler -ne 'envoc0') { $multiSuites += 's1-multi' }
         foreach ($msuite in $multiSuites) {
         Say "multi-file tests ($compiler): tests/spec/$msuite"
         foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$msuite") -Directory | Sort-Object Name) {
@@ -258,6 +271,9 @@ function Invoke-Test {
             $program = Join-Path $runDir ("$msuite-" + $d.Name + '.exe')
             $r = Invoke-Tool $exe (@('build') + $files + @('-o', $program)) $d.FullName
             if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+            if ($compiler -eq 'envoc' -and -not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) {
+                Bad $name 'the executable differs from the envoc1 build'; continue
+            }
             $r = Invoke-Tool $program @() $runDir
             $out = Normalize $r.Out
             if (-not [string]::Equals($wantOut, $out)) { Bad $name 'stdout differs'; Show-Diff $wantOut $out; continue }
@@ -509,6 +525,28 @@ function Invoke-Test {
         $what = "stage2 $($unit.Pre[-1]) $($unit.Dir)"
         if ($r1.Code -eq $r2.Code -and [string]::Equals($r1.Out, $r2.Out) -and [string]::Equals($r1.Err, $r2.Err)) { Pass $what }
         else { Bad $what "differs from envoc1 (exit $($r1.Code) vs $($r2.Code))" }
+    }
+    # Stage 2 builds Stage 1 as envoc1 does, and builds itself into the envoc that envoc1
+    # built, for both targets (M3.6).
+    $selfDir = Join-Path $Root 'build\run-envoc'
+    foreach ($unit in @(@{ Dir = 'bootstrap\stage1'; Pre = @('--core', 'build'); Target = 'x86_64-windows' },
+                        @{ Dir = 'compiler'; Pre = @('build'); Target = 'x86_64-windows' },
+                        @{ Dir = 'compiler'; Pre = @('build'); Target = 'x86_64-linux' })) {
+        $dir = Join-Path $Root $unit.Dir
+        $files = @(Get-Content -LiteralPath (Join-Path $dir 'files.txt') | Where-Object { $_.Trim() -ne '' })
+        $what = "stage2 build $($unit.Dir) ($($unit.Target))"
+        if ($unit.Dir -eq 'compiler') {
+            $want = Join-Path $Build2 'envoc'
+            if ($unit.Target -eq 'x86_64-windows') { $want = Join-Path $Build2 'envoc.exe' }
+        } else {
+            $want = Join-Path $selfDir 'self-stage1-envoc1'
+            $r = Invoke-Tool $envoc1 ($unit.Pre + $files + @('-o', $want, '--target', $unit.Target)) $dir
+            if ($r.Code -ne 0) { Bad $what "envoc1 failed: exit $($r.Code)"; continue }
+        }
+        $self = Join-Path $selfDir "self-$($unit.Target)"
+        $r = Invoke-Tool $envoc ($unit.Pre + $files + @('-o', $self, '--target', $unit.Target)) $dir
+        if ($r.Code -eq 0 -and (Test-SameBytes $want $self)) { Pass $what }
+        else { Bad $what "exit $($r.Code), or the executable differs from envoc1's" }
     }
 
     Say ''

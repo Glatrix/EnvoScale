@@ -7,6 +7,7 @@ use envoc.syntax;
 use envoc.sema;
 use envoc.eir;
 use envoc.lower;
+use envoc.x64;
 
 const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
 
@@ -20,6 +21,8 @@ void Usage(i32 fd) {
     write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
     write(fd, "  check <file.envo>...\n");
     write(fd, "                      check names and types; print the typed syntax tree\n");
+    write(fd, "  build <file.envo>... -o <output> [--target x86_64-windows|x86_64-linux]\n");
+    write(fd, "                      compile a program to an executable\n");
     write(fd, "  eir <file.envo>... [--target x86_64-windows|x86_64-linux]\n");
     write(fd, "                      print the program's EIR, runtime included\n");
     write(fd, "  eir-check <file.eir>\n");
@@ -226,6 +229,22 @@ Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool co
     return m;
 }
 
+// `envoc build <file.envo>... -o <output> [--target …]`
+i32 CmdBuild(usize argi, bool core) {
+    BuildArgs b = ParseBuildArgs(argi);
+    if (b.Files.Len() == 0 || b.Output.Len == 0) BuildUsage();
+    Sources src = Sources.New();
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, true);
+    string image = GenModule(ref m, b.Target);
+    if (!WriteFile(b.Output, image, true)) {
+        write(2, "envoc: error: cannot write '");
+        write(2, b.Output);
+        write(2, "'\n");
+        return EXIT_ERRORS;
+    }
+    return EXIT_OK;
+}
+
 // `envoc eir <file.envo>... [--target …]`: the program's EIR, runtime included.
 i32 CmdEir(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
@@ -266,6 +285,7 @@ if (Same(command, "parse")) return CmdParse(argi, core);
 if (Same(command, "check")) return CmdCheck(argi, core);
 if (Same(command, "eir-check")) return CmdEirCheck(argi);
 if (Same(command, "eir")) return CmdEir(argi, core);
+if (Same(command, "build")) return CmdBuild(argi, core);
 if (Same(command, "help") || Same(command, "--help")) {
     Usage(1);
     return EXIT_OK;

@@ -1,0 +1,164 @@
+// Executable images: one read-write-execute section at IMAGE_BASE. Follows Stage 1's
+// bootstrap/stage1/x64/image.envo. Windows images import from KERNEL32.dll; the runtime
+// reaches import k through `wincall`.
+namespace envoc.x64;
+
+use envoc.util;
+
+const u64 IMAGE_BASE = 0x400000;
+const u64 ELF_HEADERS = 176;        // ELF header (64) + 2 program headers (56 each)
+const u64 PE_SECTION_RVA = 0x1000;
+
+// The same values as envoc.lower's.
+const u32 TARGET_LINUX = 1;
+const u32 TARGET_WINDOWS = 2;
+
+const u32 WIN_IMPORTS = 12;
+
+// The KERNEL32.dll functions the Windows runtime calls, by wincall index.
+str WinImport(u32 k) {
+    match k {
+        0 => { return "GetStdHandle"; }
+        1 => { return "GetCommandLineW"; }
+        2 => { return "CreateFileW"; }
+        3 => { return "ReadFile"; }
+        4 => { return "WriteFile"; }
+        5 => { return "CloseHandle"; }
+        6 => { return "VirtualAlloc"; }
+        7 => { return "VirtualFree"; }
+        8 => { return "GetLastError"; }
+        9 => { return "ExitProcess"; }
+        10 => { return "MultiByteToWideChar"; }
+        _ => { return "WideCharToMultiByte"; }
+    }
+}
+
+struct WinImports {
+    u32 Dir;        // the import directory (two descriptors, 40 bytes)
+    u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
+}
+
+// The import directory, lookup and address tables, hint/name entries and DLL name, in the
+// data. Returns the labels the PE header and wincall need.
+WinImports EmitImports(ref Asm a) {
+    u32[12] names;
+    u32 ilt = a.NewLabel();
+    u32 dll = a.NewLabel();
+    u32 dir = a.NewLabel();
+    u32 iat = a.NewLabel();
+    for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = a.NewLabel();
+    a.DataAlign(8);
+    a.BindData(dir);
+    a.DataRva(ilt, 4);          // OriginalFirstThunk
+    a.DataU32(0);               // TimeDateStamp
+    a.DataU32(0);               // ForwarderChain
+    a.DataRva(dll, 4);          // Name
+    a.DataRva(iat, 4);          // FirstThunk
+    a.DataZeros(20);            // the null descriptor
+    a.DataAlign(8);
+    a.BindData(ilt);
+    for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
+    a.DataZeros(8);
+    a.BindData(iat);
+    for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
+    a.DataZeros(8);
+    for (u32 k = 0; k < WIN_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(names[k]);
+        a.DataZeros(2);         // hint
+        str name = WinImport(k);
+        for (usize i = 0; i < name.Len; i++) a.DataByte(name[i]);
+        a.DataByte(0);
+    }
+    a.BindData(dll);
+    str kernel = "KERNEL32.dll";
+    for (usize i = 0; i < kernel.Len; i++) a.DataByte(kernel[i]);
+    a.DataByte(0);
+    return new WinImports { Dir = dir, Iat = iat };
+}
+
+void Put16(ref string f, usize at, u64 v) => PutBytes(ref f, at, v, 2);
+void Put32(ref string f, usize at, u64 v) => PutBytes(ref f, at, v & 0xFFFFFFFF, 4);
+void Put64(ref string f, usize at, u64 v) => PutBytes(ref f, at, v, 8);
+
+// n zero bytes.
+string Zeros(usize n) {
+    string s = string.New();
+    s.Reserve(n);
+    for (usize i = 0; i < n; i++) s.AppendByte(0);
+    return s;
+}
+
+// Links the code and data and returns a complete executable. The section starts with the
+// entry point.
+string WriteImage(ref Asm a, u32 target, WinImports imports) {
+    u64 dataStart = 0;
+    if (target == TARGET_WINDOWS) {
+        string section = a.Link(IMAGE_BASE, PE_SECTION_RVA, ref dataStart);
+        u64 size = (section.Len() as u64 + 0xFFF) & ~0xFFF;
+        u64 fileSize = 0x1000 + size;
+        string f = Zeros(0x1000);
+        f.Append(section);
+        while (f.Len() < fileSize as usize) f.AppendByte(0);
+        Put16(ref f, 0, 0x5A4D);                    // MZ
+        Put32(ref f, 0x3C, 0x40);                   // e_lfanew
+        Put32(ref f, 0x40, 0x4550);                 // PE
+        Put16(ref f, 0x44, 0x8664);                 // AMD64
+        Put16(ref f, 0x46, 1);                      // one section
+        Put16(ref f, 0x54, 240);                    // SizeOfOptionalHeader
+        Put16(ref f, 0x56, 0x0023);                 // RELOCS_STRIPPED | EXECUTABLE | LARGE_ADDRESS_AWARE
+        Put16(ref f, 0x58, 0x020B);                 // PE32+
+        Put32(ref f, 0x5C, size);                   // SizeOfCode
+        Put32(ref f, 0x68, PE_SECTION_RVA);         // entry point: the start of the section
+        Put32(ref f, 0x6C, PE_SECTION_RVA);         // BaseOfCode
+        Put64(ref f, 0x70, IMAGE_BASE);
+        Put32(ref f, 0x78, 0x1000);                 // SectionAlignment
+        Put32(ref f, 0x7C, 0x1000);                 // FileAlignment
+        Put16(ref f, 0x80, 6);                      // OS version 6.0
+        Put16(ref f, 0x88, 6);                      // subsystem version 6.0
+        Put32(ref f, 0x90, size + 0x1000);          // SizeOfImage
+        Put32(ref f, 0x94, 0x1000);                 // SizeOfHeaders
+        Put16(ref f, 0x9C, 3);                      // console
+        Put16(ref f, 0x9E, 0x8100);                 // NX_COMPAT | TERMINAL_SERVER_AWARE
+        Put64(ref f, 0xA0, 0x800000);               // stack reserve (8 MiB)
+        Put64(ref f, 0xA8, 0x1000);                 // stack commit
+        Put64(ref f, 0xB0, 0x100000);               // heap reserve
+        Put64(ref f, 0xB8, 0x1000);                 // heap commit
+        Put32(ref f, 0xC4, 16);                     // NumberOfRvaAndSizes
+        Put32(ref f, 0xD0, PE_SECTION_RVA + a.LabelOffset(imports.Dir, dataStart));
+        Put32(ref f, 0xD4, 40);
+        Put32(ref f, 0x148, 0x7865742E);            // ".tex"
+        Put16(ref f, 0x14C, 0x74);                  // "t"
+        Put32(ref f, 0x150, size);                  // VirtualSize
+        Put32(ref f, 0x154, PE_SECTION_RVA);        // VirtualAddress
+        Put32(ref f, 0x158, size);                  // SizeOfRawData
+        Put32(ref f, 0x15C, 0x1000);                // PointerToRawData
+        Put32(ref f, 0x16C, 0xE0000020);            // CODE | EXECUTE | READ | WRITE
+        return f;
+    }
+    string section = a.Link(IMAGE_BASE, ELF_HEADERS, ref dataStart);
+    u64 fileSize = ELF_HEADERS + section.Len() as u64;
+    string f = Zeros(ELF_HEADERS as usize);
+    f.Append(section);
+    Put32(ref f, 0, 0x464C457F);                    // 0x7F 'E' 'L' 'F'
+    Put32(ref f, 4, 0x00010102);                    // 64-bit, little-endian, version 1
+    Put16(ref f, 16, 2);                            // ET_EXEC
+    Put16(ref f, 18, 0x3E);                         // x86-64
+    Put32(ref f, 20, 1);
+    Put64(ref f, 24, IMAGE_BASE + ELF_HEADERS);     // entry point: the start of the section
+    Put64(ref f, 32, 64);                           // program headers follow
+    Put16(ref f, 52, 64);
+    Put16(ref f, 54, 56);
+    Put16(ref f, 56, 2);
+    Put32(ref f, 64, 1);                            // PT_LOAD, R | W | X, the whole file
+    Put32(ref f, 68, 7);
+    Put64(ref f, 80, IMAGE_BASE);
+    Put64(ref f, 88, IMAGE_BASE);
+    Put64(ref f, 96, fileSize);
+    Put64(ref f, 104, fileSize);
+    Put64(ref f, 112, 0x1000);
+    Put32(ref f, 120, 0x6474E551);                  // PT_GNU_STACK, R | W
+    Put32(ref f, 124, 6);
+    Put64(ref f, 168, 16);
+    return f;
+}

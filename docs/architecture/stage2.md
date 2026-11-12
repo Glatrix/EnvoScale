@@ -80,8 +80,24 @@ allows beyond that is increment 3.10, after the fixed point.
 `envoc.eir` holds EIR v1 in memory (`ir.envo`), the text reader, the canonical printer
 and the verifier, ported from Stage 1. `envoc eir-check` matches `envoc1 eir-check` on the
 EIR goldens and error tests, and on the whole-program EIR `envoc1 eir` writes for every run
-program and for Stage 2 itself (1.7 MB). Lowering, the binary form, the backend and the
-image writers follow; the goal is `envoc build` writing the same bytes as `envoc1 build`.
+program and for Stage 2 itself (1.7 MB).
+
+Lowering (`eir/lower*.envo`, namespace `envoc.lower`) is a port of Stage 1's `lower/`. It
+emits instructions, slots, struct types and globals in the same order, so `envoc eir`
+prints the same module as `envoc1 eir`.
+
+## Backend (M3.6)
+
+`envoc.x64` is Stage 1's `-O0` code generator: the encoder (`asm.envo`), the code
+generator (`gen.envo`) and the PE and ELF writers (`image.envo`). `envoc build` writes the
+same bytes as `envoc1 build` for every run and multi-file program, both targets. The tests
+run each Stage 2 build and compare it with Stage 1's.
+
+Stage 2 also builds Stage 1 and itself exactly as `envoc1` does. So `envoc` built by
+`envoc` is already byte-identical to `envoc` built by `envoc1`. That holds until the two
+start to differ, which they will with `-O2` (3.8). The fixed point in CI is 3.9.
+
+The binary form of EIR moves to 3.7, where `.eo` objects need it.
 
 ## Stage 1 bugs found by Stage 2
 

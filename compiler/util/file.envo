@@ -20,3 +20,15 @@ public string? ReadFile(str path) {
     close(fd);
     return Some(s);
 }
+
+// Writes data to the file at path, replacing it; marks it executable where that means
+// something. False if the file cannot be opened.
+public bool WriteFile(str path, in string data, bool executable) {
+    i32 mode = 1;
+    if (executable) mode = 2;
+    i32 fd = open(path, mode);
+    if (fd < 0) return false;
+    write(fd, data);
+    close(fd);
+    return true;
+}

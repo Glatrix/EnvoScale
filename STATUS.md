@@ -16,7 +16,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M0 | Charter and skeleton | **Done** |
 | M1 | Stage 0 | **Done** |
 | M2 | Stage 1 | **Done**: `envoc1`, written in Envo-Core, compiles Envo-Core and Envo-S1 |
-| M3 | Self-hosting | **In progress**: Stage 2 skeleton, lexer, parser and the full checker done (3.1–3.5), lowering and the `-O0` backend next (3.6); plan in `docs/PLAN.md` §5 |
+| M3 | Self-hosting | **In progress**: Stage 2 compiles programs and itself, byte-identical to `envoc1` (3.1–3.6); objects and linking next (3.7); plan in `docs/PLAN.md` §5 |
 | M4–M13 | | Not started |
 
 ### M0 Definition of Done
@@ -60,11 +60,11 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **Seed** (`bootstrap/seed`) | — | — | Everything (Phase B, before 1.0) | After Stage 0's `.eas` subset is final |
 | **Stage 0** (`bootstrap/stage0`) | Experimental | `envoc0` in 15k lines of assembly: `lex`, `parse`, `check`, `build`; PE/ELF output, cross-compiles; hello world is 8 KB | Fixes only (line budget used up) | — |
 | **Stage 1** (`bootstrap/stage1`) | Experimental | `envoc1` in 17k lines of Envo-Core: front end, EIR v1 with verifier, x86-64 backend, PE/ELF, runtime in Envo. Compiles Envo-Core exactly like `envoc0`, and Envo-S1 (generics, interfaces, closures, ownership, enums, views, namespaces, prelude) | Speed (no optimizer, by design: D15) | Fixes found by Stage 2 |
-| **Stage 2** (`compiler/`) | Experimental | `envoc` in Envo-S1, built by `envoc1`: `lex`, `parse` and `check`, matching `envoc1` (ownership included) on the tests and on both compilers' sources | Code generation, linking, optimization, the fixed point (M3.6–3.9) | Lowering to EIR (M3.6) |
+| **Stage 2** (`compiler/`) | Experimental | `envoc` in Envo-S1, built by `envoc1`: `lex`, `parse`, `check`, `eir` and `build`, matching `envoc1` byte for byte on the tests and on both compilers | Objects and linking, optimization, the fixed point in CI (M3.7–3.9) | `.eo` objects and `envoc link` (M3.7) |
 | **NASM adapter** (`adapters/bootstrap/nasm`) | Experimental | `assemble.ps1`, `assemble.sh` | — | — |
 | **Build scripts** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check`, `build`, `test` on PowerShell and Git Bash | — | — |
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
-| **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | Stage 2 run tests (M3.6) |
+| **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | Object and link tests (M3.7) |
 | **Runtime** (`runtime/`) | — | — | Everything | M3 (startup, panics, ARC), M6 (VM) |
 | **Standard platform** (`lib/`) | — | — | Everything | M4 |
 | **Adapters** (`adapters/os`, `window`, `gpu`, …) | — | — | Everything | M4 on |

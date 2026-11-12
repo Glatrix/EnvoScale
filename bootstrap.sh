@@ -187,15 +187,20 @@ do_test() {
     # Programs compiled and run: `// expect:` stdout lines, `// expect-exit: N`,
     # `// expect-panic: <reason>` (exit 101 and "panic: <reason>" on stderr).
     # Programs compiled and run: by Stage 0, then by Stage 1, which must give the same
-    # output and exit codes (M2.7, PLAN D14).
+    # output and exit codes (M2.7, PLAN D14); then by Stage 2, whose executables must be
+    # byte-identical to Stage 1's (M3.6).
     stage0_exe=$EXE
-    for compiler in envoc0 envoc1; do
-    if [ "$compiler" = envoc1 ]; then EXE="$BUILD1/envoc1$(host_suffix)"; else EXE=$stage0_exe; fi
+    for compiler in envoc0 envoc1 envoc; do
+    case $compiler in
+        envoc0) EXE=$stage0_exe ;;
+        envoc1) EXE="$BUILD1/envoc1$(host_suffix)" ;;
+        envoc) EXE="$BUILD2/envoc$(host_suffix)" ;;
+    esac
         rundir="$ROOT/build/run-$compiler"
         mkdir -p "$rundir"
-        # Envo-S1 programs (tests/spec/s1-run) run under Stage 1 only.
-        run_suites=core-run
-        [ "$compiler" = envoc1 ] && run_suites="core-run s1-run"
+        # Envo-S1 programs (tests/spec/s1-run) run under Stages 1 and 2 only.
+        run_suites="core-run s1-run"
+        [ "$compiler" = envoc0 ] && run_suites=core-run
         for suite in $run_suites; do
         say "run tests ($compiler): tests/spec/$suite"
         for f in "$ROOT"/tests/spec/$suite/*.envo; do
@@ -210,6 +215,9 @@ do_test() {
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$rundir" build "$f" -o "$program"
             if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+            if [ "$compiler" = envoc ] && ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then
+                bad "$name" 'the executable differs from the envoc1 build'; continue
+            fi
             set +e
             (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
             rc=$?
@@ -225,9 +233,9 @@ do_test() {
         # Multi-file programs: one folder per test. main.envo is the entry file and holds
         # the annotations; the other .envo files follow in name order. Either
         # `// expect-error: E#### @ <file>:L:C` (envoc0 check) or `// expect:` lines (build, run).
-        # Envo-S1 programs of several files (tests/spec/s1-multi) under Stage 1 only.
-        multi_suites=core-multi
-        [ "$compiler" = envoc1 ] && multi_suites="core-multi s1-multi"
+        # Envo-S1 programs of several files (tests/spec/s1-multi) under Stages 1 and 2 only.
+        multi_suites="core-multi s1-multi"
+        [ "$compiler" = envoc0 ] && multi_suites=core-multi
         for msuite in $multi_suites; do
         say "multi-file tests ($compiler): tests/spec/$msuite"
         for d in "$ROOT"/tests/spec/$msuite/*/; do
@@ -253,6 +261,9 @@ do_test() {
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$d" build "$@" -o "$program"
             if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+            if [ "$compiler" = envoc ] && ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then
+                bad "$name" 'the executable differs from the envoc1 build'; continue
+            fi
             set +e
             (cd "$rundir" && "$program") > "$TMP/out" 2> "$TMP/err"
             rc=$?
@@ -527,6 +538,33 @@ do_test() {
         run "$dir" "$@"
         if [ "$rc" -eq "$rc1" ] && cmp -s "$TMP/out1" "$TMP/out" && cmp -s "$TMP/err1" "$TMP/err"; then pass
         else bad "stage2 $cmd ${unit%%:*}" "differs from envoc1 (exit $rc1 vs $rc)"; fi
+    done
+    # Stage 2 builds Stage 1 as envoc1 does, and builds itself into the envoc that envoc1
+    # built, for both targets (M3.6).
+    selfdir="$ROOT/build/run-envoc"
+    for unit in bootstrap/stage1:--core:x86_64-linux compiler::x86_64-linux compiler::x86_64-windows; do
+        dir="$ROOT/${unit%%:*}"
+        target=${unit##*:}
+        set -- build
+        case "$unit" in *:--core:*) set -- --core build ;; esac
+        while IFS= read -r f || [ -n "$f" ]; do
+            f=$(printf '%s' "$f" | tr -d '\r')
+            [ -n "$f" ] && set -- "$@" "$f"
+        done < "$dir/files.txt"
+        what="stage2 build ${unit%%:*} ($target)"
+        if [ "${unit%%:*}" = compiler ]; then
+            want="$BUILD2/envoc"
+            [ "$target" = x86_64-windows ] && want="$BUILD2/envoc.exe"
+        else
+            want="$selfdir/self-stage1-envoc1"
+            EXE=$ENVOC1
+            run "$dir" "$@" -o "$want" --target "$target"
+            if [ "$rc" -ne 0 ]; then bad "$what" "envoc1 failed: exit $rc"; continue; fi
+        fi
+        EXE=$envoc2
+        run "$dir" "$@" -o "$selfdir/self-$target" --target "$target"
+        if [ "$rc" -eq 0 ] && cmp -s "$want" "$selfdir/self-$target"; then pass
+        else bad "$what" "exit $rc, or the executable differs from envoc1's"; fi
     done
     EXE=$stage0_exe
 
