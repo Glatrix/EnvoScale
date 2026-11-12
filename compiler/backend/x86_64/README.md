@@ -2,7 +2,10 @@
 
 > **Status:** `-O0` (M3.6) and `-O2` (M3.8).
 
-The x86-64 backend, ported from Stage 1 (`bootstrap/stage1/x64/`):
+The x86-64 backend, ported from Stage 1 (`bootstrap/stage1/x64/`). A frame of a page or
+more is reserved one page at a time, touching each (a stack probe), so a large frame
+never jumps past the stack's guard page; all three stages do this. `envoc build -map
+<file>` writes each function's address, for profilers and debugging.
 
 - `asm.envo`: the instruction encoder, with code and data buffers, labels and fixups.
 - `gen.envo`: code generation. At `-O0` every SSA value has its own stack slot and

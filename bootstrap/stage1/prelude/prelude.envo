@@ -171,9 +171,7 @@ struct string {
 
     void Append(ref this, str s) {
         this.Reserve(s.Len);
-        unsafe {
-            for (usize i = 0; i < s.Len; i++) this.Data[this.Count + i] = s[i];
-        }
+        unsafe { string.CopyBytes(&this.Data[this.Count], s.Ptr, s.Len); }
         this.Count += s.Len;
     }
 
@@ -205,11 +203,28 @@ struct string {
         if (cap < 16) cap = 16;
         unsafe {
             *u8 fresh = alloc(cap);
-            for (usize i = 0; i < this.Count; i++) fresh[i] = this.Data[i];
+            string.CopyBytes(fresh, this.Data, this.Count);
             free(this.Data);
             this.Data = fresh;
         }
         this.Cap = cap;
+    }
+
+    // Copies n bytes from src to dst (not overlapping): eight at a time, then the rest.
+    static void CopyBytes(*u8 dst, *u8 src, usize n) {
+        usize i = 0;
+        unsafe {
+            while (i + 8 <= n) {
+                *u64 d = &dst[i] as *u64;
+                *u64 r = &src[i] as *u64;
+                d[0] = r[0];
+                i += 8;
+            }
+            while (i < n) {
+                dst[i] = src[i];
+                i++;
+            }
+        }
     }
 }
 

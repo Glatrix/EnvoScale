@@ -1,0 +1,8 @@
+// A path with a NUL byte cannot be opened: the system would read only the part before
+// it, so "out\0.exe" would quietly open "out". Found in the M3 security sweep.
+// expect: refused
+// expect: refused
+i32 w = open("nul-test\x00.exe", 1);
+if (w < 0) print("refused"); else print("opened");
+i32 r = open("nul-test\x00", 0);
+if (r < 0) print("refused"); else print("opened");

@@ -20,6 +20,13 @@ struct Doms {
 impl Module {
     void VFail(in this, u32 pos, u32 code, str msg) {
         if (this.FromText) FailAt(TextStr(this.SrcPath), TextStr(this.SrcText), pos as usize, code, msg);
+        if (this.SrcPath.Len > 0) {
+            // binary EIR read from a file: bad input, not a compiler bug
+            string e = string.From(TextStr(this.SrcPath));
+            e.Append(": invalid EIR: ");
+            e.Append(msg);
+            ToolFail(e, EXIT_ERRORS);
+        }
         string b = string.From("EIR verifier: ");
         b.Append(msg);
         ToolFail(b, EXIT_INTERNAL);

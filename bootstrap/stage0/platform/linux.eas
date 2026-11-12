@@ -188,13 +188,26 @@ rtl_bi_read:
         movsxd  rdi, dword [rsp + 24]
         jmp     near rtl_sys_read
 
-; open(str path, i32 mode) -> i32: the path is copied so it can be NUL-terminated.
+; open(str path, i32 mode) -> i32: the path is copied so it can be NUL-terminated. A path
+; with a NUL byte fails (-1): the system would read only the part before it.
 rtl_bi_open:
         push    rbx
         push    r12
         push    r13
         mov     r12, [rsp + 40]                 ; path pointer
         mov     r13, [rsp + 48]                 ; path length
+        xor     ecx, ecx
+.scan:
+        cmp     rcx, r13
+        jae     short .clean
+        cmp     byte [r12 + rcx], 0
+        je      short .refuse
+        inc     rcx
+        jmp     short .scan
+.refuse:
+        mov     rax, -1
+        jmp     short .done
+.clean:
         lea     rdi, [r13 + 1]
         call    rtl_heap_alloc                  ; zeroed, so the copy ends in NUL
         mov     rbx, rax
@@ -206,6 +219,7 @@ rtl_bi_open:
         movsxd  rsi, dword [rsp + 32]           ; mode
         call    rtl_sys_open
         cdqe                                    ; an i32 result, normalized
+.done:
         pop     r13
         pop     r12
         pop     rbx

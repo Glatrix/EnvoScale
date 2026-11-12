@@ -25,6 +25,8 @@ const u8 REMAT_FRAME = 2;      // slot: rbp + the offset
 const u8 REMAT_LABEL = 3;      // addr: the label's address
 const u64 SMALL_BYTES = 128;
 const u64 NOT_SMALL = 0xFFFFFFFFFFFFFFFF;
+// The largest frame: displacements from rbp are 32-bit.
+const u64 FRAME_MAX = 0x7FFF0000;
 
 struct Gen {
     Asm A;
@@ -538,12 +540,13 @@ struct Gen {
             if (this.Opt) this.RematImm.Set((inst.Result - f.FirstValue) as usize, inst.Imm);
         }
         u64 frame = ((save + valueArea + slotArea + 15) & ~15) - save;
+        if (save + frame > FRAME_MAX) ToolFail("a function's locals take more than 2 GiB of stack", EXIT_ERRORS);
         this.A.Push(RBP);
         this.A.MovRR(RBP, RSP);
         for (u32 r = 0; r < this.Saved.Len() as u32; r++) {
             if (this.Saved.Get(r as usize)) this.A.Push(AllocReg(r));
         }
-        if (frame > 0) this.A.AluImm(5, RSP, frame as i32);
+        this.ReserveFrame(frame);
         if (slotArea > 0 && this.Opt && slotArea <= SMALL_BYTES) {
             this.A.Alu(ALU_XOR, RAX, RAX);
             this.ZeroBytes(RBP, (0 -% (save + valueArea + slotArea)) as i32, slotArea);
@@ -564,6 +567,24 @@ struct Gen {
             this.A.Bind(this.BlockLabels.Get(b as usize));
             for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) this.Inst(m, i);
         }
+    }
+
+    // sub rsp, frame, touching every page on the way down (a stack probe): the OS grows the
+    // stack one guard page at a time, so a frame larger than a page must not skip one.
+    // Stage 1 does the same.
+    void ReserveFrame(ref this, u64 frame) {
+        u64 rest = frame;
+        if (rest >= 4096) {
+            this.A.MovRI(R11, rest / 4096);
+            u32 top = this.A.NewLabel();
+            this.A.Bind(top);
+            this.A.AluImm(5, RSP, 4096);
+            this.A.Store(RSP, 0, R11, 8);
+            this.A.AluImm(5, R11, 1);
+            this.A.Jcc(CC_NE, top);
+            rest = rest % 4096;
+        }
+        if (rest > 0) this.A.AluImm(5, RSP, rest as i32);
     }
 
     // -O2: the value of operand o if it is a constant of at most SMALL_BYTES, else
@@ -677,8 +698,20 @@ struct Gen {
 }
 
 // Generates module m (verified and laid out) for target into a complete executable image.
-// opt: -O2 code (registers and rematerialization) instead of -O0's.
-public string GenModule(ref Module m, u32 target, bool opt) {
+// v in hexadecimal, 16 digits.
+void AppendHex(ref string b, u64 v) {
+    u32 shift = 64;
+    while (shift > 0) {
+        shift -= 4;
+        u64 d = (v >> shift as u64) & 15;
+        if (d < 10) b.AppendByte((48 + d) as u8);
+        else b.AppendByte((87 + d) as u8);
+    }
+}
+
+// opt: -O2 code (registers and rematerialization) instead of -O0's. map, if wanted, gets
+// a link map: each function's address and name, one per line, in address order.
+public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref string map) {
     Gen g = new Gen {
         A = Asm.New(), Target = target, FuncLabels = List<u32>.New(), GlobalLabels = List<u32>.New(),
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
@@ -736,6 +769,16 @@ public string GenModule(ref Module m, u32 target, bool opt) {
         g.A.DataAlign(align);
         g.A.BindData(g.GlobalLabels.Get(i as usize));
         g.Init(m, gl.Init, gl.Type);
+    }
+    if (wantMap) {
+        u64 section = IMAGE_BASE + ELF_HEADERS;
+        if (target == TARGET_WINDOWS) section = IMAGE_BASE + PE_SECTION_RVA;
+        for (u32 i = 1; i < m.Funcs.Len() as u32; i++) {
+            AppendHex(ref map, section + g.A.LabelOffset(g.FuncLabels.Get(i as usize), 0));
+            map.AppendByte(' ');
+            map.Append(TextStr(m.Func(i).Name));
+            map.AppendByte(10);
+        }
     }
     return WriteImage(ref g.A, target, g.Imports);
 }

@@ -279,6 +279,14 @@ struct Decoder {
         return r;
     }
 
+    // A count of items still to read: each takes at least one byte, so a count larger
+    // than the bytes left is corrupt (and must not make the reader allocate for it).
+    u32 Count(ref this) {
+        u64 v = this.U();
+        if (v > (this.Data.Len - this.Pos) as u64) this.Corrupt();
+        return v as u32;
+    }
+
     // An unsigned number below limit.
     u32 Below(ref this, u64 limit) {
         u64 v = this.U();
@@ -314,7 +322,7 @@ struct Decoder {
         } else if (kind == EI_INT) {
             init.Int = this.S();
         } else if (kind == EI_LIST) {
-            u64 n = this.U();
+            u64 n = this.Count() as u64;
             u32 prev = 0;
             for (u64 k = 0; k < n; k++) {
                 u32 e = this.Init(ref m, depth + 1);
@@ -350,7 +358,7 @@ struct Decoder {
         Text abi = this.Str();
         u32 ret = this.Below(ntypes as u64);
         u32 nparams = this.Below(0x10000);
-        u32 nvalues = this.Below(0x10000000);
+        u32 nvalues = this.Count();
         if (nvalues < nparams) this.Corrupt();
         u32 firstValue = m.Vals.Len() as u32;
         for (u32 v = 0; v < nvalues; v++) {
@@ -364,7 +372,7 @@ struct Decoder {
         m.Funcs.Push(f);
         this.Name(ref m, name, NAME_FUNC, fi);
         if (f.Extern) return;
-        u32 nblocks = this.Below(0x10000000);
+        u32 nblocks = this.Count();
         if (nblocks == 0) this.Corrupt();
         f.NBlocks = nblocks;
         m.Funcs.Set(fi as usize, f);
@@ -378,7 +386,7 @@ struct Decoder {
             u32 fp = this.Below(nvalues as u64 + 1);
             u32 np = this.Below(nvalues as u64 + 1);
             if (fp + np > nvalues) this.Corrupt();
-            u32 ninsts = this.Below(0x10000000);
+            u32 ninsts = this.Count();
             u32 firstParam = 0;
             if (np > 0) firstParam = firstValue + fp;
             m.Blocks.Push(new EBlock { Func = fi, FirstParam = firstParam, NParams = np, FirstInst = m.Insts.Len() as u32, NInsts = ninsts, Pos = 0 });
@@ -403,7 +411,7 @@ struct Decoder {
                 u32 ty2 = this.Below(ntypes as u64);
                 u64 imm = this.S();
                 Text s = this.Str();
-                u32 nops = this.Below(0x10000000);
+                u32 nops = this.Count();
                 u32 firstOp = m.Ops.Len() as u32;
                 for (u32 o = 0; o < nops; o++) {
                     u8 kind = this.Byte();
@@ -416,7 +424,7 @@ struct Decoder {
                         eo.Str = this.Str();
                     } else if (kind == OK_TARGET) {
                         eo.Ref = f.FirstBlock + this.Below(nblocks as u64);
-                        u32 nargs = this.Below(0x10000000);
+                        u32 nargs = this.Count();
                         eo.Args = m.Args.Len() as u32;
                         eo.NArgs = nargs;
                         for (u32 a = 0; a < nargs; a++) {
@@ -459,7 +467,7 @@ public void DecodeEir(ref Module m, str path, str bytes) {
         d.Fail(msg);
     }
     usize end = d.Section(SEC_STRINGS);
-    u64 nstrs = d.U();
+    u64 nstrs = d.Count() as u64;
     for (u64 i = 0; i < nstrs; i++) {
         u64 len = d.U();
         if (len > (end - d.Pos) as u64) d.Corrupt();
@@ -475,8 +483,7 @@ public void DecodeEir(ref Module m, str path, str bytes) {
     d.End(end);
 
     end = d.Section(SEC_TYPES);
-    u64 ntypes = d.U();
-    if (ntypes > 0x10000000) d.Corrupt();
+    u64 ntypes = d.Count() as u64;
     u64 total = ET_PTR as u64 + 1 + ntypes;
     for (u64 k = 0; k < ntypes; k++) {
         u32 t = m.Types.Len() as u32;
@@ -485,7 +492,7 @@ public void DecodeEir(ref Module m, str path, str bytes) {
             Text name = d.Str();
             u8 flags = d.Byte();
             if (flags > 3) d.Corrupt();
-            u32 nfields = d.Below(0x10000000);
+            u32 nfields = d.Count();
             u32 firstField = m.Fields.Len() as u32;
             for (u32 i = 0; i < nfields; i++) {
                 u32 ft = d.Below(total);
@@ -517,7 +524,7 @@ public void DecodeEir(ref Module m, str path, str bytes) {
     d.End(end);
 
     end = d.Section(SEC_GLOBALS);
-    u64 nglobals = d.U();
+    u64 nglobals = d.Count() as u64;
     for (u64 k = 0; k < nglobals; k++) {
         u32 g = m.Globals.Len() as u32;
         Text name = d.Str();
@@ -531,7 +538,7 @@ public void DecodeEir(ref Module m, str path, str bytes) {
     d.End(end);
 
     end = d.Section(SEC_FUNCS);
-    u64 nfuncs = d.U();
+    u64 nfuncs = d.Count() as u64;
     for (u64 k = 0; k < nfuncs; k++) d.Func(ref m, total as u32);
     d.End(end);
     if (d.Pos != d.Data.Len) d.Corrupt();

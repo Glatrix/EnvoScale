@@ -92,7 +92,8 @@ bool FileRead(str path, *Buf into) {
 }
 
 // Writes data to path, replacing it. executable marks the file executable where the OS
-// has such a flag.
+// has such a flag. `write` reports no errors (a full disk just stops it), so the file is
+// read back: false unless it holds exactly data.
 bool FileWrite(str path, str data, bool executable) {
     i32 mode = 1;
     if (executable) mode = 2;
@@ -100,6 +101,16 @@ bool FileWrite(str path, str data, bool executable) {
     if (fd < 0) return false;
     write(fd, data);
     close(fd);
+    Buf back = BufNew(data.Len + 1);
+    str got = "";
+    unsafe {
+        if (!FileRead(path, &back)) return false;
+        got = BufView(&back);
+    }
+    if (got.Len != data.Len) return false;
+    for (usize i = 0; i < data.Len; i++) {
+        if (got[i] != data[i]) return false;
+    }
     return true;
 }
 

@@ -7,6 +7,8 @@ on:
   push:
   pull_request:
 
+# Least privilege: the jobs only read the repository. Actions are pinned to commit SHAs
+# (tags can be moved); the comment says which release each SHA is.
 permissions:
   contents: read
 
@@ -14,17 +16,21 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: ./bootstrap.sh check
 
   stage0-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
       - run: sh adapters/ci/github/install-nasm.sh
       - run: ./bootstrap.sh test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: stage0-built-on-linux
           path: |
@@ -38,14 +44,16 @@ jobs:
   stage0-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
       - run: choco install nasm --no-progress -y
       - run: .\bootstrap.ps1 check
         shell: powershell
       - run: .\bootstrap.ps1 test
         shell: powershell
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: stage0-built-on-windows
           path: |
@@ -61,12 +69,14 @@ jobs:
     needs: [stage0-linux, stage0-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: stage0-built-on-linux
           path: build/from-linux
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: stage0-built-on-windows
           path: build/from-windows
@@ -77,10 +87,12 @@ jobs:
   fixed-point-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: sh adapters/ci/github/install-nasm.sh
       - run: ./bootstrap.sh fixedpoint
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fixed-point-on-linux
           path: |
@@ -96,11 +108,13 @@ jobs:
   fixed-point-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: choco install nasm --no-progress -y
       - run: .\bootstrap.ps1 fixedpoint
         shell: powershell
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fixed-point-on-windows
           path: |
@@ -117,12 +131,14 @@ jobs:
     needs: [fixed-point-linux, fixed-point-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: fixed-point-on-linux
           path: build/from-linux
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: fixed-point-on-windows
           path: build/from-windows

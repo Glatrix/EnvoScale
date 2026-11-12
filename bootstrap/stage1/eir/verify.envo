@@ -264,7 +264,31 @@ Doms ComputeDoms(*Module m, u32 func) {
             }
         }
         VecSetU64(&d.Bits, 0, 1);
-        // predecessors: recompute from successors on each pass
+        // the reachable predecessors of each block, found once (they used to be recomputed
+        // from the successors for every pair of blocks on every pass; the sets are the same)
+        Vec start = SideTable(8, nb as usize + 1);
+        for (u32 p = 0; p < nb; p++) {
+            if (*VecAt(&d.Reach, p as usize) == 0) continue;
+            Successors(m, f.FirstBlock + p, f.FirstBlock, &succ);
+            for (usize i = 0; i < VecLen(&succ); i++) {
+                usize at = VecGetU64(&succ, i) as usize + 1;
+                VecSetU64(&start, at, VecGetU64(&start, at) + 1);
+            }
+        }
+        for (u32 b = 0; b < nb; b++) VecSetU64(&start, b as usize + 1, VecGetU64(&start, b as usize + 1) + VecGetU64(&start, b as usize));
+        Vec preds = SideTable(8, VecGetU64(&start, nb as usize) as usize);
+        Vec fill = SideTable(8, nb as usize);
+        for (u32 b = 0; b < nb; b++) VecSetU64(&fill, b as usize, VecGetU64(&start, b as usize));
+        for (u32 p = 0; p < nb; p++) {
+            if (*VecAt(&d.Reach, p as usize) == 0) continue;
+            Successors(m, f.FirstBlock + p, f.FirstBlock, &succ);
+            for (usize i = 0; i < VecLen(&succ); i++) {
+                usize sb = VecGetU64(&succ, i) as usize;
+                u64 at = VecGetU64(&fill, sb);
+                VecSetU64(&preds, at as usize, p as u64);
+                VecSetU64(&fill, sb, at + 1);
+            }
+        }
         bool changed = true;
         Vec fresh = SideTable(8, d.Words);
         while (changed) {
@@ -272,14 +296,8 @@ Doms ComputeDoms(*Module m, u32 func) {
             for (u32 b = 1; b < nb; b++) {
                 if (*VecAt(&d.Reach, b as usize) == 0) continue;
                 for (usize w = 0; w < d.Words; w++) VecSetU64(&fresh, w, 18446744073709551615);
-                for (u32 p = 0; p < nb; p++) {
-                    if (*VecAt(&d.Reach, p as usize) == 0) continue;
-                    Successors(m, f.FirstBlock + p, f.FirstBlock, &succ);
-                    bool pred = false;
-                    for (usize i = 0; i < VecLen(&succ); i++) {
-                        if (VecGetU64(&succ, i) == b as u64) pred = true;
-                    }
-                    if (!pred) continue;
+                for (u64 pi = VecGetU64(&start, b as usize); pi < VecGetU64(&start, b as usize + 1); pi++) {
+                    u32 p = VecGetU64(&preds, pi as usize) as u32;
                     for (usize w = 0; w < d.Words; w++) {
                         VecSetU64(&fresh, w, VecGetU64(&fresh, w) & VecGetU64(&d.Bits, (p as usize) * d.Words + w));
                     }

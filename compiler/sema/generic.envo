@@ -55,6 +55,7 @@ impl Checker {
     // Does type t mention a type parameter?
     bool HasParams(in this, u32 t) {
         if (t == 0) return false;
+        if ((t as usize) < this.ParamsIn.Len()) return this.ParamsIn.Get(t as usize);
         Type ty = this.TypeAt(t);
         if (ty.Kind == TYK_PARAM) return true;
         if (ty.Kind == TYK_PTR || ty.Kind == TYK_SLICE || ty.Kind == TYK_ARRAY) return this.HasParams(ty.Elem);

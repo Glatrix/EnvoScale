@@ -22,7 +22,8 @@ public string? ReadFile(str path) {
 }
 
 // Writes data to the file at path, replacing it; marks it executable where that means
-// something. False if the file cannot be opened.
+// something. `write` reports no errors (a full disk just stops it), so the file is read
+// back: false unless it holds exactly data.
 public bool WriteFile(str path, in string data, bool executable) {
     i32 mode = 1;
     if (executable) mode = 2;
@@ -30,5 +31,8 @@ public bool WriteFile(str path, in string data, bool executable) {
     if (fd < 0) return false;
     write(fd, data);
     close(fd);
-    return true;
+    string? back = ReadFile(path);
+    if (back.IsNone()) return false;
+    string got = back.Unwrap();
+    return Same(got.AsStr(), data.AsStr());
 }

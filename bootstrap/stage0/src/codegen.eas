@@ -1091,15 +1091,31 @@ g_frame_list:
         pop     rbx
         ret
 
-; g_prologue - push rbp; mov rbp, rsp; sub rsp, frame (16-aligned).
+; g_prologue - push rbp; mov rbp, rsp; sub rsp, frame (16-aligned). A frame of a page or
+; more is reserved a page at a time, touching each (a stack probe): the OS grows the
+; stack through one guard page, and jumping past it crashes or lands in other memory.
 g_prologue:
+        push    rbx
         lea     rsi, [t_prologue]
         call    g_t
-        mov     rdi, [g_frame]
-        add     rdi, 15
-        and     rdi, -16
+        mov     rbx, [g_frame]
+        add     rbx, 15
+        and     rbx, -16
+        cmp     rbx, 4096
+        jb      short .rest
+        mov     rdi, rbx
+        shr     rdi, 12
+        lea     rsi, [t_probe_count]
+        call    g_t_dword
+        lea     rsi, [t_probe_loop]
+        call    g_t
+        and     rbx, 4095
+.rest:
+        mov     rdi, rbx
         lea     rsi, [t_sub_rsp]
-        jmp     near g_t_dword
+        call    g_t_dword
+        pop     rbx
+        ret
 
 ; g_epilogue - mov rsp, rbp; pop rbp; ret
 g_epilogue:
@@ -2755,6 +2771,9 @@ t_lea_rax_rbp:      db 3, 0x48, 0x8D, 0x85              ; lea rax, [rbp + disp32
 t_lea_rax_rip:      db 3, 0x48, 0x8D, 0x05              ; lea rax, [rip + disp32]
 t_add_rax_imm32:    db 2, 0x48, 0x05                    ; add rax, imm32
 t_sub_rsp:          db 3, 0x48, 0x81, 0xEC              ; sub rsp, imm32
+t_probe_count:      db 2, 0x41, 0xBB                    ; mov r11d, imm32 (pages)
+; .l: sub rsp, 4096; mov [rsp], r11; sub r11, 1; jnz .l
+t_probe_loop:       db 17, 0x48, 0x81, 0xEC, 0x00, 0x10, 0x00, 0x00, 0x4C, 0x89, 0x1C, 0x24, 0x49, 0x83, 0xEB, 0x01, 0x75, 0xEF
 t_add_rsp_imm32:    db 3, 0x48, 0x81, 0xC4              ; add rsp, imm32
 t_prologue:         db 4, 0x55, 0x48, 0x89, 0xE5        ; push rbp; mov rbp, rsp
 t_epilogue:         db 5, 0x48, 0x89, 0xEC, 0x5D, 0xC3  ; mov rsp, rbp; pop rbp; ret

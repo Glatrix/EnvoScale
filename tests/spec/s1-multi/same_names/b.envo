@@ -1,0 +1,17 @@
+namespace b;
+static i64 Count = 2;
+public struct Box {
+    i64 V;
+    void Bump(ref this) {
+        Count += this.V;
+    }
+}
+public void Show() {
+    write(1, "b ");
+    print(Num(Count));
+}
+str Num(i64 v) {
+    if (v == 2) return "2";
+    if (v == 22) return "22";
+    return "?";
+}

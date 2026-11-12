@@ -169,14 +169,20 @@ isize __os_read(i32 fd, *u8 p, usize n) {
     return count as isize;
 }
 
-// mode 0 = read, 1 or 2 = write (create/truncate). Paths are UTF-8; invalid UTF-8 fails.
+// mode 0 = read, 1 or 2 = write (create/truncate). Paths are UTF-8; invalid UTF-8 fails,
+// and so does a NUL byte (the system would read only the part before it).
 i32 __os_open(*u8 path, usize len, i32 mode) {
+    if (len >= 32768) return -1;
     *u8 z = __rt_alloc(len + 1);
     unsafe {
-        for (usize i = 0; i < len; i++) z[i] = path[i];
+        for (usize i = 0; i < len; i++) {
+            if (path[i] == 0) return -1;
+            z[i] = path[i];
+        }
     }
-    *u8 wide = __rt_alloc(32768 * 2);
-    i64 chars = __wincall(__W_MULTIBYTETOWIDECHAR, 65001, 8, __w_ptr(z), -1, __w_ptr(wide), 32768, 0, 0);
+    // UTF-16 needs at most one unit per UTF-8 byte
+    *u8 wide = __rt_alloc((len + 1) * 2);
+    i64 chars = __wincall(__W_MULTIBYTETOWIDECHAR, 65001, 8, __w_ptr(z), -1, __w_ptr(wide), (len + 1) as i64, 0, 0);
     if (chars as i32 == 0) return -1;
     i64 access = 0x80000000;       // GENERIC_READ
     i64 share = 1;                  // FILE_SHARE_READ

@@ -279,6 +279,17 @@ impl Checker {
     // May a value of type t hold a borrow ([life.origin.1])? `str`, views, function values,
     // type parameters, and anything containing them.
     bool HoldsBorrow(ref this, u32 t) {
+        // cached: callers run once declarations are complete, and types never change
+        if ((t as usize) < this.BorrowMemo.Len() && this.BorrowMemo.Get(t as usize) != 0) return this.BorrowMemo.Get(t as usize) == 2;
+        bool holds = this.HoldsBorrowOf(t);
+        while (this.BorrowMemo.Len() <= t as usize) this.BorrowMemo.Push(0);
+        u8 v = 1;
+        if (holds) v = 2;
+        this.BorrowMemo.Set(t as usize, v);
+        return holds;
+    }
+
+    bool HoldsBorrowOf(ref this, u32 t) {
         Type ty = this.TypeAt(t);
         u8 k = ty.Kind;
         if (k == TYK_STR || k == TYK_SLICE || k == TYK_FN || k == TYK_PARAM) return true;

@@ -1,0 +1,15 @@
+// Items of the same name in different namespaces stay apart, also in EIR and in objects:
+// a function, a method of a struct of the same name, and a static. Found in the M3
+// sweep, where two `AppendHex` functions made the same EIR name.
+// expect: a 1
+// expect: b 2
+// expect: a 11
+// expect: b 22
+a.Show();
+b.Show();
+a.Box x = new a.Box { V = 10 };
+b.Box y = new b.Box { V = 20 };
+x.Bump();
+y.Bump();
+a.Show();
+b.Show();

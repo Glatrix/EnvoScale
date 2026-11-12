@@ -22,7 +22,7 @@ void Usage(i32 fd) {
     write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
     write(fd, "  check <file.envo>...\n");
     write(fd, "                      check names and types; print the typed syntax tree\n");
-    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [--target x86_64-windows|x86_64-linux]\n");
+    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [-map <file>] [--target x86_64-windows|x86_64-linux]\n");
     write(fd, "                      compile a program to an executable\n");
     write(fd, "  compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(fd, "                      compile to an EIR object: the code of one file (--unit)\n");
@@ -205,7 +205,7 @@ i32 CmdEirCheck(usize argi) {
 }
 
 void BuildUsage() {
-    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [--target x86_64-windows|x86_64-linux]\n");
+    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [-map <file>] [--target x86_64-windows|x86_64-linux]\n");
     write(2, "       envoc compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(2, "       envoc link <file.eo>... -o <output> [-O0|-O2]\n");
     exit(EXIT_USAGE);
@@ -229,11 +229,12 @@ struct BuildArgs {
     u32 Target;
     bool TargetSet;
     bool Opt;               // -O2
+    str Map;                // -map <file>: a link map of function addresses
     str Unit;               // compile: the file whose code the object holds
 }
 
 BuildArgs ParseBuildArgs(usize argi) {
-    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX, TargetSet = false, Unit = "", Opt = false };
+    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX, TargetSet = false, Unit = "", Opt = false, Map = "" };
     if (Same(HostTarget(), "x86_64-windows")) b.Target = TARGET_WINDOWS;
     usize i = argi;
     while (i < argc()) {
@@ -253,6 +254,10 @@ BuildArgs ParseBuildArgs(usize argi) {
         } else if (Same(a, "-O2") || Same(a, "-O0")) {
             b.Opt = Same(a, "-O2");
             i++;
+        } else if (Same(a, "-map")) {
+            if (i + 1 >= argc()) BuildUsage();
+            b.Map = arg(i + 1);
+            i += 2;
         } else if (Same(a, "--unit")) {
             if (i + 1 >= argc()) BuildUsage();
             b.Unit = arg(i + 1);
@@ -303,7 +308,9 @@ i32 CmdBuild(usize argi, bool core) {
     if (b.Files.Len() == 0 || b.Output.Len == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
     Module m = CompileProgram(ref src, b.Files, b.Target, core, true, -1, b.Opt);
-    string image = GenModule(ref m, b.Target, b.Opt);
+    string map = string.New();
+    string image = GenModule(ref m, b.Target, b.Opt, b.Map.Len > 0, ref map);
+    if (b.Map.Len > 0 && WriteOut(b.Map, map, false) != EXIT_OK) return EXIT_ERRORS;
     return WriteOut(b.Output, image, true);
 }
 
@@ -356,7 +363,9 @@ i32 CmdLink(usize argi) {
     else if (!TextIs(m.Target, "x86_64-linux")) ToolFail("the objects are for an unknown target", EXIT_ERRORS);
     if (b.TargetSet && b.Target != target) ToolFail("--target differs from the objects' target", EXIT_ERRORS);
     m.Verify();
-    string image = GenModule(ref m, target, b.Opt);
+    string map = string.New();
+    string image = GenModule(ref m, target, b.Opt, b.Map.Len > 0, ref map);
+    if (b.Map.Len > 0 && WriteOut(b.Map, map, false) != EXIT_OK) return EXIT_ERRORS;
     return WriteOut(b.Output, image, true);
 }
 

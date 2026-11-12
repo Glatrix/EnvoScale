@@ -181,10 +181,20 @@ same output, exit code and panic. They also build Stage 2 at `-O2` and use that 
 to build Stage 2 again: at `-O0` it must write the same bytes as `envoc1`, and at `-O2`
 it must reproduce itself.
 
-The `-O2` compiler builds Stage 2 in about 2.3 s, against 3.9 s for the `-O0` one, on
-the development machine. Most of what remains is the checker: name lookup scans every
-`use` declaration and builds a joined name per scope it tries, as Stage 1's does. That is
-an algorithm to change later, not something `-O2` can fix.
+The `-O2` compiler builds Stage 2 in about 1.8 s on the development machine (2.9 s
+before the M3 performance sweep), and `envoc1` builds it in 1.9 s (3.75 s before). The
+sweep was guided by a sampling profiler over `envoc build -map` output. It found these:
+- `HasParams` recomputed for every query; it is now worked out once per type, when the
+  type is stored.
+- `HoldsBorrow` walked struct fields on every call; it is now cached per type.
+- `OpTable` rebuilt an opcode's record through a 60-arm `match` on every call; it now
+  comes from a table built on first use.
+- Stage 1's verifier had the quadratic dominator computation Stage 2 had already fixed.
+- `string.Append` and `Reserve` in the prelude copied byte by byte; they now copy eight
+  bytes at a time.
+
+About a quarter of a build is now the operating system creating the output executable,
+which is outside the compiler.
 
 `ComputeDoms` in the verifier, a port of Stage 1's, recomputed every block's successors
 for every pair of blocks on each pass. Stage 2 now builds the predecessor lists once,
@@ -204,3 +214,4 @@ Stage 1 with a test before Stage 2 moves on (PLAN §6).
 | M3.3 | Backtracking after a type didn't undo a `>>` split into two `>`, so `List<List<u32>> F()` at top level failed to parse | `s1-run/nested_generics.envo` |
 | M3.4 | Any read of a variable in an argument conflicted with the same call's `ref` borrow of it, so `list.Push(list.Len())` was E0503. Arguments are evaluated before the call takes its borrows, so a read that yields a value holding no borrow is now fine; lending a view or a `string`-as-`str` still conflicts. Chapter 5 now says so ([own.borrow.2]) | `s1-run/two_phase_args.envo`, `s1-own/e0503_ref_and_read.envo`, `s1-own/e0503_ref_and_string_view.envo` |
 | M3.10 | Calling a `once fn` did not use it up, so it could be called twice ([fn.type.3]) | `s1-own/e0501_once_fn_twice.envo` |
+| M3 sweep | Functions and statics were named in EIR without their namespace, so two `Show`s in different namespaces made one EIR name: `eir` text and objects of such a program failed to verify (a build still worked, since calls go by index). EIR names now carry the namespace (`envoc.util.Same`) | `s1-multi/same_names/` |

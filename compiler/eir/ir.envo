@@ -374,8 +374,23 @@ OpInfo OpOf(u16 op, str name, u8 shape) => new OpInfo {
 };
 
 // The opcode table, in a fixed order: its index is the opcode number of the binary form
-// ([eir.bin.2]), so new opcodes go at the end.
+// ([eir.bin.2]), so new opcodes go at the end. Built on first use: every pass asks for it
+// once per instruction.
+static OpInfo[61] OpCache;
+static bool OpCacheBuilt = false;
+
 public OpInfo OpTable(u16 op) {
+    if (op > OP_LAST) return OpBuild(op);
+    unsafe {
+        if (!OpCacheBuilt) {
+            for (u16 i = 0; i <= OP_LAST; i++) OpCache[i] = OpBuild(i);
+            OpCacheBuilt = true;
+        }
+        return OpCache[op];
+    }
+}
+
+OpInfo OpBuild(u16 op) {
     OpInfo o = OpOf(op, "", 0);
     match op {
         1 => { o = OpOf(op, "const", SH_CONST); o.IntOnly = false; }

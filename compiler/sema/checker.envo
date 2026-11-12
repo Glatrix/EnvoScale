@@ -18,6 +18,8 @@ public struct Checker {
     List<u8> NConv;         // per node: 1 where a `string` is used as a `str`
     List<u8> NMove;         // per node: 1 where a use moves a whole local, 2 a dropped temporary
     List<Type> Types;
+    List<bool> ParamsIn;    // per type: does it mention a type parameter (HasParams)
+    List<u8> BorrowMemo;    // per type: HoldsBorrow, 0 not known yet, 1 no, 2 yes
     List<Sym> Syms;
     StrMap<u32> Global;     // program scope: name -> symbol
     StrMap<u32> Derived;    // interned pointer, slice and array types
@@ -74,7 +76,7 @@ public struct Checker {
             T = tree, Paths = List<Text>.New(), Texts = List<Text>.New(),
             NTypes = List<u32>.New(), NValues = List<u64>.New(), NSyms = List<u32>.New(),
             NMatched = List<u8>.New(), NConv = List<u8>.New(), NMove = List<u8>.New(),
-            Types = List<Type>.New(), Syms = List<Sym>.New(),
+            Types = List<Type>.New(), ParamsIn = List<bool>.New(), BorrowMemo = List<u8>.New(), Syms = List<Sym>.New(),
             Global = StrMap<u32>.New(), Derived = StrMap<u32>.New(),
             Locals = List<u32>.New(), LSP = 0, LBase = 0, Unsafe = 0, Loops = 0, Ret = 0,
             Top = false, Brk = false, ParamTypes = List<u32>.New(), Core = core, Runtime = runtime,
@@ -147,7 +149,16 @@ public struct Checker {
     // ------------------------------------------------------------------ types
 
     Type TypeAt(in this, u32 t) => this.Types.Get(t as usize);
-    void PutType(ref this, u32 t, Type x) => this.Types.Set(t as usize, x);
+    // Stores type t. Types are interned and their parts exist first, so whether t mentions
+    // a type parameter is worked out here, once (HasParams reads it).
+    void PutType(ref this, u32 t, Type x) {
+        this.Types.Set(t as usize, x);
+        bool p = x.Kind == TYK_PARAM;
+        if (!p && (x.Kind == TYK_PTR || x.Kind == TYK_SLICE || x.Kind == TYK_ARRAY || x.Kind == TYK_FN)) p = this.HasParams(x.Elem);
+        for (u32 i = 0; i < x.NArgs && !p; i++) p = this.HasParams(this.EnvGet(x.Args, i));
+        while (this.ParamsIn.Len() <= t as usize) this.ParamsIn.Push(false);
+        this.ParamsIn.Set(t as usize, p);
+    }
     u8 TyKind(in this, u32 t) => this.Types.Get(t as usize).Kind;
     bool IsIntType(in this, u32 t) => this.TyKind(t) == TYK_INT;
 

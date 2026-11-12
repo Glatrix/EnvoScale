@@ -339,7 +339,7 @@ public struct Lower {
         u32 n = this.C.NodeAt(program).A;
         while (n != 0) {
             u16 k = this.C.NKind(n);
-            if (k == NK_FN && !this.C.NeedsInst(this.C.NSym(n))) this.DeclareFunc(this.C.NSym(n), this.C.TokName(this.C.NTok(n)));
+            if (k == NK_FN && !this.C.NeedsInst(this.C.NSym(n))) this.DeclareFunc(this.C.NSym(n), this.QualifiedName(this.C.NSym(n), this.C.TokName(this.C.NTok(n))));
             if (k == NK_STATIC) this.DeclareStatic(this.C.NSym(n));
             n = this.C.NNext(n);
         }
@@ -431,6 +431,14 @@ public struct Lower {
 
     // The EIR signature of function symbol s: scalars by value, aggregates by pointer, and
     // an aggregate result through a hidden first pointer parameter.
+    // The EIR name of item s, written name: prefixed with its namespace, so items of the
+    // same name in different namespaces stay apart (found in the M3 sweep).
+    Text QualifiedName(ref this, u32 s, Text name) {
+        Text ns = this.C.SymAt(s).Ns;
+        if (ns.Len == 0) return name;
+        return this.C.JoinName(ns, name);
+    }
+
     void DeclareFunc(ref this, u32 s, Text name) {
         Sym sym = this.C.SymAt(s);
         u32 n = sym.Aux;
@@ -476,7 +484,7 @@ public struct Lower {
         }
         u32 g = this.M.Globals.Len() as u32;
         string name = string.From("static.");
-        name.Append(TextStr(sym.Name));
+        name.Append(TextStr(this.QualifiedName(s, sym.Name)));
         Text kept = this.M.Keep(name);
         u32 ii = this.PushInit(init);
         this.M.Globals.Push(new EGlobal { Name = kept, Type = t, ReadOnly = false, Init = ii, Pos = 0 });

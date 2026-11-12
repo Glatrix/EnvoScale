@@ -36,10 +36,14 @@ isize __os_read(i32 fd, *u8 p, usize n) {
 }
 
 // mode 0 = read, 1 = write (create/truncate, 0644), 2 = the same, executable (0755).
+// A path with a NUL byte fails: the system would read only the part before it.
 i32 __os_open(*u8 path, usize len, i32 mode) {
     *u8 z = __rt_alloc(len + 1);       // zeroed, so the copy ends in NUL
     unsafe {
-        for (usize i = 0; i < len; i++) z[i] = path[i];
+        for (usize i = 0; i < len; i++) {
+            if (path[i] == 0) return -1;
+            z[i] = path[i];
+        }
     }
     i64 flags = 0x80000;               // O_RDONLY | O_CLOEXEC
     i64 perm = 0;

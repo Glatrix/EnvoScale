@@ -37,3 +37,26 @@ then, do not use it to protect anything that matters.
 - Until then, Stage 0 is assembled by NASM through an optional adapter
   (`adapters/bootstrap/nasm/`). This is the one outside tool in the trust chain, and it
   is temporary by design.
+- CI runs with read-only repository permissions, pins every GitHub action to a commit
+  SHA, and does not leave the job's token in the checkout. NASM itself comes from the
+  runner's package manager (apt, Chocolatey) unpinned. The `reproducible` and
+  `fixed-point` jobs compare both hosts' builds byte for byte, so a NASM difference
+  between them would show.
+
+## Known hardening gaps
+
+These are known and tracked. Programs the compilers produce today are for development,
+not for running untrusted input.
+
+- **Executable layout** (PLAN D2). Executables have one read-write-execute
+  section at a fixed base address, with no relocations: no W^X, no ASLR. The layout
+  was chosen to keep Stage 0 auditable; separate code and data sections and relocatable
+  images are tracked in [#80](https://github.com/envoscale/EnvoScale/issues/80).
+- **Write errors in programs.** The Envo-Core `write` built-in returns nothing, so a
+  program cannot see a failed write (a full disk, a closed pipe). The compilers check
+  their own output by reading it back. A `write` that reports errors belongs to the
+  standard library's I/O (M4).
+- **Stack overflow** ends a program with the operating system's crash (an access
+  violation or SIGSEGV at the guard page), not a panic message. Every frame larger than a
+  page is probed, so an overflow always hits the guard page and never skips it.
+

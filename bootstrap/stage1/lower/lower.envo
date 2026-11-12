@@ -343,7 +343,7 @@ void LowerProgram(*Lower l, u32 program) {
     u32 n = CNode(c, program).A;
     while (n != 0) {
         u16 k = NKind(c, n);
-        if (k == NK_FN && !NeedsInst(c, NSym(c, n))) DeclareFunc(l, NSym(c, n), TokText(c, NTok(c, n)));
+        if (k == NK_FN && !NeedsInst(c, NSym(c, n))) DeclareFunc(l, NSym(c, n), QualifiedName(c, NSym(c, n), TokText(c, NTok(c, n))));
         if (k == NK_STATIC) DeclareStatic(l, NSym(c, n));
         n = CNode(c, n).Next;
     }
@@ -422,6 +422,20 @@ u32 AddFunc(*Lower l, str name, u32 nparams, u32 ret) {
 
 // The EIR signature of function symbol s: scalars by value, aggregates by pointer, and
 // an aggregate result through a hidden first pointer parameter.
+// The EIR name of item s, written name: prefixed with its namespace, so items of the same
+// name in different namespaces stay apart (found in the M3 sweep).
+str QualifiedName(*Checker c, u32 s, str name) {
+    Sym sym = SymGet(c, s);
+    if (sym.Ns.Len == 0) return name;
+    Buf b = BufNew(sym.Ns.Len + name.Len + 1);
+    unsafe {
+        BufStr(&b, sym.Ns);
+        BufStr(&b, ".");
+        BufStr(&b, name);
+        return BufCopy(&b);
+    }
+}
+
 void DeclareFunc(*Lower l, u32 s, str name) {
     *Checker c = LC(l);
     Sym sym = SymGet(c, s);
@@ -475,7 +489,7 @@ void DeclareStatic(*Lower l, u32 s) {
         *EGlobal gl = VecPush(&m.Globals) as *EGlobal;
         Buf name = BufNew(16);
         BufStr(&name, "static.");
-        BufStr(&name, sym.Name);
+        BufStr(&name, QualifiedName(c, s, sym.Name));
         gl.Name = BufCopy(&name);
         gl.Type = t;
         u32 ii = ECount(&m.Inits);

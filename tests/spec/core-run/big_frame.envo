@@ -1,0 +1,19 @@
+// A frame larger than a page is reserved one page at a time (a stack probe): the OS
+// grows the stack through one guard page, and jumping past it crashes or lands in other
+// memory. Found in the M3 security sweep.
+// expect: start
+// expect: ok
+u64 Big() {
+    u8[200000] a;
+    a[0] = 1;
+    return a[0] as u64;
+}
+
+u64 Deep(u64 n) {
+    if (n == 0) return Big();
+    return Deep(n - 1);
+}
+
+print("start");
+u64 r = Deep(3);
+print("ok");

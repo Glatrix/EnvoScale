@@ -462,6 +462,31 @@ void GenIntrinsic(*Gen g, EInst inst) {
     if (inst.Result != 0) StoreV(g, inst.Result, RAX);
 }
 
+// The largest frame: displacements from rbp are 32-bit.
+const u64 FRAME_MAX = 0x7FFF0000;
+
+void FrameTooLarge() {
+    *Buf e = Err();
+    BufStr(e, "envoc1: error: a function's locals take more than 2 GiB of stack\n");
+    Exit(EXIT_ERRORS);
+}
+
+// sub rsp, frame, touching every page on the way down (a stack probe): the OS grows the
+// stack one guard page at a time, so a frame larger than a page must not skip one.
+void ReserveFrame(*Asm a, u64 frame) {
+    if (frame >= 4096) {
+        MovRI(a, R11, frame / 4096);
+        u32 top = NewLabel(a);
+        Bind(a, top);
+        AluImm(a, 5, RSP, 4096);
+        Store(a, RSP, 0, R11, 8);
+        AluImm(a, 5, R11, 1);
+        Jcc(a, CC_NE, top);
+        frame = frame % 4096;
+    }
+    if (frame > 0) AluImm(a, 5, RSP, frame as i32);
+}
+
 // ------------------------------------------------------------------ functions
 
 void GenFunc(*Gen g, u32 fi) {
@@ -492,9 +517,10 @@ void GenFunc(*Gen g, u32 fi) {
         }
     }
     u64 frame = (valueArea + slotArea + 15) & ~15;
+    if (frame > FRAME_MAX) FrameTooLarge();
     Push(a, RBP);
     MovRR(a, RBP, RSP);
-    if (frame > 0) AluImm(a, 5, RSP, frame as i32);
+    ReserveFrame(a, frame);
     if (slotArea > 0) {
         LeaRM(a, RDI, RBP, (0 -% (valueArea + slotArea)) as i32);
         MovRI(a, RCX, slotArea);
