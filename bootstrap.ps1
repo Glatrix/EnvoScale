@@ -758,7 +758,10 @@ function Invoke-Test {
     }
     # The website, written in Envo (website\README.md): it builds, and its pages are there.
     # Keep in step with bootstrap.sh.
-    Say 'website: website/site.envo builds the site'
+    Say 'website: website/site.envo builds the site, with the sandbox (envoc.wasm)'
+    $cfiles = @(Get-Content (Join-Path $Root 'compiler\files.txt') | Where-Object { $_ -and -not $_.StartsWith('#') })
+    $r = Invoke-Tool $envoc (@('build', '-O2', '--target', 'wasm32-web') + $cfiles + @('-o', (Join-Path $Root 'build\envoc.wasm'))) (Join-Path $Root 'compiler')
+    if ($r.Code -ne 0) { Bad 'envoc.wasm build' $r.Err.Trim() }
     $siteTool = Join-Path $Root 'build\site-tool.exe'
     $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, (Join-Path $Root 'website\site.envo'), '-o', $siteTool) $Root
     if ($r.Code -ne 0) { Bad 'website build' $r.Err.Trim() }
@@ -767,7 +770,7 @@ function Invoke-Test {
         if (Test-Path -LiteralPath $siteDir) { Remove-Item -Recurse -Force $siteDir }
         $r = Invoke-Tool $siteTool @('build', 'build/site') $Root
         $eir = Join-Path $siteDir 'docs\spec\eir.html'
-        $ok = $r.Code -eq 0 -and (Test-Path -LiteralPath $eir) -and ([IO.File]::ReadAllText($eir).Contains('aria-current="page"')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'lumen.css')).Contains('--accent:')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'index.html')).Contains('<h1>'))
+        $ok = $r.Code -eq 0 -and (Test-Path -LiteralPath $eir) -and ([IO.File]::ReadAllText($eir).Contains('aria-current="page"')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'lumen.css')).Contains('--accent:')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'index.html')).Contains('<h1>')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'sandbox\index.html')).Contains('id="run"')) -and ((Get-FileHash (Join-Path $Root 'build\envoc.wasm')).Hash -eq (Get-FileHash (Join-Path $siteDir 'sandbox\envoc.wasm')).Hash)
         if ($ok) { Pass 'website pages' } else { Bad 'website pages' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)

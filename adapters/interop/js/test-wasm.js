@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const envoc = process.argv[2];
+const envoc = process.argv[2] && path.resolve(process.argv[2]);
 if (!envoc) {
   process.stderr.write('usage: node test-wasm.js <envoc> [suite…]\n');
   process.exit(2);
@@ -95,5 +95,42 @@ if (process.argv.length <= 3) {
   });
 }
 
-process.stdout.write(`wasm: ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// The compiler itself as WebAssembly (PLAN D52, the sandbox): envoc builds envoc.wasm;
+// envoc.wasm, under Node.js, rebuilds itself to the same bytes (the fixed point, D18, in
+// WebAssembly); and it compiles and runs a program in memory, as the website's sandbox
+// page does.
+async function compilerPhase() {
+  const EnvoWeb = require('./envo.js');
+  const compilerDir = path.join(root, 'compiler');
+  const files = fs.readFileSync(path.join(compilerDir, 'files.txt'), 'utf8').split(/\r?\n/).filter((l) => l && !l.startsWith('#'));
+  const wasm = path.join(work, 'envoc.wasm');
+  const b = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', ...files, '-o', wasm], { cwd: compilerDir, encoding: 'utf8' });
+  if (b.status !== 0) {
+    bad('wasm envoc.wasm', `build failed: ${(b.stderr || '').slice(0, 400)}`);
+    return;
+  }
+  pass++;
+  const self = path.join(work, 'envoc-self.wasm');
+  const r = spawnSync(process.execPath, [host, wasm, 'build', '-O2', '--target', 'wasm32-web', ...files, '-o', self], { cwd: compilerDir, encoding: 'utf8', input: '' });
+  if (r.status !== 0) bad('wasm envoc.wasm builds itself', `exit ${r.status}: ${(r.stderr || '').slice(0, 400)}`);
+  else if (!fs.readFileSync(wasm).equals(fs.readFileSync(self))) bad('wasm envoc.wasm builds itself', 'the rebuilt compiler differs');
+  else pass++;
+  const mem = new Map([['main.envo', new TextEncoder().encode('print("Hello from the sandbox");\n')]]);
+  let log = '';
+  const keep = (x) => { log += new TextDecoder().decode(x); };
+  const code = await EnvoWeb.run(fs.readFileSync(wasm), { args: ['envoc', 'build', '--target', 'wasm32-web', 'main.envo', '-o', 'main.wasm'], fs: EnvoWeb.memoryFs(mem), stdout: keep, stderr: keep });
+  if (code !== 0 || !mem.has('main.wasm')) {
+    bad('wasm sandbox compile', `exit ${code}: ${log}`);
+    return;
+  }
+  let out = '';
+  await EnvoWeb.run(mem.get('main.wasm'), { args: ['main'], stdout: (x) => { out += new TextDecoder().decode(x); } });
+  if (out !== 'Hello from the sandbox\n') bad('wasm sandbox run', JSON.stringify(out));
+  else pass++;
+}
+
+(async () => {
+  if (process.argv.length <= 3) await compilerPhase();
+  process.stdout.write(`wasm: ${pass} passed, ${fail} failed\n`);
+  process.exitCode = fail === 0 ? 0 : 1;
+})();

@@ -194,6 +194,7 @@ templates.Frame FrameFor(str page) {
     f.Top.Push(templates.NavItem.Link("Docs", Rel(page, "/docs/README.html").AsStr(), 0));
     f.Top.Push(templates.NavItem.Link("Learn", Rel(page, "/docs/guides/README.html").AsStr(), 0));
     f.Top.Push(templates.NavItem.Link("Language", Rel(page, "/docs/spec/README.html").AsStr(), 0));
+    f.Top.Push(templates.NavItem.Link("Sandbox", Rel(page, "/sandbox/").AsStr(), 0));
     f.Top.Push(templates.NavItem.Link("Status", Rel(page, "/STATUS.html").AsStr(), 0));
     f.Footer = string.From("EnvoScale. This site is built by an Envo program (website/site.envo) with envo.web and Lumen.");
     return f;
@@ -231,10 +232,35 @@ http.Response DocPage(str page, str source) {
     return http.Response.Html(200, html.AsStr());
 }
 
+// The sandbox: the compiler, built for WebAssembly (build/envoc.wasm), compiles and runs
+// programs in the page (website/PLAN.md, phase 3b).
+http.Response Sandbox() {
+    templates.Frame f = FrameFor("/sandbox/index.html");
+    templates.Landing l = templates.Landing.New("Sandbox", "Envo in your browser: the compiler itself, built for WebAssembly, compiles your program on this page and runs it there. Nothing you type leaves your machine.");
+    l.Body = string.From(SANDBOX_BODY);
+    return http.Response.Html(200, templates.LandingPage(f, l).AsStr());
+}
+
+const str SANDBOX_BODY = "<div class=\"sandbox\">\n<div class=\"toolbar\">\n<label for=\"example\">Example</label>\n<select id=\"example\">\n<option value=\"hello\">Hello, World</option>\n<option value=\"fizzbuzz\">FizzBuzz</option>\n<option value=\"structs\">Structs and methods</option>\n<option value=\"generics\">Generics</option>\n<option value=\"panic\">A panic</option>\n</select>\n<button id=\"run\" class=\"button primary\" type=\"button\" disabled>Run</button>\n</div>\n<label for=\"code\" class=\"visually-hidden\">Program</label>\n<textarea id=\"code\" class=\"code\" spellcheck=\"false\" autocapitalize=\"off\" autocomplete=\"off\"></textarea>\n<h2>Output</h2>\n<pre id=\"out\" class=\"output\" aria-live=\"polite\">Loading the compiler…</pre>\n<p>The sandbox has the language and its prelude (List, string, Option, Result). The standard platform (std, envo.*) is not in the page yet.</p>\n</div>\n<script src=\"envo.js\"></script>\n<script src=\"sandbox.js\"></script>\n";
+
+// A file of the repository as a response of type type, or 404.
+http.Response FileOf(str source, str type) {
+    var r = fs.ReadText(source);
+    if (r.IsErr()) return http.Response.Html(404, "<!doctype html>\n<title>Not found</title>\n<h1>Not found</h1>\n");
+    string body = r.Unwrap();
+    http.Response resp = http.Response.Text(200, body.AsStr());
+    resp.SetHeader("Content-Type", type);
+    return resp;
+}
+
 // Every page of the site, by its path.
 http.Response SitePage(in http.Request req, in web.Params ps) {
     str path = ps.Get("path");
     if (path.Len == 0 || IsText(path, "index.html")) return Home();
+    if (IsText(path, "sandbox") || IsText(path, "sandbox/") || IsText(path, "sandbox/index.html")) return Sandbox();
+    if (IsText(path, "sandbox/envo.js")) return FileOf("adapters/interop/js/envo.js", "text/javascript; charset=utf-8");
+    if (IsText(path, "sandbox/sandbox.js")) return FileOf("adapters/interop/js/sandbox.js", "text/javascript; charset=utf-8");
+    if (IsText(path, "sandbox/envoc.wasm")) return FileOf("build/envoc.wasm", "application/wasm");
     if (IsText(path, "lumen.css")) {
         http.Response css = http.Response.Text(200, templates.Css(lumen.Light(), lumen.Dark()).AsStr());
         css.SetHeader("Content-Type", "text/css; charset=utf-8");
@@ -273,6 +299,10 @@ if (IsText(command, "serve")) {
     List<string> pages = List<string>.New();
     pages.Push(string.From("/"));
     pages.Push(string.From("/lumen.css"));
+    pages.Push(string.From("/sandbox/"));
+    pages.Push(string.From("/sandbox/envo.js"));
+    pages.Push(string.From("/sandbox/sandbox.js"));
+    if (fs.IsFile("build/envoc.wasm")) pages.Push(string.From("/sandbox/envoc.wasm"));
     string[] ss = sources.AsSlice();
     for (usize i = 0; i < ss.Len; i++) pages.Push(PageOf(ss[i].AsStr()));
     List<str> paths = List<str>.New();

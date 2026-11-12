@@ -205,7 +205,7 @@ with EnvoScale.
 | [9.4](https://github.com/envoscale/EnvoScale/issues/123) | `envo.markdown` and Lumen templates (D51) | `lib/envo/markdown/tests/`, golden pages || done |
 | [9.5](https://github.com/envoscale/EnvoScale/issues/124) | SSG and SSR from the same pages (D50) | golden sites || done |
 | [9.6](https://github.com/envoscale/EnvoScale/issues/126) | The website and docs site built with Envo (D52) | `website/`, CI builds it || done |
-| [9.7](https://github.com/envoscale/EnvoScale/issues/125) | The sandbox: `envoc` in the browser (D52) | `envoc` built for `wasm32-web` compiles and runs a program under Node.js | |
+| [9.7](https://github.com/envoscale/EnvoScale/issues/125) | The sandbox: `envoc` in the browser (D52) | `envoc` built for `wasm32-web` compiles and runs a program under Node.js || done |
 | [9.8](https://github.com/envoscale/EnvoScale/issues/127) | Docs and status; M9 complete | CI | |
 
 ## 6. Risks

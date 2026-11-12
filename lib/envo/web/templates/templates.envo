@@ -145,6 +145,13 @@ void BaseCss(ref string css) {
     css.Append(".card p { color: var(--text2); margin-bottom: var(--s); }\n");
     css.Append(".section { max-width: 860px; margin: 0 auto; padding: 0 var(--xl) var(--xxl); }\n");
     css.Append("footer { border-top: 1px solid var(--sep); padding: var(--l) var(--xl); color: var(--text2); font: var(--caption); text-align: center; }\n");
+    css.Append("button.button { cursor: pointer; font: inherit; }\n");
+    css.Append("button.button:disabled { opacity: 0.6; cursor: default; }\n");
+    css.Append("select, textarea { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--edge); border-radius: var(--r-m); padding: var(--s) var(--m); }\n");
+    css.Append("textarea.code { display: block; width: 100%; min-height: 280px; font-family: ui-monospace, \"Cascadia Code\", Consolas, monospace; font-size: 14px; line-height: 1.5; tab-size: 4; resize: vertical; }\n");
+    css.Append(".toolbar { display: flex; gap: var(--m); align-items: center; flex-wrap: wrap; margin: var(--m) 0; }\n");
+    css.Append("pre.output { min-height: 120px; white-space: pre-wrap; }\n");
+    css.Append(".visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }\n");
     css.Append("@media (max-width: 1100px) { .docs { grid-template-columns: 220px minmax(0, 1fr); } .toc { display: none; } }\n");
     css.Append("@media (max-width: 760px) { .docs { grid-template-columns: minmax(0, 1fr); } .side { position: static; max-height: none; } .bar { padding: var(--s) var(--l); } }\n");
     css.Append("@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }\n");

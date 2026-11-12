@@ -14,5 +14,15 @@ build/site-tool build            # the static site in build/site
 build/site-tool serve 8080       # the same pages, rendered per request
 ```
 
-The bootstrap scripts build the site and check its pages. Publishing it (a domain and
+The **sandbox** (`/sandbox/`) is the compiler itself, built for WebAssembly as
+`build/envoc.wasm`:
+
+```sh
+cd compiler && ../build/stage2/envoc build -O2 --target wasm32-web $(grep -v '^#' files.txt) -o ../build/envoc.wasm
+```
+
+It compiles and runs programs in the visitor's browser, so nothing they type leaves their
+machine (`adapters/interop/js/sandbox.js`). The site includes it when
+`build/envoc.wasm` exists. The bootstrap scripts build both, and check the pages and the
+sandbox's files. Publishing it (a domain and
 hosting) is the owner's decision (#61).

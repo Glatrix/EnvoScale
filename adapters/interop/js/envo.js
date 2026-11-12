@@ -163,7 +163,67 @@ const EnvoWeb = (() => {
     }
   }
 
-  return { run };
+  // A file system in memory, for a page (or a test): files maps paths to bytes, and the
+  // program's writes land in it. It answers the calls run makes of Node's fs.
+  function memoryFs(files) {
+    const open = new Map();
+    let next = 100;
+    const norm = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '');
+    const fail = (code) => Object.assign(new Error(code), { code });
+    const isDir = (p) => p === '.' || p === '' || [...files.keys()].some((k) => k.startsWith(p + '/'));
+    return {
+      openSync(path, flags) {
+        const p = norm(path);
+        if (flags === 'r') {
+          if (!files.has(p)) throw fail('ENOENT');
+        } else {
+          files.set(p, new Uint8Array(0));
+        }
+        open.set(next, { p, pos: 0 });
+        return next++;
+      },
+      readSync(fd, buf, off, len) {
+        const f = open.get(fd);
+        const data = files.get(f.p);
+        const n = Math.max(0, Math.min(len, data.length - f.pos));
+        buf.set(data.subarray(f.pos, f.pos + n), off);
+        f.pos += n;
+        return n;
+      },
+      writeSync(fd, bytes) {
+        const f = open.get(fd);
+        const old = files.get(f.p);
+        const grown = new Uint8Array(old.length + bytes.length);
+        grown.set(old);
+        grown.set(bytes, old.length);
+        files.set(f.p, grown);
+        return bytes.length;
+      },
+      closeSync(fd) {
+        open.delete(fd);
+      },
+      statSync(path) {
+        const p = norm(path);
+        if (files.has(p)) return { isFile: () => true, isDirectory: () => false };
+        if (isDir(p)) return { isFile: () => false, isDirectory: () => true };
+        throw fail('ENOENT');
+      },
+      unlinkSync(path) {
+        if (!files.delete(norm(path))) throw fail('ENOENT');
+      },
+      mkdirSync() {},
+      rmdirSync() {},
+      readdirSync(path) {
+        const p = norm(path);
+        const pre = p === '.' || p === '' ? '' : p + '/';
+        const names = new Set();
+        for (const k of files.keys()) if (k.startsWith(pre)) names.add(k.slice(pre.length).split('/')[0]);
+        return [...names];
+      },
+    };
+  }
+
+  return { run, memoryFs };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = EnvoWeb;
