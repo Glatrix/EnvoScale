@@ -4,7 +4,9 @@
 // - In one call, a local passed `ref` (or captured by a lambda argument that changes it)
 //   may not be used any other way in that call (E0503); a local borrowed by the call may
 //   not be moved by it (E0504). Arguments are evaluated before the call takes its borrows,
-//   so plain reads in an argument whose value holds no borrow do not count.
+//   so plain reads in an argument whose value holds no borrow do not count. Uses of
+//   different fields of a local are disjoint (`F(ref p.A, ref p.B)`); Stage 1 counts any
+//   use of a field as a use of the whole local (M3.10).
 // - A function-typed parameter may hold a lambda that borrows its caller's variables
 //   ([fn.pos.1]); it may only be called or passed to another function-typed parameter.
 //   Returning it, storing it, or giving it to anything else is E0507.
@@ -79,8 +81,10 @@ impl Checker {
     // ------------------------------------------------------------------ calls
 
     // Records every use of a local in expression n (not inside lambda bodies) as kind k, or
-    // as a move where the move checker marked one. uses holds triples (local, kind, token).
-    void CollectUses(in this, ref List<u32> uses, u32 n, u32 k) {
+    // as a move where the move checker marked one. uses holds quadruples (local, kind,
+    // token, path): path is the outermost of the field accesses directly over the local
+    // (`p.A.B` for p), or 0 for the whole local.
+    void CollectUses(in this, ref List<u32> uses, u32 n, u32 k, u32 path) {
         if (n == 0) return;
         Node node = this.NodeAt(n);
         if (node.Kind == NK_NAME || node.Kind == NK_THIS) {
@@ -91,6 +95,7 @@ impl Checker {
             uses.Push(s);
             uses.Push(kind);
             uses.Push(node.Tok);
+            uses.Push(path);
             return;
         }
         if (node.Kind == NK_LAMBDA) {
@@ -102,31 +107,38 @@ impl Checker {
                 uses.Push(this.Captures.Get((first + i) as usize));
                 uses.Push(BK_READ);
                 uses.Push(node.Tok);
+                uses.Push(0);
             }
             return;
         }
-        if (node.Kind == NK_MEMBER || node.Kind == NK_UNARY || node.Kind == NK_CAST || node.Kind == NK_TRY) {
-            this.CollectUses(ref uses, node.A, k);
+        if (node.Kind == NK_MEMBER) {
+            u32 outer = path;
+            if (outer == 0) outer = n;
+            this.CollectUses(ref uses, node.A, k, outer);
+            return;
+        }
+        if (node.Kind == NK_UNARY || node.Kind == NK_CAST || node.Kind == NK_TRY) {
+            this.CollectUses(ref uses, node.A, k, 0);
             return;
         }
         if (node.Kind == NK_COND) {
-            this.CollectUses(ref uses, node.A, BK_READ);
-            this.CollectUses(ref uses, node.B, k);
-            this.CollectUses(ref uses, node.C, k);
+            this.CollectUses(ref uses, node.A, BK_READ, 0);
+            this.CollectUses(ref uses, node.B, k, 0);
+            this.CollectUses(ref uses, node.C, k, 0);
             return;
         }
         if (node.Kind == NK_INDEX || node.Kind == NK_BINARY) {
-            this.CollectUses(ref uses, node.A, k);
-            this.CollectUses(ref uses, node.B, BK_READ);
+            this.CollectUses(ref uses, node.A, k, 0);
+            this.CollectUses(ref uses, node.B, BK_READ, 0);
             return;
         }
         if (node.Kind == NK_CALL) {
             // an inner call's borrows end before the outer call: its uses are reads here
-            if (this.NKind(node.A) == NK_MEMBER) this.CollectUses(ref uses, this.NodeAt(node.A).A, BK_READ);
-            else if (this.TyKind(this.NType(node.A)) == TYK_FN) this.CollectUses(ref uses, node.A, BK_READ);
+            if (this.NKind(node.A) == NK_MEMBER) this.CollectUses(ref uses, this.NodeAt(node.A).A, BK_READ, 0);
+            else if (this.TyKind(this.NType(node.A)) == TYK_FN) this.CollectUses(ref uses, node.A, BK_READ, 0);
             u32 a = node.B;
             while (a != 0) {
-                this.CollectUses(ref uses, a, BK_READ);
+                this.CollectUses(ref uses, a, BK_READ, 0);
                 a = this.NNext(a);
             }
             return;
@@ -134,10 +146,36 @@ impl Checker {
         if (node.Kind == NK_NEW) {
             u32 init = node.B;
             while (init != 0) {
-                this.CollectUses(ref uses, this.NodeAt(init).A, BK_READ);
+                this.CollectUses(ref uses, this.NodeAt(init).A, BK_READ, 0);
                 init = this.NNext(init);
             }
         }
+    }
+
+    // Are field paths p and q (CollectUses) disjoint: neither a prefix of the other?
+    bool DisjointPaths(in this, u32 p, u32 q) {
+        if (p == 0 || q == 0) return false;
+        List<u32> a = List<u32>.New();
+        List<u32> b = List<u32>.New();
+        u32 n = p;
+        while (this.NKind(n) == NK_MEMBER) {
+            a.Push(this.NTok(n));
+            n = this.NodeAt(n).A;
+        }
+        n = q;
+        while (this.NKind(n) == NK_MEMBER) {
+            b.Push(this.NTok(n));
+            n = this.NodeAt(n).A;
+        }
+        // compare from the local outward: the lists hold the outermost access first
+        usize i = a.Len();
+        usize j = b.Len();
+        while (i > 0 && j > 0) {
+            i--;
+            j--;
+            if (!Same(TextStr(this.TokName(a.Get(i))), TextStr(this.TokName(b.Get(j))))) return true;
+        }
+        return false;
     }
 
     // A lambda argument for a function-typed parameter borrows its captures for the call:
@@ -145,7 +183,7 @@ impl Checker {
     void CollectLambdaBorrows(in this, ref List<u32> uses, u32 a) {
         Node lam = this.NodeAt(a);
         if (this.NSym(a) != 1 || lam.Flags & NF_MOVE != 0) {
-            this.CollectUses(ref uses, a, BK_READ);
+            this.CollectUses(ref uses, a, BK_READ, 0);
             return;
         }
         u32 k = BK_IN;
@@ -157,6 +195,7 @@ impl Checker {
             uses.Push(this.Captures.Get((first + i) as usize));
             uses.Push(k);
             uses.Push(lam.Tok);
+            uses.Push(0);
         }
     }
 
@@ -168,13 +207,13 @@ impl Checker {
             return;
         }
         usize start = uses.Len();
-        this.CollectUses(ref uses, a, k);
+        this.CollectUses(ref uses, a, k, 0);
         if (this.HoldsBorrow(this.NType(a)) || this.IsConverted(a)) return;     // a view, or a `string` lent as `str`
         usize keep = start;
-        for (usize i = start; i < uses.Len(); i += 3) {
+        for (usize i = start; i < uses.Len(); i += 4) {
             if (uses.Get(i + 1) == BK_READ) continue;
-            for (usize j = 0; j < 3; j++) uses.Set(keep + j, uses.Get(i + j));
-            keep += 3;
+            for (usize j = 0; j < 4; j++) uses.Set(keep + j, uses.Get(i + j));
+            keep += 4;
         }
         while (uses.Len() > keep) uses.Pop();
     }
@@ -204,7 +243,7 @@ impl Checker {
             }
         } else if (this.TyKind(this.NType(node.A)) == TYK_FN) {
             Type f = this.TypeAt(this.NType(node.A));
-            this.CollectUses(ref uses, node.A, BK_READ);
+            this.CollectUses(ref uses, node.A, BK_READ, 0);
             u32 i = 0;
             while (a != 0) {
                 u32 k = BK_READ;
@@ -218,14 +257,15 @@ impl Checker {
         } else {
             return;
         }
-        usize count = uses.Len() / 3;
+        usize count = uses.Len() / 4;
         for (usize i = 0; i < count; i++) {
             for (usize j = i + 1; j < count; j++) {
-                u32 si = uses.Get(i * 3);
-                if (si != uses.Get(j * 3)) continue;
-                u32 ki = uses.Get(i * 3 + 1);
-                u32 kj = uses.Get(j * 3 + 1);
-                u32 tok = uses.Get(j * 3 + 2);
+                u32 si = uses.Get(i * 4);
+                if (si != uses.Get(j * 4)) continue;
+                if (this.DisjointPaths(uses.Get(i * 4 + 3), uses.Get(j * 4 + 3))) continue;
+                u32 ki = uses.Get(i * 4 + 1);
+                u32 kj = uses.Get(j * 4 + 1);
+                u32 tok = uses.Get(j * 4 + 2);
                 bool moved = ki == BK_MOVE || kj == BK_MOVE;
                 bool borrowed = ki == BK_REF || kj == BK_REF || ki == BK_IN || kj == BK_IN;
                 if (moved && borrowed) this.BorrowError(tok, si, E_MOVED_WHILE_BORROWED, "` is moved while this call borrows it");

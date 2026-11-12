@@ -1,0 +1,40 @@
+// [own.borrow.1] Borrows of different fields of one local are disjoint, so one call may
+// take both `ref`: the fields are separate places. Stage 1 counts a field as the whole
+// local (M3.10).
+// stage1-error: E0503
+// expect: 3 1
+str Num(u64 v) {
+    *u8 buf = alloc(24);
+    usize at = 24;
+    unsafe {
+        while (true) {
+            at--;
+            buf[at] = (48 + v % 10) as u8;
+            v /= 10;
+            if (v == 0) break;
+        }
+        return str_from(&buf[at], 24 - at);
+    }
+}
+
+struct Pair {
+    List<u64> A;
+    List<u64> B;
+
+    // moves every element of A to the end of B, through two borrows of this
+    void Drain(ref this) => MoveAll(ref this.A, ref this.B);
+}
+
+void MoveAll(ref List<u64> from, ref List<u64> to) {
+    while (from.Len() > 0) to.Push(from.Pop().Unwrap());
+}
+
+Pair p = new Pair { A = List<u64>.New(), B = List<u64>.New() };
+p.A.Push(1);
+p.A.Push(2);
+p.B.Push(3);
+p.Drain();
+MoveAll(ref p.B, ref p.A);
+write(1, Num(p.A.Len() as u64));
+write(1, " ");
+print(Num(p.B.Len() as u64 + 1));

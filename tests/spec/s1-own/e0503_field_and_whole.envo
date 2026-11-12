@@ -1,0 +1,6 @@
+// expect-error: E0503 @ 6:17
+// [own.borrow.1] a field and the value that contains it overlap
+struct Pair { List<u64> A; List<u64> B; }
+void Both(ref Pair p, ref List<u64> a) { }
+Pair p = new Pair { A = List<u64>.New(), B = List<u64>.New() };
+Both(ref p, ref p.A);

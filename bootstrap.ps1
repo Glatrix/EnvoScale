@@ -261,6 +261,8 @@ function Invoke-Test {
         # Envo-S1 programs (tests/spec/s1-run) run under Stages 1 and 2 only.
         $runSuites = @('core-run')
         if ($compiler -ne 'envoc0') { $runSuites += 's1-run' }
+        # programs only Stage 2 accepts (tests/spec/s2-run, M3.10)
+        if ($compiler -eq 'envoc') { $runSuites += 's2-run' }
         foreach ($suite in $runSuites) {
         Say "run tests ($compiler): tests/spec/$suite"
         foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envo' | Sort-Object Name) {
@@ -277,8 +279,15 @@ function Invoke-Test {
             $program = Join-Path $runDir ($f.BaseName + '.exe')
             $r = Invoke-Tool $exe @('build', $f.FullName, '-o', $program) $runDir
             if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
-            if ($compiler -eq 'envoc') {
+            if ($suite -eq 's2-run') {
+                # Stage 1 rejects it, with the code the test names
+                $m1 = [regex]::Match($text, '(?m)^// stage1-error: (E\d{4})')
+                $r1 = Invoke-Tool (Join-Path $Build1 'envoc1.exe') @('check', $f.FullName) $runDir
+                if (-not $m1.Success -or $r1.Code -ne 1 -or -not $r1.Err.Contains("error[$($m1.Groups[1].Value)]")) { Bad $name "envoc1 should reject it with the // stage1-error: code; exit $($r1.Code)"; continue }
+            } elseif ($compiler -eq 'envoc') {
                 if (-not (Test-SameBytes $program (Join-Path $Root "build\run-envoc1\$(Split-Path -Leaf $program)"))) { Bad $name 'the executable differs from the envoc1 build'; continue }
+            }
+            if ($compiler -eq 'envoc') {
                 $problem = Test-Objects $exe $runDir $program @($f.FullName)
                 if ($problem) { Bad $name $problem; continue }
                 # the object holds the program's EIR, in the binary form

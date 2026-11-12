@@ -220,6 +220,8 @@ do_test() {
         # Envo-S1 programs (tests/spec/s1-run) run under Stages 1 and 2 only.
         run_suites="core-run s1-run"
         [ "$compiler" = envoc0 ] && run_suites=core-run
+        # programs only Stage 2 accepts (tests/spec/s2-run, M3.10)
+        [ "$compiler" = envoc ] && run_suites="core-run s1-run s2-run"
         for suite in $run_suites; do
         say "run tests ($compiler): tests/spec/$suite"
         for f in "$ROOT"/tests/spec/$suite/*.envo; do
@@ -234,8 +236,20 @@ do_test() {
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$rundir" build "$f" -o "$program"
             if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
-            if [ "$compiler" = envoc ]; then
+            if [ "$suite" = s2-run ]; then
+                # Stage 1 rejects it, with the code the test names
+                stage1=$(sed -n 's|^// stage1-error: \(E[0-9]*\).*|\1|p' "$f" | tr -d '\r' | head -n 1)
+                saved=$EXE
+                EXE="$BUILD1/envoc1$(host_suffix)"
+                mv "$TMP/out" "$TMP/run-out"
+                run "$rundir" check "$f"
+                mv "$TMP/run-out" "$TMP/out"
+                EXE=$saved
+                if [ -z "$stage1" ] || [ "$rc" -ne 1 ] || ! grep -q "error\[$stage1\]" "$TMP/err"; then bad "$name" "envoc1 should reject it with ${stage1:-a // stage1-error: code}: exit $rc"; continue; fi
+            elif [ "$compiler" = envoc ]; then
                 if ! cmp -s "$program" "$ROOT/build/run-envoc1/${program##*/}"; then bad "$name" 'the executable differs from the envoc1 build'; continue; fi
+            fi
+            if [ "$compiler" = envoc ]; then
                 problem=$(objects "$rundir" "$program" "$f")
                 if [ -n "$problem" ]; then bad "$name" "$problem"; continue; fi
                 # the object holds the program's EIR, in the binary form

@@ -1,0 +1,7 @@
+// expect-error: E0503 @ 7:18
+// [own.borrow.1] the same field, or a field and the whole value, may not be borrowed
+// `ref` twice by one call
+struct Pair { List<u64> A; List<u64> B; }
+void Two(ref List<u64> a, ref List<u64> b) { }
+Pair p = new Pair { A = List<u64>.New(), B = List<u64>.New() };
+Two(ref p.A, ref p.A);
