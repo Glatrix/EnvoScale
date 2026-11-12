@@ -40,7 +40,7 @@ jobs:
           [ "$out" = "window: done" ]
       # The X11 clipboard both ways with another program (M14.7b)
       - run: command -v xclip || (sudo apt-get update && sudo apt-get install -y xclip)
-      - run: xvfb-run -a sh adapters/os/linux/x11/tests/clipboard.sh build/envo/envo
+      - run: xvfb-run -a sh adapters/os/linux/x11/check/clipboard.sh build/envo/envo
       # The VS Code extension (adapters/editors/vscode, M14.9) against the envo just built
       - run: ENVO=build/envo/envo node --test adapters/editors/vscode/test/*.test.js
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

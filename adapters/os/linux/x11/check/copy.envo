@@ -1,6 +1,6 @@
-// The X11 clipboard, copying (run by clipboard.sh under an X server): takes the
-// selection with a text and answers other programs' pastes from a window's polls for a
-// few seconds.
+// The X11 clipboard, copying (run by clipboard.sh under an X server; not an `envo test`
+// program, so it lives in check/): takes the selection with a text and answers other
+// programs' pastes from a window's polls for a few seconds.
 use ports.{IWindow, EventKind};
 use std.clipboard;
 use std.time;

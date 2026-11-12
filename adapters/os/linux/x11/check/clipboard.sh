@@ -2,7 +2,7 @@
 # The X11 clipboard both ways with another program (xclip), under an X server ($DISPLAY):
 # Envo copies and xclip pastes; xclip copies and Envo pastes. CI runs it under Xvfb.
 #
-#   sh adapters/os/linux/x11/tests/clipboard.sh <envo>
+#   sh adapters/os/linux/x11/check/clipboard.sh <envo>
 set -eu
 envo=$1
 here=$(dirname "$0")
