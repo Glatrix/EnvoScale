@@ -1,0 +1,348 @@
+// `envo test`: builds and runs test programs and compares what they print with their
+// `// expect: ` lines (PLAN D29). Each build runs as a child `envo build`, so a program
+// that does not compile fails its test and the run goes on. Under a path:
+//
+// - a package (a folder with envo.envon): its program must build, and each file under
+//   its tests/ is built with the package's sources except main.envo;
+// - any other folder: each package below it as above, and each .envo file under a
+//   tests/ folder, built on its own with the library;
+// - a .envo file: that file, on its own.
+//
+// A test program runs in a scratch folder (build/envo-test/run) and must exit with 0.
+// `// os: none` builds it with the reference adapters; a program under
+// tests/conformance/ runs against both the reference and the native adapters. Each is
+// built at -O0 and -O2 (only -O0 with `-O0`).
+use std.fs;
+use std.env;
+use std.path;
+use std.process;
+use core.text as ct;
+use alloc.text;
+use envo.eon;
+use ports.{IoError};
+
+struct TestRun {
+    string Self;            // this program, to run `envo build`
+    string Work;            // build/envo-test
+    string RunDir;          // build/envo-test/run, where test programs run
+    bool Quick;             // -O0 only
+    bool Verbose;
+    usize Passed;
+    usize Failed;
+    usize Count;            // programs built, for unique names
+}
+
+// The `// expect: ` lines of a test program's text, each followed by a line break.
+string Expected(str src) {
+    string want = string.New();
+    usize at = 0;
+    while (at < src.Len) {
+        usize end = at;
+        while (end < src.Len && src[end] != 10) end++;
+        str line = src[at..end];
+        if (line.Len > 0 && line[line.Len - 1] == 13) line = line[0..line.Len - 1];
+        if (ct.StartsWith(line, "// expect: ")) {
+            want.Append(line[11..line.Len]);
+            want.AppendByte(10);
+        }
+        at = end + 1;
+    }
+    return want;
+}
+
+// The value of the first `// os: ` line, or "".
+str OsLine(str src) {
+    usize at = 0;
+    while (at < src.Len) {
+        usize end = at;
+        while (end < src.Len && src[end] != 10) end++;
+        str line = src[at..end];
+        if (line.Len > 0 && line[line.Len - 1] == 13) line = line[0..line.Len - 1];
+        if (ct.StartsWith(line, "// os: ")) return ct.Trim(line[7..line.Len]);
+        at = end + 1;
+    }
+    return "";
+}
+
+string WithoutCr(str s) {
+    string r = string.New();
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] != 13) r.AppendByte(s[i]);
+    }
+    return r;
+}
+
+// The first line where want and got differ, for the report.
+void ShowDiff(str want, str got) {
+    usize at = 0;
+    usize line = 1;
+    while (true) {
+        usize we = at;
+        while (we < want.Len && want[we] != 10) we++;
+        usize ge = at;
+        while (ge < got.Len && got[ge] != 10) ge++;
+        bool wEnd = at >= want.Len;
+        bool gEnd = at >= got.Len;
+        if (wEnd && gEnd) return;
+        str w = "";
+        str g = "";
+        if (!wEnd) w = want[at..we];
+        if (!gEnd) g = got[at..ge];
+        if (wEnd || gEnd || ct.Compare(w, g) != 0) {
+            write(1, "    line ");
+            write(1, text.Uint(line as u64).AsStr());
+            write(1, ": expected ");
+            if (wEnd) write(1, "(end of output)");
+            else {
+                write(1, "[");
+                write(1, w);
+                write(1, "]");
+            }
+            write(1, "\n             got ");
+            if (gEnd) print("(end of output)");
+            else {
+                write(1, "[");
+                write(1, g);
+                print("]");
+            }
+            return;
+        }
+        // both lines end at the same offset
+        if (we >= want.Len || ge >= got.Len) {
+            at = we + 1;
+        } else {
+            at = we + 1;
+        }
+        line++;
+    }
+}
+
+void Report(ref TestRun r, bool ok, str label, str why) {
+    if (ok) {
+        r.Passed++;
+        if (r.Verbose) {
+            write(1, "ok   ");
+            print(label);
+        }
+        return;
+    }
+    r.Failed++;
+    write(1, "FAIL ");
+    write(1, label);
+    write(1, ": ");
+    print(why);
+}
+
+// The first lines of the file at p, for a report.
+string Head(str p, usize lines) {
+    Result<string, IoError> t = fs.ReadText(p);
+    string r = string.New();
+    if (t.IsErr()) return r;
+    string all = t.Unwrap();
+    str s = all.AsStr();
+    usize n = 0;
+    for (usize i = 0; i < s.Len && n < lines; i++) {
+        if (s[i] == 10) {
+            n++;
+            if (n < lines) r.Append("\n    ");
+        } else if (s[i] != 13) {
+            r.AppendByte(s[i]);
+        }
+    }
+    return r;
+}
+
+// Builds files (the test first) with os and level through a child `envo build`; the
+// executable's path, or "" if the build failed (reported).
+string BuildFor(ref TestRun r, in List<string> files, str os, bool opt, str label) {
+    r.Count++;
+    string exe = path.Join(r.Work.AsStr(), "t");
+    exe.Append(text.Uint(r.Count as u64).AsStr());
+    if (HostTargetCode() == TGT_WINDOWS) exe.Append(".exe");
+    string log = path.Join(r.Work.AsStr(), "build.txt");
+    List<str> args = List<str>.New();
+    args.Push("build");
+    if (opt) args.Push("-O2");
+    else args.Push("-O0");
+    if (ct.Compare(os, "none") == 0) {
+        args.Push("--os");
+        args.Push("none");
+    }
+    foreach (var f in files.AsSlice()) args.Push(f.AsStr());
+    args.Push("-o");
+    args.Push(exe.AsStr());
+    Result<i32, IoError> b = process.RunIn(r.Self.AsStr(), args.AsSlice(), "", log.AsStr(), log.AsStr());
+    if (b.IsErr() || b.Unwrap() != 0) {
+        string why = string.From("build failed\n    ");
+        why.Append(Head(log.AsStr(), 6).AsStr());
+        Report(ref r, false, label, why.AsStr());
+        return string.New();
+    }
+    return exe;
+}
+
+// Builds and runs one test program in each configuration it asks for.
+void RunTest(ref TestRun r, str testFile, in List<string> extra, str shown) {
+    Result<string, IoError> srcR = fs.ReadText(testFile);
+    if (srcR.IsErr()) {
+        Report(ref r, false, shown, "cannot read the file");
+        return;
+    }
+    string src = srcR.Unwrap();
+    string want = Expected(src.AsStr());
+    List<str> oses = List<str>.New();
+    string norm = WithoutSlashes(testFile);
+    if (ct.Contains(norm.AsStr(), "tests/conformance/")) {
+        oses.Push("none");
+        oses.Push("native");
+    } else if (ct.Compare(OsLine(src.AsStr()), "none") == 0) {
+        oses.Push("none");
+    } else {
+        oses.Push("native");
+    }
+    List<string> files = List<string>.New();
+    files.Push(string.From(testFile));
+    foreach (var f in extra.AsSlice()) files.Push(string.From(f.AsStr()));
+    foreach (var os in oses.AsSlice()) {
+        for (usize level = 0; level < 2; level++) {
+            if (level == 1 && r.Quick) continue;
+            string label = string.From(shown);
+            label.Append(" (");
+            label.Append(os);
+            if (level == 1) label.Append(" -O2)");
+            else label.Append(" -O0)");
+            string exe = BuildFor(ref r, files, os, level == 1, label.AsStr());
+            if (exe.Len() == 0) continue;
+            string outFile = path.Join(r.Work.AsStr(), "out.txt");
+            string errFile = path.Join(r.Work.AsStr(), "err.txt");
+            List<str> none = List<str>.New();
+            // absolute, since the program runs in another folder and may start itself
+            string program = path.Join(env.CurrentDir().AsStr(), exe.AsStr());
+            Result<i32, IoError> run = process.RunIn(program.AsStr(), none.AsSlice(), r.RunDir.AsStr(), outFile.AsStr(), errFile.AsStr());
+            if (run.IsErr()) {
+                string why = string.From("cannot start the program: ");
+                why.Append(IoErrorText(run.UnwrapErr()));
+                Report(ref r, false, label.AsStr(), why.AsStr());
+                continue;
+            }
+            i32 code = run.Unwrap();
+            Result<string, IoError> gotR = fs.ReadText(outFile.AsStr());
+            string got = string.New();
+            if (gotR.IsOk()) got = WithoutCr(gotR.Unwrap().AsStr());
+            if (code != 0) {
+                string why = string.From("exit code ");
+                why.Append(text.Int(code as i64).AsStr());
+                why.Append("\n    ");
+                why.Append(Head(errFile.AsStr(), 4).AsStr());
+                Report(ref r, false, label.AsStr(), why.AsStr());
+                continue;
+            }
+            if (!got.Equals(want.AsStr())) {
+                Report(ref r, false, label.AsStr(), "the output differs");
+                ShowDiff(want.AsStr(), got.AsStr());
+                continue;
+            }
+            Report(ref r, true, label.AsStr(), "");
+            fs.Delete(exe.AsStr());
+        }
+    }
+}
+
+string WithoutSlashes(str p) {
+    string r = string.New();
+    for (usize i = 0; i < p.Len; i++) {
+        if (p[i] == 0x5C) r.AppendByte('/');
+        else r.AppendByte(p[i]);
+    }
+    return r;
+}
+
+// A package: its program builds, and its tests pass.
+void TestPackage(ref TestRun r, str dir) {
+    Package pkg = ReadPackage(dir);
+    List<string> lib = List<string>.New();
+    foreach (var f in pkg.Sources.AsSlice()) {
+        if (!pkg.HasMain || ct.Compare(f.AsStr(), pkg.Sources.AsSlice()[0].AsStr()) != 0) lib.Push(string.From(f.AsStr()));
+    }
+    if (pkg.HasMain) {
+        string label = string.From(dir);
+        label.Append(" (builds)");
+        string exe = BuildFor(ref r, pkg.Sources, "", r.Quick == false, label.AsStr());
+        if (exe.Len() > 0) {
+            Report(ref r, true, label.AsStr(), "");
+            fs.Delete(exe.AsStr());
+        }
+    }
+    foreach (var t in pkg.Tests.AsSlice()) RunTest(ref r, t.AsStr(), lib, t.AsStr());
+}
+
+// Everything to test under dir.
+void TestTree(ref TestRun r, str dir, bool inTests) {
+    if (IsPackageDir(dir)) {
+        // a workspace manifest is not a package: look inside it
+        if (!IsWorkspace(dir)) {
+            TestPackage(ref r, dir);
+            return;
+        }
+    }
+    Result<List<string>, IoError> lr = fs.ListDir(dir);
+    if (lr.IsErr()) return;
+    List<string> names = lr.Unwrap();
+    List<string> none = List<string>.New();
+    foreach (var n in names.AsSlice()) {
+        str name = n.AsStr();
+        if (name.Len == 0 || name[0] == '.' || ct.Compare(name, "build") == 0) continue;
+        string full = path.Join(dir, name);
+        if (fs.IsDir(full.AsStr())) {
+            TestTree(ref r, full.AsStr(), inTests || ct.Compare(name, "tests") == 0);
+        } else if (inTests && ct.EndsWith(name, ".envo")) {
+            RunTest(ref r, full.AsStr(), none, full.AsStr());
+        }
+    }
+}
+
+bool IsWorkspace(str dir) {
+    string m = path.Join(dir, "envo.envon");
+    Result<eon.Value, eon.ParseError> r = eon.Load(m.AsStr());
+    if (r.IsErr()) return false;
+    eon.Value doc = r.Unwrap();
+    return doc.Has("workspace") && !doc.Has("package");
+}
+
+i32 CmdEnvoTest(usize from) {
+    TestRun r = new TestRun {
+        Self = string.From(env.Arg(0)), Work = string.From("build/envo-test"), RunDir = string.From("build/envo-test/run"),
+        Quick = false, Verbose = false, Passed = 0, Failed = 0, Count = 0,
+    };
+    List<string> paths = List<string>.New();
+    for (usize i = from; i < env.ArgCount(); i++) {
+        str a = env.Arg(i);
+        if (ct.Compare(a, "-O0") == 0) r.Quick = true;
+        else if (ct.Compare(a, "-v") == 0) r.Verbose = true;
+        else if (a.Len > 0 && a[0] == '-') EnvoFail("envo test takes paths, -O0 and -v", 2);
+        else paths.Push(string.From(a));
+    }
+    if (paths.Len() == 0) paths.Push(string.From("."));
+    if (fs.CreateDirAll(r.RunDir.AsStr()).IsErr()) EnvoFail("cannot create build/envo-test", 1);
+    // the child `envo build` must find the same library
+    EnvoHome();
+    foreach (var p in paths.AsSlice()) {
+        str ps = p.AsStr();
+        if (fs.IsFile(ps)) {
+            List<string> none = List<string>.New();
+            RunTest(ref r, ps, none, ps);
+        } else if (fs.IsDir(ps)) {
+            TestTree(ref r, ps, ct.Compare(path.FileName(ps), "tests") == 0 || ct.Contains(WithoutSlashes(ps).AsStr(), "tests/"));
+        } else {
+            string msg = string.From("no such file or folder: ");
+            msg.Append(ps);
+            EnvoFail(msg.AsStr(), 2);
+        }
+    }
+    write(1, text.Uint(r.Passed as u64).AsStr());
+    write(1, " passed, ");
+    write(1, text.Uint(r.Failed as u64).AsStr());
+    print(" failed");
+    if (r.Failed > 0) return 1;
+    return 0;
+}

@@ -90,6 +90,29 @@ do_build() {
         say "          $size bytes  sha256 $(sha256 "$BUILD2/$out")"
     done
     chmod +x "$BUILD2/envoc"
+
+    # envo holds the compiler (PLAN D26): tools/envo plus compiler/ without its entry
+    # file, built by Stage 2 with the library (--lib).
+    mkdir -p "$ROOT/build/envo"
+    envoc2="$BUILD2/envoc$(host_suffix)"
+    set --
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && set -- "$@" "$f"
+    done < "$ROOT/tools/envo/files.txt"
+    while IFS= read -r f || [ -n "$f" ]; do
+        f=$(printf '%s' "$f" | tr -d '\r')
+        [ -n "$f" ] && [ "$f" != driver/main.envo ] && set -- "$@" "compiler/$f"
+    done < "$STAGE2/files.txt"
+    for unit in "x86_64-linux:envo" "x86_64-windows:envo.exe"; do
+        target=${unit%%:*}
+        out=${unit#*:}
+        say "build     tools/envo -> build/envo/$out"
+        (cd "$ROOT" && "$envoc2" build -O2 --lib "$ROOT" "$@" -o "$ROOT/build/envo/$out" --target "$target") \
+            || fail "building envo ($target) failed"
+        say "          $(wc -c < "$ROOT/build/envo/$out" | tr -d ' ') bytes"
+    done
+    chmod +x "$ROOT/build/envo/envo"
 }
 
 # ------------------------------------------------------------------- test
@@ -581,50 +604,77 @@ do_test() {
         if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
         else bad "stage2 spec/eir/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
     done
-    # The standard platform (M4): each program in lib/*/tests/ and adapters/os/*/tests/ is
-    # built by Stage 2 with --lib at -O0 and -O2 and run (`// os: none` picks the
-    # reference adapters); each program in tests/conformance/ runs against both the
-    # reference adapters and the native ones.
-    say 'stage 2 library tests: lib/*/tests, adapters/os/*/tests, tests/conformance'
-    libdir="$ROOT/build/run-lib"
-    mkdir -p "$libdir"
-    EXE=$envoc2
-    for f in $(cd "$ROOT" && find lib adapters tests/conformance -name '*.envo' \( -path '*/tests/*' -o -path 'tests/conformance/*' \) 2>/dev/null | LC_ALL=C sort); do
-        case "$f" in
-            tests/conformance/*) oses='none native' ;;
-            *) oses=$(sed -n 's|^// os: \(.*\)$|\1|p' "$ROOT/$f" | tr -d '\r' | head -n 1); [ -n "$oses" ] || oses=native ;;
-        esac
-        sed -n 's|^// expect: \(.*\)$|\1|p' "$ROOT/$f" | tr -d '\r' > "$TMP/expected"
-        base=$(printf '%s' "${f%.envo}" | tr '/' '-')
-        for os in $oses; do
-            for level in -O0 -O2; do
-                name="lib $f ($os $level)"
-                program="$libdir/$base-$os$level$(host_suffix)"
-                set -- build "$level" --lib "$ROOT" "$ROOT/$f" -o "$program"
-                [ "$os" = native ] || set -- "$@" --os "$os"
-                run "$libdir" "$@"
-                if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
-                set +e
-                (cd "$libdir" && "$program") > "$TMP/out" 2> "$TMP/err"
-                rc=$?
-                set -e
-                tr -d '\r' < "$TMP/out" > "$TMP/actual"
-                if [ "$rc" -ne 0 ] || ! cmp -s "$TMP/expected" "$TMP/actual"; then
-                    bad "$name" "exit $rc, or stdout differs: $(head -c 200 "$TMP/err")"
-                    diff "$TMP/expected" "$TMP/actual" | head -n 10 || true
-                    continue
-                fi
-                pass
-            done
-        done
+    # The standard platform and the examples (PLAN D29): `envo test` builds and runs each
+    # library test, adapter test and conformance suite (the suites against the reference
+    # and the native adapters) at -O0 and -O2, and builds each example package. Keep in
+    # step with bootstrap.ps1.
+    say 'envo test: lib, adapters, tests/conformance, examples'
+    envo="$ROOT/build/envo/envo$(host_suffix)"
+    set +e
+    (cd "$ROOT" && "$envo" test lib adapters tests/conformance examples) > "$TMP/out" 2> "$TMP/err"
+    rc=$?
+    set -e
+    summary=$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$TMP/out" | tail -n 1 || true)
+    if [ -z "$summary" ]; then
+        bad 'envo test' "no summary (exit $rc): $(cat "$TMP/err")"
+    else
+        np=${summary%% passed*}
+        nf=${summary#*, }
+        nf=${nf%% failed*}
+        passed=$((passed + np))
+        if [ "$nf" -gt 0 ] || [ "$rc" -ne 0 ]; then
+            bad 'envo test' "$(cat "$TMP/out")"
+            if [ "$nf" -gt 1 ]; then failed=$((failed + nf - 1)); fi
+        fi
+    fi
+    # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
+    say 'envo commands: new, run, test, check, explain, version'
+    erun="$ROOT/build/run-envo"
+    rm -rf "$erun"
+    mkdir -p "$erun"
+    envo_do() {
+        set +e
+        (cd "$erun" && "$envo" "$@") > "$TMP/out" 2> "$TMP/err"
+        rc=$?
+        set -e
+    }
+    envo_do new demo
+    if [ "$rc" -eq 0 ] && [ -f "$erun/demo/envo.envon" ]; then pass; else bad 'envo new' "exit $rc: $(cat "$TMP/err")"; fi
+    envo_do run demo
+    if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, demo!' ]; then pass; else bad 'envo run' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    envo_do test demo
+    if [ "$rc" -eq 0 ] && grep -q '3 passed, 0 failed' "$TMP/out"; then pass; else bad 'envo test (package)' "exit $rc: $(cat "$TMP/out")"; fi
+    printf 'i32 x = ;\n' > "$erun/bad.envo"
+    envo_do check bad.envo
+    if [ "$rc" -eq 1 ] && grep -q -F 'bad.envo:1:9: error[E0101]' "$TMP/err" && grep -q -F '1 | i32 x = ;' "$TMP/err" && grep -q -F 'envo explain E0101' "$TMP/err"; then pass; else bad 'envo check' "exit $rc: $(cat "$TMP/err")"; fi
+    envo_do explain E0004
+    if [ "$rc" -eq 0 ] && grep -q -F 'E0004: unterminated string literal' "$TMP/out" && grep -q -F '[lex.str.1]' "$TMP/out"; then pass; else bad 'envo explain' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    envo_do explain E9999
+    if [ "$rc" -eq 1 ]; then pass; else bad 'envo explain (unknown)' "exit $rc"; fi
+    envo_do version
+    if [ "$rc" -eq 0 ] && grep -q '^envo ' "$TMP/out"; then pass; else bad 'envo version' "exit $rc"; fi
+    envo_do frobnicate
+    if [ "$rc" -eq 2 ]; then pass; else bad 'envo (unknown command)' "exit $rc"; fi
+    # envo fmt: each tests/golden/fmt/name.envo formats to name.expected, which formats to
+    # itself; and the repository's own code is already in the canonical layout
+    say 'envo fmt: tests/golden/fmt, and --check on the code'
+    for f in "$ROOT"/tests/golden/fmt/*.envo; do
+        expected="${f%.envo}.expected"
+        tr -d '\r' < "$expected" > "$TMP/expected"
+        envo_do fmt --stdout "$f"
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+        else bad "golden fmt/$(basename "$f")" "exit $rc: $(cat "$TMP/err")"; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
+        envo_do fmt --stdout "$expected"
+        tr -d '\r' < "$TMP/out" > "$TMP/actual"
+        if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
+        else bad "golden fmt/$(basename "$f") (formatting the expected output changes it)" "exit $rc"; fi
     done
-    # Every example builds (examples/README.md: an example exists only once it works)
-    say 'stage 2 examples: examples/*/main.envo'
-    for f in "$ROOT"/examples/*/main.envo; do
-        ex=$(basename "$(dirname "$f")")
-        run "$libdir" build -O2 --lib "$ROOT" "$f" -o "$libdir/example-$ex$(host_suffix)"
-        if [ "$rc" -eq 0 ]; then pass; else bad "example $ex" "build failed: $(cat "$TMP/err")"; fi
-    done
+    set +e
+    (cd "$ROOT" && "$envo" fmt --check lib adapters tools tests/conformance compiler bootstrap/stage1 examples) > "$TMP/out" 2> "$TMP/err"
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then pass; else bad 'envo fmt --check (run envo fmt on these files)' "$(cat "$TMP/out" "$TMP/err")"; fi
     # Library resolution errors (M4.1): `// lib: root` checks against tests/spec/lib/root
     # instead of the repository
     say 'stage 2 spec tests: tests/spec/lib'

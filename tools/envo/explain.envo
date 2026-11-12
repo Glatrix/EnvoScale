@@ -1,0 +1,148 @@
+// `envo explain <code>`: a diagnostic code's entry in the registry
+// (docs/spec/errors.md): its message, where it is reported, the phase, and the text of
+// each rule it cites, found in docs/spec/.
+use std.fs;
+use std.env;
+use std.path;
+use core.text as ct;
+use alloc.text;
+use ports.{IoError};
+
+// code as E#### (it may come as e214, 214 or E0214), or "" if it is not a code.
+string NormalCode(str code) {
+    str digits = code;
+    if (digits.Len > 0 && (digits[0] == 'E' || digits[0] == 'e')) digits = digits[1..digits.Len];
+    if (digits.Len == 0 || digits.Len > 4) return string.New();
+    for (usize i = 0; i < digits.Len; i++) {
+        if (!ct.IsDigit(digits[i])) return string.New();
+    }
+    string r = string.From("E");
+    for (usize i = digits.Len; i < 4; i++) r.AppendByte('0');
+    r.Append(digits);
+    return r;
+}
+
+// The cells of a Markdown table row, trimmed.
+List<str> Cells(str row) {
+    List<str> cells = List<str>.New();
+    str s = ct.Trim(row);
+    if (s.Len > 0 && s[0] == '|') s = s[1..s.Len];
+    if (s.Len > 0 && s[s.Len - 1] == '|') s = s[0..s.Len - 1];
+    usize start = 0;
+    bool code = false;
+    for (usize i = 0; i <= s.Len; i++) {
+        if (i < s.Len && s[i] == '`') code = !code;
+        if (i == s.Len || (s[i] == '|' && !code)) {
+            cells.Push(ct.Trim(s[start..i]));
+            start = i + 1;
+        }
+    }
+    return cells;
+}
+
+// The paragraph of a spec file that starts with `**[rule]**`, or "".
+string RuleText(str specDir, str rule) {
+    Result<List<string>, IoError> lr = fs.ListDir(specDir);
+    if (lr.IsErr()) return string.New();
+    string marker = string.From("**");
+    marker.Append(rule);
+    List<string> names = lr.Unwrap();
+    foreach (var n in names.AsSlice()) {
+        if (!ct.EndsWith(n.AsStr(), ".md")) continue;
+        string file = path.Join(specDir, n.AsStr());
+        Result<string, IoError> tr = fs.ReadText(file.AsStr());
+        if (tr.IsErr()) continue;
+        string all = tr.Unwrap();
+        str t = all.AsStr();
+        usize? at = ct.IndexOf(t, marker.AsStr());
+        if (at.IsNone()) continue;
+        usize start = at.Unwrap();
+        // the paragraph ends at a blank line
+        usize end = start;
+        while (end < t.Len) {
+            if (t[end] == 10) {
+                usize k = end + 1;
+                while (k < t.Len && t[k] == 13) k++;
+                if (k >= t.Len || t[k] == 10) break;
+            }
+            end++;
+        }
+        string r = string.New();
+        r.Append(n.AsStr());
+        r.Append(": ");
+        for (usize i = start; i < end; i++) {
+            if (t[i] != 13) r.AppendByte(t[i]);
+        }
+        return r;
+    }
+    return string.New();
+}
+
+i32 CmdEnvoExplain(usize from) {
+    if (env.ArgCount() != from + 1) EnvoFail("usage: envo explain <code>, such as E0214", 2);
+    string code = NormalCode(env.Arg(from));
+    if (code.Len() == 0) EnvoFail("a diagnostic code looks like E0214", 2);
+    string home = EnvoHome();
+    string specDir = path.Join(home.AsStr(), "docs/spec");
+    string reg = path.Join(specDir.AsStr(), "errors.md");
+    Result<string, IoError> tr = fs.ReadText(reg.AsStr());
+    if (tr.IsErr()) EnvoFail("cannot read docs/spec/errors.md under the EnvoScale folder", 1);
+    string all = tr.Unwrap();
+    str t = all.AsStr();
+    string section = string.New();
+    List<str> header = List<str>.New();
+    usize at = 0;
+    while (at < t.Len) {
+        usize end = at;
+        while (end < t.Len && t[end] != 10) end++;
+        str line = t[at..end];
+        if (line.Len > 0 && line[line.Len - 1] == 13) line = line[0..line.Len - 1];
+        at = end + 1;
+        if (ct.StartsWith(line, "## ")) {
+            section = string.From(line[3..line.Len]);
+            continue;
+        }
+        if (ct.StartsWith(line, "| Code |")) {
+            header = Cells(line);
+            continue;
+        }
+        if (!ct.StartsWith(line, "| ")) continue;
+        List<str> cells = Cells(line);
+        if (cells.Len() < 2 || ct.Compare(cells.AsSlice()[0], code.AsStr()) != 0) continue;
+        // found: the code and message, then the other columns by their headers
+        write(1, code.AsStr());
+        write(1, ": ");
+        print(cells.AsSlice()[1]);
+        write(1, "  phase: ");
+        print(section.AsStr());
+        for (usize i = 2; i < cells.Len() && i < header.Len(); i++) {
+            write(1, "  ");
+            write(1, text.Lower(header.AsSlice()[i]).AsStr());
+            write(1, ": ");
+            print(cells.AsSlice()[i]);
+        }
+        // the rules' text: every [rule.id] in the row
+        str rest = line;
+        while (true) {
+            usize? open = ct.IndexOf(rest, "[");
+            if (open.IsNone()) break;
+            str tail = rest[open.Unwrap()..rest.Len];
+            usize? close = ct.IndexOf(tail, "]");
+            if (close.IsNone()) break;
+            str rule = tail[0..close.Unwrap() + 1];
+            rest = tail[close.Unwrap() + 1..tail.Len];
+            // links like [`eir.md`](eir.md) are not rules
+            if (rule.Len < 4 || ct.Contains(rule, "`") || (rest.Len > 0 && rest[0] == '(')) continue;
+            string body = RuleText(specDir.AsStr(), rule);
+            if (body.Len() > 0) {
+                print("");
+                print(body.AsStr());
+            }
+        }
+        return 0;
+    }
+    write(2, "envo: error: no diagnostic ");
+    write(2, code.AsStr());
+    write(2, "; the codes are listed in docs/spec/errors.md\n");
+    return 1;
+}

@@ -167,12 +167,12 @@ u32 NodeSlots(u16 kind) {
         NK_FN | NK_IF | NK_USE | NK_IMPL | NK_COND | NK_FOREACH => { return 3; }
         NK_FOR => { return 4; }
         NK_ENUM | NK_CONST | NK_STATIC | NK_TARRAY | NK_WHILE | NK_MATCH | NK_ARM | NK_VAR |
-        NK_ASSIGN | NK_CALL | NK_INDEX | NK_BINARY | NK_CAST | NK_NEW | NK_TFN | NK_LAMBDA |
-        NK_RANGE => { return 2; }
+            NK_ASSIGN | NK_CALL | NK_INDEX | NK_BINARY | NK_CAST | NK_NEW | NK_TFN | NK_LAMBDA |
+            NK_RANGE => { return 2; }
         NK_PROGRAM | NK_PARAM | NK_STRUCT | NK_FIELD | NK_VARIANT | NK_TPTR | NK_TSLICE |
-        NK_BLOCK | NK_UNSAFE | NK_RETURN | NK_EXPR | NK_INC | NK_DEC | NK_MEMBER | NK_UNARY |
-        NK_SIZEOF | NK_ALIGNOF | NK_INIT | NK_NAMESPACE | NK_INTERFACE | NK_TPARAM | NK_WHERE |
-        NK_TOPT | NK_TRY => { return 1; }
+            NK_BLOCK | NK_UNSAFE | NK_RETURN | NK_EXPR | NK_INC | NK_DEC | NK_MEMBER | NK_UNARY |
+            NK_SIZEOF | NK_ALIGNOF | NK_INIT | NK_NAMESPACE | NK_INTERFACE | NK_TPARAM | NK_WHERE |
+            NK_TOPT | NK_TRY => { return 1; }
         _ => { return 0; }
     }
 }
@@ -180,9 +180,9 @@ u32 NodeSlots(u16 kind) {
 bool NodeHasText(u16 kind) {
     match kind {
         NK_FN | NK_PARAM | NK_STRUCT | NK_FIELD | NK_ENUM | NK_VARIANT | NK_CONST | NK_STATIC |
-        NK_TNAME | NK_VAR | NK_ASSIGN | NK_INT | NK_CHAR | NK_STRING | NK_BOOL | NK_NAME |
-        NK_MEMBER | NK_UNARY | NK_BINARY | NK_INIT | NK_INTERFACE | NK_TPARAM | NK_WHERE |
-        NK_RANGE => { return true; }
+            NK_TNAME | NK_VAR | NK_ASSIGN | NK_INT | NK_CHAR | NK_STRING | NK_BOOL | NK_NAME |
+            NK_MEMBER | NK_UNARY | NK_BINARY | NK_INIT | NK_INTERFACE | NK_TPARAM | NK_WHERE |
+            NK_RANGE => { return true; }
         _ => { return false; }
     }
 }
@@ -190,7 +190,7 @@ bool NodeHasText(u16 kind) {
 // Items, as opposed to statements, at the top level of a file.
 bool NodeIsItem(u16 kind) {
     return kind == NK_FN || kind == NK_STRUCT || kind == NK_ENUM || kind == NK_CONST || kind == NK_STATIC ||
-           kind == NK_INTERFACE || kind == NK_IMPL || kind == NK_NAMESPACE || kind == NK_USE;
+        kind == NK_INTERFACE || kind == NK_IMPL || kind == NK_NAMESPACE || kind == NK_USE;
 }
 
 // Token classes for the parser (Stage 0's tok_class): binary operator level 1-9 in the
@@ -204,14 +204,14 @@ const u32 PREC_COMPARE = 3;
 u32 TokClass(u16 kind) {
     match kind {
         TK_KW_UNDERSCORE | TK_KW_ALIGNOF | TK_KW_AS | TK_KW_BREAK | TK_KW_CONST | TK_KW_CONTINUE |
-        TK_KW_ELSE | TK_KW_ENUM | TK_KW_FALSE | TK_KW_FOR | TK_KW_IF | TK_KW_MATCH | TK_KW_NEW |
-        TK_KW_PRIVATE | TK_KW_PUBLIC | TK_KW_RETURN | TK_KW_SIZEOF | TK_KW_STATIC | TK_KW_STRUCT |
-        TK_KW_TRUE | TK_KW_UNSAFE | TK_KW_VAR | TK_KW_WHILE => { return TC_CORE_KW; }
+            TK_KW_ELSE | TK_KW_ENUM | TK_KW_FALSE | TK_KW_FOR | TK_KW_IF | TK_KW_MATCH | TK_KW_NEW |
+            TK_KW_PRIVATE | TK_KW_PUBLIC | TK_KW_RETURN | TK_KW_SIZEOF | TK_KW_STATIC | TK_KW_STRUCT |
+            TK_KW_TRUE | TK_KW_UNSAFE | TK_KW_VAR | TK_KW_WHILE => { return TC_CORE_KW; }
         TK_SHL_EQ | TK_SHR_EQ | TK_WRAP_ADD_EQ | TK_WRAP_SUB_EQ | TK_WRAP_MUL_EQ | TK_PLUS_EQ |
-        TK_MINUS_EQ | TK_STAR_EQ | TK_SLASH_EQ | TK_PERCENT_EQ | TK_AMP_EQ | TK_PIPE_EQ |
-        TK_CARET_EQ | TK_EQ => { return TC_ASSIGN; }
+            TK_MINUS_EQ | TK_STAR_EQ | TK_SLASH_EQ | TK_PERCENT_EQ | TK_AMP_EQ | TK_PIPE_EQ |
+            TK_CARET_EQ | TK_EQ => { return TC_ASSIGN; }
         TK_DOT_DOT_EQ | TK_QQ_EQ | TK_FAT_ARROW | TK_ARROW | TK_COLON_COLON | TK_DOT_DOT | TK_QQ |
-        TK_QUESTION => { return TC_NOT_CORE; }
+            TK_QUESTION => { return TC_NOT_CORE; }
         TK_OR_OR => { return 1; }
         TK_AND_AND => { return 2; }
         TK_EQ_EQ | TK_NOT_EQ | TK_LT_EQ | TK_GT_EQ | TK_LT | TK_GT => { return 3; }

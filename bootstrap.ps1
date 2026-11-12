@@ -72,6 +72,22 @@ function Invoke-Build {
         $size = (Get-Item -LiteralPath $out).Length
         Say ("          {0,8} bytes  sha256 {1}" -f $size, $hash)
     }
+
+    # envo holds the compiler (PLAN D26): tools\envo plus compiler\ without its entry
+    # file, built by Stage 2 with the library (--lib).
+    $envoDir = Join-Path $Root 'build\envo'
+    New-Item -ItemType Directory -Force $envoDir | Out-Null
+    $envoc = Join-Path $Build2 'envoc.exe'
+    $files = @(Get-Content -LiteralPath (Join-Path $Root 'tools\envo\files.txt') | Where-Object { $_.Trim() -ne '' })
+    $files += @(Get-Content -LiteralPath (Join-Path $Stage2 'files.txt') | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne 'driver/main.envo' } | ForEach-Object { "compiler/$($_.Trim())" })
+    foreach ($u in @(@{ Target = 'x86_64-windows'; Out = 'envo.exe' }, @{ Target = 'x86_64-linux'; Out = 'envo' })) {
+        $out = Join-Path $envoDir $u.Out
+        Say "build     tools/envo -> build/envo/$($u.Out)"
+        $r = Invoke-Tool $envoc (@('build', '-O2', '--lib', $Root) + $files + @('-o', $out, '--target', $u.Target)) $Root
+        if ($r.Code -ne 0) { Fail "building envo ($($u.Target)) failed: $($r.Err.Trim())" }
+        $size = (Get-Item -LiteralPath $out).Length
+        Say ("          {0,8} bytes" -f $size)
+    }
 }
 
 # ------------------------------------------------------------------- fixed point
@@ -597,58 +613,55 @@ function Invoke-Test {
         if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $f.Name }
         else { Bad "stage2 spec/eir/$($f.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
     }
-    # The standard platform (M4): each program in lib\*\tests\ and adapters\os\*\tests\ is
-    # built by Stage 2 with --lib at -O0 and -O2 and run (`// os: none` picks the
-    # reference adapters); each program in tests\conformance\ runs against both the
-    # reference adapters and the native ones. Keep in step with bootstrap.sh.
-    Say 'stage 2 library tests: lib/*/tests, adapters/os/*/tests, tests/conformance'
-    $libDir = Join-Path $Root 'build\run-lib'
-    New-Item -ItemType Directory -Force $libDir | Out-Null
-    $libTests = @()
-    foreach ($top in @('lib', 'adapters', 'tests\conformance')) {
-        $dir = Join-Path $Root $top
-        if (-not (Test-Path -LiteralPath $dir)) { continue }
-        foreach ($f in Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.envo') {
-            $rel = $f.FullName.Substring($Root.Length + 1)
-            if ($rel -match '\\tests\\' -or $rel -match '^tests\\conformance\\') { $libTests += $f }
-        }
+    # The standard platform and the examples (PLAN D29): `envo test` builds and runs each
+    # library test, adapter test and conformance suite (the suites against the reference
+    # and the native adapters) at -O0 and -O2, and builds each example package. Keep in
+    # step with bootstrap.sh.
+    Say 'envo test: lib, adapters, tests/conformance, examples'
+    $envo = Join-Path $Root 'build\envo\envo.exe'
+    $r = Invoke-Tool $envo @('test', 'lib', 'adapters', 'tests/conformance', 'examples') $Root
+    $m = [regex]::Match($r.Out, '(\d+) passed, (\d+) failed')
+    if (-not $m.Success) { Bad 'envo test' "no summary (exit $($r.Code)): $($r.Err.Trim())" }
+    else {
+        $script:passed += [int]$m.Groups[1].Value
+        $nfail = [int]$m.Groups[2].Value
+        if ($nfail -gt 0 -or $r.Code -ne 0) { Bad 'envo test' (Normalize $r.Out).Trim(); $script:failed += [Math]::Max(0, $nfail - 1) }
     }
-    foreach ($f in $libTests | Sort-Object { $_.FullName.Substring($Root.Length + 1).Replace('\', '/') }) {
-        $rel = $f.FullName.Substring($Root.Length + 1).Replace('\', '/')
-        $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
-        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
-        $wantOut = ''
-        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
-        $oses = @('native')
-        if ($rel.StartsWith('tests/conformance/')) { $oses = @('none', 'native') }
-        else {
-            $m = [regex]::Match($text, '(?m)^// os: (\S+)')
-            if ($m.Success) { $oses = @($m.Groups[1].Value) }
-        }
-        $base = ($rel -replace '\.envo$', '').Replace('/', '-')
-        foreach ($os in $oses) {
-            foreach ($level in @('-O0', '-O2')) {
-                $name = "lib $rel ($os $level)"
-                $program = Join-Path $libDir "$base-$os$level.exe"
-                $argv = @('build', $level, '--lib', $Root, $f.FullName, '-o', $program)
-                if ($os -ne 'native') { $argv += @('--os', $os) }
-                $r = Invoke-Tool $envoc $argv $libDir
-                if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
-                $r = Invoke-Tool $program @() $libDir
-                $out = Normalize $r.Out
-                if ($r.Code -ne 0 -or -not [string]::Equals($wantOut, $out)) { Bad $name "exit $($r.Code), or stdout differs: $($r.Err.Trim())"; Show-Diff $wantOut $out; continue }
-                Pass $name
-            }
-        }
+    # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
+    Say 'envo commands: new, run, test, check, explain, version'
+    $envoRun = Join-Path $Root 'build\run-envo'
+    if (Test-Path -LiteralPath $envoRun) { Remove-Item -Recurse -Force $envoRun }
+    New-Item -ItemType Directory -Force $envoRun | Out-Null
+    $r = Invoke-Tool $envo @('new', 'demo') $envoRun
+    if ($r.Code -eq 0 -and (Test-Path -LiteralPath (Join-Path $envoRun 'demo\envo.envon'))) { Pass 'envo new' } else { Bad 'envo new' "exit $($r.Code): $($r.Err.Trim())" }
+    $r = Invoke-Tool $envo @('run', 'demo') $envoRun
+    if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, demo!`n") { Pass 'envo run' } else { Bad 'envo run' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    $r = Invoke-Tool $envo @('test', 'demo') $envoRun
+    if ($r.Code -eq 0 -and $r.Out.Contains('3 passed, 0 failed')) { Pass 'envo test (package)' } else { Bad 'envo test (package)' "exit $($r.Code): $($r.Out.Trim())" }
+    [IO.File]::WriteAllText((Join-Path $envoRun 'bad.envo'), "i32 x = ;`n", $Utf8)
+    $r = Invoke-Tool $envo @('check', 'bad.envo') $envoRun
+    if ($r.Code -eq 1 -and $r.Err.Contains('bad.envo:1:9: error[E0101]') -and $r.Err.Contains('1 | i32 x = ;') -and $r.Err.Contains('envo explain E0101')) { Pass 'envo check' } else { Bad 'envo check' "exit $($r.Code): $($r.Err.Trim())" }
+    $r = Invoke-Tool $envo @('explain', 'E0004') $envoRun
+    if ($r.Code -eq 0 -and $r.Out.Contains('E0004: unterminated string literal') -and $r.Out.Contains('[lex.str.1]')) { Pass 'envo explain' } else { Bad 'envo explain' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    $r = Invoke-Tool $envo @('explain', 'E9999') $envoRun
+    if ($r.Code -eq 1) { Pass 'envo explain (unknown)' } else { Bad 'envo explain (unknown)' "exit $($r.Code)" }
+    $r = Invoke-Tool $envo @('version') $envoRun
+    if ($r.Code -eq 0 -and $r.Out.StartsWith('envo ')) { Pass 'envo version' } else { Bad 'envo version' "exit $($r.Code)" }
+    $r = Invoke-Tool $envo @('frobnicate') $envoRun
+    if ($r.Code -eq 2) { Pass 'envo (unknown command)' } else { Bad 'envo (unknown command)' "exit $($r.Code)" }
+    # envo fmt: each tests\golden\fmt\name.envo formats to name.expected, which formats to
+    # itself; and the repository's own code is already in the canonical layout
+    Say 'envo fmt: tests/golden/fmt, and --check on the code'
+    foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\golden\fmt') -Filter '*.envo' | Sort-Object Name) {
+        $expected = [IO.Path]::ChangeExtension($f.FullName, '.expected')
+        $want = Normalize ([IO.File]::ReadAllText($expected, $Utf8))
+        $r = Invoke-Tool $envo @('fmt', '--stdout', $f.FullName) $envoRun
+        if ($r.Code -eq 0 -and (Normalize $r.Out) -eq $want) { Pass "fmt $($f.Name)" } else { Bad "golden fmt/$($f.Name)" "exit $($r.Code): $($r.Err.Trim())"; Show-Diff $want (Normalize $r.Out) }
+        $r = Invoke-Tool $envo @('fmt', '--stdout', $expected) $envoRun
+        if ($r.Code -eq 0 -and (Normalize $r.Out) -eq $want) { Pass "fmt $($f.Name) (again)" } else { Bad "golden fmt/$($f.Name) (formatting the expected output changes it)" "exit $($r.Code)" }
     }
-    # Every example builds (examples\README.md: an example exists only once it works)
-    Say 'stage 2 examples: examples/*/main.envo'
-    foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'examples') -Directory | Sort-Object Name) {
-        $main = Join-Path $d.FullName 'main.envo'
-        if (-not (Test-Path -LiteralPath $main)) { continue }
-        $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, $main, '-o', (Join-Path $libDir "example-$($d.Name).exe")) $libDir
-        if ($r.Code -eq 0) { Pass "example $($d.Name)" } else { Bad "example $($d.Name)" "build failed: $($r.Err.Trim())" }
-    }
+    $r = Invoke-Tool $envo @('fmt', '--check', 'lib', 'adapters', 'tools', 'tests/conformance', 'compiler', 'bootstrap/stage1', 'examples') $Root
+    if ($r.Code -eq 0) { Pass 'envo fmt --check' } else { Bad 'envo fmt --check (run envo fmt on these files)' "$($r.Out.Trim()) $($r.Err.Trim())" }
     # Library resolution errors (M4.1): `// lib: root` checks against tests\spec\lib\root
     # instead of the repository
     Say 'stage 2 spec tests: tests/spec/lib'

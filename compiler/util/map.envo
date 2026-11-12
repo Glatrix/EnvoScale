@@ -69,7 +69,7 @@ public struct StrMap<V> {
             V? v = slot.Unwrap();
             match v {
                 Some(value) => { StrMap<V>.Place(ref keys, ref values, k.Unwrap(), value); }
-                None => { }
+                None => {}
             }
         }
         this.Keys = keys;

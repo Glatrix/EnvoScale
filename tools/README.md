@@ -1,8 +1,8 @@
 # `tools/` — the `envo` toolchain
 
-> **Status:** Not started. The CLI with `new`, `build`, `run`, `test` and `fmt` plus a
-> basic LSP arrive with **M5**. Until then, `bootstrap.ps1` / `bootstrap.sh` are the
-> only entry points.
+> **Status:** Experimental (M5). `envo` has `new`, `build`, `run`, `check`, `test`,
+> `explain` and `version` ([`envo/README.md`](envo/README.md)); `fmt` and a basic LSP
+> follow in M5. The bootstrap scripts still build and test Stages 0–2 (PLAN D29).
 
 Every tool is written in Envo and ships inside the single `envo` binary.
 

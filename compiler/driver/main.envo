@@ -12,8 +12,6 @@ use envoc.opt;
 
 const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
 
-const usize MAX_SOURCE = 16 << 20;     // 16 MiB per file, as in Stages 0 and 1
-
 void Usage(i32 fd) {
     write(fd, "usage: envoc [--core] <command> [arguments]\n");
     write(fd, "\n");
@@ -58,40 +56,6 @@ void SelfTest() {
     print("selftest: ok");
 }
 
-// The target this program runs on: Linux has /proc/self/exe.
-str HostTarget() {
-    i32 fd = open("/proc/self/exe", 0);
-    if (fd >= 0) {
-        close(fd);
-        return "x86_64-linux";
-    }
-    return "x86_64-windows";
-}
-
-// Reads the source file at path into src, without a leading byte order mark, and returns
-// its index. Reports a file that cannot be read, and exits.
-usize Load(ref Sources src, str path) {
-    string? read = ReadFile(path);
-    if (read.IsNone()) {
-        string msg = string.From("cannot open '");
-        msg.Append(path);
-        msg.AppendByte(0x27);
-        ToolFail(msg, EXIT_ERRORS);
-    }
-    string text = read.Unwrap();
-    if (text.Len() > MAX_SOURCE) {
-        string msg = string.From("file too large: '");
-        msg.Append(path);
-        msg.Append("' (envoc accepts source files up to 16 MiB)");
-        ToolFail(msg, EXIT_ERRORS);
-    }
-    str t = text.AsStr();
-    if (t.Len >= 3 && t[0] == 0xEF && t[1] == 0xBB && t[2] == 0xBF) {
-        return src.Add(path, string.From(t[3..t.Len]));
-    }
-    return src.Add(path, text);
-}
-
 // `envoc lex <file.envo>`
 i32 CmdLex(usize argi, bool core) {
     if (argc() != argi + 1) {
@@ -99,26 +63,13 @@ i32 CmdLex(usize argi, bool core) {
         return EXIT_USAGE;
     }
     Sources src = Sources.New();
-    usize f = Load(ref src, arg(argi));
+    usize f = LoadSource(ref src, arg(argi));
     LexTables tables = LexTables.New();
     List<Token> toks = Lex(tables, src.Path(f), src.Text(f), f as u32, core);
     string listing = string.New();
     DumpTokens(ref listing, toks, src.Text(f));
     write(1, listing);
     return EXIT_OK;
-}
-
-// Lexes every file in src, in order, into one token list; starts gets each file's first
-// token.
-List<Token> LexAll(in Sources src, ref List<usize> starts, bool core) {
-    LexTables tables = LexTables.New();
-    List<Token> all = List<Token>.New();
-    for (usize f = 0; f < src.Count(); f++) {
-        starts.Push(all.Len());
-        List<Token> toks = Lex(tables, src.Path(f), src.Text(f), f as u32, core);
-        foreach (var t in toks.AsSlice()) all.Push(t);
-    }
-    return all;
 }
 
 // `envoc parse <file.envo>`
@@ -128,7 +79,7 @@ i32 CmdParse(usize argi, bool core) {
         return EXIT_USAGE;
     }
     Sources src = Sources.New();
-    Load(ref src, arg(argi));
+    LoadSource(ref src, arg(argi));
     List<usize> starts = List<usize>.New();
     List<Token> toks = LexAll(src, ref starts, core);
     Tree tree = Parse(src, toks, starts, core);
@@ -156,7 +107,7 @@ i32 CmdCheck(usize argi, bool core) {
             i += 2;
             continue;
         }
-        Load(ref src, arg(i));
+        LoadSource(ref src, arg(i));
         i++;
     }
     // the libraries' native adapters use the target intrinsics, which come with the runtime
@@ -199,7 +150,7 @@ i32 CmdEirCheck(usize argi) {
         return EXIT_USAGE;
     }
     Sources src = Sources.New();
-    usize f = Load(ref src, arg(argi));
+    usize f = LoadSource(ref src, arg(argi));
     Module m = Module.New();
     if (IsBinaryEir(src.Text(f))) DecodeEir(ref m, src.Path(f), src.Text(f));
     else ReadEir(ref m, src.Path(f), src.Text(f));
@@ -225,17 +176,6 @@ void BuildUsage() {
     exit(EXIT_USAGE);
 }
 
-// Writes an output file, or reports that it can't.
-i32 WriteOut(str path, in string data, bool executable) {
-    if (!WriteFile(path, data, executable)) {
-        write(2, "envoc: error: cannot write '");
-        write(2, path);
-        write(2, "'\n");
-        return EXIT_ERRORS;
-    }
-    return EXIT_OK;
-}
-
 // The arguments of `build` and `eir`: the files, -o <output>, --target <triple>.
 struct BuildArgs {
     List<usize> Files;      // argument indexes
@@ -247,11 +187,6 @@ struct BuildArgs {
     str Lib;                // --lib <dir>: holds lib/ and adapters/ (D21)
     str Os;                 // --os: the adapters `platform` binds (D23); "" for the target's
     str Unit;               // compile: the file whose code the object holds
-}
-
-u32 HostTargetCode() {
-    if (Same(HostTarget(), "x86_64-windows")) return TARGET_WINDOWS;
-    return TARGET_LINUX;
 }
 
 BuildArgs ParseBuildArgs(usize argi) {
@@ -299,60 +234,26 @@ BuildArgs ParseBuildArgs(usize argi) {
     return b;
 }
 
-// The adapters `platform` binds: --os, or the target's operating system (D23).
-str PlatformOs(str os, u32 target) {
-    if (os.Len == 0) {
-        if (target == TARGET_WINDOWS) return "windows";
-        return "linux";
-    }
-    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && target == TARGET_LINUX);
-    if (!ok) ToolFail("--os must be `none` or the target's operating system", EXIT_USAGE);
-    return os;
-}
-
-// Compiles the program in the given files, with the runtime for target, to an EIR module.
-// With a unit (an index into files), the module is that file's object: other files'
-// functions are only declared, and the runtime goes with the entry file (unit 0).
-Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool core, bool verify, i32 unit, bool opt, str lib, str os) {
-    foreach (var i in files.AsSlice()) Load(ref src, arg(i));
-    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), core);
-    src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
-    if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
-    else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
-    u32 prelude = 0xFFFFFFFF;
-    if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
-    List<usize> starts = List<usize>.New();
-    List<Token> toks = LexAll(src, ref starts, core);
-    Tree tree = Parse(src, toks, starts, core);
-    Checker c = Checker.New(src, tree, core, true);
-    c.PreludeFile = prelude;
-    c.CheckProgram();
-    Lower l = Lower.New(c, target);
-    l.LowerProgram();
-    if (unit >= 0) {
-        List<bool> owned = List<bool>.New();
-        for (usize i = 0; i < src.Count(); i++) owned.Push(i == unit as usize || (unit == 0 && i >= files.Len()));
-        l.KeepUnit(owned, unit == 0);
-    }
-    Module m = l.TakeModule();
-    if (verify) m.Verify();
-    if (opt) {
-        Optimize(ref m);
-        m.Verify();
-    }
-    return m;
-}
-
 // `envoc build <file.envo>... -o <output> [--target …]`
 i32 CmdBuild(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Output.Len == 0 || b.Unit.Len > 0) BuildUsage();
-    Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, -1, b.Opt, b.Lib, b.Os);
-    string map = string.New();
-    string image = GenModule(ref m, b.Target, b.Opt, b.Map.Len > 0, ref map);
-    if (b.Map.Len > 0 && WriteOut(b.Map, map, false) != EXIT_OK) return EXIT_ERRORS;
-    return WriteOut(b.Output, image, true);
+    if (core) {
+        Sources src = Sources.New();
+        Module m = CompileProgram(ref src, Paths(b.Files), b.Target, core, true, -1, b.Opt, b.Lib, b.Os);
+        string map = string.New();
+        string image = GenModule(ref m, b.Target, b.Opt, b.Map.Len > 0, ref map);
+        if (b.Map.Len > 0 && WriteOut(b.Map, map, false) != EXIT_OK) return EXIT_ERRORS;
+        return WriteOut(b.Output, image, true);
+    }
+    return BuildProgram(Paths(b.Files), b.Output, b.Target, b.Opt, b.Lib, b.Os, b.Map);
+}
+
+// The arguments at the given indexes.
+List<string> Paths(in List<usize> indexes) {
+    List<string> all = List<string>.New();
+    foreach (var i in indexes.AsSlice()) all.Push(string.From(arg(i)));
+    return all;
 }
 
 // `envoc compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]`
@@ -367,7 +268,7 @@ i32 CmdCompile(usize argi, bool core) {
         if (unit < 0) ToolFail("--unit must name one of the files", EXIT_USAGE);
     }
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, unit, b.Opt, b.Lib, b.Os);
+    Module m = CompileProgram(ref src, Paths(b.Files), b.Target, core, true, unit, b.Opt, b.Lib, b.Os);
     string bytes = m.Encode();
     return WriteOut(b.Output, bytes, false);
 }
@@ -377,7 +278,7 @@ i32 CmdLink(usize argi) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Output.Len == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
-    foreach (var i in b.Files.AsSlice()) Load(ref src, arg(i));
+    foreach (var i in b.Files.AsSlice()) LoadSource(ref src, arg(i));
     Module m = Module.New();
     DecodeEir(ref m, src.Path(0), src.Text(0));
     for (usize k = 1; k < src.Count(); k++) {
@@ -415,7 +316,7 @@ i32 CmdEir(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, false, -1, b.Opt, b.Lib, b.Os);     // eir-check the output to verify it
+    Module m = CompileProgram(ref src, Paths(b.Files), b.Target, core, false, -1, b.Opt, b.Lib, b.Os);     // eir-check the output to verify it
     if (b.Output.Len > 0) {
         string bytes = m.Encode();
         return WriteOut(b.Output, bytes, false);

@@ -10,3 +10,4 @@ One document per subsystem describing how it is built and why:
 - [`ports-and-adapters.md`](ports-and-adapters.md): the shape of the platform.
 - [`library.md`](library.md): the standard platform as built in M4 (layers, module
   resolution, the `platform` binding, adapters, conformance).
+- [`tooling.md`](tooling.md): the `envo` tool, packages and the Process port (M5).

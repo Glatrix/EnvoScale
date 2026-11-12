@@ -102,7 +102,7 @@ proc.Add("prog");
 List<str> pargs = List<str>.New();
 pargs.Push("x");
 pargs.Push("y");
-Result<i32, IoError> pr = proc.Run("prog", pargs.AsSlice(), "d/out.txt", "d/out.txt");
+Result<i32, IoError> pr = proc.Run("prog", pargs.AsSlice(), "", "d/out.txt", "d/out.txt");
 write(1, "process ");
 if (pr.IsOk() && pr.Unwrap() == 2) write(1, "2 ");
 write(1, "[");
@@ -110,7 +110,7 @@ write(1, lfs.Read("d/out.txt").Unwrap().AsStr());
 write(1, "] [");
 write(1, proc.Runs());
 write(1, "] ");
-if (IsNotFound(proc.Run("other", pargs.AsSlice(), "", ""))) print("missing");
+if (IsNotFound(proc.Run("other", pargs.AsSlice(), "", "", "")) && IsNotFound(proc.Run("prog", pargs.AsSlice(), "nodir", "", ""))) print("missing");
 
 bool IsNotFound(Result<i32, IoError> r) {
     match r {

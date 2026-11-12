@@ -89,7 +89,7 @@ void XTokenize(*Reader r) {
             t.Kind = XT_PUNCT;
             j = i + 2;
         } else if (c == ':' || c == ',' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' ||
-                   c == '}' || c == '=') {
+            c == '}' || c == '=') {
             t.Kind = XT_PUNCT;
         } else {
             XFail(r, i, 601, "EIR syntax: unexpected character");

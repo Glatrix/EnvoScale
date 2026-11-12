@@ -73,16 +73,21 @@ public interface IEnvironment {
     str Arg(ref this, usize i);
     // The value of the environment variable name, if it is set.
     string? Var(ref this, str name);
+    // The working directory, as an absolute path.
+    string CurrentDir(ref this);
 }
 
 // Running other programs.
 public interface IProcess {
     // Runs program with args (the program's own name is not one of them), waits for it to
     // end and gives its exit code; on Linux a program ended by signal n gives 128 + n.
-    // program is a path, or a name looked up on PATH as the system does. When outPath is
-    // not "", the program's standard output replaces that file's content; errPath does
-    // the same for standard error, and when the two are equal both streams go to the
-    // one file. Standard input, and any stream not sent to a file, is this program's.
-    // NotFound if there is no such program or a file's directory does not exist.
-    Result<i32, IoError> Run(ref this, str program, str[] args, str outPath, str errPath);
+    // program is a path, or a name looked up on PATH as the system does. The program
+    // runs in the directory workDir ("" for this program's). When outPath is not "", the
+    // program's standard output replaces that file's content; errPath does the same for
+    // standard error, and when the two are equal both streams go to the one file.
+    // program, outPath and errPath are relative to this program's working directory, not
+    // workDir. Standard input, and any stream not sent to a file, is this program's.
+    // NotFound if there is no such program, no directory workDir, or a file's directory
+    // does not exist.
+    Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath);
 }

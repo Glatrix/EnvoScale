@@ -11,6 +11,7 @@ output is byte-identical to the expected file (after normalizing CRLF to LF).
 | `s1-parser/` | `envoc1 parse` (Envo-S1) | `name.envo` → `name.ast` |
 | `eir/` | `envoc1 eir-check` | `name.eir` → `name.out` (canonical form; `name.out` must also print as itself) |
 | `opt/` | `envoc eir-check -O2` | `name.eir` → `name.out` (the module after `-O2`'s EIR passes) |
+| `fmt/` | `envo fmt --stdout` | `name.envo` → `name.expected` (which must format to itself) |
 
 
 ## Syntax tree format

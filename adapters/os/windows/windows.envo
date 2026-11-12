@@ -29,7 +29,8 @@ const i64 W_FINDNEXTFILEW = 23;
 const i64 W_FINDCLOSE = 24;
 const i64 W_SETHANDLEINFORMATION = 25;
 const i64 W_GETENVIRONMENTVARIABLEW = 26;
-const i64 W_RTLGENRANDOM = 28;
+const i64 W_GETCURRENTDIRECTORYW = 27;
+const i64 W_RTLGENRANDOM = 29;
 
 const u32 ATTR_DIRECTORY = 0x10;
 
@@ -302,6 +303,20 @@ impl IEnvironment for Environment {
     usize ArgCount(ref this) => argc();
     str Arg(ref this, usize i) => arg(i);
 
+    string CurrentDir(ref this) {
+        unsafe {
+            i64 cap = 260;
+            while (true) {
+                *u8 buf = alloc((cap * 2) as usize);
+                i64 n = Call(W_GETCURRENTDIRECTORYW, cap, Ptr(buf), 0, 0, 0, 0) as u32 as i64;
+                if (n == 0) return string.New();
+                if (n < cap) return Narrow(buf);
+                cap = n;        // the size it needs, its 0 included
+            }
+        }
+        return string.New();
+    }
+
     string? Var(ref this, str name) {
         if (name.Len == 0) return null;
         *u8 w = Wide(name);
@@ -390,9 +405,27 @@ void Inheritable(i64 h) {
 }
 
 impl IProcess for Process {
-    Result<i32, IoError> Run(ref this, str program, str[] args, str outPath, str errPath) {
+    Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath) {
+        *u8 wdir = Wide(".");
+        unsafe { wdir = 0 as usize as *u8; }
+        if (workDir.Len > 0) {
+            wdir = Wide(workDir);
+            unsafe {
+                if (wdir as usize == 0) return Err(IoError.Invalid);
+            }
+            u32 attrs = Attributes(workDir);
+            if (attrs == 0xFFFFFFFF || attrs & ATTR_DIRECTORY == 0) return Err(IoError.NotFound);
+        }
+        // CreateProcessW takes only `\` as a separator when it looks for the program: with
+        // `/`, a relative path is looked for next to this executable, not in the working
+        // directory
+        string exe = string.New();
+        for (usize i = 0; i < program.Len; i++) {
+            if (program[i] == '/') exe.AppendByte(0x5C);
+            else exe.AppendByte(program[i]);
+        }
         string cmd = string.New();
-        if (!Quote(ref cmd, program)) return Err(IoError.Invalid);
+        if (!Quote(ref cmd, exe.AsStr())) return Err(IoError.Invalid);
         foreach (var a in args) {
             cmd.AppendByte(' ');
             if (!Quote(ref cmd, a)) return Err(IoError.Invalid);
@@ -440,7 +473,7 @@ impl IProcess for Process {
             si64[12] = herr;
             *u8 pi = alloc(24);             // PROCESS_INFORMATION
             for (usize i = 0; i < 24; i++) pi[i] = 0;
-            ok = __wincall(W_CREATEPROCESSW, 0, Ptr(wcmd), 0, 0, 1, 0, 0, 0, Ptr(si), Ptr(pi));
+            ok = __wincall(W_CREATEPROCESSW, 0, Ptr(wcmd), 0, 0, 1, 0, 0, Ptr(wdir), Ptr(si), Ptr(pi));
             u32 e = LastError();
             if (fout != 0) Call(W_CLOSEHANDLE, fout, 0, 0, 0, 0, 0);
             if (ferr != 0) Call(W_CLOSEHANDLE, ferr, 0, 0, 0, 0, 0);

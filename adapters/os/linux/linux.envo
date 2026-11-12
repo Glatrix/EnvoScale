@@ -13,6 +13,8 @@ const i64 SYS_DUP2 = 33;
 const i64 SYS_FORK = 57;
 const i64 SYS_EXECVE = 59;
 const i64 SYS_WAIT4 = 61;
+const i64 SYS_GETCWD = 79;
+const i64 SYS_CHDIR = 80;
 const i64 SYS_MKDIR = 83;
 const i64 SYS_RMDIR = 84;
 const i64 SYS_UNLINK = 87;
@@ -276,6 +278,8 @@ impl IEnvironment for Environment {
     usize ArgCount(ref this) => argc();
     str Arg(ref this, usize i) => arg(i);
 
+    string CurrentDir(ref this) => Absolute("");
+
     string? Var(ref this, str name) {
         if (name.Len == 0) return null;
         string all = Environ();
@@ -315,10 +319,26 @@ public struct Process {
     public static Process New() => new Process { Unused = 0 };
 }
 
-// The file to run for program, or "" if there is none.
+// path made absolute, against the working directory.
+string Absolute(str path) {
+    if (path.Len > 0 && path[0] == '/') return string.From(path);
+    string s = string.New();
+    unsafe {
+        *u8 buf = alloc(4096);
+        i64 n = Sys(SYS_GETCWD, Ptr(buf), 4096, 0, 0);
+        if (n <= 1) return string.From(path);
+        for (usize i = 0; i + 1 < n as usize; i++) s.AppendByte(buf[i]);
+    }
+    if (path.Len == 0) return s;
+    if (s.AsStr()[s.Len() - 1] != '/') s.AppendByte('/');
+    s.Append(path);
+    return s;
+}
+
+// The file to run for program, as an absolute path, or "" if there is none.
 string Resolve(str program) {
     if (ct.IndexOfByte(program, '/').IsSome()) {
-        if (Kind(program) == S_IFREG) return string.From(program);
+        if (Kind(program) == S_IFREG) return Absolute(program);
         return string.New();
     }
     Environment env = Environment.New();
@@ -335,7 +355,7 @@ string Resolve(str program) {
         else candidate.Append(ps[at..end]);
         candidate.AppendByte('/');
         candidate.Append(program);
-        if (Kind(candidate.AsStr()) == S_IFREG) return candidate;
+        if (Kind(candidate.AsStr()) == S_IFREG) return Absolute(candidate.AsStr());
         at = end + 1;
     }
     return string.New();
@@ -353,10 +373,12 @@ i64 OpenForChild(str path) {
 }
 
 impl IProcess for Process {
-    Result<i32, IoError> Run(ref this, str program, str[] args, str outPath, str errPath) {
+    Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath) {
+        *u8 wdir = CPath(workDir);
         unsafe {
-            if (CPath(program) as usize == 0) return Err(IoError.Invalid);
+            if (CPath(program) as usize == 0 || wdir as usize == 0) return Err(IoError.Invalid);
         }
+        if (workDir.Len > 0 && Kind(workDir) != S_IFDIR) return Err(IoError.NotFound);
         foreach (var a in args) {
             unsafe {
                 if (CPath(a) as usize == 0) return Err(IoError.Invalid);
@@ -411,6 +433,7 @@ impl IProcess for Process {
                 // the child: its standard streams, then the program
                 if (fout >= 0) Sys(SYS_DUP2, fout, 1, 0, 0);
                 if (ferr >= 0) Sys(SYS_DUP2, ferr, 2, 0, 0);
+                if (workDir.Len > 0 && Sys(SYS_CHDIR, Ptr(wdir), 0, 0, 0) < 0) Sys(SYS_EXIT_GROUP, 127, 0, 0, 0);
                 Sys(SYS_EXECVE, Ptr(path), argv as isize as i64, envp as isize as i64, 0);
                 Sys(SYS_EXIT_GROUP, 127, 0, 0, 0);
             }

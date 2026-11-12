@@ -79,11 +79,11 @@ M4 grew the Windows import table, identically in Stage 1 and Stage 2, so their
 executables stay byte-identical:
 - KERNEL32 slots 0–18 (12–18 are new: the precise system time, the performance counter,
   `DeleteFileW`, `CreateDirectoryW`, `RemoveDirectoryW`, `GetFileAttributesW`);
-- M5 (D28) added slots 19–26: `CreateProcessW`, `WaitForSingleObject`,
+- M5 (D28) added slots 19–27: `CreateProcessW`, `WaitForSingleObject`,
   `GetExitCodeProcess`, `FindFirstFileW`, `FindNextFileW`, `FindClose`,
-  `SetHandleInformation`, `GetEnvironmentVariableW`;
-- slot 27 ends KERNEL32's;
-- slot 28 is ADVAPI32's `SystemFunction036` (RtlGenRandom), the system's random
+  `SetHandleInformation`, `GetEnvironmentVariableW`, `GetCurrentDirectoryW`;
+- slot 28 ends KERNEL32's;
+- slot 29 is ADVAPI32's `SystemFunction036` (RtlGenRandom), the system's random
   generator.
 
 `__wincall` takes the slot and up to 10 arguments (`CreateProcessW` has 10).

@@ -26,8 +26,19 @@ marked retired, never reused.
 <file>:<line>:<col>: error[E0004]: unterminated string literal
 ```
 
-Lines and columns are 1-based; columns count Unicode scalar values (§1.1). Stage 2 adds
-labelled source snippets and `help:` lines (see chapter 5, §5.5).
+Lines and columns are 1-based; columns count Unicode scalar values (§1.1). Every stage
+writes this line, and `envoc` writes only this line, so the stages can be compared. The
+`envo` tool (M5) follows it with the source line, a caret under the column, a `help:`
+line where there is advice, and a pointer to `envo explain`:
+
+```text
+kw.envo:1:8: error[E0101]: expected `;`, found `out`
+  |
+1 | string out = string.New();
+  |        ^
+help: `out` is a keyword, so it cannot be a name; choose another
+  = run `envo explain E0101` for more
+```
 
 ## Lexical (E0001–E0099)
 
@@ -71,6 +82,8 @@ labelled source snippets and `help:` lines (see chapter 5, §5.5).
 | E0211 | `namespace` must come first in its file | [s1.item.1] (Envo-S1) |
 | E0212 | `X` is private to namespace `N` | [s1.item.2] (Envo-S1) |
 | E0213 | unknown namespace `N` | [s1.item.1] (Envo-S1) |
+| E0214 | no module `a.b`: the file `<lib>/lib/a/b/b.envo` does not exist | the `use` path; `envoc --lib` only ([`library.md`](../architecture/library.md), D21) |
+| E0215 | the standard platform cannot use the adapter `os.X` | the `use` path in a file under `lib/` ([`library.md`](../architecture/library.md), D23) |
 
 ## Types (E0300–E0399)
 

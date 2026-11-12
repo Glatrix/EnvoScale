@@ -453,7 +453,7 @@ OpInfo OpBuild(u16 op) {
         58 => { o = OpOf(op, "ret", SH_RET); o.Term = true; o.IntOnly = false; }
         59 => { o = OpOf(op, "panic", SH_PANIC); o.Term = true; }
         60 => { o = OpOf(op, "unreachable", SH_NONE); o.Term = true; }
-        _ => { }
+        _ => {}
     }
     return o;
 }

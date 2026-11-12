@@ -1,0 +1,32 @@
+// envo fmt: indentation by braces and continuations, blank lines.
+struct Point {
+  i64 X;
+        i64 Y;
+
+
+
+  i64 Sum(in this) => this.X
+  + this.Y;
+}
+
+
+u64 Classify(i64 v) {
+
+    if (v < 0)
+    return 0;
+      if (v == 0 || v == 1 ||
+   v == 2) {
+                return 1;
+      }
+    else {
+  return 2;
+    }
+
+}
+
+Point p = new Point {
+X = 1,
+    Y = 2,
+};
+u64 c = Classify(p.Sum(
+    ));

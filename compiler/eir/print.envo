@@ -216,7 +216,7 @@ struct Printer {
         } else {
             // type operand (if the shape has one), then the operands separated by commas
             bool typed = sh == SH_SLOT || sh == SH_BIN || sh == SH_UN || sh == SH_CMP || sh == SH_SELECT ||
-                         sh == SH_LOAD || sh == SH_STORE || sh == SH_ELEM || sh == SH_BOUNDS;
+                sh == SH_LOAD || sh == SH_STORE || sh == SH_ELEM || sh == SH_BOUNDS;
             if (typed) {
                 o.AppendByte(' ');
                 this.Type(m, ref o, inst.Ty);

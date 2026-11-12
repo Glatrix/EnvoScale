@@ -714,7 +714,7 @@ impl Checker {
             this.AppendMangle(ref b, ty.Elem);
             return;
         }
-        b.Append(TextStr(ty.Name));
+        this.AppendTypeName(ref b, t);
         if (ty.NArgs == 0) return;
         b.AppendByte('.');
         AppendDecimal(ref b, ty.NArgs as u64);
@@ -722,6 +722,20 @@ impl Checker {
             b.AppendByte('.');
             this.AppendMangle(ref b, this.EnvGet(ty.Args, i));
         }
+    }
+
+    // The name of named type t (a struct or an enum), prefixed with its namespace as
+    // items' EIR names are, so types of the same name in different namespaces stay apart.
+    public void AppendTypeName(in this, ref string b, u32 t) {
+        Type ty = this.TypeAt(t);
+        if (ty.Sym != 0 && (ty.Kind == TYK_STRUCT || ty.Kind == TYK_ENUM || ty.Kind == TYK_UNION)) {
+            Text ns = this.SymAt(ty.Sym).Ns;
+            if (ns.Len > 0) {
+                b.Append(TextStr(ns));
+                b.AppendByte('.');
+            }
+        }
+        b.Append(TextStr(ty.Name));
     }
 
     // The EIR name of instance i: [owner.]name, then each type argument.
@@ -734,7 +748,7 @@ impl Checker {
             b.AppendByte('.');
         } else if (s.Flags & SF_METHOD != 0) {
             Type ot = this.TypeAt(s.OwnerType);
-            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM || ot.Kind == TYK_UNION) b.Append(TextStr(ot.Name));
+            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM || ot.Kind == TYK_UNION) this.AppendTypeName(ref b, s.OwnerType);
             else this.AppendMangle(ref b, s.OwnerType);
             b.AppendByte('.');
         }

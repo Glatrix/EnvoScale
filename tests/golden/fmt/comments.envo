@@ -1,0 +1,17 @@
+   // envo fmt: comments are kept; a comment line takes the indentation of the code
+   // after it.
+/// A doc comment.
+i64 Twice(i64 v) {
+        // why: an example
+    return v * 2;   // after code: the space before it is kept
+    /* a block comment */
+}
+
+i64 Three() {
+    i64 a = 1; /* inline */ i64 b = 2;
+/* a block comment
+     over lines,
+   copied as it is */
+    return a + b;
+        // before a closing brace
+}

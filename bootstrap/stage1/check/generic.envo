@@ -826,7 +826,7 @@ void BufMangle(*Buf b, *Checker c, u32 t) {
         BufMangle(b, c, ty.Elem);
         return;
     }
-    BufStr(b, ty.Name);
+    BufTypeName(b, c, t);
     if (ty.NArgs == 0) return;
     BufByte(b, '.');
     BufU64(b, ty.NArgs as u64);
@@ -834,6 +834,20 @@ void BufMangle(*Buf b, *Checker c, u32 t) {
         BufByte(b, '.');
         BufMangle(b, c, EnvGet(c, ty.Args, i));
     }
+}
+
+// The name of named type t (a struct or an enum), prefixed with its namespace as items'
+// EIR names are, so types of the same name in different namespaces stay apart.
+void BufTypeName(*Buf b, *Checker c, u32 t) {
+    Type ty = TypeGet(c, t);
+    if (ty.Sym != 0 && (ty.Kind == TYK_STRUCT || ty.Kind == TYK_ENUM || ty.Kind == TYK_UNION)) {
+        str ns = SymGet(c, ty.Sym).Ns;
+        if (ns.Len > 0) {
+            BufStr(b, ns);
+            BufByte(b, '.');
+        }
+    }
+    BufStr(b, ty.Name);
 }
 
 // The EIR name of instance i: [owner.]name, then each type argument.
@@ -847,7 +861,7 @@ str InstName(*Checker c, u32 i) {
             BufByte(&b, '.');
         } else if (s.Flags & SF_METHOD != 0) {
             Type ot = TypeGet(c, s.OwnerType);
-            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM || ot.Kind == TYK_UNION) BufStr(&b, ot.Name);
+            if (ot.Kind == TYK_STRUCT || ot.Kind == TYK_ENUM || ot.Kind == TYK_UNION) BufTypeName(&b, c, s.OwnerType);
             else BufMangle(&b, c, s.OwnerType);
             BufByte(&b, '.');
         }

@@ -1,0 +1,20 @@
+// envo fmt: spacing around punctuation; `<`, `*`, `-` and `&` keep the source's choice.
+use core.text as ct;
+use alloc.map.{Map};
+
+i64 Add(i64 a,i64 b)=>a+b;
+
+void Main( ) {
+    i64 x=Add( 1 ,2 );
+    i64 y = - x;
+    x+=y ;x-=1;
+    bool ok=x>=0&&y<=0||x!=y;
+    List<u64> list = List<u64>.New();
+    for(u64 i=0;i<3;i++){list.Push(i * 2);}
+    while(false){}
+    if(ok){x=x*-1;}
+    u64? maybe = null;
+    u64 v = maybe??7;
+    str s = ct.Trim( "  a  " );
+    unsafe { *u8 p = alloc(4); p[0] = 1; }
+}

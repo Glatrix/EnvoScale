@@ -1,0 +1,356 @@
+// envo: the EnvoScale tool (PLAN D26-D30; tools/envo/README.md). One binary that holds
+// the compiler (compiler/, without its entry file) and creates, builds, runs, checks
+// and tests packages. Its top-level statements, at the end of this file, are main; the
+// other files are listed in tools/envo/files.txt.
+use std.fs;
+use std.env;
+use std.path;
+use std.process;
+use core.text as ct;
+use alloc.text;
+use envo.eon;
+use ports.{IoError};
+use envoc.diag;
+
+const str ENVO_VERSION = "0.5.0-dev";
+const u32 TGT_LINUX = 1;
+const u32 TGT_WINDOWS = 2;
+
+void EnvoUsage(i32 fd) {
+    write(fd, "usage: envo <command> [arguments]\n");
+    write(fd, "\n");
+    write(fd, "commands:\n");
+    write(fd, "  new <name>              create a package in the folder <name>\n");
+    write(fd, "  build [dir | file.envo...] [-O0|-O2] [-o <output>] [--os none] [--target <t>]\n");
+    write(fd, "                          build a package's program (dir/build/<name>), or the\n");
+    write(fd, "                          program in the given files\n");
+    write(fd, "  run [dir | file.envo...] [build options] [-- <arguments>]\n");
+    write(fd, "                          build, then run with the arguments\n");
+    write(fd, "  check [dir | file.envo...] [--os none]\n");
+    write(fd, "                          check names, types and ownership without building\n");
+    write(fd, "  test [path...] [-O0] [-v]\n");
+    write(fd, "                          build and run the test programs under each path\n");
+    write(fd, "                          (default: the current directory)\n");
+    write(fd, "  fmt [path...] [--check | --stdout]\n");
+    write(fd, "                          lay out .envo files in the canonical format\n");
+    write(fd, "  explain <code>          explain a diagnostic code, such as E0214\n");
+    write(fd, "  version                 print the version\n");
+    write(fd, "  help                    print this message\n");
+    write(fd, "\n");
+    write(fd, "The library is found through ENVO_HOME, or above the envo executable or the\n");
+    write(fd, "current directory: the folder that holds lib/ and adapters/.\n");
+}
+
+// Reports a problem with the command line or the environment, and exits with code.
+void EnvoFail(str msg, i32 code) {
+    string e = string.From("envo: error: ");
+    e.Append(msg);
+    e.AppendByte(10);
+    write(2, e.AsStr());
+    exit(code);
+}
+
+bool Eq(str a, str b) => ct.Compare(a, b) == 0;
+
+// What an IoError means, for a message.
+str IoErrorText(IoError e) {
+    if (e == IoError.NotFound) return "not found";
+    if (e == IoError.Exists) return "already exists";
+    if (e == IoError.NotEmpty) return "not empty";
+    if (e == IoError.Denied) return "permission denied";
+    if (e == IoError.Invalid) return "not a valid name or argument";
+    return "the system reported an error";
+}
+
+// Is dir the EnvoScale library root (it holds lib/ports/ports.envo)?
+bool IsHome(str dir) {
+    string p = path.Join(dir, "lib/ports/ports.envo");
+    return fs.IsFile(p.AsStr());
+}
+
+// dir and up to `levels` folders above it, the first that is the library root, or "".
+string HomeAbove(str dir, usize levels) {
+    string d = string.From(dir);
+    for (usize i = 0; i <= levels; i++) {
+        if (IsHome(d.AsStr())) return d;
+        string up = path.Join(d.AsStr(), "..");
+        d = up;
+    }
+    return string.New();
+}
+
+// The folder that holds lib/ and adapters/ (D21): ENVO_HOME, else above the executable,
+// else above the working directory.
+string EnvoHome() {
+    string? set = env.Var("ENVO_HOME");
+    if (set.IsSome()) {
+        string h = set.Unwrap();
+        if (IsHome(h.AsStr())) return h;
+        EnvoFail("ENVO_HOME does not name the EnvoScale library (no lib/ports/ports.envo)", 2);
+    }
+    str exe = env.Arg(0);
+    str exeDir = path.Parent(exe);
+    if (exeDir.Len > 0) {
+        string h = HomeAbove(exeDir, 4);
+        if (h.Len() > 0) return h;
+    }
+    string h = HomeAbove(".", 8);
+    if (h.Len() > 0) return h;
+    EnvoFail("cannot find the EnvoScale library; set ENVO_HOME to the folder that holds lib/", 2);
+    return string.New();
+}
+
+// The options shared by build, run and check.
+struct BuildOpts {
+    List<string> Inputs;    // a package folder, or .envo files
+    string Output;
+    u32 Target;
+    bool Opt;
+    string Os;
+    List<string> RunArgs;   // after `--`
+}
+
+BuildOpts ParseOpts(usize from) {
+    BuildOpts o = new BuildOpts {
+        Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
+        Os = string.New(), RunArgs = List<string>.New(),
+    };
+    usize i = from;
+    while (i < env.ArgCount()) {
+        str a = env.Arg(i);
+        if (Eq(a, "--")) {
+            for (usize k = i + 1; k < env.ArgCount(); k++) o.RunArgs.Push(string.From(env.Arg(k)));
+            break;
+        }
+        if (Eq(a, "-O2") || Eq(a, "-O0")) {
+            o.Opt = Eq(a, "-O2");
+            i++;
+        } else if ((Eq(a, "-o") || Eq(a, "--os") || Eq(a, "--target")) && i + 1 < env.ArgCount()) {
+            str v = env.Arg(i + 1);
+            if (Eq(a, "-o")) o.Output = string.From(v);
+            if (Eq(a, "--os")) o.Os = string.From(v);
+            if (Eq(a, "--target")) {
+                if (Eq(v, "x86_64-windows")) o.Target = TGT_WINDOWS;
+                else if (Eq(v, "x86_64-linux")) o.Target = TGT_LINUX;
+                else EnvoFail("--target must be x86_64-windows or x86_64-linux", 2);
+            }
+            i += 2;
+        } else if (a.Len > 0 && a[0] == '-') {
+            string msg = string.From("unknown option '");
+            msg.Append(a);
+            msg.Append("'; run `envo help` for the list");
+            EnvoFail(msg.AsStr(), 2);
+        } else {
+            o.Inputs.Push(string.From(a));
+            i++;
+        }
+    }
+    return o;
+}
+
+// Are the inputs source files (rather than one package folder)?
+bool FileInputs(in BuildOpts o) {
+    if (o.Inputs.Len() == 0) return false;
+    foreach (var f in o.Inputs.AsSlice()) {
+        if (!ct.EndsWith(f.AsStr(), ".envo")) return false;
+    }
+    return true;
+}
+
+string ExeName(str stem, u32 target) {
+    string n = string.From(stem);
+    if (target == TGT_WINDOWS) n.Append(".exe");
+    return n;
+}
+
+// The files to compile and the executable to write, for build and run.
+struct Plan {
+    List<string> Files;
+    string Output;
+}
+
+Plan PlanBuild(in BuildOpts o) {
+    Plan p = new Plan { Files = List<string>.New(), Output = string.New() };
+    if (FileInputs(o)) {
+        foreach (var f in o.Inputs.AsSlice()) p.Files.Push(string.From(f.AsStr()));
+        if (o.Output.Len() > 0) p.Output = string.From(o.Output.AsStr());
+        else p.Output = ExeName(path.Stem(o.Inputs.AsSlice()[0].AsStr()), o.Target);
+        return p;
+    }
+    if (o.Inputs.Len() > 1) EnvoFail("give one package folder, or .envo files", 2);
+    str dir = ".";
+    if (o.Inputs.Len() == 1) dir = o.Inputs.AsSlice()[0].AsStr();
+    Package pkg = ReadPackage(dir);
+    if (!pkg.HasMain) {
+        string msg = string.From("the package `");
+        msg.Append(pkg.Name.AsStr());
+        msg.Append("` has no main.envo, so there is no program to build");
+        EnvoFail(msg.AsStr(), 1);
+    }
+    foreach (var f in pkg.Sources.AsSlice()) p.Files.Push(string.From(f.AsStr()));
+    if (o.Output.Len() > 0) {
+        p.Output = string.From(o.Output.AsStr());
+    } else {
+        string out_dir = path.Join(dir, "build");
+        fs.CreateDirAll(out_dir.AsStr());
+        string exe = ExeName(pkg.Name.AsStr(), o.Target);
+        p.Output = path.Join(out_dir.AsStr(), exe.AsStr());
+    }
+    return p;
+}
+
+i32 CmdEnvoBuild(usize from, bool quiet) {
+    BuildOpts o = ParseOpts(from);
+    if (o.RunArgs.Len() > 0) EnvoFail("`--` and program arguments go with `envo run`", 2);
+    Plan p = PlanBuild(o);
+    string home = EnvoHome();
+    i32 code = BuildProgram(p.Files, p.Output.AsStr(), o.Target, o.Opt, home.AsStr(), o.Os.AsStr(), "");
+    if (code == 0 && !quiet) {
+        write(1, "built ");
+        print(p.Output.AsStr());
+    }
+    return code;
+}
+
+i32 CmdEnvoRun(usize from) {
+    BuildOpts o = ParseOpts(from);
+    if (o.Target != HostTargetCode()) EnvoFail("`envo run` builds for this machine; leave out --target", 2);
+    Plan p = PlanBuild(o);
+    string home = EnvoHome();
+    i32 code = BuildProgram(p.Files, p.Output.AsStr(), o.Target, o.Opt, home.AsStr(), o.Os.AsStr(), "");
+    if (code != 0) return code;
+    List<str> args = List<str>.New();
+    foreach (var a in o.RunArgs.AsSlice()) args.Push(a.AsStr());
+    // a bare name would be looked up on PATH: name the file in this folder
+    string program = string.New();
+    if (!path.IsAbsolute(p.Output.AsStr()) && ct.IndexOfByte(p.Output.AsStr(), '/').IsNone() && ct.IndexOfByte(p.Output.AsStr(), 0x5C).IsNone()) program.Append("./");
+    program.Append(p.Output.AsStr());
+    Result<i32, IoError> r = process.Run(program.AsStr(), args.AsSlice());
+    match r {
+        Ok(exitCode) => { return exitCode; }
+        Err(e) => {
+            string msg = string.From("cannot run ");
+            msg.Append(program.AsStr());
+            msg.Append(": ");
+            msg.Append(IoErrorText(e));
+            EnvoFail(msg.AsStr(), 1);
+        }
+    }
+    return 1;
+}
+
+i32 CmdEnvoCheck(usize from) {
+    BuildOpts o = ParseOpts(from);
+    List<string> files = List<string>.New();
+    if (FileInputs(o)) {
+        foreach (var f in o.Inputs.AsSlice()) files.Push(string.From(f.AsStr()));
+    } else {
+        if (o.Inputs.Len() > 1) EnvoFail("give one package folder, or .envo files", 2);
+        str dir = ".";
+        if (o.Inputs.Len() == 1) dir = o.Inputs.AsSlice()[0].AsStr();
+        Package pkg = ReadPackage(dir);
+        foreach (var f in pkg.Sources.AsSlice()) files.Push(string.From(f.AsStr()));
+        if (files.Len() == 0) EnvoFail("the package has no source files", 1);
+    }
+    string home = EnvoHome();
+    return CheckProgram(files, home.AsStr(), o.Os.AsStr(), o.Target);
+}
+
+// A package name: lowercase letters, digits, `-` and `_`, starting with a letter.
+bool GoodName(str name) {
+    if (name.Len == 0 || !ct.IsLower(name[0])) return false;
+    for (usize i = 0; i < name.Len; i++) {
+        u8 c = name[i];
+        if (!ct.IsLower(c) && !ct.IsDigit(c) && c != '-' && c != '_') return false;
+    }
+    return true;
+}
+
+void WriteNew(str file, str content) {
+    if (fs.WriteText(file, content).IsErr()) {
+        string msg = string.From("cannot write ");
+        msg.Append(file);
+        EnvoFail(msg.AsStr(), 1);
+    }
+}
+
+i32 CmdEnvoNew(usize from) {
+    if (env.ArgCount() != from + 1) EnvoFail("usage: envo new <name>", 2);
+    str name = env.Arg(from);
+    if (!GoodName(name)) EnvoFail("a package name has lowercase letters, digits, `-` and `_`, and starts with a letter", 2);
+    if (fs.Exists(name)) {
+        string msg = string.From("`");
+        msg.Append(name);
+        msg.Append("` already exists");
+        EnvoFail(msg.AsStr(), 1);
+    }
+    if (fs.CreateDir(name).IsErr()) EnvoFail("cannot create the package folder", 1);
+    string tests = path.Join(name, "tests");
+    fs.CreateDir(tests.AsStr());
+    eon.Value doc = eon.Value.NewBlock();
+    eon.Value pkg = eon.Value.NewBlock();
+    pkg.Set("name", eon.Value.OfStr(name));
+    pkg.Set("version", eon.Value.OfStr("0.1.0"));
+    pkg.Set("edition", eon.Value.OfStr("2027"));
+    doc.Set("package", pkg);
+    doc.Set("dependencies", eon.Value.NewBlock());
+    string manifest = eon.Write(doc);
+    WriteNew(path.Join(name, "envo.envon").AsStr(), manifest.AsStr());
+    string greet = string.From("// The package's own code: every .envo file outside tests/ is compiled with main.envo\n");
+    greet.Append("// and with each test.\n\n");
+    greet.Append("string Greeting(str who) {\n");
+    greet.Append("    string s = string.From(\"Hello, \");\n");
+    greet.Append("    s.Append(who);\n");
+    greet.Append("    s.Append(\"!\");\n");
+    greet.Append("    return s;\n");
+    greet.Append("}\n");
+    WriteNew(path.Join(name, "greet.envo").AsStr(), greet.AsStr());
+    string main = string.From("// The program: `envo run` builds and runs it.\n");
+    main.Append("print(Greeting(\"");
+    main.Append(name);
+    main.Append("\").AsStr());\n");
+    WriteNew(path.Join(name, "main.envo").AsStr(), main.AsStr());
+    string test = string.From("// A test program: `envo test` builds it with the package's code (not main.envo),\n");
+    test.Append("// runs it, and compares what it prints with the `expect:` lines.\n");
+    test.Append("// expect: Hello, test!\n");
+    test.Append("print(Greeting(\"test\").AsStr());\n");
+    WriteNew(path.Join(tests.AsStr(), "greet.envo").AsStr(), test.AsStr());
+    write(1, "created package `");
+    write(1, name);
+    print("`: envo.envon, main.envo, greet.envo, tests/greet.envo");
+    return 0;
+}
+
+// ------------------------------------------------------------------ main
+
+// compile errors from envo show the source line, a caret and advice
+EnableRichDiagnostics();
+if (env.ArgCount() < 2) {
+    EnvoUsage(2);
+    return 2;
+}
+str command = env.Arg(1);
+if (Eq(command, "version") || Eq(command, "--version")) {
+    write(1, "envo ");
+    write(1, ENVO_VERSION);
+    write(1, " (EnvoScale, Envo-S1; ");
+    write(1, HostTarget());
+    print(")");
+    return 0;
+}
+if (Eq(command, "help") || Eq(command, "--help")) {
+    EnvoUsage(1);
+    return 0;
+}
+if (Eq(command, "new")) return CmdEnvoNew(2);
+if (Eq(command, "build")) return CmdEnvoBuild(2, false);
+if (Eq(command, "run")) return CmdEnvoRun(2);
+if (Eq(command, "check")) return CmdEnvoCheck(2);
+if (Eq(command, "test")) return CmdEnvoTest(2);
+if (Eq(command, "explain")) return CmdEnvoExplain(2);
+if (Eq(command, "fmt")) return CmdEnvoFmt(2);
+string msg = string.From("unknown command '");
+msg.Append(command);
+msg.Append("'; run `envo help` for the list");
+EnvoFail(msg.AsStr(), 2);
+return 2;

@@ -4,7 +4,8 @@
 |---|---|---|
 | [`spec/`](spec/README.md) | One folder per spec chapter; `.envo` files with `// expect:` / `// expect-error:` | `bootstrap.* test` (lexical chapter) |
 | [`golden/`](golden/README.md) | Inputs with expected outputs (token dumps, later AST/EIR/asm/diagnostics) | `bootstrap.* test` (lexer) |
-| [`conformance/`](conformance/README.md) | Port/adapter conformance suites | M4 |
+| [`conformance/`](conformance/README.md) | Port/adapter conformance suites | `envo test tests/conformance` |
+| [`envo/`](envo/README.md) | The `envo` tool's commands, end to end | `bootstrap.* test` |
 | [`bootstrap/`](bootstrap/README.md) | Stage equivalence and fixed-point checks | M2/M3 |
 | [`diff/`](diff/README.md) | `-O0` vs `-O3`, AOT vs script, GPU adapter vs software | M3+ |
 | [`fuzz/`](fuzz/README.md) | Fuzz corpora | M13 |

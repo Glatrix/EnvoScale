@@ -149,7 +149,7 @@ struct Lexer {
             E_CHAR_LENGTH => msg = "character literal must contain exactly one character",
             E_BAD_UNICODE_ESCAPE => msg = "invalid Unicode escape",
             E_CONTROL_CHAR => msg = "control character in literal; use an escape sequence",
-            _ => { }
+            _ => {}
         }
         FailAt(this.Path, this.Src, off, code, msg);
     }
@@ -162,7 +162,7 @@ struct Lexer {
                 E_CORE_INTERPOLATION => msg = "interpolated strings are not part of Envo-Core",
                 E_CORE_RAW_STRING => msg = "raw string literals are not part of Envo-Core",
                 E_CORE_DIRECTIVE => msg = "directives are not part of Envo-Core",
-                _ => { }
+                _ => {}
             }
             FailAt(this.Path, this.Src, off, coreCode, msg);
         }
@@ -171,7 +171,7 @@ struct Lexer {
             E_CORE_INTERPOLATION => what = "not part of Envo-S1: interpolated strings",
             E_CORE_RAW_STRING => what = "not part of Envo-S1: raw string literals",
             E_CORE_DIRECTIVE => what = "not part of Envo-S1: directives",
-            _ => { }
+            _ => {}
         }
         FailAt(this.Path, this.Src, off, E_NOT_S1, what);
     }
@@ -285,7 +285,7 @@ struct Lexer {
                         this.Pos = start + len;
                         return this.Emit(k, start);
                     }
-                    None => { }
+                    None => {}
                 }
             }
             len--;

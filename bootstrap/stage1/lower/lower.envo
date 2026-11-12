@@ -246,15 +246,13 @@ u32 LType(*Lower l, u32 t) {
     } else if (ty.Kind == TYK_ARRAY) {
         r = EArrayType(m, LType(l, ty.Elem), ty.Count);
     } else {
-        // a struct: its fields in order, with C layout like Stage 0; a generic instance is
-        // named after its arguments
-        str name = ty.Name;
-        if (ty.NArgs > 0) {
-            Buf b = BufNew(32);
-            unsafe {
-                BufMangle(&b, c, t);
-                name = BufCopy(&b);
-            }
+        // a struct: its fields in order, with C layout like Stage 0; named with its
+        // namespace, and a generic instance after its arguments
+        str name = "";
+        Buf b = BufNew(32);
+        unsafe {
+            BufMangle(&b, c, t);
+            name = BufCopy(&b);
         }
         r = EStructType(m, name);
         unsafe { MemStoreU32(VecAt(&l.TypeIds, t as usize), r); }

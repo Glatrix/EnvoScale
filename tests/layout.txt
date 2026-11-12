@@ -125,6 +125,7 @@ tests/bench
 tests/bootstrap
 tests/conformance
 tests/diff
+tests/envo
 tests/fuzz
 tests/golden
 tests/spec

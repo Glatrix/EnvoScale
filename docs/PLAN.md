@@ -156,10 +156,10 @@ diagnostics to editors over LSP (D30); CI uses it for the package tests (D29).
 |---|---|---|---|
 | [5.1](https://github.com/envoscale/EnvoScale/issues/88) | `FileSystem.List` and the `Process` port (D28), with reference and native adapters and conformance suites | `tests/conformance/` | done |
 | [5.2](https://github.com/envoscale/EnvoScale/issues/89) | `envo.eon`: EON reader and writer for manifests | `lib/envo/eon/tests/` | done |
-| [5.3](https://github.com/envoscale/EnvoScale/issues/90) | The compiler as a library (`envoc.build`) and packages (D27) | `tests/packages/` | |
-| [5.4](https://github.com/envoscale/EnvoScale/issues/91) | `envo`: `new`, `build`, `run`, `test`, `check`, `explain`, `version` | `tests/envo/` | |
-| [5.5](https://github.com/envoscale/EnvoScale/issues/92) | Diagnostics with a labelled source line and `help:` notes; `envo explain` | the spec suites | |
-| [5.6](https://github.com/envoscale/EnvoScale/issues/93) | `envo fmt`: one canonical format, comments kept | `tests/golden/fmt/` | |
+| [5.3](https://github.com/envoscale/EnvoScale/issues/90) | The compiler as a library (`envoc.build`) and packages (D27) | `tests/envo/` | done |
+| [5.4](https://github.com/envoscale/EnvoScale/issues/91) | `envo`: `new`, `build`, `run`, `test`, `check`, `explain`, `version` | `tests/envo/` | done |
+| [5.5](https://github.com/envoscale/EnvoScale/issues/92) | Diagnostics with a labelled source line and `help:` notes; `envo explain` | `tests/envo/` | done |
+| [5.6](https://github.com/envoscale/EnvoScale/issues/93) | `envo fmt`: one canonical format, comments kept | `tests/golden/fmt/` | done |
 | [5.7](https://github.com/envoscale/EnvoScale/issues/94) | `envo lsp`: diagnostics over JSON-RPC (D30), with `envo.json` | `tests/lsp/` | |
 | [5.8](https://github.com/envoscale/EnvoScale/issues/95) | CI on `envo test` (D29); M5 complete | CI | |
 

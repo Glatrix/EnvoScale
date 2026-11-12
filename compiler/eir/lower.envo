@@ -260,14 +260,11 @@ public struct Lower {
             u32 elem = this.LType(ty.Elem);
             r = this.M.ArrayType(elem, ty.Count);
         } else {
-            // a struct: its fields in order, with C layout; a generic instance is named
-            // after its arguments
-            Text name = ty.Name;
-            if (ty.NArgs > 0) {
-                string b = string.New();
-                this.C.AppendMangle(ref b, t);
-                name = this.M.Keep(b);
-            }
+            // a struct: its fields in order, with C layout; named with its namespace, and a
+            // generic instance after its arguments
+            string b = string.New();
+            this.C.AppendMangle(ref b, t);
+            Text name = this.M.Keep(b);
             r = this.M.StructType(name);
             this.TypeIds.Set(t as usize, r);
             u32 f = this.C.NodeAt(this.C.SymAt(ty.Sym).Node).A;

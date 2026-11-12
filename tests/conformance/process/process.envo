@@ -57,7 +57,7 @@ void Run<P, F>(ref P proc, ref F fs, str self) where P : IProcess, F : IFileSyst
     args.Push("back\\slash\\");
     args.Push("tab\there");
     args.Push("caf\u{e9}");
-    Result<i32, IoError> r = proc.Run(self, args.AsSlice(), outFile, errFile);
+    Result<i32, IoError> r = proc.Run(self, args.AsSlice(), "", outFile, errFile);
     Check(r.IsOk(), "Run");
     if (r.IsOk()) Check(r.Unwrap() == 7, "the exit code");
     Check(ReadsAs(ref fs, outFile, "child\ntwo words\n\na \"quoted\" word\nback\\slash\\\ntab\there\ncaf\u{e9}\n"), "standard output goes to its file, the arguments as given");
@@ -65,14 +65,15 @@ void Run<P, F>(ref P proc, ref F fs, str self) where P : IProcess, F : IFileSyst
 
     List<str> one = List<str>.New();
     one.Push("child");
-    Result<i32, IoError> both = proc.Run(self, one.AsSlice(), outFile, outFile);
+    Result<i32, IoError> both = proc.Run(self, one.AsSlice(), dir, outFile, outFile);
     Check(both.IsOk() && both.Unwrap() == 1, "Run with one argument");
-    Check(ReadsAs(ref fs, outFile, "child\nerr\n"), "both streams to one file, the file replaced");
+    Check(ReadsAs(ref fs, outFile, "child\nerr\n"), "both streams to one file, the file replaced, relative to this program's directory");
 
     List<str> none = List<str>.New();
-    Check(IsErr(proc.Run("conformance-no-such-program", none.AsSlice(), outFile, ""), IoError.NotFound), "a missing program is NotFound");
-    Check(IsErr(proc.Run(self, one.AsSlice(), "conformance-proc/missing/out.txt", ""), IoError.NotFound), "an output file without its directory is NotFound");
-    Check(IsErr(proc.Run("bad\x00name", none.AsSlice(), "", ""), IoError.Invalid), "a program name with a NUL byte is Invalid");
+    Check(IsErr(proc.Run("conformance-no-such-program", none.AsSlice(), "", outFile, ""), IoError.NotFound), "a missing program is NotFound");
+    Check(IsErr(proc.Run(self, one.AsSlice(), "", "conformance-proc/missing/out.txt", ""), IoError.NotFound), "an output file without its directory is NotFound");
+    Check(IsErr(proc.Run(self, one.AsSlice(), "conformance-proc/missing", outFile, ""), IoError.NotFound), "a missing working directory is NotFound");
+    Check(IsErr(proc.Run("bad\x00name", none.AsSlice(), "", "", ""), IoError.Invalid), "a program name with a NUL byte is Invalid");
 
     Check(fs.Delete(outFile).IsOk() && fs.Delete(errFile).IsOk() && fs.RemoveDir(dir).IsOk(), "clean up");
 }

@@ -572,7 +572,7 @@ impl Parser {
     bool StartsExpr(in this) {
         u16 k = this.Kind();
         return !(k == TK_RBRACKET || k == TK_RPAREN || k == TK_COMMA || k == TK_SEMI || k == TK_RBRACE ||
-                 k == TK_LBRACE || k == TK_EOF || k == TK_COLON || k == TK_FAT_ARROW);
+            k == TK_LBRACE || k == TK_EOF || k == TK_COLON || k == TK_FAT_ARROW);
     }
 
     u32 ParseRange(ref this) {

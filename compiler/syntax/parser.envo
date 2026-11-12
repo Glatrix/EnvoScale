@@ -338,6 +338,13 @@ struct Parser {
 
     // E0101 at the current token: "expected <what>, found <token>".
     void ErrExpected(in this, str what) {
+        u16 k = this.Toks.Get(this.Pos).Kind;
+        if (k >= TK_KW_FIRST && k <= TK_KW_LAST) {
+            string h = string.From("`");
+            h.Append(this.TokText(this.Pos));
+            h.Append("` is a keyword, so it cannot be a name; choose another");
+            SetHelp(h.AsStr());
+        }
         string b = string.From("expected ");
         b.Append(what);
         b.Append(", found ");
@@ -375,7 +382,7 @@ struct Parser {
             E_BAD_ASSIGN_TARGET => msg = "invalid target for assignment",
             E_TOO_DEEP => msg = "nested too deeply (Stage 1 limit: 256 levels)",
             E_ENTRY_ONLY => msg = "top-level statements are only allowed in the entry file (the first file given)",
-            _ => { }
+            _ => {}
         }
         this.FailTok(tok, code, msg);
     }

@@ -566,7 +566,7 @@ u32 ParseCond(*Parser p) {
 bool PStartsExpr(*Parser p) {
     u16 k = PKind(p);
     return !(k == TK_RBRACKET || k == TK_RPAREN || k == TK_COMMA || k == TK_SEMI || k == TK_RBRACE ||
-             k == TK_LBRACE || k == TK_EOF || k == TK_COLON || k == TK_FAT_ARROW);
+        k == TK_LBRACE || k == TK_EOF || k == TK_COLON || k == TK_FAT_ARROW);
 }
 
 u32 ParseRange(*Parser p) {

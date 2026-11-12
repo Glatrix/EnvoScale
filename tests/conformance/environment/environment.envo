@@ -16,6 +16,8 @@ void Run<E>(ref E env) where E : IEnvironment {
     Check(env.Arg(0).Len > 0, "the program has a name");
     Check(env.Var("ENVO_CONFORMANCE_NOT_SET").IsNone(), "a variable that is not set");
     Check(env.Var("").IsNone(), "a variable without a name");
+    string cwd = env.CurrentDir();
+    Check(cwd.Len() > 0 && (cwd.AsStr()[0] == '/' || (cwd.Len() >= 3 && cwd.AsStr()[1] == ':')), "the working directory is absolute");
 }
 
 var env = platform.Environment();

@@ -1,0 +1,151 @@
+// The compiler as a library (PLAN D26, "envoc.build"): envoc's commands and the `envo`
+// tool (tools/envo) both compile through these functions. They are top-level, like the
+// rest of the driver, because the embedded runtime (runtime.envo) and the library loader
+// (library.envo) are. A compile error is reported in the shared format on stderr and
+// ends the process with exit code 1 (compiler/diag).
+
+use envoc.util;
+use envoc.diag;
+use envoc.syntax;
+use envoc.sema;
+use envoc.eir;
+use envoc.lower;
+use envoc.x64;
+use envoc.opt;
+
+const usize MAX_SOURCE = 16 << 20;      // 16 MiB per file, as in Stages 0 and 1
+
+// The target this program runs on: Linux has /proc/self/exe.
+str HostTarget() {
+    i32 fd = open("/proc/self/exe", 0);
+    if (fd >= 0) {
+        close(fd);
+        return "x86_64-linux";
+    }
+    return "x86_64-windows";
+}
+
+u32 HostTargetCode() {
+    if (Same(HostTarget(), "x86_64-windows")) return TARGET_WINDOWS;
+    return TARGET_LINUX;
+}
+
+// Reads the source file at path into src, without a leading byte order mark, and returns
+// its index. Reports a file that cannot be read, and exits.
+usize LoadSource(ref Sources src, str path) {
+    string? read = ReadFile(path);
+    if (read.IsNone()) {
+        string msg = string.From("cannot open '");
+        msg.Append(path);
+        msg.AppendByte(0x27);
+        ToolFail(msg, EXIT_ERRORS);
+    }
+    string text = read.Unwrap();
+    if (text.Len() > MAX_SOURCE) {
+        string msg = string.From("file too large: '");
+        msg.Append(path);
+        msg.Append("' (envoc accepts source files up to 16 MiB)");
+        ToolFail(msg, EXIT_ERRORS);
+    }
+    str t = text.AsStr();
+    if (t.Len >= 3 && t[0] == 0xEF && t[1] == 0xBB && t[2] == 0xBF) {
+        return src.Add(path, string.From(t[3..t.Len]));
+    }
+    return src.Add(path, text);
+}
+
+// Lexes every file in src, in order, into one token list; starts gets each file's first
+// token.
+List<Token> LexAll(in Sources src, ref List<usize> starts, bool core) {
+    LexTables tables = LexTables.New();
+    List<Token> all = List<Token>.New();
+    for (usize f = 0; f < src.Count(); f++) {
+        starts.Push(all.Len());
+        List<Token> toks = Lex(tables, src.Path(f), src.Text(f), f as u32, core);
+        foreach (var t in toks.AsSlice()) all.Push(t);
+    }
+    return all;
+}
+
+// Writes an output file, or reports that it can't.
+i32 WriteOut(str path, in string data, bool executable) {
+    if (!WriteFile(path, data, executable)) {
+        write(2, "envoc: error: cannot write '");
+        write(2, path);
+        write(2, "'\n");
+        return EXIT_ERRORS;
+    }
+    return EXIT_OK;
+}
+
+// The adapters `platform` binds: os, or the target's operating system (D23).
+str PlatformOs(str os, u32 target) {
+    if (os.Len == 0) {
+        if (target == TARGET_WINDOWS) return "windows";
+        return "linux";
+    }
+    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && target == TARGET_LINUX);
+    if (!ok) ToolFail("--os must be `none` or the target's operating system", EXIT_USAGE);
+    return os;
+}
+
+// Compiles the program in the files at paths, with the runtime for target, to an EIR
+// module. With a unit (an index into paths), the module is that file's object: other
+// files' functions are only declared, and the runtime goes with the entry file (unit 0).
+// lib is the folder holding lib/ and adapters/ (D21), "" for none; os as for PlatformOs.
+Module CompileProgram(ref Sources src, in List<string> paths, u32 target, bool core, bool verify, i32 unit, bool opt, str lib, str os) {
+    foreach (var p in paths.AsSlice()) LoadSource(ref src, p.AsStr());
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), core);
+    src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
+    if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
+    else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
+    u32 prelude = 0xFFFFFFFF;
+    if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
+    List<usize> starts = List<usize>.New();
+    List<Token> toks = LexAll(src, ref starts, core);
+    Tree tree = Parse(src, toks, starts, core);
+    Checker c = Checker.New(src, tree, core, true);
+    c.PreludeFile = prelude;
+    c.CheckProgram();
+    Lower l = Lower.New(c, target);
+    l.LowerProgram();
+    if (unit >= 0) {
+        List<bool> owned = List<bool>.New();
+        for (usize i = 0; i < src.Count(); i++) owned.Push(i == unit as usize || (unit == 0 && i >= paths.Len()));
+        l.KeepUnit(owned, unit == 0);
+    }
+    Module m = l.TakeModule();
+    if (verify) m.Verify();
+    if (opt) {
+        Optimize(ref m);
+        m.Verify();
+    }
+    return m;
+}
+
+// Compiles the program in the files at paths to an executable at output (and a link map
+// at mapPath unless it is ""). Returns the exit code.
+i32 BuildProgram(in List<string> paths, str output, u32 target, bool opt, str lib, str os, str mapPath) {
+    Sources src = Sources.New();
+    Module m = CompileProgram(ref src, paths, target, false, true, -1, opt, lib, os);
+    string map = string.New();
+    string image = GenModule(ref m, target, opt, mapPath.Len > 0, ref map);
+    if (mapPath.Len > 0 && WriteOut(mapPath, map, false) != EXIT_OK) return EXIT_ERRORS;
+    return WriteOut(output, image, true);
+}
+
+// Checks the program in the files at paths (names, types, ownership) without compiling
+// it. Returns EXIT_OK; an error ends the process.
+i32 CheckProgram(in List<string> paths, str lib, str os, u32 target) {
+    Sources src = Sources.New();
+    foreach (var p in paths.AsSlice()) LoadSource(ref src, p.AsStr());
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), false);
+    u32 prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
+    List<usize> starts = List<usize>.New();
+    List<Token> toks = LexAll(src, ref starts, false);
+    Tree tree = Parse(src, toks, starts, false);
+    Checker c = Checker.New(src, tree, false, lib.Len > 0);
+    c.PreludeFile = prelude;
+    c.CheckProgram();
+    return EXIT_OK;
+}

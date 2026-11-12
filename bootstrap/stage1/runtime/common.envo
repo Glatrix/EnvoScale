@@ -72,7 +72,7 @@ void __rt_close(i32 fd) {
 
 // `free` (Envo-S1): the heap is a bump allocator that never frees, which envo-s1.md
 // section 7 allows.
-void __rt_free(*u8 p) { }
+void __rt_free(*u8 p) {}
 
 usize __rt_argc() {
     unsafe { return __rt_argc_value; }

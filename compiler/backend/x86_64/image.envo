@@ -1,8 +1,8 @@
 // Executable images: one read-write-execute section at IMAGE_BASE. Follows Stage 1's
 // bootstrap/stage1/x64/image.envo. Windows images import from KERNEL32.dll and
 // ADVAPI32.dll; import k is the k-th slot of the address table, reached through `wincall`:
-// KERNEL32's functions are 0-26, slot 27 ends them, and ADVAPI32's SystemFunction036
-// (RtlGenRandom) is slot 28 (PLAN D25, D28).
+// KERNEL32's functions are 0-27, slot 28 ends them, and ADVAPI32's SystemFunction036
+// (RtlGenRandom) is slot 29 (PLAN D25, D28).
 namespace envoc.x64;
 
 use envoc.util;
@@ -15,7 +15,7 @@ const u64 PE_SECTION_RVA = 0x1000;
 const u32 TARGET_LINUX = 1;
 const u32 TARGET_WINDOWS = 2;
 
-const u32 WIN_IMPORTS = 27;        // from KERNEL32.dll; then ADVAPI32's one, at slot 28
+const u32 WIN_IMPORTS = 28;        // from KERNEL32.dll; then ADVAPI32's one, at slot 29
 
 // The KERNEL32.dll functions, by wincall index.
 str WinImport(u32 k) {
@@ -46,7 +46,8 @@ str WinImport(u32 k) {
         23 => { return "FindNextFileW"; }
         24 => { return "FindClose"; }
         25 => { return "SetHandleInformation"; }
-        _ => { return "GetEnvironmentVariableW"; }
+        26 => { return "GetEnvironmentVariableW"; }
+        _ => { return "GetCurrentDirectoryW"; }
     }
 }
 
@@ -58,7 +59,7 @@ struct WinImports {
 // The import directory, lookup and address tables, hint/name entries and DLL name, in the
 // data. Returns the labels the PE header and wincall need.
 WinImports EmitImports(ref Asm a) {
-    u32[27] names;
+    u32[28] names;
     u32 ilt = a.NewLabel();
     u32 dll = a.NewLabel();
     u32 ilt2 = a.NewLabel();
@@ -90,8 +91,8 @@ WinImports EmitImports(ref Asm a) {
     a.DataZeros(8);
     a.BindData(iat);
     for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
-    a.DataZeros(8);             // slot 27 ends KERNEL32's
-    a.BindData(iat2);           // slot 28
+    a.DataZeros(8);             // slot 28 ends KERNEL32's
+    a.BindData(iat2);           // slot 29
     a.DataRva(name2, 8);
     a.DataZeros(8);
     for (u32 k = 0; k < WIN_IMPORTS; k++) {

@@ -13,8 +13,9 @@ OS-level services built on ports, with no platform code
 - `std.path`: `Join`, `FileName`, `Stem`, `Extension`, `Parent`, `IsAbsolute` (text only).
 - `std.time`: `NowNanos`, `MonoNanos`, `Now` (a UTC `Date`), `FromUnixNanos`,
   `FromUnixSeconds`, `Iso`, `Stopwatch`.
-- `std.env`: `ArgCount`, `Arg`, `Args`, `Var`.
-- `std.process`: `Run`, `RunTo` (output to a file), `RunWith`.
+- `std.env`: `ArgCount`, `Arg`, `Args`, `Var`, `CurrentDir`.
+- `std.process`: `Run`, `RunTo` (output to a file), `RunIn` (a working directory and
+  output files), `RunWith`.
 - `std.random`: `Fill`, `U64`, `Below` (the system's generator) and `Rng` (seeded).
 
 ## Simple door

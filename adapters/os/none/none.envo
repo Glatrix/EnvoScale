@@ -409,6 +409,9 @@ impl IEnvironment for Environment {
         unsafe { return this.State[0].Args.AsSlice()[i].AsStr(); }
     }
 
+    // The reference file system's working directory is its root.
+    string CurrentDir(ref this) => string.From("/");
+
     string? Var(ref this, str name) {
         string key = string.From(name);
         unsafe {
@@ -454,8 +457,8 @@ public struct Process {
 }
 
 impl IProcess for Process {
-    Result<i32, IoError> Run(ref this, str program, str[] args, str outPath, str errPath) {
-        if (BadPath(program) || BadPath(outPath) || BadPath(errPath)) return Err(IoError.Invalid);
+    Result<i32, IoError> Run(ref this, str program, str[] args, str workDir, str outPath, str errPath) {
+        if (BadPath(program) || BadPath(workDir) || BadPath(outPath) || BadPath(errPath)) return Err(IoError.Invalid);
         foreach (var a in args) {
             if (BadPath(a)) return Err(IoError.Invalid);
         }
@@ -469,6 +472,7 @@ impl IProcess for Process {
             string name = string.From(program);
             if (!this.State[0].Programs.Has(name)) return Err(IoError.NotFound);
             FileSystem fs = new FileSystem { State = this.State[0].Fs };
+            if (!fs.IsDir(workDir)) return Err(IoError.NotFound);
             string o = Clean(outPath);
             string e = Clean(errPath);
             if (outPath.Len > 0 && errPath.Len > 0 && o.Equals(e.AsStr())) {
