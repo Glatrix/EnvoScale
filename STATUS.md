@@ -19,8 +19,9 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M3 | Self-hosting | **Done**: `envoc`, written in Envo-S1, compiles itself at `-O2` to a fixed point, checked in CI on both hosts; objects and linking; ownership beyond Stage 1 (3.1–3.10, `docs/PLAN.md` §5) |
 | M4 | Foundations | **Done**: `core`, `alloc`, `ports`, `std` in Envo-S1 through `envoc --lib`; reference, Windows and Linux adapters; conformance suites passing on both hosts (4.1–4.7) |
 | M5 | Daily tooling | **Done**: the `envo` binary (the compiler as a library) with `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`; packages; rich diagnostics; `FileSystem.List` and the `Process` port; `envo.eon`, `envo.json` (5.1–5.8) |
-| M6 | Script runtime | **Next**: EIR VM, REPL, shebang, sandbox permissions (`docs/PLAN.md` §5) |
-| M7–M13 | | Not started |
+| M6 | Script runtime | **Done**: `envo run` interprets the program's EIR, sandboxed with `--allow` permissions; scripts and `#!/usr/bin/env envo`; `envo repl`; every spec run test and library test passes in both modes (6.1–6.7) |
+| M7 | Crypto and network | **Next** (`docs/PLAN.md` §5) |
+| M8–M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -65,6 +66,16 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | Running programs | `ports.IProcess` with reference, Windows and Linux adapters; `FileSystem.List`, `Environment.Var`, `CurrentDir` | Done |
 | CI uses `envo test` | the bootstrap scripts build `envo` and run `envo test lib adapters tests/conformance examples` (D29); green on both hosts | Done |
 
+### M6 Definition of Done
+
+| Item (brief §16, PLAN §5) | Where | State |
+|---|---|---|
+| EIR VM | `runtime/vm`: an interpreter over the compiler's EIR for the host target, runtime included (D31, D32); the compiler itself runs in it and builds byte-identical executables | Done |
+| REPL | `envo repl` (D36) | Done |
+| Shebang | `envo file.envo`, `#!/usr/bin/env envo` (D33); a shebang script runs on Linux in CI | Done |
+| Sandbox permissions | `--allow read, write, fs (:path), env, run, net, all` (D34); `tests/sandbox` | Done |
+| Every spec test in both modes | every spec run and multi-file program, and every library test, in the VM too (D35); green on both hosts | Done |
+
 ## Subsystems
 
 | Subsystem | Tier | Works | Missing | Next |
@@ -79,10 +90,10 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **Build scripts** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check`, `build`, `test`, `fixedpoint` on PowerShell and Git Bash; build `envo` after Stage 2 and test through it | — | — |
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
-| **Runtime** (`runtime/`) | — | — | Everything | M3 (startup, panics, ARC), M6 (VM) |
+| **Runtime** (`runtime/`) | Experimental | Startup, panics and the OS layer (`bootstrap/stage1/runtime/`, in every program); the EIR VM (`runtime/vm`) with permissions | ARC, a JIT, floats in the VM | M7 on |
 | **Standard platform** (`lib/`) | Experimental | `core` (text, fmt, math, hash), `alloc` (Map, Set, Box, text), `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M6 on |
 | **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process; every conformance suite passes on both hosts | Window, GPU, audio, network, threads | M6 on |
-| **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run`, `check`, `test`, `fmt`, `lsp`, `explain`, `version` | `repl`, sandboxed `run` (M6); `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` (later) | M6 |
+| **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run` (script runtime or `--native`), `check`, `test`, `fmt`, `lsp`, `repl`, `explain`, `version`; scripts | `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` | later milestones |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |
 
 ## Known limitations

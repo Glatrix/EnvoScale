@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M6 (script runtime). M0–M5 are done; their records are in §4.
+- **Current milestone:** M7 (crypto and network). M0–M6 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -72,6 +72,12 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D34 | **Permissions** follow the brief's Deno-like model (§2.5): a script has its console and nothing else until `--allow` grants `read[:path]`, `write[:path]`, `fs[:path]` (both), `env`, `run`, `net` (for M7) or `all`. The VM checks them where it forwards system calls; a denied call fails as the OS would with "access denied", so library code sees `IoError.Denied`, and `envo` prints one note per denied capability. | `docs/architecture/script-runtime.md` |
 | D35 | **Both modes in the tests**: the bootstrap scripts run every spec run test (`core-run`, `s1-run`, `s2-run`, the multi-file programs) through `envo run --allow all` as well as natively, requiring the same output and exit code; `envo test` runs each library test in the VM too. Error tests share the front end, so they agree by construction. | `tests/README.md` |
 | D36 | **`envo repl`** keeps a session of cells: declarations accumulate, and each statement cell runs the session's program again in the VM, showing only the output that is new. A resident VM state needs incremental compilation (the query-based compiler) and comes later. | `tools/envo/README.md` |
+| D37 | **`envo.crypto` is written in Envo-S1**, one module per family (`sha2`, `mac`, `chacha`, `aes`, `curve25519`, `random`) under `lib/envo/crypto/`, with `envo.crypto` as the simple door. Constant time by construction: no branch, loop bound or memory index depends on a secret; tags compare in constant time. The whole module stays Experimental until an independent audit (brief §7.2), as its README and `SECURITY.md` say. | `lib/envo/crypto/README.md` |
+| D38 | **Test vectors** come from the standards (RFC 8439, 7748, 8032, 4231, 5869; FIPS 180-4 and 197; the GCM specification), copied into the library's tests, with their sources listed in `tests/vectors/README.md`. An algorithm exists only once its vectors pass. | `tests/vectors/README.md` |
+| D39 | **The CSPRNG** is ChaCha20 keyed from the `Entropy` port (32 bytes), rekeyed from its own output after each request (fast key erasure), so the system's generator is read once per generator, not per call. | `lib/envo/crypto/README.md` |
+| D40 | **A `Net` port** for TCP (connect, listen, accept, read, write, close) and name lookup. Windows: `ws2_32.dll` joins the import table in both stages (D25); Linux: system calls, and a DNS client in Envo reading `/etc/hosts` and `/etc/resolv.conf`. The script runtime gates it with `--allow net`. | `docs/architecture/network.md` |
+| D41 | **TLS 1.3 client** (RFC 8446) with X25519 and `TLS_CHACHA20_POLY1305_SHA256` / `TLS_AES_128_GCM_SHA256`; certificates are verified (X.509 chain to the system's roots, names, validity; RSA and ECDSA P-256 signatures) before any application data. A connection that cannot be verified fails; there is no "insecure" switch in M7. | `docs/architecture/network.md` |
+| D42 | **HTTP/1.1** client and server in `envo.http` over the Net port (and TLS for `https`), sharing request and response types. The brief's `serve(8080) { get("/") => … }` door needs trailing blocks, which Envo-S1 lacks; M7 gives the same server as calls (`Router`, `Get`, `Serve`) and the door follows when the language has it. | `lib/envo/http/README.md` |
 
 ## 3. Open questions
 
@@ -156,22 +162,29 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   `envo.eon` and `envo.json`; CI testing the library through `envo test` (D29).
   Increments 5.1–5.8; design in [`architecture/tooling.md`](architecture/tooling.md).
 
-## 5. M6 — Script runtime
+- **M6 — Script runtime.** `envo run` compiles in memory and interprets the EIR on host
+  memory (D31, D32), sandboxed with `--allow` permissions (D34); scripts and shebang
+  lines (D33); `envo repl` (D36); every spec run test and library test in both modes
+  (D35). Increments 6.1–6.7; design in
+  [`architecture/script-runtime.md`](architecture/script-runtime.md).
 
-**DoD (brief §16):** EIR VM, REPL, shebang, sandbox permissions. Every spec test passes
-in both modes. Read here as: `envo run` interprets the program's EIR (D31, D32) with
-permissions (D34); `envo repl` (D36); `#!/usr/bin/env envo` scripts (D33); every spec
-run test gives the same output and exit code in the VM as natively (D35).
+## 5. M7 — Crypto and network
+
+**DoD (brief §16):** hashes, AEADs, X25519/Ed25519, CSPRNG, TLS 1.3 client, TCP/DNS,
+HTTP/1.1 client and server. All crypto test vectors pass. Marked Experimental. Read here
+as: `envo.crypto` (D37) passing every vector it implements (D38), with a CSPRNG (D39); a
+Net port with native adapters (D40); a verifying TLS 1.3 client (D41); `envo.http` (D42).
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [6.1](https://github.com/envoscale/EnvoScale/issues/96) | The EIR interpreter: every instruction, calls, slots, globals, function values, panics | `tests/spec/*-run` in the VM | |
-| [6.2](https://github.com/envoscale/EnvoScale/issues/97) | Forwarded `syscall`/`wincall`, arguments and exit codes; `envo run` in the VM, `--native` | the run tests and library tests in both modes | |
-| [6.3](https://github.com/envoscale/EnvoScale/issues/98) | Shebang scripts and `envo <file>` | `tests/envo/` (Linux in CI) | |
-| [6.4](https://github.com/envoscale/EnvoScale/issues/99) | Permissions: `--allow read, write, fs, env, run, net, all` | `tests/sandbox/` | |
-| [6.5](https://github.com/envoscale/EnvoScale/issues/100) | `envo repl` | `tests/envo/` | |
-| [6.6](https://github.com/envoscale/EnvoScale/issues/101) | Speed: the VM's own instruction form, measured on the test programs | `tests/bench/` | |
-| [6.7](https://github.com/envoscale/EnvoScale/issues/102) | Docs and status; M6 complete | CI | |
+| 7.1 | Hashes and MACs: SHA-256, SHA-512, HMAC, HKDF | `lib/envo/crypto/tests/` | |
+| 7.2 | AEADs: ChaCha20-Poly1305, AES-128/256-GCM | `lib/envo/crypto/tests/` | |
+| 7.3 | X25519 and Ed25519 | `lib/envo/crypto/tests/` | |
+| 7.4 | The CSPRNG and the `envo.crypto` simple door | `lib/envo/crypto/tests/` | |
+| 7.5 | The Net port: TCP and name lookup, reference and native adapters | `tests/conformance/net/` | |
+| 7.6 | `envo.http`: HTTP/1.1 client and server | `lib/envo/http/tests/` | |
+| 7.7 | TLS 1.3 client with certificate verification | `lib/envo/tls/tests/` | |
+| 7.8 | Docs and status; M7 complete | CI | |
 
 ## 6. Risks
 

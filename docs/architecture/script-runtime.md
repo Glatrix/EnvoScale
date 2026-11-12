@@ -1,6 +1,6 @@
 # The script runtime (M6)
 
-> **Status:** M6, in progress. Decisions D31–D36 in [`PLAN.md`](../PLAN.md).
+> **Status:** M6, done. Decisions D31–D36 in [`PLAN.md`](../PLAN.md).
 
 Envo has two execution modes with one meaning (brief §3.7): `envo build` makes native
 code; `envo run`, `envo file.envo` and `#!/usr/bin/env envo` run the program in the
