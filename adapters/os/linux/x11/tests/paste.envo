@@ -1,0 +1,7 @@
+// The X11 clipboard, pasting (run by clipboard.sh after another program copied): prints
+// the selection's text.
+use std.clipboard;
+
+string? t = clipboard.Text();
+if (t.IsNone()) print("nothing to paste");
+else print(t.Unwrap().AsStr());

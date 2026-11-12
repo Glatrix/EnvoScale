@@ -312,7 +312,7 @@ names, logos and look-and-feel of other products are not copied (legal review, #
 | [14.5](https://github.com/envoscale/EnvoScale/issues/153) | `envo.edit`: buffers, cursors, selections, undo, search (D74) | `lib/envo/edit/tests` | Done |
 | [14.6](https://github.com/envoscale/EnvoScale/issues/154) | `envo.ui` for applications: scrolling, lists and trees, tabs, split panes, the code editor, a command palette | pixel and cell tests | Done |
 | [14.7](https://github.com/envoscale/EnvoScale/issues/155) | Linux windows: X11 over its socket, in `adapters/os/linux` | CI under Xvfb | Done |
-| [14.7b](https://github.com/envoscale/EnvoScale/issues/167) | The Linux clipboard: the X11 `CLIPBOARD` selection | the clipboard test under Xvfb | |
+| [14.7b](https://github.com/envoscale/EnvoScale/issues/167) | The Linux clipboard: the X11 `CLIPBOARD` selection | the clipboard test under Xvfb | Done |
 | [14.8](https://github.com/envoscale/EnvoScale/issues/156) | The browser host: `envo.ui` programs in a page (D72) | the wasm tests; a page in the site | Done |
 | [14.8b](https://github.com/envoscale/EnvoScale/issues/168) | A font for pages, then an editor demo on the site (owner decision: which font ships) | a page in the site | Needs Decision |
 | [14.9](https://github.com/envoscale/EnvoScale/issues/157) | A VS Code extension (`adapters/editors/vscode`): grammar, editor settings, an LSP client with no npm dependencies | the extension's own tests in CI | Done |

@@ -1,0 +1,23 @@
+// The X11 clipboard, copying (run by clipboard.sh under an X server): takes the
+// selection with a text and answers other programs' pastes from a window's polls for a
+// few seconds.
+use ports.{IWindow, EventKind};
+use std.clipboard;
+use std.time;
+use platform;
+
+var w = platform.Window();
+if (!w.Open("envo clipboard", 16, 16)) {
+    print("no window");
+    exit(1);
+}
+if (!clipboard.SetText("copied by envo")) {
+    print("SetText said no");
+    exit(1);
+}
+print("copied");
+u64 start = time.MonoNanos();
+while (time.MonoNanos() - start < 4 * time.NANOS_PER_SECOND as u64) {
+    w.Poll();
+}
+w.Close();

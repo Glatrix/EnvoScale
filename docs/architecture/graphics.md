@@ -51,8 +51,12 @@ character and mouse event carries the modifier keys held (`Event.Mods`, `MOD_SHI
 adapter passes them through; other adapters translate. The Clipboard port
 (`ports.IClipboard`, `std.clipboard`) holds text: Windows' through `CF_UNICODETEXT`, the
 reference adapters' in memory, the browser host's within the page (and written to the
-system's where the browser allows). Linux (X11 selections, #167) has none yet: an empty
-clipboard that keeps nothing.
+system's where the browser allows), and Linux's is the X server's `CLIPBOARD` selection
+(M14.7b): a connection of the clipboard's own, made on first use and kept for the
+program's life, owns the selection to copy (answering other programs' requests for
+`UTF8_STRING`, `STRING` and `TARGETS`) and converts it to paste. A window's `Poll`
+answers those requests, so a program with no window answers only when it next uses the
+clipboard. CI copies and pastes both ways with `xclip` under Xvfb.
 
 The Win32 adapter needs no callback from Windows into Envo code. Its window class uses
 `DefWindowProcW` itself as the window procedure, so:

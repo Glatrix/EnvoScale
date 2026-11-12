@@ -2,7 +2,8 @@
 
 > **Status:** Experimental (M4, M5, M14): Console, FileSystem, Clock, Entropy,
 > Environment, Process, Net, Trust, Terminal, Window (X11, M14.7). Passes every
-> conformance suite (in CI, windows under Xvfb). Clipboard: none yet.
+> conformance suite (in CI, windows under Xvfb). Clipboard: the X11 `CLIPBOARD` selection
+> (M14.7b).
 
 Linux adapters over raw x86-64 system calls through the `__syscall` intrinsic:
 `newfstatat`, `unlink`, `mkdir`, `rmdir`, `getdents64`, `fork`, `execve`, `wait4`, `dup2`,

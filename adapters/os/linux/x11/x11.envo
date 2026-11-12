@@ -2,7 +2,9 @@
 // D45, M14.7). It does what the Window port needs: connect (with the MIT-MAGIC-COOKIE-1
 // from the Xauthority file), open a window that asks to be told of its closing, show
 // frames (PutImage, in strips under the request size limit), and turn the server's
-// events into port events, keys through the server's keyboard map.
+// events into port events, keys through the server's keyboard map. It also holds the
+// CLIPBOARD selection for the Clipboard port (M14.7b): it owns it to copy, answering other
+// programs' requests, and converts it to paste.
 //
 // Only the core protocol, little-endian, for a TrueColor visual of depth 24 drawn 32 bits
 // a pixel (what X servers offer today). The protocol: https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html
@@ -22,6 +24,11 @@ const u8 CHANGE_PROPERTY = 18;
 const u8 CREATE_GC = 55;
 const u8 PUT_IMAGE = 72;
 const u8 GET_KEYBOARD_MAPPING = 101;
+const u8 GET_PROPERTY = 20;
+const u8 SET_SELECTION_OWNER = 22;
+const u8 GET_SELECTION_OWNER = 23;
+const u8 CONVERT_SELECTION = 24;
+const u8 SEND_EVENT = 25;
 
 // Atoms every server has.
 const u32 ATOM_ATOM = 4;
@@ -195,12 +202,23 @@ public struct Conn {
     u32 W;
     u32 H;
     bool Failed;            // an error came back: the window is no use
+    u32 ClipWin;            // an unmapped window that owns and receives the selection
+    u32 ClipAtom;           // CLIPBOARD
+    u32 Utf8Atom;           // UTF8_STRING
+    u32 TargetsAtom;        // TARGETS
+    u32 PropAtom;           // where a pasted selection is put for us
+    string ClipText;        // what we copied
+    bool Owning;            // we own CLIPBOARD
+    bool Notified;          // a SelectionNotify came
+    u32 NotifiedProp;       // its property (0: the owner could not convert)
 
     // No connection.
     public static Conn Closed() => new Conn {
         Fd = -1, In = List<u8>.New(), Seq = 0, IdBase = 0, IdMask = 0, NextId = 0, Root = 0, Black = 0,
         MaxBytes = 0, MinKey = 0, MaxKey = 0, PerKey = 0, Syms = List<u32>.New(), Queue = List<Event>.New(),
-        Win = 0, Gc = 0, DeleteAtom = 0, ProtocolsAtom = 0, W = 0, H = 0, Failed = false
+        Win = 0, Gc = 0, DeleteAtom = 0, ProtocolsAtom = 0, W = 0, H = 0, Failed = false,
+        ClipWin = 0, ClipAtom = 0, Utf8Atom = 0, TargetsAtom = 0, PropAtom = 0, ClipText = string.New(),
+        Owning = false, Notified = false, NotifiedProp = 0
     };
 
     // Connects to display (as $DISPLAY names it) with the cookie in the Xauthority file
@@ -460,9 +478,11 @@ public struct Conn {
         return !this.Failed;
     }
 
-    void Property(ref this, u32 property, u32 kind, u8 format, u8[] data) {
+    void Property(ref this, u32 property, u32 kind, u8 format, u8[] data) => this.PropertyOn(this.Win, property, kind, format, data);
+
+    void PropertyOn(ref this, u32 window, u32 property, u32 kind, u8 format, u8[] data) {
         Req r = Req.Of(CHANGE_PROPERTY, 0);         // Replace
-        r.U32(this.Win);
+        r.U32(window);
         r.U32(property);
         r.U32(kind);
         r.U8(format);
@@ -525,6 +545,150 @@ public struct Conn {
             this.Request(ref r);
         }
         this.Win = 0;
+    }
+
+    // ---------------------------------------------------------------- the clipboard
+
+    // Makes the window that owns and receives the selection; false if the server says no.
+    public bool OpenClipboard(ref this) {
+        if (this.ClipWin != 0) return !this.Failed;
+        this.ClipWin = this.NewId();
+        Req r = Req.Of(CREATE_WINDOW, 0);
+        r.U32(this.ClipWin);
+        r.U32(this.Root);
+        r.U16(0);
+        r.U16(0);
+        r.U16(1);
+        r.U16(1);
+        r.U16(0);
+        r.U16(2);                                   // InputOnly: never shown
+        r.U32(0);
+        r.U32(0);                                   // no values
+        this.Request(ref r);
+        this.ClipAtom = this.Atom("CLIPBOARD");
+        this.Utf8Atom = this.Atom("UTF8_STRING");
+        this.TargetsAtom = this.Atom("TARGETS");
+        this.PropAtom = this.Atom("ENVO_CLIPBOARD");
+        return !this.Failed && this.ClipAtom != 0 && this.Utf8Atom != 0 && this.TargetsAtom != 0 && this.PropAtom != 0;
+    }
+
+    // Takes the selection with text; false if the server would not give it.
+    public bool Own(ref this, str text) {
+        this.ClipText = string.From(text);
+        Req r = Req.Of(SET_SELECTION_OWNER, 0);
+        r.U32(this.ClipWin);
+        r.U32(this.ClipAtom);
+        r.U32(0);                                   // CurrentTime
+        this.Request(ref r);
+        Req q = Req.Of(GET_SELECTION_OWNER, 0);
+        q.U32(this.ClipAtom);
+        this.Request(ref q);
+        List<u8>? reply = this.Reply();
+        this.Owning = reply.IsSome() && Get32(reply.Unwrap().AsSlice(), 8) == this.ClipWin;
+        return this.Owning;
+    }
+
+    // The selection's text: ours without asking, or converted to UTF-8 by its owner
+    // (waiting up to a second); None if nobody has it or it is not text.
+    public string? Fetch(ref this) {
+        this.Service();
+        if (this.Owning) return Some(string.From(this.ClipText.AsStr()));
+        Req r = Req.Of(CONVERT_SELECTION, 0);
+        r.U32(this.ClipWin);
+        r.U32(this.ClipAtom);
+        r.U32(this.Utf8Atom);
+        r.U32(this.PropAtom);
+        r.U32(0);
+        this.Request(ref r);
+        this.Notified = false;
+        u32 tries = 0;
+        while (!this.Notified && tries < 10 && !this.Failed) {
+            this.Fill(100);
+            this.Drain();
+            tries++;
+        }
+        if (!this.Notified || this.NotifiedProp == 0) return null;
+        Req g = Req.Of(GET_PROPERTY, 1);            // delete it once read
+        g.U32(this.ClipWin);
+        g.U32(this.PropAtom);
+        g.U32(0);                                   // any type
+        g.U32(0);
+        g.U32(0x100000);                            // up to 4 MiB
+        this.Request(ref g);
+        List<u8>? reply = this.Reply();
+        if (reply.IsNone()) return null;
+        u8[] p = reply.Unwrap().AsSlice();
+        if (p[1] != 8) return null;                 // not bytes
+        usize n = Get32(p, 16) as usize;
+        if (32 + n > p.Len) return null;
+        string t = string.New();
+        for (usize i = 32; i < 32 + n; i++) t.AppendByte(p[i]);
+        return Some(t);
+    }
+
+    // Answers what other programs asked of the selection since the last call, without
+    // waiting: a window's Poll calls it, so pastes elsewhere are answered while it runs.
+    public void Service(ref this) {
+        this.Fill(0);
+        this.Drain();
+    }
+
+    // Turns the events read so far into the queue (and selection work).
+    void Drain(ref this) {
+        while (this.In.Len() >= 32) {
+            u8 kind = this.In.AsSlice()[0];
+            if (kind == 1) {
+                usize more = Get32(this.In.AsSlice(), 4) as usize * 4;
+                if (this.In.Len() < 32 + more) break;
+                List<u8> skipped = this.Take(32 + more);
+                continue;
+            }
+            List<u8> e = this.Take(32);
+            if (kind == 0) continue;                // an error about a request nobody waits for
+            this.Translate(e.AsSlice());
+        }
+    }
+
+    // SelectionRequest: another program pastes. It gets our text (UTF8_STRING or STRING),
+    // or the list of what we offer (TARGETS), in the property it named.
+    void AnswerSelection(ref this, u8[] e) {
+        u32 time = Get32(e, 4);
+        u32 requestor = Get32(e, 12);
+        u32 selection = Get32(e, 16);
+        u32 target = Get32(e, 20);
+        u32 property = Get32(e, 24);
+        if (property == 0) property = target;       // an old client
+        u32 answered = 0;
+        if (this.Owning && selection == this.ClipAtom) {
+            if (target == this.TargetsAtom) {
+                List<u8> atoms = List<u8>.New();
+                PushAtom(ref atoms, this.TargetsAtom);
+                PushAtom(ref atoms, this.Utf8Atom);
+                PushAtom(ref atoms, ATOM_STRING);
+                this.PropertyOn(requestor, property, ATOM_ATOM, 32, atoms.AsSlice());
+                answered = property;
+            } else if (target == this.Utf8Atom || target == ATOM_STRING) {
+                List<u8> t = List<u8>.New();
+                str text = this.ClipText.AsStr();
+                for (usize i = 0; i < text.Len; i++) t.Push(text[i]);
+                this.PropertyOn(requestor, property, target, 8, t.AsSlice());
+                answered = property;
+            }
+        }
+        // SelectionNotify to the requestor: done, or (property 0) refused
+        Req r = Req.Of(SEND_EVENT, 0);
+        r.U32(requestor);
+        r.U32(0);                                   // no event mask: to the client that made the window
+        r.U8(31);
+        r.U8(0);
+        r.U16(0);
+        r.U32(time);
+        r.U32(requestor);
+        r.U32(selection);
+        r.U32(target);
+        r.U32(answered);
+        for (usize i = 0; i < 8; i++) r.U8(0);
+        this.Request(ref r);
     }
 
     // ---------------------------------------------------------------- events
@@ -621,6 +785,23 @@ public struct Conn {
             }
             return;
         }
+        if (kind == 29) {
+            // SelectionClear: another program copied
+            if (Get32(e, 12) == this.ClipAtom) this.Owning = false;
+            return;
+        }
+        if (kind == 30) {
+            this.AnswerSelection(e);
+            return;
+        }
+        if (kind == 31) {
+            // SelectionNotify: what we asked to paste is ready (or not)
+            if (Get32(e, 8) == this.ClipWin) {
+                this.Notified = true;
+                this.NotifiedProp = Get32(e, 20);
+            }
+            return;
+        }
         if (kind == 34) {
             // MappingNotify: the keyboard changed
             this.LoadKeyboard();
@@ -645,6 +826,13 @@ public struct Conn {
         }
         return plain;
     }
+}
+
+void PushAtom(ref List<u8> b, u32 a) {
+    b.Push(a as u8);
+    b.Push((a >> 8) as u8);
+    b.Push((a >> 16) as u8);
+    b.Push((a >> 24) as u8);
 }
 
 // The port's modifiers from an X state mask.

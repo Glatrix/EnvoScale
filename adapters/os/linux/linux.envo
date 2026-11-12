@@ -1137,6 +1137,19 @@ impl ITerminal for Terminal {
 
 // ------------------------------------------------------------------ window
 
+// The Xauthority file: $XAUTHORITY, else ~/.Xauthority.
+string XAuthority(ref Environment env) {
+    string? given = env.Var("XAUTHORITY");
+    if (given.IsSome()) return given.Unwrap();
+    string auth = string.New();
+    string? home = env.Var("HOME");
+    if (home.IsSome()) {
+        auth = home.Unwrap();
+        auth.Append("/.Xauthority");
+    }
+    return auth;
+}
+
 // Windows through the X server $DISPLAY names, spoken to over its socket (os.linux.x11,
 // M14.7). With no X server (no $DISPLAY, or none listening) Open says no.
 public struct Window {
@@ -1153,17 +1166,7 @@ impl IWindow for Window {
         Environment env = Environment.New();
         string? display = env.Var("DISPLAY");
         if (display.IsNone()) return false;
-        string auth = string.New();
-        string? given = env.Var("XAUTHORITY");
-        if (given.IsSome()) {
-            auth = given.Unwrap();
-        } else {
-            string? home = env.Var("HOME");
-            if (home.IsSome()) {
-                auth = home.Unwrap();
-                auth.Append("/.Xauthority");
-            }
-        }
+        string auth = XAuthority(ref env);
         this.C = x11.Conn.Open(display.Unwrap().AsStr(), auth.AsStr());
         if (this.C.IsBroken()) return false;
         if (!this.C.CreateWindow(title, width, height)) {
@@ -1188,6 +1191,7 @@ impl IWindow for Window {
     }
 
     Event Poll(ref this) {
+        ServiceClipboard();
         if (!this.Live) return Event.Nothing();
         if (this.C.IsBroken()) {
             // the server went away, or refused a request: the window is gone
@@ -1220,14 +1224,62 @@ impl IWindow for Window {
     }
 }
 
-// No clipboard yet: it comes with X11 windows (M14.7). Text is always None and SetText says no.
+// The clipboard is the X server's CLIPBOARD selection (M14.7b), held through a connection of
+// its own that lives as long as the program: copying takes the selection and keeps the text
+// to give other programs, which a window's Poll answers (a program with no window answers
+// only when it next uses the clipboard). With no X server there is none.
 public struct Clipboard {
     bool Unused;
 
     public static Clipboard New() => new Clipboard { Unused = false };
 }
 
+static usize ClipState = 0;     // the clipboard's connection (an x11.Conn), made on first use
+
+// The clipboard's connection, or null if there is no X server.
+*x11.Conn ClipConn() {
+    unsafe {
+        if (ClipState == 0) {
+            Environment env = Environment.New();
+            string? display = env.Var("DISPLAY");
+            if (display.IsNone()) return 0 as usize as *x11.Conn;
+            string auth = XAuthority(ref env);
+            x11.Conn c = x11.Conn.Open(display.Unwrap().AsStr(), auth.AsStr());
+            if (c.IsBroken() || !c.OpenClipboard()) {
+                c.Close();
+                return 0 as usize as *x11.Conn;
+            }
+            *x11.Conn p = alloc(sizeof(x11.Conn)) as *x11.Conn;
+            p[0] = c;
+            ClipState = p as usize;
+        }
+        return ClipState as *x11.Conn;
+    }
+}
+
+// Answers other programs' pastes of what we copied (a window's Poll calls it).
+void ServiceClipboard() {
+    if (ClipState == 0) return;
+    unsafe {
+        *x11.Conn p = ClipState as *x11.Conn;
+        p[0].Service();
+    }
+}
+
 impl IClipboard for Clipboard {
-    string? Text(ref this) => None;
-    bool SetText(ref this, str text) => false;
+    string? Text(ref this) {
+        *x11.Conn p = ClipConn();
+        unsafe {
+            if (p as usize == 0 || p[0].IsBroken()) return null;
+            return p[0].Fetch();
+        }
+    }
+
+    bool SetText(ref this, str text) {
+        *x11.Conn p = ClipConn();
+        unsafe {
+            if (p as usize == 0 || p[0].IsBroken()) return false;
+            return p[0].Own(text);
+        }
+    }
 }

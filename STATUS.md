@@ -27,7 +27,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M11 | 3D | **Done** (Experimental; ahead of M10): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR: the same frame bit for bit in every build), glTF 2.0 import, the 3D gallery program in a window (11.1–11.6) |
 | M12 | AI | **Done** (Experimental): `envo.ai` tensors, autograd and optimizers; BPE, SentencePiece and WordPiece tokenizers; GGUF loading (11 tensor types); local inference for the Llama family; a text encoder (nomic-bert), exact and HNSW vector search; a matrix product on the GPU through `IGpu` (12.1–12.7) |
 | M13 | Ecosystem | **Done** (Experimental): `envo prof`, `envo fuzz` (coverage-guided), `envo dbg` (source-level), package dependencies with a lock, signed archives and a registry adapter, and the hex seed: Stage 0 built from commented hex with the OS alone, byte-identical to NASM (13.1–13.6) |
-| M14 | The application platform | **Done** (Experimental): a heap that frees, key codes and a clipboard port, processes with pipes, `envo query` and completion, hover, definition, symbols and formatting in `envo lsp`, `envo.edit`, application components in `envo.ui`, Linux windows over X11, the browser host, a VS Code extension (14.1–14.10). Open: the Linux clipboard (#167), a font for pages (#168, owner) |
+| M14 | The application platform | **Done** (Experimental): a heap that frees, key codes and a clipboard port, processes with pipes, `envo query` and completion, hover, definition, symbols and formatting in `envo lsp`, `envo.edit`, application components in `envo.ui`, Linux windows over X11, the browser host, a VS Code extension (14.1–14.10). Open: a font for pages (#168, owner) |
 | M15 | Envo Studio, the IDE | **Next** (PLAN §6): its own repository, built on M14 |
 
 ### M0 Definition of Done
@@ -144,7 +144,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | Item (PLAN §6) | Where | State |
 |---|---|---|
 | A heap that frees | the runtime's size-class free lists (D76); temporaries a view borrows kept alive ([own.temp.1]) | Done |
-| Input and clipboard | `ports.KEY_*`, `Event.Mods`, `IClipboard`, `std.clipboard` (Windows; reference; the page) | Done (Linux: #167) |
+| Input and clipboard | `ports.KEY_*`, `Event.Mods`, `IClipboard`, `std.clipboard` (Windows; X11; reference; the page) | Done |
 | Processes with pipes | `IProcess.Spawn`/`Send`/`Receive`/`Kill`, `std.process.Child` | Done |
 | Language intelligence | `envo query`; `envo lsp` completion, hover, definition, symbols, formatting (D75) | Done |
 | The editor core | `envo.edit` (D74) | Done |
@@ -179,7 +179,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
 | **Runtime** (`runtime/`) | Experimental | Startup, panics and the OS layer (`bootstrap/stage1/runtime/`, in every program); the EIR VM (`runtime/vm`) with permissions | ARC, a JIT, floats in the VM | M7 on |
 | **Standard platform** (`lib/`) | Experimental | `core`, `alloc`, `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, `envo.crypto`, `envo.http`, `envo.tls`, `envo.cli`, `envo.term`, `envo.gfx`, `envo.font`, `envo.lumen`, `envo.ui`, `envo.gpu`, `envo.markdown`, `envo.web`, `envo.math`, `envo.ecs`, `envo.render3d`, `envo.edit`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M8 on |
-| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`, `os/wasm`: Console, FileSystem, Clock, Entropy, Environment, Process (with pipes), Net, Trust, Terminal, Window (Win32, X11, a page's canvas), Clipboard (Windows, a page), Gpu (Direct3D 12; software elsewhere); every conformance suite passes on both hosts; `editors/vscode` | Vulkan, audio, threads, Wayland, the Linux clipboard | M15 on |
+| **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`, `os/wasm`: Console, FileSystem, Clock, Entropy, Environment, Process (with pipes), Net, Trust, Terminal, Window (Win32, X11, a page's canvas), Clipboard (Windows, X11, a page), Gpu (Direct3D 12; software elsewhere); every conformance suite passes on both hosts; `editors/vscode` | Vulkan, audio, threads, Wayland | M15 on |
 | **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run` (script runtime or `--native`), `check`, `query`, `test`, `fmt`, `lsp` (diagnostics, completion, hover, definition, symbols, formatting), `repl`, `explain`, `version`; scripts | `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` | later milestones |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |
 
