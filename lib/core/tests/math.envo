@@ -1,0 +1,41 @@
+// core.math: integer helpers.
+// expect: min -3 max 9 clamp 5 abs 9223372036854775808
+// expect: pow 1024 divceil 4 pow2 true next 64 log2 10 gcd 6
+use core.math;
+use core.fmt;
+
+str Num(i64 v) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteI64(slice_from_mut(p, 24), v);
+        return str_from(p, n);
+    }
+}
+
+str NumU(u64 v) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteU64(slice_from_mut(p, 24), v);
+        return str_from(p, n);
+    }
+}
+
+write(1, "min ");
+write(1, Num(math.Min(-3, 4)));
+write(1, " max ");
+write(1, Num(math.Max(9, 2)));
+write(1, " clamp ");
+write(1, Num(math.Clamp(17, 0, 5)));
+write(1, " abs ");
+print(NumU(math.Abs(-9223372036854775807 - 1)));
+write(1, "pow ");
+write(1, NumU(math.Pow(2, 10)));
+write(1, " divceil ");
+write(1, NumU(math.DivCeil(10, 3)));
+if (math.IsPowerOfTwo(64) && !math.IsPowerOfTwo(65)) write(1, " pow2 true");
+write(1, " next ");
+write(1, NumU(math.NextPowerOfTwo(33)));
+write(1, " log2 ");
+write(1, NumU(math.Log2(1025) as u64));
+write(1, " gcd ");
+print(NumU(math.Gcd(48, 18)));

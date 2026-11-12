@@ -1,0 +1,4 @@
+namespace bad;
+// a library module that reaches for an adapter directly
+use os.none;
+public void Hello() => print("hello");

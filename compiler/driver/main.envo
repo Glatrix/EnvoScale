@@ -22,7 +22,7 @@ void Usage(i32 fd) {
     write(fd, "  parse <file.envo>   print the syntax tree of a source file\n");
     write(fd, "  check <file.envo>...\n");
     write(fd, "                      check names and types; print the typed syntax tree\n");
-    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [-map <file>] [--target x86_64-windows|x86_64-linux]\n");
+    write(fd, "  build <file.envo>... -o <output> [-O0|-O2] [--lib <dir> [--os none]] [-map <file>] [--target x86_64-windows|x86_64-linux]\n");
     write(fd, "                      compile a program to an executable\n");
     write(fd, "  compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(fd, "                      compile to an EIR object: the code of one file (--unit)\n");
@@ -146,13 +146,27 @@ i32 CmdCheck(usize argi, bool core) {
         return EXIT_USAGE;
     }
     Sources src = Sources.New();
-    for (usize i = argi; i < argc(); i++) Load(ref src, arg(i));
+    str lib = "";
+    str os = "";
+    usize i = argi;
+    while (i < argc()) {
+        if ((Same(arg(i), "--lib") || Same(arg(i), "--os")) && i + 1 < argc()) {
+            if (Same(arg(i), "--lib")) lib = arg(i + 1);
+            else os = arg(i + 1);
+            i += 2;
+            continue;
+        }
+        Load(ref src, arg(i));
+        i++;
+    }
+    // the libraries' native adapters use the target intrinsics, which come with the runtime
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, HostTargetCode()), core);
     u32 prelude = 0xFFFFFFFF;
     if (!core) prelude = src.Add("<prelude>/prelude.envo", string.From(RUNTIME_3)) as u32;
     List<usize> starts = List<usize>.New();
     List<Token> toks = LexAll(src, ref starts, core);
     Tree tree = Parse(src, toks, starts, core);
-    Checker c = Checker.New(src, tree, core, false);
+    Checker c = Checker.New(src, tree, core, lib.Len > 0);
     c.PreludeFile = prelude;
     c.CheckProgram();
     string listing = string.New();
@@ -205,7 +219,7 @@ i32 CmdEirCheck(usize argi) {
 }
 
 void BuildUsage() {
-    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [-map <file>] [--target x86_64-windows|x86_64-linux]\n");
+    write(2, "usage: envoc build <file.envo>... -o <output> [-O0|-O2] [--lib <dir> [--os none]] [-map <file>] [--target x86_64-windows|x86_64-linux]\n");
     write(2, "       envoc compile <file.envo>... -o <out.eo> [--unit <file.envo>] [--target …]\n");
     write(2, "       envoc link <file.eo>... -o <output> [-O0|-O2]\n");
     exit(EXIT_USAGE);
@@ -230,11 +244,18 @@ struct BuildArgs {
     bool TargetSet;
     bool Opt;               // -O2
     str Map;                // -map <file>: a link map of function addresses
+    str Lib;                // --lib <dir>: holds lib/ and adapters/ (D21)
+    str Os;                 // --os: the adapters `platform` binds (D23); "" for the target's
     str Unit;               // compile: the file whose code the object holds
 }
 
+u32 HostTargetCode() {
+    if (Same(HostTarget(), "x86_64-windows")) return TARGET_WINDOWS;
+    return TARGET_LINUX;
+}
+
 BuildArgs ParseBuildArgs(usize argi) {
-    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX, TargetSet = false, Unit = "", Opt = false, Map = "" };
+    BuildArgs b = new BuildArgs { Files = List<usize>.New(), Output = "", Target = TARGET_LINUX, TargetSet = false, Unit = "", Opt = false, Map = "", Lib = "", Os = "" };
     if (Same(HostTarget(), "x86_64-windows")) b.Target = TARGET_WINDOWS;
     usize i = argi;
     while (i < argc()) {
@@ -254,6 +275,14 @@ BuildArgs ParseBuildArgs(usize argi) {
         } else if (Same(a, "-O2") || Same(a, "-O0")) {
             b.Opt = Same(a, "-O2");
             i++;
+        } else if (Same(a, "--lib")) {
+            if (i + 1 >= argc()) BuildUsage();
+            b.Lib = arg(i + 1);
+            i += 2;
+        } else if (Same(a, "--os")) {
+            if (i + 1 >= argc()) BuildUsage();
+            b.Os = arg(i + 1);
+            i += 2;
         } else if (Same(a, "-map")) {
             if (i + 1 >= argc()) BuildUsage();
             b.Map = arg(i + 1);
@@ -270,11 +299,23 @@ BuildArgs ParseBuildArgs(usize argi) {
     return b;
 }
 
+// The adapters `platform` binds: --os, or the target's operating system (D23).
+str PlatformOs(str os, u32 target) {
+    if (os.Len == 0) {
+        if (target == TARGET_WINDOWS) return "windows";
+        return "linux";
+    }
+    bool ok = Same(os, "none") || (Same(os, "windows") && target == TARGET_WINDOWS) || (Same(os, "linux") && target == TARGET_LINUX);
+    if (!ok) ToolFail("--os must be `none` or the target's operating system", EXIT_USAGE);
+    return os;
+}
+
 // Compiles the program in the given files, with the runtime for target, to an EIR module.
 // With a unit (an index into files), the module is that file's object: other files'
 // functions are only declared, and the runtime goes with the entry file (unit 0).
-Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool core, bool verify, i32 unit, bool opt) {
+Module CompileProgram(ref Sources src, in List<usize> files, u32 target, bool core, bool verify, i32 unit, bool opt, str lib, str os) {
     foreach (var i in files.AsSlice()) Load(ref src, arg(i));
+    if (lib.Len > 0) LoadLibraries(ref src, lib, PlatformOs(os, target), core);
     src.Add("<runtime>/common.envo", string.From(RUNTIME_0));
     if (target == TARGET_WINDOWS) src.Add("<runtime>/windows.envo", string.From(RUNTIME_2));
     else src.Add("<runtime>/linux.envo", string.From(RUNTIME_1));
@@ -307,7 +348,7 @@ i32 CmdBuild(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Output.Len == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, -1, b.Opt);
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, -1, b.Opt, b.Lib, b.Os);
     string map = string.New();
     string image = GenModule(ref m, b.Target, b.Opt, b.Map.Len > 0, ref map);
     if (b.Map.Len > 0 && WriteOut(b.Map, map, false) != EXIT_OK) return EXIT_ERRORS;
@@ -326,7 +367,7 @@ i32 CmdCompile(usize argi, bool core) {
         if (unit < 0) ToolFail("--unit must name one of the files", EXIT_USAGE);
     }
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, unit, b.Opt);
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, true, unit, b.Opt, b.Lib, b.Os);
     string bytes = m.Encode();
     return WriteOut(b.Output, bytes, false);
 }
@@ -374,7 +415,7 @@ i32 CmdEir(usize argi, bool core) {
     BuildArgs b = ParseBuildArgs(argi);
     if (b.Files.Len() == 0 || b.Unit.Len > 0) BuildUsage();
     Sources src = Sources.New();
-    Module m = CompileProgram(ref src, b.Files, b.Target, core, false, -1, b.Opt);     // eir-check the output to verify it
+    Module m = CompileProgram(ref src, b.Files, b.Target, core, false, -1, b.Opt, b.Lib, b.Os);     // eir-check the output to verify it
     if (b.Output.Len > 0) {
         string bytes = m.Encode();
         return WriteOut(b.Output, bytes, false);

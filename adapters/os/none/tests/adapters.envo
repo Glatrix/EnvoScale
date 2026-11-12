@@ -1,0 +1,71 @@
+// os.none: the reference adapters, through their own types.
+// expect: console [hello, world] [oops] read [ab] [c] []
+// expect: fs ok
+// expect: clock 1000 2500
+// expect: entropy same, differs by seed
+// expect: env 2 program --flag
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+use os.none;
+
+none.Console c = none.Console.WithInput("abc");
+c.Out("hello");
+c.Out(", world");
+c.Err("oops");
+u8[2] buf;
+u8[2] buf2;
+u8[2] buf3;
+usize n1 = c.Read(buf[0..2]);
+str first = "";
+unsafe { first = str_from(&buf[0], n1); }
+write(1, "console [");
+write(1, c.Stdout());
+write(1, "] [");
+write(1, c.Stderr());
+write(1, "] read [");
+write(1, first);
+usize n2 = c.Read(buf2[0..2]);
+str second = "";
+unsafe { second = str_from(&buf2[0], n2); }
+write(1, "] [");
+write(1, second);
+usize n3 = c.Read(buf3[0..2]);
+if (n3 == 0) print("] []");
+
+none.FileSystem fs = none.FileSystem.New();
+bool ok = !fs.IsFile("a.txt") && fs.Write("a.txt", "one").IsOk() && fs.IsFile("./a.txt");
+ok = ok && fs.Read("a.txt").Unwrap().Equals("one");
+ok = ok && fs.Write("d/b.txt", "x").IsErr() && fs.CreateDir("d").IsOk() && fs.IsDir("d/") && fs.Write("d\\b.txt", "two").IsOk();
+ok = ok && fs.RemoveDir("d").IsErr() && fs.Delete("d/b.txt").IsOk() && fs.RemoveDir("d").IsOk() && !fs.IsDir("d");
+ok = ok && fs.Read("missing").IsErr() && fs.Delete("missing").IsErr();
+if (ok) print("fs ok");
+
+none.Clock clock = none.Clock.At(0);
+clock.Advance(1000);
+u64 a = clock.MonoNanos();
+clock.Advance(1500);
+if (a == 1000 && clock.MonoNanos() == 2500) print("clock 1000 2500");
+
+none.Entropy e1 = none.Entropy.Seeded(7);
+none.Entropy e2 = none.Entropy.Seeded(7);
+none.Entropy e3 = none.Entropy.Seeded(8);
+u8[16] x;
+u8[16] y;
+u8[16] z;
+e1.Fill(x[0..16]);
+e2.Fill(y[0..16]);
+e3.Fill(z[0..16]);
+bool same = true;
+bool differs = false;
+for (usize i = 0; i < 16; i++) {
+    if (x[i] != y[i]) same = false;
+    if (x[i] != z[i]) differs = true;
+}
+if (same && differs) print("entropy same, differs by seed");
+
+none.Environment env = none.Environment.Of("program");
+env.Add("--flag");
+write(1, "env ");
+if (env.ArgCount() == 2) write(1, "2 ");
+write(1, env.Arg(0));
+write(1, " ");
+print(env.Arg(1));

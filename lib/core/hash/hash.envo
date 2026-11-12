@@ -1,0 +1,91 @@
+// core.hash: hashing, and the key interface the hash-based collections use. The hashes
+// are fast and deterministic (no random seed); they are not for protecting a table from
+// keys an attacker chooses. That needs a keyed hash, which comes with envo.crypto (M7).
+namespace core.hash;
+
+// What a hash-table key provides: a hash, and equality that agrees with it (equal keys
+// have equal hashes). Implemented here for the integer types, `bool`, `str` and `string`.
+// (`IKey` rather than the prelude's IHash and IEquatable: `string` already has an
+// `Equals(str)` method.)
+public interface IKey<T> {
+    u64 KeyHash();
+    bool KeyEquals(in T other);
+}
+
+// FNV-1a over bytes.
+public u64 Bytes(u8[] b) {
+    u64 h = 0xCBF29CE484222325;
+    for (usize i = 0; i < b.Len; i++) h = (h ^ b[i] as u64) *% 0x100000001B3;
+    return h;
+}
+
+public u64 Str(str s) {
+    u64 h = 0xCBF29CE484222325;
+    for (usize i = 0; i < s.Len; i++) h = (h ^ s[i] as u64) *% 0x100000001B3;
+    return h;
+}
+
+// Scrambles v so nearby integers land far apart (SplitMix64's finalizer).
+public u64 Mix(u64 v) {
+    u64 z = v +% 0x9E3779B97F4A7C15;
+    z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+    z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
+    return z ^ (z >> 31);
+}
+
+// A hash of h and v together, in that order.
+public u64 Combine(u64 h, u64 v) => Mix(h ^ (v +% 0x9E3779B97F4A7C15 +% (h << 6) +% (h >> 2)));
+
+impl IKey<u64> for u64 {
+    u64 KeyHash() => Mix(this);
+    bool KeyEquals(in u64 other) => this == other;
+}
+
+impl IKey<i64> for i64 {
+    u64 KeyHash() => Mix(this as u64);
+    bool KeyEquals(in i64 other) => this == other;
+}
+
+impl IKey<usize> for usize {
+    u64 KeyHash() => Mix(this as u64);
+    bool KeyEquals(in usize other) => this == other;
+}
+
+impl IKey<u32> for u32 {
+    u64 KeyHash() => Mix(this as u64);
+    bool KeyEquals(in u32 other) => this == other;
+}
+
+impl IKey<i32> for i32 {
+    u64 KeyHash() => Mix(this as i64 as u64);
+    bool KeyEquals(in i32 other) => this == other;
+}
+
+impl IKey<u8> for u8 {
+    u64 KeyHash() => Mix(this as u64);
+    bool KeyEquals(in u8 other) => this == other;
+}
+
+impl IKey<bool> for bool {
+    u64 KeyHash() {
+        if (this) return Mix(1);
+        return Mix(0);
+    }
+    bool KeyEquals(in bool other) => this == other;
+}
+
+impl IKey<str> for str {
+    u64 KeyHash() => Str(this);
+    bool KeyEquals(in str other) {
+        if (this.Len != other.Len) return false;
+        for (usize i = 0; i < this.Len; i++) {
+            if (this[i] != other[i]) return false;
+        }
+        return true;
+    }
+}
+
+impl IKey<string> for string {
+    u64 KeyHash() => Str(this.AsStr());
+    bool KeyEquals(in string other) => this.Equals(other.AsStr());
+}

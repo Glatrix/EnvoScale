@@ -581,6 +581,62 @@ do_test() {
         if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
         else bad "stage2 spec/eir/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
     done
+    # The standard platform (M4): each program in lib/*/tests/ and adapters/os/*/tests/ is
+    # built by Stage 2 with --lib at -O0 and -O2 and run (`// os: none` picks the
+    # reference adapters); each program in tests/conformance/ runs against both the
+    # reference adapters and the native ones.
+    say 'stage 2 library tests: lib/*/tests, adapters/os/*/tests, tests/conformance'
+    libdir="$ROOT/build/run-lib"
+    mkdir -p "$libdir"
+    EXE=$envoc2
+    for f in $(cd "$ROOT" && find lib adapters tests/conformance -name '*.envo' \( -path '*/tests/*' -o -path 'tests/conformance/*' \) 2>/dev/null | LC_ALL=C sort); do
+        case "$f" in
+            tests/conformance/*) oses='none native' ;;
+            *) oses=$(sed -n 's|^// os: \(.*\)$|\1|p' "$ROOT/$f" | tr -d '\r' | head -n 1); [ -n "$oses" ] || oses=native ;;
+        esac
+        sed -n 's|^// expect: \(.*\)$|\1|p' "$ROOT/$f" | tr -d '\r' > "$TMP/expected"
+        base=$(printf '%s' "${f%.envo}" | tr '/' '-')
+        for os in $oses; do
+            for level in -O0 -O2; do
+                name="lib $f ($os $level)"
+                program="$libdir/$base-$os$level$(host_suffix)"
+                set -- build "$level" --lib "$ROOT" "$ROOT/$f" -o "$program"
+                [ "$os" = native ] || set -- "$@" --os "$os"
+                run "$libdir" "$@"
+                if [ "$rc" -ne 0 ]; then bad "$name" "build failed: $(cat "$TMP/err")"; continue; fi
+                set +e
+                (cd "$libdir" && "$program") > "$TMP/out" 2> "$TMP/err"
+                rc=$?
+                set -e
+                tr -d '\r' < "$TMP/out" > "$TMP/actual"
+                if [ "$rc" -ne 0 ] || ! cmp -s "$TMP/expected" "$TMP/actual"; then
+                    bad "$name" "exit $rc, or stdout differs: $(head -c 200 "$TMP/err")"
+                    diff "$TMP/expected" "$TMP/actual" | head -n 10 || true
+                    continue
+                fi
+                pass
+            done
+        done
+    done
+    # Library resolution errors (M4.1): `// lib: root` checks against tests/spec/lib/root
+    # instead of the repository
+    say 'stage 2 spec tests: tests/spec/lib'
+    dir="$ROOT/tests/spec/lib"
+    for f in "$dir"/*.envo; do
+        base=$(basename "$f")
+        line=$(grep -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
+        code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
+        where=${line##* @ }
+        case "$where" in
+            *.envo:*) want="$where: error[$code]" ;;
+            *) want="$base:$where: error[$code]" ;;
+        esac
+        libroot="$ROOT"
+        if grep -q '^// lib: root' "$f"; then libroot=root; fi
+        run "$dir" check --lib "$libroot" "$base"
+        if [ "$rc" -eq 1 ] && grep -q -F "$want" "$TMP/err"; then pass
+        else bad "stage2 spec/lib/$base" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
+    done
     say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens; eir on the run programs'
     for f in $(cd "$ROOT" && find compiler bootstrap/stage1 tests -name '*.envo' | LC_ALL=C sort); do
         dir="$ROOT/$(dirname "$f")"

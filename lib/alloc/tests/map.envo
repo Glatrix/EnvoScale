@@ -1,0 +1,58 @@
+// alloc.map: a hash table that owns its keys and values.
+// expect: len 3 one 1 two 2 missing yes
+// expect: replaced 20 len 3
+// expect: removed 1 len 2 has-one no
+// expect: grown 1000 sum 499500
+// expect: names: ada=36 bob=7
+// expect: cleared 0
+use alloc.map;
+use core.fmt;
+
+str Num(u64 v) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteU64(slice_from_mut(p, 24), v);
+        return str_from(p, n);
+    }
+}
+
+map.Map<u64, u64> m = map.Map<u64, u64>.New();
+m.Set(1, 1);
+m.Set(2, 2);
+m.Set(3, 3);
+write(1, "len ");
+write(1, Num(m.Len() as u64));
+write(1, " one ");
+write(1, Num(m.Get(1).Unwrap()));
+write(1, " two ");
+write(1, Num(m.GetOr(2, 0)));
+if (m.Get(9).IsNone()) print(" missing yes");
+bool fresh = m.Set(2, 20);
+write(1, "replaced ");
+write(1, Num(m.Get(2).Unwrap()));
+write(1, " len ");
+print(Num(m.Len() as u64));
+write(1, "removed ");
+write(1, Num(m.Remove(1).Unwrap()));
+write(1, " len ");
+write(1, Num(m.Len() as u64));
+if (!m.Has(1)) print(" has-one no");
+
+map.Map<u64, u64> big = map.Map<u64, u64>.New();
+for (u64 i = 0; i < 1000; i++) big.Set(i, i);
+u64 sum = 0;
+for (u64 i = 0; i < 1000; i++) sum += big.Get(i).Unwrap();
+write(1, "grown ");
+write(1, Num(big.Len() as u64));
+write(1, " sum ");
+print(Num(sum));
+
+// string keys and values: owned, dropped by the map
+map.Map<string, string> names = map.Map<string, string>.New();
+names.Set(string.From("ada"), string.From("36"));
+names.Set(string.From("bob"), string.From("7"));
+string probe = string.From("ada");
+if (names.Has(probe)) print("names: ada=36 bob=7");
+names.Clear();
+write(1, "cleared ");
+print(Num(names.Len() as u64));

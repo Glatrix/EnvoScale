@@ -1,0 +1,30 @@
+// alloc.set: Set<T>, a hash set owning its items (an alloc.map.Map with no values).
+namespace alloc.set;
+
+use core.hash.{IKey};
+use alloc.map.{Map};
+
+public struct Set<T> {
+    Map<T, bool> Table;
+
+    public static Set<T> New() => new Set<T> { Table = Map<T, bool>.New() };
+
+    public usize Len() => this.Table.Len();
+    public bool IsEmpty() => this.Table.IsEmpty();
+    public bool Has(in this, in T item) where T : IKey<T> => this.Table.Has(item);
+
+    // Adds item; true if it was not there yet.
+    public bool Add(ref this, T item) where T : IKey<T> => this.Table.Set(item, true);
+
+    // Removes item; true if it was there.
+    public bool Remove(ref this, in T item) where T : IKey<T> => this.Table.Remove(item).IsSome();
+
+    public void Clear(ref this) => this.Table.Clear();
+
+    // Slots and ItemAt go over the items without copying them (see Map.KeyAt).
+    public usize Slots(in this) => this.Table.Slots();
+    public T[] ItemAt(in this, usize slot) => this.Table.KeyAt(slot);
+
+    // The items, in table order.
+    public List<T> Items(in this) where T : Copy => this.Table.Keys();
+}

@@ -4,7 +4,7 @@ This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](..
 It records how the brief was understood, the questions still open, and the task
 breakdown for the current milestone. It is rewritten at the start of each milestone.
 
-- **Current milestone:** M3 (self-hosting) is done: every increment in §5 is complete. This plan is rewritten for M4 next. M0–M2's records are in §4.
+- **Current milestone:** M4 (foundations). M0–M3 are done; their records are in §4.
 - **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
 
 ---
@@ -56,6 +56,11 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D18 | The **fixed point**: `envoc1` builds `envoc` (stage2a); stage2a builds `envoc` (stage2b); stage2b builds `envoc` (stage2c). stage2b and stage2c must be byte-identical, and identical between the Windows and Linux hosts. CI checks it on every push. | `docs/architecture/stage2.md` |
 | D19 | Linking in M3 is **whole-program over EIR objects**: a source file compiles to a binary EIR object (`.eo`); `envoc link` merges objects with the runtime, generates code and writes PE or ELF directly. Foreign objects (COFF/ELF, `.lib`/`.a`) arrive with `extern "C"` in M4. | `docs/architecture/stage2.md` |
 | D20 | `-O0` keeps Stage 1's stack-slot code generation (fast and simple); `-O2` adds SSA optimizations (constant folding, copy propagation, dead-code elimination, CFG simplification, inlining of small functions) and linear-scan register allocation. Both are deterministic, and every run test runs at both levels and must agree. | `docs/architecture/stage2.md` |
+| D21 | **Library modules** resolve by path until package manifests exist (M5): namespace `a.b` is the file `<lib>/a/b/b.envo` (`std.fs` is `lib/std/fs/fs.envo`), loaded when a file `use`s it, transitively. `envoc --lib <dir>` names the folder that holds `lib/` and `adapters/`. The runtime cannot list folders, and one file per module keeps the rule exact. | `docs/architecture/library.md` |
+| D22 | **Ports are interfaces** used through generic bounds (static dispatch, D13): Envo-S1 has no dynamic interface values. An adapter is a struct that implements the port and owns its state. The full-control door takes the port as a parameter (`fs.ReadTextWith(ref myFs, path)`). | `docs/architecture/library.md` |
+| D23 | The simple door reaches the target's adapters through one namespace, **`platform`**, which the build binds: `adapters/os/<os>/platform.envo` for the target's OS, or `adapters/os/none` with `--os none`. `lib/` names `platform` but never an adapter namespace (`os.*`); the compiler enforces it (E0213). | `docs/architecture/library.md` |
+| D24 | M4's ports are the ones the runtime can serve today: `Console`, `FileSystem`, `Clock`, `Entropy` and `Environment`. `Threads`, `Executor`, `NetStack` and the device ports come with the milestones that need them (M6, M7, M8); `std.thread`, `sync` and `async` wait for them. | `docs/PLAN.md` §5 |
+| D25 | Native adapters call the OS directly through the target intrinsics (`__syscall`, `__wincall`). The Windows import table grows in both Stage 1 and Stage 2, so their executables stay byte-identical (D17), and gains a second DLL for the system's random generator. | `docs/architecture/library.md` |
 
 ## 3. Open questions
 
@@ -119,44 +124,46 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   tests on both OSes. DoD record in `STATUS.md`; design in
   [`architecture/stage1.md`](architecture/stage1.md).
 
-## 5. M3 — Self-hosting
+- **M3 — Self-hosting.** `envoc`, written in Envo-S1 in `compiler/`, built by `envoc1`.
+  Increments 3.1–3.10 were: skeleton, lexer, parser, checker, ownership (each matching
+  `envoc1` on every test and on both compilers' sources), lowering and the `-O0`
+  backend (byte-identical to `envoc1`), binary EIR objects and `envoc link`, `-O2`
+  (inlining, folding, dead code, block merging, linear-scan registers), the fixed point
+  in CI on both hosts, and ownership beyond Stage 1. Followed by a security and
+  performance sweep. Design in [`architecture/stage2.md`](architecture/stage2.md);
+  follow-ups #79, #80.
 
-**DoD (brief §15):** Stage 2 `envoc` in full Envo, with an x86-64 backend, `-O0`/`-O2`,
-and PE+ELF linking. **Fixed-point check passes in CI.** Read here as: `envoc`, written in
-Envo-S1 (D16) and built by `envoc1`, compiles every Envo-Core and Envo-S1 spec test at
-`-O0` and `-O2` on Windows and Linux, links separately compiled objects (D19), and
-reaches the fixed point (D18) in CI on both hosts.
+## 5. M4 — Foundations
+
+**DoD (brief §16):** `core`, `alloc`, `std`, `lib/ports`, OS adapters for Windows and
+Linux, plus the `none`/in-memory reference adapters. Port conformance suite exists.
+Read here as: the layers are Envo-S1 code that `envoc` compiles (D16); every port has a
+reference adapter in `adapters/os/none` and native adapters for Windows and Linux, and
+one conformance suite per port passes against all three on both hosts in CI. Library
+resolution and the platform binding follow D21–D25.
 
 | # | Increment | Tested by | State |
 |---|---|---|---|
-| [3.1](https://github.com/envoscale/EnvoScale/issues/68) | Stage 2 skeleton: `compiler/` in Envo-S1 built by `envoc1`; support library over `List<T>` and `string` (buffers, maps, files, diagnostics); `envoc version`; scripts and CI build it | smoke tests | done: `envoc version`, `help`, `selftest`; `envoc.util` and `envoc.diag`; built for both OSes by both scripts and CI; three Stage 1 bugs found and fixed ([`architecture/stage2.md`](architecture/stage2.md)) |
-| [3.2](https://github.com/envoscale/EnvoScale/issues/69) | Lexer for the full lexical grammar | every lexer input matches `envoc1` (D17) | done: `envoc lex` matches `envoc1` on the goldens, the lexical tests and every `.envo` file in the repo |
-| [3.3](https://github.com/envoscale/EnvoScale/issues/70) | Parser for Envo-S1, keeping trivia for tools | every parser and syntax input matches `envoc1` | done: `envoc parse` matches `envoc1` on the goldens, the syntax tests and every `.envo` file in the repo. Comments aren't kept yet; the lossless tree comes with the formatter (M5) |
-| [3.4](https://github.com/envoscale/EnvoScale/issues/71) | Names, types, generics, interfaces, closures, enums, views, namespaces | every type and error input matches `envoc1` | done: `envoc check` matches `envoc1` on the checker goldens, the type tests, the run programs and both compilers' sources |
-| [3.5](https://github.com/envoscale/EnvoScale/issues/72) | Ownership: the move checker, call borrows, view tracking and closure origins | `s1-own` and every type input, as under `envoc1` | done: `envoc check` matches `envoc1` on every ownership and type test, the run programs and both compilers' sources. Accepting more than Stage 1 moved to 3.10 |
-| [3.6](https://github.com/envoscale/EnvoScale/issues/73) | Lowering to EIR v1; the `-O0` backend, PE/ELF writers and runtime | every run and multi-file program, as under `envoc1` | done: `envoc eir` and `envoc build` match `envoc1` byte for byte on every run and multi-file program, both targets, and on both compilers. The binary EIR form moved to 3.7 |
-| [3.7](https://github.com/envoscale/EnvoScale/issues/74) | Separate compilation: the binary EIR form, `.eo` objects and `envoc link` (D19) | multi-file programs built from objects | done: `envoc compile --unit` and `envoc link` give the same executable as `envoc build` for every run and multi-file program and for Stage 2 itself. Each object still reads every source file; interface files come with the build system (M5) |
-| [3.8](https://github.com/envoscale/EnvoScale/issues/75) | `-O2`: SSA optimizations and linear-scan register allocation (D20) | every run program at `-O0` and `-O2` | done: inlining, constant and branch folding, copy propagation, dead code, block merging; rematerialization and linear-scan registers. Every run and multi-file program gives the same results at both levels, and the `-O2` compiler reproduces itself. The `-O2` compiler builds Stage 2 about 40% faster |
-| [3.9](https://github.com/envoscale/EnvoScale/issues/76) | Self-hosting: `envoc` compiles itself; the fixed point (D18) in CI on both hosts | CI `fixed-point` job | done: `bootstrap fixedpoint` builds stage2b and stage2c at `-O2` for both targets; they are identical on each host, and the hosts agree |
-| [3.10](https://github.com/envoscale/EnvoScale/issues/78) | Borrow checking beyond Stage 1: accept the programs chapter 5 allows that Stage 1 rejects (after the fixed point, so Stage 2 builds itself while it changes) | new `s1-own` tests that `envoc` accepts | done: disjoint field borrows, partial moves out of values with a drop, `once fn` lambdas that move their captures, locals that borrow (`tests/spec/s2-run`, `s2-own`). Two refinements where Stage 2 is still stricter are [#79](https://github.com/envoscale/EnvoScale/issues/79) |
+| [4.1](https://github.com/envoscale/EnvoScale/issues/81) | Library resolution: `--lib`, `use` loads modules by path (D21), `platform` binding and `--os` (D23), the lib→adapters rule in the compiler | `tests/spec/lib/` | |
+| [4.2](https://github.com/envoscale/EnvoScale/issues/82) | `core`: integer formatting and parsing, `str` searching and splitting, math helpers, hashing | `lib/core/tests/` | |
+| [4.3](https://github.com/envoscale/EnvoScale/issues/83) | `alloc`: `Map<K, V>`, `Set<T>`, `Box<T>`, `StringBuilder` | `lib/alloc/tests/` | |
+| [4.4](https://github.com/envoscale/EnvoScale/issues/84) | `ports` and the reference adapters (`os.none`): in-memory file system, captured console, manual clock, seeded entropy, fixed environment | `tests/conformance/` against `os.none` | |
+| [4.5](https://github.com/envoscale/EnvoScale/issues/85) | Native adapters `os.windows` and `os.linux` (D25), Windows import table grown in both stages | `tests/conformance/` against each OS, in CI | |
+| [4.6](https://github.com/envoscale/EnvoScale/issues/86) | `std`: `io`, `fs`, `path`, `time`, `env`, `random`, each with a simple door through `platform` and a full-control door taking the port | `lib/std/tests/` | |
+| [4.7](https://github.com/envoscale/EnvoScale/issues/87) | M4 complete: docs, examples, `STATUS.md` | the whole suite | |
 
 ## 6. Risks
 
-- **Stage 2 volume and Stage 1 bugs.** `envoc` is the largest Envo-S1 program yet, so it
-  will find `envoc1` bugs. Mitigation: each bug gets a minimal `s1-run` or `s1-types`
-  reproduction and a fix in Stage 1 before Stage 2 works around it.
-- **Compile speed.** `envoc1` output is unoptimized and its heap never frees. Building
-  `envoc` with it is measured from 3.1 on; `-O2` (3.8) speeds up stages 2b and 2c.
-- **Stage 0 bugs found by a large program.** `envoc0` has only compiled tests so far.
-  A miscompilation in Stage 1 looks like a Stage 1 bug. Mitigation: differential tests
-  (D14) and a minimal reproduction added to `core-run` for every Stage 0 bug found.
-  Fixes must fit Stage 0's budget; a fix that cannot gets an RFC.
-- **Debugging without locations.** Programs built by `envoc0` panic with a reason but
-  no source location. Mitigation: small functions, unit-style tests per module, and
-  `envoc1` itself reporting its phase on internal errors.
-- **Speed.** `envoc0` output has no optimizer and a bump allocator that never frees.
-  Fine at Stage 1's scale; measured from 2.4 on and recorded in `STATUS.md`.
+- **Envo-S1 is a small language for a library.** No floats, no dynamic interface
+  values, no classes; lambdas own no resources. Mitigation: M4's layers use what S1 has
+  (static dispatch, D22), and each module's README says what changes when `envoc`
+  accepts more of Envo. APIs are designed for full Envo and implemented in S1 now.
+- **The heap never frees** (Stage 1's runtime). Library code allocates freely; fine at
+  test scale, and the allocator port arrives with `alloc`'s allocator interface.
+- **OS behaviour differs.** Conformance suites define the behaviour each port promises,
+  and run against every adapter on both hosts in CI. A difference is an adapter bug or a
+  suite that promised too much.
 - **Untestable Linux path locally.** Development happens on Windows; Linux binaries
   only run in CI. Unchanged from M1.
-- **Spec drift.** Chapters 1–5 are drafts; Envo-S1 makes parts of chapters 2–5
-  normative as `envoc1` implements them.
+- **Spec drift.** Chapters 1–5 are drafts; the library is written against Envo-S1,
+  which is normative where `envoc` implements it.

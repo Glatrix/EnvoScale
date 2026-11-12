@@ -1,0 +1,409 @@
+// os.none: the reference adapters, which need no operating system (PLAN D22-D24;
+// docs/architecture/ports-and-adapters.md). Each port's conformance suite is developed
+// against them first, most library tests use them, and they are the fallback on a new
+// platform. They are deterministic: the same calls give the same results on every run.
+//
+// Each adapter keeps its state on the heap behind a pointer, so copies of one adapter
+// share it (the heap never frees in Envo-S1, so nothing is lost).
+namespace os.none;
+
+use ports.{IConsole, IFileSystem, IClock, IEntropy, IEnvironment, IoError};
+use alloc.map.{Map};
+use alloc.set.{Set};
+
+// ------------------------------------------------------------------ console
+
+struct ConsoleState {
+    string Out;
+    string Err;
+    string In;
+    usize InAt;
+}
+
+// A console that keeps what is written to it, and reads from text given up front.
+public struct Console {
+    *ConsoleState State;
+
+    public static Console New() => Console.WithInput("");
+
+    public static Console WithInput(str input) {
+        unsafe {
+            *ConsoleState p = alloc(sizeof(ConsoleState)) as *ConsoleState;
+            p[0] = new ConsoleState { Out = string.New(), Err = string.New(), In = string.From(input), InAt = 0 };
+            return new Console { State = p };
+        }
+    }
+
+    // Everything written to standard output so far.
+    public str Stdout(in this) {
+        unsafe { return this.State[0].Out.AsStr(); }
+    }
+
+    // Everything written to standard error so far.
+    public str Stderr(in this) {
+        unsafe { return this.State[0].Err.AsStr(); }
+    }
+}
+
+impl IConsole for Console {
+    void Out(ref this, str text) {
+        unsafe { this.State[0].Out.Append(text); }
+    }
+
+    void Err(ref this, str text) {
+        unsafe { this.State[0].Err.Append(text); }
+    }
+
+    usize Read(ref this, mut u8[] into) {
+        usize n = 0;
+        unsafe {
+            str input = this.State[0].In.AsStr();
+            usize at = this.State[0].InAt;
+            while (n < into.Len && at + n < input.Len) {
+                into[n] = input[at + n];
+                n++;
+            }
+            this.State[0].InAt = at + n;
+        }
+        return n;
+    }
+}
+
+// The process's own standard streams, through the language runtime: what `platform`
+// gives as the console with `--os none`, so a program's output can still be read.
+public struct Terminal {
+    u8 Unused;
+
+    public static Terminal New() => new Terminal { Unused = 0 };
+}
+
+impl IConsole for Terminal {
+    void Out(ref this, str text) => write(1, text);
+    void Err(ref this, str text) => write(2, text);
+
+    usize Read(ref this, mut u8[] into) {
+        if (into.Len == 0) return 0;
+        isize n = 0;
+        unsafe { n = read(0, &into[0], into.Len); }
+        if (n <= 0) return 0;
+        return n as usize;
+    }
+}
+
+// ------------------------------------------------------------------ file system
+
+struct FsState {
+    Map<string, string> Files;
+    Set<string> Dirs;
+}
+
+// A file system in memory. Paths are compared after `\` becomes `/`, a leading `./` and
+// a trailing `/` go, and repeated `/` collapse; "" and "." are the working directory,
+// which always exists.
+public struct FileSystem {
+    *FsState State;
+
+    public static FileSystem New() {
+        unsafe {
+            *FsState p = alloc(sizeof(FsState)) as *FsState;
+            p[0] = new FsState { Files = Map<string, string>.New(), Dirs = Set<string>.New() };
+            return new FileSystem { State = p };
+        }
+    }
+}
+
+// path in the form the file system compares.
+string Clean(str path) {
+    string r = string.New();
+    usize i = 0;
+    while (i + 1 < path.Len && path[i] == '.' && (path[i + 1] == '/' || path[i + 1] == 0x5C)) i += 2;
+    if (path.Len == 1 && path[0] == '.') i = 1;
+    while (i < path.Len) {
+        u8 c = path[i];
+        if (c == 0x5C) c = '/';
+        if (c == '/' && r.Len() > 0 && r.AsStr()[r.Len() - 1] == '/') {
+            i++;
+            continue;
+        }
+        r.AppendByte(c);
+        i++;
+    }
+    while (r.Len() > 1 && r.AsStr()[r.Len() - 1] == '/') {
+        string t = string.From(r.AsStr()[0..r.Len() - 1]);
+        r = t;
+    }
+    return r;
+}
+
+// The directory that holds path ("" for the working directory).
+string Parent(str path) {
+    usize i = path.Len;
+    while (i > 0) {
+        i--;
+        if (path[i] == '/') {
+            if (i == 0) return string.From("/");
+            return string.From(path[0..i]);
+        }
+    }
+    return string.New();
+}
+
+impl IFileSystem for FileSystem {
+    Result<string, IoError> Read(ref this, str path) {
+        string p = Clean(path);
+        unsafe {
+            string[] v = this.State[0].Files.View(p);
+            if (v.Len == 0) {
+                if (this.State[0].Dirs.Has(p)) return Err(IoError.Invalid);
+                return Err(IoError.NotFound);
+            }
+            return Ok(string.From(v[0].AsStr()));
+        }
+    }
+
+    Result<usize, IoError> Write(ref this, str path, str data) {
+        string p = Clean(path);
+        if (p.Len() == 0) return Err(IoError.Invalid);
+        string parent = Parent(p.AsStr());
+        unsafe {
+            if (this.State[0].Dirs.Has(p)) return Err(IoError.Invalid);
+            if (parent.Len() > 0 && !this.State[0].Dirs.Has(parent)) return Err(IoError.NotFound);
+            this.State[0].Files.Set(p, string.From(data));
+        }
+        return Ok(data.Len);
+    }
+
+    bool IsFile(ref this, str path) {
+        string p = Clean(path);
+        unsafe { return this.State[0].Files.Has(p); }
+    }
+
+    bool IsDir(ref this, str path) {
+        string p = Clean(path);
+        if (p.Len() == 0) return true;
+        unsafe { return this.State[0].Dirs.Has(p); }
+    }
+
+    Result<bool, IoError> Delete(ref this, str path) {
+        string p = Clean(path);
+        unsafe {
+            if (this.State[0].Files.Remove(p).IsSome()) return Ok(true);
+            if (this.State[0].Dirs.Has(p)) return Err(IoError.Invalid);
+        }
+        return Err(IoError.NotFound);
+    }
+
+    Result<bool, IoError> CreateDir(ref this, str path) {
+        string p = Clean(path);
+        if (p.Len() == 0) return Err(IoError.Exists);
+        string parent = Parent(p.AsStr());
+        unsafe {
+            if (this.State[0].Dirs.Has(p) || this.State[0].Files.Has(p)) return Err(IoError.Exists);
+            if (parent.Len() > 0 && !this.State[0].Dirs.Has(parent)) return Err(IoError.NotFound);
+            this.State[0].Dirs.Add(p);
+        }
+        return Ok(true);
+    }
+
+    Result<bool, IoError> RemoveDir(ref this, str path) {
+        string p = Clean(path);
+        unsafe {
+            if (!this.State[0].Dirs.Has(p)) return Err(IoError.NotFound);
+            // empty: no file or directory has p as its parent
+            List<string> files = KeysOf(this.State[0].Files);
+            foreach (var f in files.AsSlice()) {
+                string fp = Parent(f.AsStr());
+                if (fp.Equals(p.AsStr())) return Err(IoError.NotEmpty);
+            }
+            List<string> dirs = DirsOf(this.State[0].Dirs);
+            foreach (var d in dirs.AsSlice()) {
+                string dp = Parent(d.AsStr());
+                if (dp.Equals(p.AsStr())) return Err(IoError.NotEmpty);
+            }
+            this.State[0].Dirs.Remove(p);
+        }
+        return Ok(true);
+    }
+}
+
+// Copies of the paths a table holds.
+List<string> KeysOf(in Map<string, string> m) {
+    List<string> all = List<string>.New();
+    for (usize i = 0; i < m.Slots(); i++) {
+        string[] k = m.KeyAt(i);
+        if (k.Len == 1) all.Push(string.From(k[0].AsStr()));
+    }
+    return all;
+}
+
+List<string> DirsOf(in Set<string> s) {
+    List<string> all = List<string>.New();
+    for (usize i = 0; i < s.Slots(); i++) {
+        string[] k = s.ItemAt(i);
+        if (k.Len == 1) all.Push(string.From(k[0].AsStr()));
+    }
+    return all;
+}
+
+// ------------------------------------------------------------------ clock
+
+struct ClockState {
+    i64 Now;
+    u64 Mono;
+}
+
+// A clock that moves only when told to (Advance).
+public struct Clock {
+    *ClockState State;
+
+    // Starts at wall-clock time start (nanoseconds since 1970) and monotonic time 0.
+    public static Clock At(i64 start) {
+        unsafe {
+            *ClockState p = alloc(sizeof(ClockState)) as *ClockState;
+            p[0] = new ClockState { Now = start, Mono = 0 };
+            return new Clock { State = p };
+        }
+    }
+
+    public void Advance(ref this, u64 nanos) {
+        unsafe {
+            this.State[0].Now = this.State[0].Now + nanos as i64;
+            this.State[0].Mono = this.State[0].Mono + nanos;
+        }
+    }
+}
+
+impl IClock for Clock {
+    i64 NowNanos(ref this) {
+        unsafe { return this.State[0].Now; }
+    }
+
+    u64 MonoNanos(ref this) {
+        unsafe { return this.State[0].Mono; }
+    }
+}
+
+// ------------------------------------------------------------------ entropy
+
+struct EntropyState {
+    u64 Next;
+}
+
+// Deterministic bytes from a seed (SplitMix64): for tests, never for keys.
+public struct Entropy {
+    *EntropyState State;
+
+    public static Entropy Seeded(u64 seed) {
+        unsafe {
+            *EntropyState p = alloc(sizeof(EntropyState)) as *EntropyState;
+            p[0] = new EntropyState { Next = seed };
+            return new Entropy { State = p };
+        }
+    }
+}
+
+impl IEntropy for Entropy {
+    void Fill(ref this, mut u8[] into) {
+        usize i = 0;
+        while (i < into.Len) {
+            u64 z = 0;
+            unsafe {
+                this.State[0].Next = this.State[0].Next +% 0x9E3779B97F4A7C15;
+                z = this.State[0].Next;
+            }
+            z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
+            z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
+            z = z ^ (z >> 31);
+            for (u64 k = 0; k < 8 && i < into.Len; k++) {
+                into[i] = ((z >> (8 * k)) & 0xFF) as u8;
+                i++;
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ environment
+
+struct EnvState {
+    List<string> Args;
+}
+
+// A fixed set of arguments.
+public struct Environment {
+    *EnvState State;
+
+    // An environment whose only argument is the program's name.
+    public static Environment Of(str program) {
+        unsafe {
+            *EnvState p = alloc(sizeof(EnvState)) as *EnvState;
+            p[0] = new EnvState { Args = List<string>.New() };
+            p[0].Args.Push(string.From(program));
+            return new Environment { State = p };
+        }
+    }
+
+    public void Add(ref this, str arg) {
+        unsafe { this.State[0].Args.Push(string.From(arg)); }
+    }
+}
+
+impl IEnvironment for Environment {
+    usize ArgCount(ref this) {
+        unsafe { return this.State[0].Args.Len(); }
+    }
+
+    str Arg(ref this, usize i) {
+        unsafe { return this.State[0].Args.AsSlice()[i].AsStr(); }
+    }
+}
+
+// ------------------------------------------------------------------ shared instances
+
+// One of each for the whole program: what `platform` hands out with `--os none`.
+static usize SharedFs = 0;
+static usize SharedClockState = 0;
+static usize SharedEntropyState = 0;
+static usize SharedEnvState = 0;
+
+// 2026-01-01 00:00:00 UTC, where the shared clock starts.
+public const i64 START_NANOS = 1767225600000000000;
+
+public FileSystem SharedFileSystem() {
+    unsafe {
+        if (SharedFs == 0) {
+            FileSystem f = FileSystem.New();
+            SharedFs = f.State as usize;
+        }
+        return new FileSystem { State = SharedFs as *FsState };
+    }
+}
+
+public Clock SharedClock() {
+    unsafe {
+        if (SharedClockState == 0) {
+            Clock c = Clock.At(START_NANOS);
+            SharedClockState = c.State as usize;
+        }
+        return new Clock { State = SharedClockState as *ClockState };
+    }
+}
+
+public Entropy SharedEntropy() {
+    unsafe {
+        if (SharedEntropyState == 0) {
+            Entropy e = Entropy.Seeded(0);
+            SharedEntropyState = e.State as usize;
+        }
+        return new Entropy { State = SharedEntropyState as *EntropyState };
+    }
+}
+
+public Environment SharedEnvironment() {
+    unsafe {
+        if (SharedEnvState == 0) {
+            Environment e = Environment.Of("program");
+            SharedEnvState = e.State as usize;
+        }
+        return new Environment { State = SharedEnvState as *EnvState };
+    }
+}

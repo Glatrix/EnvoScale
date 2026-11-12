@@ -1,0 +1,205 @@
+// alloc.map: Map<K, V>, a hash table owning its keys and values. The operations that
+// hash need K : IKey<K> (Envo-S1 puts constraints on methods, not on the struct). Open addressing with
+// linear probing over a power-of-two table, at most 3/4 full (removed slots count until
+// the next growth). Keys implement core.hash.IKey; the iteration order (Keys, Values) is
+// the table's, which depends only on the keys inserted and removed, never on addresses.
+namespace alloc.map;
+
+use core.hash.{IKey};
+
+const u8 EMPTY = 0;
+const u8 FULL = 1;
+const u8 REMOVED = 2;
+
+public struct Map<K, V> {
+    *u8 States;     // per slot: EMPTY, FULL or REMOVED
+    *K Keys;
+    *V Values;
+    usize Count;    // FULL slots
+    usize Taken;    // FULL and REMOVED slots
+    usize Cap;      // slots: 0, or a power of two
+
+    public static Map<K, V> New() {
+        unsafe {
+            return new Map<K, V> {
+                States = 0 as usize as *u8, Keys = 0 as usize as *K, Values = 0 as usize as *V,
+                Count = 0, Taken = 0, Cap = 0
+            };
+        }
+    }
+
+    public usize Len() => this.Count;
+    public bool IsEmpty() => this.Count == 0;
+
+    // The slot holding key, or Cap if it is not there.
+    usize Find(in this, in K key) where K : IKey<K> {
+        if (this.Cap == 0) return this.Cap;
+        usize mask = this.Cap - 1;
+        usize i = (key.KeyHash() as usize) & mask;
+        unsafe {
+            while (true) {
+                u8 st = this.States[i];
+                if (st == EMPTY) return this.Cap;
+                if (st == FULL && this.Keys[i].KeyEquals(key)) return i;
+                i = (i + 1) & mask;
+            }
+        }
+        return this.Cap;
+    }
+
+    public bool Has(in this, in K key) where K : IKey<K> => this.Find(key) != this.Cap;
+
+    // A copy of the value for key, or null.
+    public V? Get(in this, in K key) where K : IKey<K>, V : Copy {
+        usize i = this.Find(key);
+        if (i == this.Cap) return null;
+        unsafe { return Some(this.Values[i]); }
+    }
+
+    // The value for key as a view of one element (none if the key is not there), for
+    // reading a value that is not Copy.
+    public V[] View(in this, in K key) where K : IKey<K> {
+        usize i = this.Find(key);
+        unsafe {
+            if (i == this.Cap) return slice_from(this.Values, 0);
+            return slice_from(&this.Values[i], 1);
+        }
+    }
+
+    // The value for key, or other.
+    public V GetOr(in this, in K key, V other) where K : IKey<K>, V : Copy {
+        usize i = this.Find(key);
+        if (i == this.Cap) return other;
+        unsafe { return this.Values[i]; }
+    }
+
+    // Sets key to value. Returns true if the key is new; an old value is dropped.
+    public bool Set(ref this, K key, V value) where K : IKey<K> {
+        usize found = this.Find(key);
+        if (found != this.Cap) {
+            unsafe {
+                V old = this.Values[found];     // taken, dropped at the end of the block
+                this.Values[found] = value;
+            }
+            return false;
+        }
+        if ((this.Taken + 1) * 4 > this.Cap * 3) this.Grow();
+        this.Place(key, value);
+        return true;
+    }
+
+    // Puts a key that is not in the table into the first free slot of its probe sequence.
+    void Place(ref this, K key, V value) where K : IKey<K> {
+        usize mask = this.Cap - 1;
+        usize i = (key.KeyHash() as usize) & mask;
+        unsafe {
+            while (this.States[i] == FULL) i = (i + 1) & mask;
+            if (this.States[i] == EMPTY) this.Taken++;
+            this.States[i] = FULL;
+            this.Keys[i] = key;
+            this.Values[i] = value;
+        }
+        this.Count++;
+    }
+
+    // Removes key and returns its value, or null if it was not there.
+    public V? Remove(ref this, in K key) where K : IKey<K> {
+        usize i = this.Find(key);
+        if (i == this.Cap) return null;
+        unsafe {
+            K k = this.Keys[i];         // taken, dropped at the end of the block
+            V v = this.Values[i];
+            this.States[i] = REMOVED;
+            this.Count--;
+            return Some(v);
+        }
+    }
+
+    // Removes every entry; keeps the table.
+    public void Clear(ref this) {
+        unsafe {
+            for (usize i = 0; i < this.Cap; i++) {
+                if (this.States[i] == FULL) {
+                    K k = this.Keys[i];
+                    V v = this.Values[i];
+                }
+                this.States[i] = EMPTY;
+            }
+        }
+        this.Count = 0;
+        this.Taken = 0;
+    }
+
+    // The table's slots, for going over the keys without copying them: KeyAt(i) for i
+    // below Slots() is a view of one key, or of none for a free slot.
+    public usize Slots(in this) => this.Cap;
+
+    public K[] KeyAt(in this, usize slot) {
+        unsafe {
+            if (slot >= this.Cap || this.States[slot] != FULL) return slice_from(this.Keys, 0);
+            return slice_from(&this.Keys[slot], 1);
+        }
+    }
+
+    // The keys, in table order.
+    public List<K> Keys(in this) where K : Copy {
+        List<K> all = List<K>.New();
+        unsafe {
+            for (usize i = 0; i < this.Cap; i++) {
+                if (this.States[i] == FULL) all.Push(this.Keys[i]);
+            }
+        }
+        return all;
+    }
+
+    // The values, in table order.
+    public List<V> Values(in this) where V : Copy {
+        List<V> all = List<V>.New();
+        unsafe {
+            for (usize i = 0; i < this.Cap; i++) {
+                if (this.States[i] == FULL) all.Push(this.Values[i]);
+            }
+        }
+        return all;
+    }
+
+    void Grow(ref this) where K : IKey<K> {
+        usize oldCap = this.Cap;
+        *u8 oldStates = this.States;
+        *K oldKeys = this.Keys;
+        *V oldValues = this.Values;
+        usize cap = oldCap * 2;
+        if (cap < 8) cap = 8;
+        unsafe {
+            this.States = alloc(cap);
+            this.Keys = alloc(cap * sizeof(K)) as *K;
+            this.Values = alloc(cap * sizeof(V)) as *V;
+        }
+        this.Cap = cap;
+        this.Count = 0;
+        this.Taken = 0;
+        unsafe {
+            for (usize i = 0; i < oldCap; i++) {
+                if (oldStates[i] == FULL) {
+                    K k = oldKeys[i];       // moved into the new table
+                    V v = oldValues[i];
+                    this.Place(k, v);
+                }
+            }
+            free(oldStates);
+            free(oldKeys as *u8);
+            free(oldValues as *u8);
+        }
+    }
+}
+
+impl<K, V> IDrop for Map<K, V> {
+    void Drop(ref this) {
+        this.Clear();
+        unsafe {
+            free(this.States);
+            free(this.Keys as *u8);
+            free(this.Values as *u8);
+        }
+    }
+}

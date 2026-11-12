@@ -1,0 +1,71 @@
+// ports: the interfaces through which lib/ reaches the outside world (PLAN D22, D24;
+// docs/architecture/library.md). An adapter is a type that implements a port; the
+// reference adapters are in adapters/os/none, the native ones in adapters/os/windows and
+// adapters/os/linux. Each port's promises are checked by its conformance suite in
+// tests/conformance/, against every adapter.
+//
+// Methods take `ref this`: an adapter may keep state (a captured console, an in-memory
+// file system, a manual clock).
+namespace ports;
+
+// Why an operation on the outside world failed.
+public enum IoError {
+    NotFound,       // no such file or directory
+    Exists,         // it is already there
+    NotEmpty,       // a directory that still has entries
+    Denied,         // not allowed
+    Invalid,        // a path or argument the adapter cannot accept
+    Other,          // anything else the system reported
+}
+
+// Standard output, standard error and standard input.
+public interface IConsole {
+    void Out(ref this, str text);
+    void Err(ref this, str text);
+    // Reads up to into.Len bytes of standard input; 0 at its end.
+    usize Read(ref this, mut u8[] into);
+}
+
+// Files and directories, named by paths with `/` between their parts (adapters accept
+// `\` too where the system does). A path is relative to the program's working directory
+// unless it is absolute.
+public interface IFileSystem {
+    // The whole content of the file at path.
+    Result<string, IoError> Read(ref this, str path);
+    // Replaces the file at path with data, creating it if needed; its directory must
+    // exist. Returns the number of bytes written.
+    Result<usize, IoError> Write(ref this, str path, str data);
+    // Is there a file (not a directory) at path?
+    bool IsFile(ref this, str path);
+    // Is there a directory at path?
+    bool IsDir(ref this, str path);
+    // Removes the file at path.
+    Result<bool, IoError> Delete(ref this, str path);
+    // Creates the directory path; its parent must exist. Exists if it is already there.
+    Result<bool, IoError> CreateDir(ref this, str path);
+    // Removes the empty directory path.
+    Result<bool, IoError> RemoveDir(ref this, str path);
+}
+
+// Time.
+public interface IClock {
+    // The wall clock: nanoseconds since 1970-01-01 00:00 UTC. It can jump.
+    i64 NowNanos(ref this);
+    // A clock that never goes back: nanoseconds since an arbitrary start.
+    u64 MonoNanos(ref this);
+}
+
+// Random bytes.
+public interface IEntropy {
+    // Fills into with random bytes. A native adapter uses the system's generator, which
+    // is fit for keys; the reference adapter is deterministic, for tests only.
+    void Fill(ref this, mut u8[] into);
+}
+
+// What the program was started with.
+public interface IEnvironment {
+    // The number of command-line arguments, the program's own name included.
+    usize ArgCount(ref this);
+    // Argument i (0 is the program); i must be below ArgCount.
+    str Arg(ref this, usize i);
+}

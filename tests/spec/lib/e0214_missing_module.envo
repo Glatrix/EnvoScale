@@ -1,0 +1,4 @@
+// expect-error: E0214 @ 3:5
+// [D21] with --lib, a used namespace that no file declares is loaded from the library
+use nowhere.at.all;
+print("x");

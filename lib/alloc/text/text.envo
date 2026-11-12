@@ -1,0 +1,150 @@
+// alloc.text: text helpers that return new text (a `string`) or lists. The searching and
+// classifying helpers that need no allocation are in core.text; these build on them.
+namespace alloc.text;
+
+use core.fmt;
+use core.text as ct;
+
+// v in decimal.
+public string Int(i64 v) {
+    u8[24] buf;
+    usize n = fmt.WriteI64(buf[0..24], v);
+    return FromDigits(buf[0..n]);
+}
+
+// v in decimal.
+public string Uint(u64 v) {
+    u8[24] buf;
+    usize n = fmt.WriteU64(buf[0..24], v);
+    return FromDigits(buf[0..n]);
+}
+
+// v in lowercase hexadecimal, at least minDigits digits.
+public string Hex(u64 v, usize minDigits) {
+    u8[24] buf;
+    usize n = fmt.WriteHex(buf[0..24], v, minDigits);
+    return FromDigits(buf[0..n]);
+}
+
+// ASCII digits and letters as a string.
+string FromDigits(u8[] b) {
+    string r = string.New();
+    for (usize i = 0; i < b.Len; i++) r.AppendByte(b[i]);
+    return r;
+}
+
+// The pieces of s between the separators. An empty separator splits nothing.
+public List<str> Split(str s, str sep) {
+    List<str> parts = List<str>.New();
+    if (sep.Len == 0) {
+        parts.Push(s);
+        return parts;
+    }
+    usize start = 0;
+    usize i = 0;
+    while (i + sep.Len <= s.Len) {
+        if (ct.MatchesAt(s, i, sep)) {
+            parts.Push(s[start..i]);
+            i += sep.Len;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    parts.Push(s[start..s.Len]);
+    return parts;
+}
+
+// The lines of s, without their line endings (`\n` or `\r\n`); no empty last line for
+// a final line break.
+public List<str> Lines(str s) {
+    List<str> lines = List<str>.New();
+    usize start = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] == 10) {
+            usize end = i;
+            if (end > start && s[end - 1] == 13) end--;
+            lines.Push(s[start..end]);
+            start = i + 1;
+        }
+    }
+    if (start < s.Len) lines.Push(s[start..s.Len]);
+    return lines;
+}
+
+// The parts, with sep between them.
+public string Join(str[] parts, str sep) {
+    string joined = string.New();
+    for (usize i = 0; i < parts.Len; i++) {
+        if (i > 0) joined.Append(sep);
+        joined.Append(parts[i]);
+    }
+    return joined;
+}
+
+// s with every from replaced by to (left to right, not overlapping).
+public string Replace(str s, str from, str to) {
+    string r = string.New();
+    if (from.Len == 0) {
+        r.Append(s);
+        return r;
+    }
+    usize i = 0;
+    usize start = 0;
+    while (i + from.Len <= s.Len) {
+        if (ct.MatchesAt(s, i, from)) {
+            r.Append(s[start..i]);
+            r.Append(to);
+            i += from.Len;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    r.Append(s[start..s.Len]);
+    return r;
+}
+
+// s, n times.
+public string Repeat(str s, usize n) {
+    string r = string.New();
+    for (usize i = 0; i < n; i++) r.Append(s);
+    return r;
+}
+
+// ASCII letters in lower case; everything else unchanged.
+public string Lower(str s) {
+    string r = string.New();
+    for (usize i = 0; i < s.Len; i++) r.AppendByte(ct.ToLower(s[i]));
+    return r;
+}
+
+// ASCII letters in upper case; everything else unchanged.
+public string Upper(str s) {
+    string r = string.New();
+    for (usize i = 0; i < s.Len; i++) r.AppendByte(ct.ToUpper(s[i]));
+    return r;
+}
+
+// s padded on the left with fill to at least width characters.
+public string PadLeft(str s, usize width, u8 fill) {
+    string r = string.New();
+    usize n = ct.CharCount(s);
+    while (n < width) {
+        r.AppendByte(fill);
+        n++;
+    }
+    r.Append(s);
+    return r;
+}
+
+// s padded on the right with fill to at least width characters.
+public string PadRight(str s, usize width, u8 fill) {
+    string r = string.From(s);
+    usize n = ct.CharCount(s);
+    while (n < width) {
+        r.AppendByte(fill);
+        n++;
+    }
+    return r;
+}

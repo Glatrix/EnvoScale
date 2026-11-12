@@ -224,12 +224,26 @@ impl Checker {
         return s;
     }
 
-    // The namespace `use … as name` in file f names, or empty.
+    // The namespace name stands for in file f: `use … as name`, or `use a.b;` whose last
+    // segment is name ([item.use.1]; Stage 1 knows only the first). Empty if neither.
     Text AliasPath(ref this, Text name, u32 f) {
         for (usize i = 0; i < this.Uses.Len(); i++) {
             u32 u = this.Uses.Get(i);
             Node un = this.NodeAt(u);
             if (un.C != 0 && this.TokFile(un.Tok) == f && Same(this.TokText(this.NTok(un.C)), TextStr(name))) return this.PathText(un.A);
+        }
+        for (usize i = 0; i < this.Uses.Len(); i++) {
+            u32 u = this.Uses.Get(i);
+            Node un = this.NodeAt(u);
+            if (un.C != 0 || un.B != 0 || this.TokFile(un.Tok) != f) continue;
+            // the last name of the path
+            u32 last = un.A;
+            while (this.NNext(last) != 0) last = this.NNext(last);
+            if (last == un.A) continue;     // `use a;`: a already names itself
+            if (Same(this.TokText(this.NTok(last)), TextStr(name))) {
+                Text path = this.PathText(un.A);
+                if (this.IsNamespace(TextStr(path))) return path;
+            }
         }
         return TextOf("");
     }

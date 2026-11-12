@@ -1,0 +1,45 @@
+// alloc.box: Box<T>, one value on the heap with a single owner. Moving a Box moves the
+// pointer, not the value; dropping it drops the value. Useful for recursive types
+// (`enum Tree { Leaf(i64 v), Node(Box<Tree> left, Box<Tree> right) }`) and for values too
+// big to move around. Envo-S1 has no `*box` dereference, so the value is read with Get
+// (a copy) or taken with Take, and replaced with Set.
+namespace alloc.box;
+
+public struct Box<T> {
+    *T Ptr;
+
+    public static Box<T> New(T value) {
+        unsafe {
+            *T p = alloc(sizeof(T)) as *T;
+            p[0] = value;
+            return new Box<T> { Ptr = p };
+        }
+    }
+
+    // A copy of the value.
+    public T Get(in this) where T : Copy {
+        unsafe { return this.Ptr[0]; }
+    }
+
+    // Replaces the value; the old one is dropped.
+    public void Set(ref this, T value) {
+        unsafe {
+            T old = this.Ptr[0];
+            this.Ptr[0] = value;
+        }
+    }
+
+    // A view of the value (one element), for reading a value that is not Copy.
+    public T[] View(in this) {
+        unsafe { return slice_from(this.Ptr, 1); }
+    }
+}
+
+impl<T> IDrop for Box<T> {
+    void Drop(ref this) {
+        unsafe {
+            T value = this.Ptr[0];      // taken, then dropped at the end of the block
+            free(this.Ptr as *u8);
+        }
+    }
+}

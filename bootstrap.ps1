@@ -597,6 +597,67 @@ function Invoke-Test {
         if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $f.Name }
         else { Bad "stage2 spec/eir/$($f.Name)" "expected exit 1 with '$want'; got exit $($r.Code), stderr: $($r.Err.Trim())" }
     }
+    # The standard platform (M4): each program in lib\*\tests\ and adapters\os\*\tests\ is
+    # built by Stage 2 with --lib at -O0 and -O2 and run (`// os: none` picks the
+    # reference adapters); each program in tests\conformance\ runs against both the
+    # reference adapters and the native ones. Keep in step with bootstrap.sh.
+    Say 'stage 2 library tests: lib/*/tests, adapters/os/*/tests, tests/conformance'
+    $libDir = Join-Path $Root 'build\run-lib'
+    New-Item -ItemType Directory -Force $libDir | Out-Null
+    $libTests = @()
+    foreach ($top in @('lib', 'adapters', 'tests\conformance')) {
+        $dir = Join-Path $Root $top
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.envo') {
+            $rel = $f.FullName.Substring($Root.Length + 1)
+            if ($rel -match '\\tests\\' -or $rel -match '^tests\\conformance\\') { $libTests += $f }
+        }
+    }
+    foreach ($f in $libTests | Sort-Object { $_.FullName.Substring($Root.Length + 1).Replace('\', '/') }) {
+        $rel = $f.FullName.Substring($Root.Length + 1).Replace('\', '/')
+        $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
+        $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
+        $wantOut = ''
+        if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
+        $oses = @('native')
+        if ($rel.StartsWith('tests/conformance/')) { $oses = @('none', 'native') }
+        else {
+            $m = [regex]::Match($text, '(?m)^// os: (\S+)')
+            if ($m.Success) { $oses = @($m.Groups[1].Value) }
+        }
+        $base = ($rel -replace '\.envo$', '').Replace('/', '-')
+        foreach ($os in $oses) {
+            foreach ($level in @('-O0', '-O2')) {
+                $name = "lib $rel ($os $level)"
+                $program = Join-Path $libDir "$base-$os$level.exe"
+                $argv = @('build', $level, '--lib', $Root, $f.FullName, '-o', $program)
+                if ($os -ne 'native') { $argv += @('--os', $os) }
+                $r = Invoke-Tool $envoc $argv $libDir
+                if ($r.Code -ne 0) { Bad $name "build failed: $($r.Err.Trim())"; continue }
+                $r = Invoke-Tool $program @() $libDir
+                $out = Normalize $r.Out
+                if ($r.Code -ne 0 -or -not [string]::Equals($wantOut, $out)) { Bad $name "exit $($r.Code), or stdout differs: $($r.Err.Trim())"; Show-Diff $wantOut $out; continue }
+                Pass $name
+            }
+        }
+    }
+    # Library resolution errors (M4.1): `// lib: root` checks against tests\spec\lib\root
+    # instead of the repository
+    Say 'stage 2 spec tests: tests/spec/lib'
+    $dir = Join-Path $Root 'tests\spec\lib'
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+        $text = [IO.File]::ReadAllText($f.FullName, $Utf8)
+        $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)')
+        if (-not $m.Success) { Bad "stage2 spec/lib/$($f.Name)" 'no // expect-error: annotation'; continue }
+        $where = $m.Groups[2].Value
+        if ($where -match '\.envo:') { $want = "$($where): error[$($m.Groups[1].Value)]" }
+        else { $want = "$($f.Name):$($where): error[$($m.Groups[1].Value)]" }
+        $libRoot = $Root
+        if ($text -match '(?m)^// lib: root') { $libRoot = 'root' }
+        $r = Invoke-Tool $envoc @('check', '--lib', $libRoot, $f.Name) $dir
+        if ($r.Code -eq 1 -and $r.Err.Contains($want)) { Pass $f.Name }
+        else { Bad "stage2 spec/lib/$($f.Name)" "expected exit 1 with '$want'; got exit $($r.Code): $($r.Err.Trim())" }
+    }
     Say 'stage 2 against envoc1: lex and parse on every .envo file in compiler/, bootstrap/stage1/, tests/; check on the run programs and goldens; eir on the run programs'
     $sources = @('compiler', 'bootstrap\stage1', 'tests') | ForEach-Object {
         Get-ChildItem -LiteralPath (Join-Path $Root $_) -Filter '*.envo' -Recurse -File

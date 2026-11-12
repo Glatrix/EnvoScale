@@ -1,0 +1,91 @@
+// core.fmt: numbers to text and back, without allocating. The Write functions fill the
+// start of a caller's buffer and return how many bytes they wrote; a buffer of 20 bytes
+// holds any u64 in decimal, 21 any i64, 16 any u64 in hex. The Parse functions return
+// null for anything but a whole, in-range number. alloc.text has versions that return
+// a `string`.
+namespace core.fmt;
+
+const str DIGITS = "0123456789abcdef";
+
+// v in decimal.
+public usize WriteU64(mut u8[] dst, u64 v) {
+    u8[20] tmp;
+    usize n = 0;
+    while (true) {
+        tmp[n] = (48 + v % 10) as u8;
+        n++;
+        v /= 10;
+        if (v == 0) break;
+    }
+    if (n > dst.Len) panic("core.fmt: buffer too short");
+    for (usize i = 0; i < n; i++) dst[i] = tmp[n - 1 - i];
+    return n;
+}
+
+// v in decimal, with a `-` if negative.
+public usize WriteI64(mut u8[] dst, i64 v) {
+    if (v >= 0) return WriteU64(dst, v as u64);
+    if (dst.Len == 0) panic("core.fmt: buffer too short");
+    dst[0] = '-';
+    u64 mag = 0 -% (v as u64);
+    return 1 + WriteU64(dst[1..dst.Len], mag);
+}
+
+// v in lowercase hexadecimal, at least minDigits digits (zero-padded).
+public usize WriteHex(mut u8[] dst, u64 v, usize minDigits) {
+    u8[16] tmp;
+    usize n = 0;
+    while (true) {
+        tmp[n] = DIGITS[(v & 15) as usize];
+        n++;
+        v = v >> 4;
+        if (v == 0) break;
+    }
+    while (n < minDigits && n < 16) {
+        tmp[n] = '0';
+        n++;
+    }
+    if (n > dst.Len) panic("core.fmt: buffer too short");
+    for (usize i = 0; i < n; i++) dst[i] = tmp[n - 1 - i];
+    return n;
+}
+
+u64 DigitValue(u8 c) {
+    if (c >= '0' && c <= '9') return (c - '0') as u64;
+    if (c >= 'a' && c <= 'f') return (c - 'a' + 10) as u64;
+    if (c >= 'A' && c <= 'F') return (c - 'A' + 10) as u64;
+    return 16;
+}
+
+// s as an unsigned number in the given base (2 to 16), every byte a digit.
+public u64? ParseU64Base(str s, u64 radix) {
+    if (s.Len == 0 || radix < 2 || radix > 16) return null;
+    u64 v = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        u64 d = DigitValue(s[i]);
+        if (d >= radix) return null;
+        if (v > (0xFFFFFFFFFFFFFFFF - d) / radix) return null;     // would overflow
+        v = v * radix + d;
+    }
+    return Some(v);
+}
+
+public u64? ParseU64(str s) => ParseU64Base(s, 10);
+public u64? ParseHex(str s) => ParseU64Base(s, 16);
+
+// s in decimal with an optional leading `-` or `+`.
+public i64? ParseI64(str s) {
+    if (s.Len == 0) return null;
+    bool negative = s[0] == '-';
+    usize start = 0;
+    if (s[0] == '-' || s[0] == '+') start = 1;
+    u64? mag = ParseU64(s[start..s.Len]);
+    if (mag.IsNone()) return null;
+    u64 m = mag.Unwrap();
+    if (negative) {
+        if (m > 0x8000000000000000) return null;
+        return Some((0 -% m) as i64);
+    }
+    if (m > 0x7FFFFFFFFFFFFFFF) return null;
+    return Some(m as i64);
+}

@@ -1,0 +1,44 @@
+// alloc.text: helpers that build text.
+// expect: -42 18446744073709551615 00ff
+// expect: [a][b][][c] lines [one] [two] [three]
+// expect: a, b, c
+// expect: x-y-z abcabc envo ENVO
+// expect: [   7] [7...]
+use alloc.text;
+
+write(1, text.Int(-42));
+write(1, " ");
+write(1, text.Uint(18446744073709551615));
+write(1, " ");
+print(text.Hex(255, 4));
+List<str> parts = text.Split("a,b,,c", ",");
+foreach (var p in parts.AsSlice()) {
+    write(1, "[");
+    write(1, p);
+    write(1, "]");
+}
+write(1, " lines");
+List<str> lines = text.Lines("one\r\ntwo\nthree\n");
+foreach (var l in lines.AsSlice()) {
+    write(1, " [");
+    write(1, l);
+    write(1, "]");
+}
+print("");
+List<str> words = List<str>.New();
+words.Push("a");
+words.Push("b");
+words.Push("c");
+print(text.Join(words.AsSlice(), ", "));
+write(1, text.Replace("x.y.z", ".", "-"));
+write(1, " ");
+write(1, text.Repeat("abc", 2));
+write(1, " ");
+write(1, text.Lower("EnVo"));
+write(1, " ");
+print(text.Upper("envo"));
+write(1, "[");
+write(1, text.PadLeft("7", 4, ' '));
+write(1, "] [");
+write(1, text.PadRight("7", 4, '.'));
+print("]");

@@ -1,0 +1,38 @@
+// alloc.set and alloc.box.
+// expect: set 3 added-again no has 2 yes removed yes left 2
+// expect: box 41 then 42
+// expect: tree sum 10
+use alloc.set.{Set};
+use alloc.box.{Box};
+
+Set<u64> s = Set<u64>.New();
+s.Add(1);
+s.Add(2);
+s.Add(3);
+bool again = s.Add(2);
+if (s.Len() == 3) write(1, "set 3");
+if (!again) write(1, " added-again no");
+if (s.Has(2)) write(1, " has 2 yes");
+if (s.Remove(1)) write(1, " removed yes");
+if (s.Len() == 2) print(" left 2");
+
+Box<u64> b = Box<u64>.New(41);
+if (b.Get() == 41) write(1, "box 41");
+b.Set(42);
+if (b.Get() == 42) print(" then 42");
+
+// a recursive type through Box
+enum Tree {
+    Leaf(i64 v),
+    Node(Box<Tree> left, Box<Tree> right),
+}
+
+i64 Sum(in Tree t) {
+    match t {
+        Leaf(v) => { return v; }
+        Node(l, r) => { return Sum(l.View()[0]) + Sum(r.View()[0]); }
+    }
+}
+
+Tree t = Tree.Node(Box<Tree>.New(Tree.Leaf(1)), Box<Tree>.New(Tree.Node(Box<Tree>.New(Tree.Leaf(4)), Box<Tree>.New(Tree.Leaf(5)))));
+if (Sum(t) == 10) print("tree sum 10");

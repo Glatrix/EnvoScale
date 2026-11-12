@@ -1,0 +1,13 @@
+// The platform binding for `--os none` (PLAN D23): the reference adapters. The file
+// system is in memory, the clock stands at 2026-01-01 00:00 UTC until advanced, entropy
+// is seeded (deterministic), and the only argument is "program". The console is the
+// process's own, so output can still be read.
+namespace platform;
+
+use os.none;
+
+public none.Terminal Console() => none.Terminal.New();
+public none.FileSystem FileSystem() => none.SharedFileSystem();
+public none.Clock Clock() => none.SharedClock();
+public none.Entropy Entropy() => none.SharedEntropy();
+public none.Environment Environment() => none.SharedEnvironment();

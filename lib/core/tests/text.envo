@@ -1,0 +1,52 @@
+// core.text: searching, trimming, classifying.
+// expect: index 6 last 13 none
+// expect: [hello] [hello  ] [  hello]
+// expect: count 3 starts ends contains
+// expect: key=[name] value=[ envo ]
+// expect: chars 5 bytes 6
+// expect: case ok
+use core.text;
+use core.fmt;
+
+str Num(u64 v) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteU64(slice_from_mut(p, 24), v);
+        return str_from(p, n);
+    }
+}
+
+str s = "hello world, world";
+write(1, "index ");
+write(1, Num(text.IndexOf(s, "world").Unwrap() as u64));
+write(1, " last ");
+write(1, Num(text.LastIndexOf(s, "world").Unwrap() as u64));
+if (text.IndexOf(s, "envo").IsNone()) print(" none");
+str padded = "  hello  ";
+write(1, "[");
+write(1, text.Trim(padded));
+write(1, "] [");
+write(1, text.TrimStart(padded));
+write(1, "] [");
+write(1, text.TrimEnd(padded));
+print("]");
+write(1, "count ");
+write(1, Num(text.Count("a-b-c-d", "-") as u64));
+if (text.StartsWith(s, "hello")) write(1, " starts");
+if (text.EndsWith(s, "world")) write(1, " ends");
+if (text.Contains(s, ", ")) print(" contains");
+str key = "";
+str value = "";
+if (text.SplitOnce("name= envo ", "=", ref key, ref value)) {
+    write(1, "key=[");
+    write(1, key);
+    write(1, "] value=[");
+    write(1, value);
+    print("]");
+}
+str word = "héllo";
+write(1, "chars ");
+write(1, Num(text.CharCount("héllo") as u64));
+write(1, " bytes ");
+print(Num(word.Len as u64));
+if (text.EqualsIgnoreCase("EnVo", "envo") && !text.EqualsIgnoreCase("envo", "envy") && text.ToUpper('q') == 'Q' && text.IsSpace(9) && !text.IsDigit('x')) print("case ok");

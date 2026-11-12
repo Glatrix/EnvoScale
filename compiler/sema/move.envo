@@ -635,7 +635,12 @@ impl Checker {
             return;
         }
         while (a != 0) {
-            this.MvExpr(ref x, a, true);    // built-ins take `Copy` values
+            // built-ins take `Copy` values and keep nothing, so a temporary `string` may be
+            // lent to one directly (`print(text.Int(n))`; Stage 1: E0504)
+            u32 outer = x.DirectArg;
+            x.DirectArg = a;
+            this.MvExpr(ref x, a, true);
+            x.DirectArg = outer;
             a = this.NNext(a);
         }
     }

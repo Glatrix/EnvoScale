@@ -1,0 +1,16 @@
+// core.hash: hashes and the key interface.
+// expect: fnv ok
+// expect: keys ok
+use core.hash;
+
+// The FNV-1a 64 test vectors: "" and "a".
+if (hash.Str("") == 0xCBF29CE484222325 && hash.Str("a") == 0xAF63DC4C8601EC8C) print("fnv ok");
+
+u64 KeyOf<K>(in K k) where K : hash.IKey<K> => k.KeyHash();
+bool SameKey<K>(in K a, in K b) where K : hash.IKey<K> => a.KeyEquals(b);
+
+string owned = string.From("key");
+str view = "key";
+bool ok = KeyOf(owned) == KeyOf(view) && SameKey(view, "key") && !SameKey(view, "kez")
+    && SameKey(5 as u64, 5 as u64) && KeyOf(1 as u64) != KeyOf(2 as u64) && hash.Mix(0) != 0;
+if (ok) print("keys ok");

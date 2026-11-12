@@ -1,0 +1,139 @@
+// core.text: searching, trimming and classifying text without allocating. Positions are
+// byte offsets into the UTF-8 text; a match of valid UTF-8 always starts on a character
+// boundary, so they can be used to slice. Classification is ASCII; full Unicode
+// properties come with envo.text.
+namespace core.text;
+
+public bool IsDigit(u8 c) => c >= '0' && c <= '9';
+public bool IsLower(u8 c) => c >= 'a' && c <= 'z';
+public bool IsUpper(u8 c) => c >= 'A' && c <= 'Z';
+public bool IsAlpha(u8 c) => IsLower(c) || IsUpper(c);
+public bool IsAlnum(u8 c) => IsAlpha(c) || IsDigit(c);
+public bool IsHexDigit(u8 c) => IsDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+// Space, tab, line feed, carriage return, vertical tab, form feed.
+public bool IsSpace(u8 c) => c == ' ' || (c >= 9 && c <= 13);
+
+public u8 ToLower(u8 c) {
+    if (IsUpper(c)) return c + 32;
+    return c;
+}
+
+public u8 ToUpper(u8 c) {
+    if (IsLower(c)) return c - 32;
+    return c;
+}
+
+public bool StartsWith(str s, str prefix) {
+    if (prefix.Len > s.Len) return false;
+    for (usize i = 0; i < prefix.Len; i++) {
+        if (s[i] != prefix[i]) return false;
+    }
+    return true;
+}
+
+public bool EndsWith(str s, str suffix) {
+    if (suffix.Len > s.Len) return false;
+    usize at = s.Len - suffix.Len;
+    for (usize i = 0; i < suffix.Len; i++) {
+        if (s[at + i] != suffix[i]) return false;
+    }
+    return true;
+}
+
+// Does needle occur in s at byte offset at? (Compares bytes: at need not be a character
+// boundary.)
+public bool MatchesAt(str s, usize at, str needle) {
+    if (at + needle.Len > s.Len) return false;
+    for (usize i = 0; i < needle.Len; i++) {
+        if (s[at + i] != needle[i]) return false;
+    }
+    return true;
+}
+
+// The offset of the first needle in s; an empty needle is at 0.
+public usize? IndexOf(str s, str needle) {
+    if (needle.Len > s.Len) return null;
+    for (usize i = 0; i + needle.Len <= s.Len; i++) {
+        if (MatchesAt(s, i, needle)) return Some(i);
+    }
+    return null;
+}
+
+// The offset of the last needle in s; an empty needle is at s.Len.
+public usize? LastIndexOf(str s, str needle) {
+    if (needle.Len > s.Len) return null;
+    usize i = s.Len - needle.Len + 1;
+    while (i > 0) {
+        i--;
+        if (MatchesAt(s, i, needle)) return Some(i);
+    }
+    return null;
+}
+
+public usize? IndexOfByte(str s, u8 b) {
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] == b) return Some(i);
+    }
+    return null;
+}
+
+public bool Contains(str s, str needle) => IndexOf(s, needle).IsSome();
+
+// How many times needle occurs in s, not overlapping; 0 for an empty needle.
+public usize Count(str s, str needle) {
+    if (needle.Len == 0) return 0;
+    usize n = 0;
+    usize i = 0;
+    while (i + needle.Len <= s.Len) {
+        if (MatchesAt(s, i, needle)) {
+            n++;
+            i += needle.Len;
+        } else {
+            i++;
+        }
+    }
+    return n;
+}
+
+public str TrimStart(str s) {
+    usize i = 0;
+    while (i < s.Len && IsSpace(s[i])) i++;
+    return s[i..s.Len];
+}
+
+public str TrimEnd(str s) {
+    usize n = s.Len;
+    while (n > 0 && IsSpace(s[n - 1])) n--;
+    return s[0..n];
+}
+
+public str Trim(str s) => TrimEnd(TrimStart(s));
+
+// ASCII letters compared without case.
+public bool EqualsIgnoreCase(str a, str b) {
+    if (a.Len != b.Len) return false;
+    for (usize i = 0; i < a.Len; i++) {
+        if (ToLower(a[i]) != ToLower(b[i])) return false;
+    }
+    return true;
+}
+
+// The text before the first sep, and after it; false (and nothing set) if there is none.
+public bool SplitOnce(str s, str sep, ref str head, ref str tail) {
+    usize? at = IndexOf(s, sep);
+    if (at.IsNone()) return false;
+    usize i = at.Unwrap();
+    head = s[0..i];
+    tail = s[i + sep.Len..s.Len];
+    return true;
+}
+
+// The number of characters (Unicode code points) in s.
+public usize CharCount(str s) {
+    usize n = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] & 0xC0 != 0x80) n++;
+    }
+    return n;
+}

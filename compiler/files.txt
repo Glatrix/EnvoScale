@@ -1,5 +1,6 @@
 driver/main.envo
 driver/runtime.envo
+driver/library.envo
 util/text.envo
 util/textref.envo
 util/map.envo

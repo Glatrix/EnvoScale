@@ -1,0 +1,51 @@
+// core.fmt: numbers to text and back.
+// expect: 0 7 -42 18446744073709551615 -9223372036854775808
+// expect: ff 000a
+// expect: 123 -77 255
+// expect: rejected: empty, sign only, letters, overflow, too small
+use core.fmt;
+
+str Num(i64 v) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteI64(slice_from_mut(p, 24), v);
+        return str_from(p, n);
+    }
+}
+
+str NumU(u64 v) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteU64(slice_from_mut(p, 24), v);
+        return str_from(p, n);
+    }
+}
+
+str Hex(u64 v, usize digits) {
+    unsafe {
+        *u8 p = alloc(24);
+        usize n = fmt.WriteHex(slice_from_mut(p, 24), v, digits);
+        return str_from(p, n);
+    }
+}
+
+write(1, Num(0));
+write(1, " ");
+write(1, Num(7));
+write(1, " ");
+write(1, Num(-42));
+write(1, " ");
+write(1, NumU(18446744073709551615));
+write(1, " ");
+print(Num(-9223372036854775807 - 1));
+write(1, Hex(255, 0));
+write(1, " ");
+print(Hex(10, 4));
+write(1, Num(fmt.ParseI64("123").Unwrap()));
+write(1, " ");
+write(1, Num(fmt.ParseI64("-77").Unwrap()));
+write(1, " ");
+print(NumU(fmt.ParseHex("FF").Unwrap()));
+bool all = fmt.ParseU64("").IsNone() && fmt.ParseI64("-").IsNone() && fmt.ParseU64("12a").IsNone()
+    && fmt.ParseU64("18446744073709551616").IsNone() && fmt.ParseI64("-9223372036854775809").IsNone();
+if (all) print("rejected: empty, sign only, letters, overflow, too small");
