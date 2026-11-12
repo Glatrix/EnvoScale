@@ -13,3 +13,4 @@ tests/golden/lexer/*.envo -text
 *.exe binary
 *.bin binary
 *.gguf binary
+tests/fuzz/corpus/** binary
