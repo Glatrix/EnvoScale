@@ -1,0 +1,364 @@
+// The debugger (PLAN D65): `envo dbg` runs a program in the VM and stops it at source
+// lines. The compiler marks each EIR instruction with its statement's file and line
+// (EInst.Src) and lists each function's named locals (Module.Locals), so the debugger
+// can stop at breakpoints, step by line (into calls, over them, out of them), show the
+// call stack and print locals. Commands come from stdin, one per line, so a session can
+// be scripted (tests/envo/dbg).
+namespace envo.vm;
+
+use envoc.util;
+use envoc.eir;
+use core.text as ct;
+use core.fmt;
+use alloc.text;
+
+const u8 DBG_RUN = 0;       // until a breakpoint
+const u8 DBG_STEP = 1;      // until another line, anywhere
+const u8 DBG_NEXT = 2;      // until another line in this frame or a caller
+const u8 DBG_FINISH = 3;    // until this frame returns
+
+public struct Debugger {
+    List<string> Paths;     // per source file
+    List<string> Texts;
+    List<bool> Steppable;   // per file: the debugger stops in it (not the runtime's)
+    List<u32> Breaks;       // Src values ((file + 1) << 20 | line)
+    u8 Mode;
+    usize Depth;            // the frame depth when the step began
+    u32 From;               // the line it began on
+    bool Started;
+    bool Done;              // quit: run to the end without stopping
+
+    public static Debugger New() => new Debugger {
+        Paths = List<string>.New(), Texts = List<string>.New(), Steppable = List<bool>.New(), Breaks = List<u32>.New(),
+        Mode = DBG_STEP, Depth = 0, From = 0, Started = false, Done = false
+    };
+
+    // Adds a source file, in the compiler's order (its index is its number in Src).
+    public void Source(ref this, str file, str text) {
+        this.Paths.Push(string.From(file));
+        this.Texts.Push(string.From(text));
+        this.Steppable.Push(file.Len == 0 || file[0] != '<');
+    }
+
+    bool Stops(in this, u32 src) {
+        u32 file = (src >> 20) - 1;
+        return (file as usize) < this.Steppable.Len() && this.Steppable.Get(file as usize);
+    }
+
+    public str Line(in this, u32 src) {
+        u32 file = (src >> 20) - 1;
+        u32 line = src & 0xFFFFF;
+        if (file as usize >= this.Texts.Len() || line == 0) return "";
+        str t = this.Texts.AsSlice()[file as usize].AsStr();
+        u32 n = 1;
+        usize i = 0;
+        while (i < t.Len && n < line) {
+            if (t[i] == '\n') n++;
+            i++;
+        }
+        usize e = i;
+        while (e < t.Len && t[e] != '\n' && t[e] != '\r') e++;
+        return t[i..e];
+    }
+
+    public string Where(in this, u32 src) {
+        string s = string.New();
+        u32 file = (src >> 20) - 1;
+        if (src == 0 || file as usize >= this.Paths.Len()) {
+            s.Append("?");
+            return s;
+        }
+        s.Append(this.Paths.AsSlice()[file as usize].AsStr());
+        s.AppendByte(':');
+        s.Append(text.Uint((src & 0xFFFFF) as u64).AsStr());
+        return s;
+    }
+
+    // The Src for "file:line" or "line" (in the first file), or 0.
+    u32 Parse(in this, str spec) {
+        usize colon = spec.Len;
+        for (usize i = 0; i < spec.Len; i++) {
+            if (spec[i] == ':') colon = i;
+        }
+        u32 file = 0;
+        str num = spec;
+        if (colon < spec.Len) {
+            str name = spec[0..colon];
+            num = spec[colon + 1..spec.Len];
+            bool found = false;
+            for (usize f = 0; f < this.Paths.Len() && !found; f++) {
+                str p = this.Paths.AsSlice()[f].AsStr();
+                if (ct.EndsWith(p, name)) {
+                    file = f as u32;
+                    found = true;
+                }
+            }
+            if (!found) return 0;
+        }
+        u64? line = fmt.ParseU64(num);
+        if (line.IsNone() || line.Unwrap() == 0 || line.Unwrap() >= 0x100000) return 0;
+        return ((file + 1) << 20) | line.Unwrap() as u32;
+    }
+}
+
+impl Vm {
+    // Debugs the program: stops before its first line and takes commands.
+    public void Debug(ref this, Debugger d) {
+        this.Dbg = d;
+        this.Debugging = true;
+    }
+
+    // Called before instruction i of the top frame runs (Debugging mode).
+    void DebugAt(ref this, u32 i) {
+        if (this.Dbg.Done) return;
+        u32 src = 0;
+        unsafe { src = this.M.Insts.Data[i].Src; }
+        if (src == 0 || !this.Dbg.Stops(src)) return;
+        usize depth = this.Depth;
+        unsafe {
+            *Frame fr = &this.Frames[depth - 1];
+            if (fr.Src == src) return;      // the same line, still
+            fr.Src = src;
+        }
+        bool stop = false;
+        u8 mode = this.Dbg.Mode;
+        if (mode == DBG_STEP) stop = true;
+        else if (mode == DBG_NEXT) stop = depth <= this.Dbg.Depth;
+        else if (mode == DBG_FINISH) stop = depth < this.Dbg.Depth;
+        if (!stop) {
+            foreach (var b in this.Dbg.Breaks.AsSlice()) {
+                if (b == src) stop = true;
+            }
+        }
+        if (!stop) return;
+        this.ShowLine(src);
+        this.Prompt(src);
+    }
+
+    void ShowLine(in this, u32 src) {
+        string at = this.Dbg.Where(src);
+        write(1, at.AsStr());
+        write(1, "  ");
+        print(ct.Trim(this.Dbg.Line(src)));
+    }
+
+    // Reads commands until one resumes the program.
+    void Prompt(ref this, u32 src) {
+        while (true) {
+            write(1, "(dbg) ");
+            string line = ReadLine();
+            str cmd = ct.Trim(line.AsStr());
+            if (line.Len() == 0) {
+                // end of input: let the program finish
+                print("");
+                this.Dbg.Done = true;
+                return;
+            }
+            this.Dbg.Started = true;
+            str word = cmd;
+            str rest = "";
+            for (usize k = 0; k < cmd.Len; k++) {
+                if (cmd[k] == ' ') {
+                    word = cmd[0..k];
+                    rest = ct.Trim(cmd[k + 1..cmd.Len]);
+                    break;
+                }
+            }
+            if (Same(word, "c") || Same(word, "continue")) {
+                this.Dbg.Mode = DBG_RUN;
+                return;
+            }
+            if (Same(word, "s") || Same(word, "step")) {
+                this.Dbg.Mode = DBG_STEP;
+                return;
+            }
+            if (Same(word, "n") || Same(word, "next")) {
+                this.Dbg.Mode = DBG_NEXT;
+                this.Dbg.Depth = this.Depth;
+                return;
+            }
+            if (Same(word, "f") || Same(word, "finish")) {
+                this.Dbg.Mode = DBG_FINISH;
+                this.Dbg.Depth = this.Depth;
+                return;
+            }
+            if (Same(word, "q") || Same(word, "quit")) {
+                this.Dbg.Done = true;
+                this.Halt(0);
+                return;
+            }
+            if (Same(word, "b") || Same(word, "break")) {
+                u32 at = this.Dbg.Parse(rest);
+                if (at == 0) print("break: give a line, or file:line");
+                else {
+                    this.Dbg.Breaks.Push(at);
+                    write(1, "breakpoint ");
+                    write(1, text.Uint(this.Dbg.Breaks.Len() as u64).AsStr());
+                    write(1, " at ");
+                    string w = this.Dbg.Where(at);
+                    print(w.AsStr());
+                }
+                continue;
+            }
+            if (Same(word, "bt") || Same(word, "backtrace")) {
+                this.Backtrace();
+                continue;
+            }
+            if (Same(word, "p") || Same(word, "print")) {
+                this.PrintLocal(rest);
+                continue;
+            }
+            if (Same(word, "locals")) {
+                this.PrintLocal("");
+                continue;
+            }
+            if (Same(word, "l") || Same(word, "list")) {
+                u32 here = src & 0xFFFFF;
+                u32 first = 1;
+                if (here > 3) first = here - 3;
+                for (u32 k = first; k <= here + 3; k++) {
+                    u32 s = (src & 0xFFF00000) | k;
+                    if (k == here) write(1, "=> ");
+                    else write(1, "   ");
+                    write(1, text.PadLeft(text.Uint(k as u64).AsStr(), 4, ' ').AsStr());
+                    write(1, "  ");
+                    print(this.Dbg.Line(s));
+                }
+                continue;
+            }
+            if (Same(word, "where")) {
+                this.ShowLine(src);
+                continue;
+            }
+            if (Same(word, "help") || Same(word, "h")) {
+                print("commands: break [file:]line, continue, step, next, finish, bt, print name, locals, list, where, quit");
+                continue;
+            }
+            if (cmd.Len == 0) continue;
+            write(1, "unknown command: ");
+            print(word);
+        }
+    }
+
+    void Backtrace(in this) {
+        usize d = this.Depth;
+        while (d > 0) {
+            d--;
+            u32 f = 0;
+            u32 src = 0;
+            unsafe {
+                f = this.Frames[d].Func;
+                src = this.Frames[d].Src;
+            }
+            str name = TextStr(this.M.Func(f).Name);
+            if (ct.StartsWith(name, "__rt_") || ct.StartsWith(name, "__os_")) continue;
+            write(1, "  ");
+            if (Same(name, "__main")) write(1, "(top level)");
+            else write(1, name);
+            write(1, " at ");
+            string w = this.Dbg.Where(src);
+            print(w.AsStr());
+        }
+    }
+
+    // Prints the named local of the top frame, or all of them for "".
+    void PrintLocal(in this, str name) {
+        u32 f = 0;
+        usize fb = 0;
+        u32 first = 0;
+        unsafe {
+            *Frame fr = &this.Frames[this.Depth - 1];
+            f = fr.Func;
+            fb = fr.Base;
+            first = fr.First;
+        }
+        bool any = false;
+        foreach (var l in this.M.Locals.AsSlice()) {
+            if (l.Func != f) continue;
+            str n = TextStr(l.Name);
+            if (name.Len > 0 && !Same(n, name)) continue;
+            any = true;
+            u64 addr = 0;
+            unsafe { addr = this.Values[fb + (l.Value - first) as usize]; }
+            write(1, n);
+            write(1, " = ");
+            string v = this.Show(addr, l.Type);
+            print(v.AsStr());
+        }
+        if (!any) {
+            if (name.Len == 0) print("no locals here");
+            else {
+                write(1, "no local named ");
+                print(name);
+            }
+        }
+    }
+
+    // The value of type t stored at addr, as text.
+    string Show(in this, u64 addr, u32 t) {
+        string s = string.New();
+        if (addr == 0) {
+            s.Append("(not yet set)");
+            return s;
+        }
+        ETy ty = this.M.Ty(t);
+        unsafe {
+            *u8 p = addr as usize as *u8;
+            if (t == ET_BOOL) {
+                if (p[0] != 0) s.Append("true");
+                else s.Append("false");
+                return s;
+            }
+            if (t == ET_I8 || t == ET_I16 || t == ET_I32 || t == ET_I64) {
+                u64 v = Load(addr, ty.Size);
+                s.Append(text.Int(Norm(v, ty.Size, true) as i64).AsStr());
+                return s;
+            }
+            if (t == ET_U8 || t == ET_U16 || t == ET_U32 || t == ET_U64) {
+                s.Append(text.Uint(Load(addr, ty.Size)).AsStr());
+                return s;
+            }
+            if (t == ET_PTR) {
+                s.Append("0x");
+                s.Append(text.Hex(Load(addr, 8), 1).AsStr());
+                return s;
+            }
+            if (ty.Kind == EK_STRUCT && (Same(TextStr(ty.Name), "$str") || Same(TextStr(ty.Name), "str"))) {
+                u64 ptr = Load(addr, 8);
+                u64 len = Load(addr + 8, 8);
+                s.AppendByte('"');
+                *u8 q = ptr as usize as *u8;
+                for (u64 k = 0; k < len && k < 80; k++) {
+                    u8 c = q[k as usize];
+                    if (c == '"' || c == 0x5C) s.AppendByte(0x5C);
+                    if (c == '\n') s.Append("\\n");
+                    else s.AppendByte(c);
+                }
+                if (len > 80) s.Append("...");
+                s.AppendByte('"');
+                return s;
+            }
+        }
+        s.Append("{");
+        s.Append(text.Uint(ty.Size as u64).AsStr());
+        s.Append(" bytes}");
+        return s;
+    }
+}
+
+// A line from stdin, without its end; empty at the end of input.
+string ReadLine() {
+    string s = string.New();
+    u8[1] b;
+    while (true) {
+        isize n = 0;
+        unsafe { n = read(0, &b[0], 1); }
+        if (n <= 0) break;
+        if (b[0] == '\n') {
+            if (s.Len() == 0) s.AppendByte(' ');
+            break;
+        }
+        if (b[0] != '\r') s.AppendByte(b[0]);
+    }
+    return s;
+}

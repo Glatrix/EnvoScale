@@ -681,7 +681,7 @@ struct Reader {
         OpInfo info = OpTable(op);
         EInst inst = new EInst {
             Op = op, Ty = 0, Ty2 = 0, Result = 0, FirstOp = m.Ops.Len() as u32, NOps = 0,
-            Block = this.Block, Imm = 0, Str = TextOf(""), Pos = opTok.Start
+            Block = this.Block, Imm = 0, Str = TextOf(""), Pos = opTok.Start, Src = 0
         };
         u32 resultType = 0;
         u8 sh = info.Shape;

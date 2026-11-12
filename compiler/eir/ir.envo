@@ -117,6 +117,16 @@ public struct EInst {
     u64 Imm;        // const value, field index, panic reason
     Text Str;       // intrinsic name, callee name, abi of call.ind
     u32 Pos;
+    u32 Src;        // the source statement: (file + 1) << 20 | line; 0 if unknown (debuggers)
+}
+
+// A named local of a function, for debuggers: the value holding its storage's address
+// (a slot, or a by-reference parameter), and the EIR type stored there.
+public struct EDebugVar {
+    u32 Func;
+    u32 Value;
+    u32 Type;
+    Text Name;
 }
 
 // Operands
@@ -160,6 +170,7 @@ public struct Module {
     Text SrcText;
     bool FromText;
     List<string> Owned;     // text the module made (decoded strings, names), kept for good
+    List<EDebugVar> Locals; // named locals, when lowered from source (debuggers)
 
     public static Module New() {
         Module m = new Module {
@@ -168,7 +179,7 @@ public struct Module {
             Inits = List<EInit>.New(), Funcs = List<EFunc>.New(), Names = StrMap<u64>.New(),
             Blocks = List<EBlock>.New(), Vals = List<EVal>.New(), Insts = List<EInst>.New(),
             Ops = List<EOp>.New(), Args = List<u32>.New(), Text = 0, SrcPath = TextOf(""), SrcText = TextOf(""), FromText = false,
-            Owned = List<string>.New()
+            Owned = List<string>.New(), Locals = List<EDebugVar>.New()
         };
         Text none = TextOf("");
         m.Types.Push(new ETy { Kind = 0, Packed = false, Defined = false, LState = 0, Size = 0, Align = 0, Elem = 0, Count = 0, Fields = 0, NFields = 0, Name = none });
@@ -178,7 +189,7 @@ public struct Module {
         m.Funcs.Push(new EFunc { Name = none, Extern = false, Abi = none, Ret = 0, NParams = 0, FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0 });
         m.Blocks.Push(new EBlock { Func = 0, FirstParam = 0, NParams = 0, FirstInst = 0, NInsts = 0, Pos = 0 });
         m.Vals.Push(new EVal { Type = 0, Block = 0, Inst = 0, Pos = 0 });
-        m.Insts.Push(new EInst { Op = 0, Ty = 0, Ty2 = 0, Result = 0, FirstOp = 0, NOps = 0, Block = 0, Imm = 0, Str = none, Pos = 0 });
+        m.Insts.Push(new EInst { Op = 0, Ty = 0, Ty2 = 0, Result = 0, FirstOp = 0, NOps = 0, Block = 0, Imm = 0, Str = none, Pos = 0, Src = 0 });
         m.Ops.Push(new EOp { Kind = 0, Ref = 0, Int = 0, Str = none, Args = 0, NArgs = 0, Pos = 0 });
         m.Args.Push(0);
         m.Prim(EK_VOID, 0, 1, "void");

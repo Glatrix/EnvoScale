@@ -135,7 +135,7 @@ void InlineFunc(ref Module m, u32 fi) {
                     u32 sizeVal = v0 + s.Sizes + n;
                     m.Insts.Push(new EInst {
                         Op = OP_CONST, Ty = ET_U64, Ty2 = 0, Result = sizeVal, FirstOp = m.Ops.Len() as u32, NOps = 0,
-                        Block = nb, Imm = m.Ty(ci.Ty).Size as u64, Str = TextOf(""), Pos = 0
+                        Block = nb, Imm = m.Ty(ci.Ty).Size as u64, Str = TextOf(""), Pos = 0, Src = ci.Src
                     });
                     SetDef(ref m, sizeVal, nb);
                     u32 zop = m.Ops.Len() as u32;
@@ -144,7 +144,7 @@ void InlineFunc(ref Module m, u32 fi) {
                     m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = sizeVal, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
                     m.Insts.Push(new EInst {
                         Op = OP_ZERO, Ty = 0, Ty2 = 0, Result = 0, FirstOp = zop, NOps = 2,
-                        Block = nb, Imm = 0, Str = TextOf(""), Pos = 0
+                        Block = nb, Imm = 0, Str = TextOf(""), Pos = 0, Src = ci.Src
                     });
                     n++;
                 }

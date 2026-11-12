@@ -7,6 +7,8 @@ tools/envo/lsp.envo
 tools/envo/script.envo
 runtime/vm/vm.envo
 runtime/vm/sandbox.envo
+runtime/vm/debug.envo
 tools/envo/repl.envo
 tools/envo/prof.envo
 tools/envo/fuzz.envo
+tools/envo/dbg.envo

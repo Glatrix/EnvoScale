@@ -774,7 +774,7 @@ function Invoke-Test {
         if ($ok) { Pass 'website pages' } else { Bad 'website pages' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
-    Say 'envo commands: new, run, test, check, explain, version, prof, fuzz'
+    Say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg'
     $envoRun = Join-Path $Root 'build\run-envo'
     if (Test-Path -LiteralPath $envoRun) { Remove-Item -Recurse -Force $envoRun }
     New-Item -ItemType Directory -Force $envoRun | Out-Null
@@ -803,6 +803,26 @@ function Invoke-Test {
     if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "ok`n" -and $errN -match '(?m)^ +177 +\d+ +[\d.]+  Fib$' -and $errN -match '(?m)^ +10 +\d+ +[\d.]+  Square$') { Pass 'envo prof' } else { Bad 'envo prof' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     $r = Invoke-Tool $envo @('fuzz', 'magic.envo', '--runs', '50000', '--seed', '1') $envoRun
     if ($r.Code -eq 1 -and $r.Out.Contains('crash: ') -and $r.Err.Contains('panic: found the magic input') -and (Test-Path -LiteralPath (Join-Path $envoRun 'build\fuzz\magic\crash'))) { Pass 'envo fuzz' } else { Bad 'envo fuzz' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    # envo dbg: a scripted session (tests/envo/dbg) gives the expected transcript
+    Copy-Item (Join-Path $Root 'tests\envo\dbg\sum.envo') $envoRun
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $envo
+    $psi.Arguments = 'dbg sum.envo'
+    $psi.WorkingDirectory = $envoRun
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $Utf8
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $bytes = [IO.File]::ReadAllBytes((Join-Path $Root 'tests\envo\dbg\session.txt'))
+    $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $p.StandardInput.BaseStream.Close()
+    $p.WaitForExit()
+    $want = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'tests\envo\dbg\expected.txt')))
+    if ($p.ExitCode -eq 0 -and (Normalize $outTask.Result) -eq $want) { Pass 'envo dbg' } else { Bad 'envo dbg' "exit $($p.ExitCode): $($outTask.Result) $($errTask.Result)" }
     # envo repl: cells piped in; each cell's output shows once, a bad cell shows its error
     $replIn = "print(`"hello`")`ni32 Twice(i32 x) {`n    return x * 2;`n}`nuse alloc.text;`nprint(text.Int(Twice(21) as i64).AsStr())`nu8 bad = nope;`n:quit`n"
     $psi = New-Object System.Diagnostics.ProcessStartInfo

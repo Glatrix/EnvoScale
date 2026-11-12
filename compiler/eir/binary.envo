@@ -438,7 +438,7 @@ struct Decoder {
                 }
                 m.Insts.Push(new EInst {
                     Op = op, Ty = ty, Ty2 = ty2, Result = result, FirstOp = firstOp, NOps = nops,
-                    Block = b, Imm = imm, Str = s, Pos = 0
+                    Block = b, Imm = imm, Str = s, Pos = 0, Src = 0
                 });
             }
         }

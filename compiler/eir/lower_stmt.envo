@@ -7,7 +7,17 @@ use envoc.sema;
 use envoc.eir;
 
 impl Lower {
+    // Lowers statement n, its instructions marked with its line (Src) for debuggers; the
+    // statement around it gets its own line back afterwards.
     void LowerStmt(ref this, u32 n) {
+        u32 outer = this.Src;
+        u16 kind = this.C.NodeAt(n).Kind;
+        if (kind != NK_BLOCK && kind != NK_UNSAFE) this.Src = this.SrcOf(n);
+        this.LowerStmtHere(n);
+        this.Src = outer;
+    }
+
+    void LowerStmtHere(ref this, u32 n) {
         Node node = this.C.NodeAt(n);
         u16 k = node.Kind;
         if (k == NK_BLOCK) {
@@ -160,6 +170,7 @@ impl Lower {
         u32 et = this.LType(t);
         u32 slot = this.Slot(et);
         this.SetSymSlot(s, slot);
+        this.DebugLocal(s, slot, et);
         return slot;
     }
 

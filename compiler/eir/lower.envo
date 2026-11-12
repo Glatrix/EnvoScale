@@ -39,7 +39,7 @@ EOp OpInt(u64 n) {
 
 EInst NoInst(u16 op) => new EInst {
     Op = op, Ty = 0, Ty2 = 0, Result = 0, FirstOp = 0, NOps = 0, Block = 0, Imm = 0,
-    Str = TextOf(""), Pos = 0
+    Str = TextOf(""), Pos = 0, Src = 0
 };
 
 // The EIR float type of size bytes: f32 (EK_F32) or f64 (EK_F64) (RFC 0006).
@@ -96,6 +96,7 @@ public struct Lower {
     List<u32> FlagSyms;     // the locals given a drop flag in the current function
     List<u32> FieldFlags;   // per checker symbol: 1 + where a partly moved local's field flags start
     List<u32> FieldFlagSlots; // per field of such a local: its drop flag slot, 0 if it needs none
+    u32 Src;                // the statement being lowered: (file + 1) << 20 | line (EInst.Src)
 
     public static Lower New(Checker c, u32 target) => new Lower {
         C = c, M = Module.New(), Func = 0, Block = 0, Entry = 0, Body = 0,
@@ -105,7 +106,7 @@ public struct Lower {
         Top = false, Target = target, Env = 0, NEnv = 0, FnvType = 0, LamCount = 0,
         PendingLams = List<u32>.New(), PendingThunks = List<u32>.New(), Thunks = StrMap<u32>.New(),
         DropFlags = List<u32>.New(), Drops = List<u32>.New(), Temps = List<u32>.New(), FlagSyms = List<u32>.New(),
-        FieldFlags = List<u32>.New(), FieldFlagSlots = List<u32>.New()
+        FieldFlags = List<u32>.New(), FieldFlagSlots = List<u32>.New(), Src = 0
     };
 
     // The module, handed out once lowering is done.
@@ -158,6 +159,7 @@ public struct Lower {
         inst.Ty2 = ty2;
         inst.Imm = imm;
         inst.Block = this.Block;
+        inst.Src = this.Src;
         inst.FirstOp = this.M.Ops.Len() as u32;
         inst.NOps = nops;
         if (nops > 0) this.M.Ops.Push(a);
@@ -620,6 +622,22 @@ public struct Lower {
         this.M.Funcs.Set(this.Func as usize, fn);
     }
 
+    // Lists local s (its storage's address in value v, holding EIR type et) for debuggers.
+    void DebugLocal(ref this, u32 s, u32 v, u32 et) {
+        Sym sym = this.C.SymAt(s);
+        this.M.Locals.Push(new EDebugVar { Func = this.Func, Value = v, Type = et, Name = sym.Name });
+    }
+
+    // The Src of node n: its first token's file and line.
+    u32 SrcOf(in this, u32 n) {
+        Node node = this.C.NodeAt(n);
+        Token t = this.C.Tok(node.Tok);
+        u32 line = t.Line;
+        if (line > 0xFFFFF) line = 0xFFFFF;
+        if (t.File >= 0xFFF) return 0;
+        return ((t.File + 1) << 20) | line;
+    }
+
     void SetSymSlot(ref this, u32 s, u32 v) {
         while (this.SymSlots.Len() <= s as usize) this.SymSlots.Push(0);
         this.SymSlots.Set(s as usize, v);
@@ -707,6 +725,7 @@ public struct Lower {
             // the caller passes a pointer to a copy this function owns, or to the borrowed place
             this.SetValType(v, ET_PTR);
             this.SetSymSlot(s, v);
+            this.DebugLocal(s, v, et);
         } else {
             this.SetValType(v, et);
             u32 slot = this.Slot(et);
@@ -714,6 +733,7 @@ public struct Lower {
             stores.Push(slot);
             stores.Push(et);
             this.SetSymSlot(s, slot);
+            this.DebugLocal(s, slot, et);
         }
     }
 

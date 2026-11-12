@@ -28,6 +28,7 @@ struct Frame {
     u32 First;          // the value id of its first value
     u32 Ret;            // the caller's frame index that gets the result, or NO_RESULT
     usize SlotMark;     // the slot stack's top when it started
+    u32 Src;            // the debugger: the line it last stopped at, or passed
 }
 
 // Each instruction in the form the VM runs, worked out before running: what it needs,
@@ -81,6 +82,8 @@ public struct Vm {
     string VPath;
     List<u8> VData;
     usize VPos;
+    bool Debugging;
+    Debugger Dbg;
 
     // A VM for module m (made for the host target, runtime included).
     public static Vm New(Module m, Sandbox box) {
@@ -97,6 +100,7 @@ public struct Vm {
                 Covering = false, BlockHits = List<u8>.New(), Catching = false, Quiet = false,
                 Halted = false, HaltCode = 0, StdOut = -1, StdErr = -1,
                 VPath = string.New(), VData = List<u8>.New(), VPos = 0,
+                Debugging = false, Dbg = Debugger.New(),
             };
             vm.Prepare();
             return vm;
@@ -480,6 +484,7 @@ public struct Vm {
             fr.First = fn.FirstValue;
             fr.SlotMark = this.SlotTop;
             fr.Ret = ret;
+            fr.Src = 0;
             EBlock blk = this.M.Block(fn.FirstBlock);
             fr.Inst = blk.FirstInst;
         }
@@ -501,6 +506,10 @@ public struct Vm {
                 }
                 *Frame fr = &this.Frames[this.Depth - 1];
                 if (this.Profiling) this.FnInsts.Data[fr.Func] = this.FnInsts.Data[fr.Func] + 1;
+                if (this.Debugging) {
+                    this.DebugAt(fr.Inst);
+                    if (this.Halted) continue;
+                }
                 usize fb = fr.Base;
                 u32 first = fr.First;
                 u32 i = fr.Inst;

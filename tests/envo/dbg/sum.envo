@@ -1,0 +1,15 @@
+// envo dbg's test program (tests/envo/dbg/session.txt drives it).
+use alloc.text;
+
+i64 Sum(i64 n) {
+    i64 total = 0;
+    for (i64 i = 1; i <= n; i++) {
+        total += i;
+    }
+    return total;
+}
+
+str name = "sum";
+i64 got = Sum(4);
+bool done = got == 10;
+print(text.Int(got).AsStr());

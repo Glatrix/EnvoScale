@@ -42,6 +42,9 @@ void EnvoUsage(i32 fd) {
     write(fd, "  fuzz target.envo [--runs N] [--seed N] [--max-len N] [--corpus dir]\n");
     write(fd, "                          coverage-guided fuzzing: the target reads the file\n");
     write(fd, "                          named by its first argument; a panic is a crash\n");
+    write(fd, "  dbg [dir | file.envo] [-- args]\n");
+    write(fd, "                          debug in the script runtime: breakpoints, stepping,\n");
+    write(fd, "                          the call stack and locals (commands on stdin)\n");
     write(fd, "  lsp                     serve diagnostics to an editor (Language Server Protocol)\n");
     write(fd, "  explain <code>          explain a diagnostic code, such as E0214\n");
     write(fd, "  version                 print the version\n");
@@ -382,6 +385,7 @@ if (Eq(command, "lsp")) return CmdEnvoLsp(2);
 if (Eq(command, "repl")) return CmdEnvoRepl(2);
 if (Eq(command, "prof")) return CmdEnvoProf(2);
 if (Eq(command, "fuzz")) return CmdEnvoFuzz(2);
+if (Eq(command, "dbg")) return CmdEnvoDbg(2);
 string msg = string.From("unknown command '");
 msg.Append(command);
 msg.Append("'; run `envo help` for the list");
