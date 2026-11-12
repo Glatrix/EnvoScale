@@ -24,7 +24,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M8 | Graphics and UI | **Done** (Experimental): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port (Win32), `envo.lumen` and `envo.ui` (desktop and terminal renderers), `envo.gpu` (software and Direct3D 12) (8.1–8.9) |
 | M9 | Web | **Done** (Experimental): the WebAssembly backend, the JS host and `os.wasm`, `envo.markdown`, `envo.web` with Lumen's Landing and Docs templates, the website and its in-browser sandbox, built by Envo programs (9.1–9.8) |
 | M10 | AArch64 and macOS | **Blocked** on test machines: no AArch64 or macOS hardware here, and GitHub's arm64 and macOS runners cost money for a private repository (an owner decision) |
-| M11–M13 | | Not started |
+| M11 | 3D | **In progress** (ahead of M10, `docs/PLAN.md` §5): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR, the same frame bit for bit in every build), the 3D gallery program (11.1–11.3, 11.5) |
+| M12–M13 | | Not started |
 
 ### M0 Definition of Done
 
@@ -130,7 +131,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **CI** (`adapters/ci/github`) | Experimental | `check`, Windows and Linux test jobs (745/745 each), and `reproducible`, which requires byte-identical builds of all three compilers across hosts | — | — |
 | **Tests** (`tests/`) | — | Lexer, parser and checker goldens; Core and S1 error, run and multi-file tests; EIR tests; CLI smoke tests; Hello World line limits | — | New `s1-own` tests for M3.10 |
 | **Runtime** (`runtime/`) | Experimental | Startup, panics and the OS layer (`bootstrap/stage1/runtime/`, in every program); the EIR VM (`runtime/vm`) with permissions | ARC, a JIT, floats in the VM | M7 on |
-| **Standard platform** (`lib/`) | Experimental | `core`, `alloc`, `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, `envo.crypto`, `envo.http`, `envo.tls`, `envo.cli`, `envo.term`, `envo.gfx`, `envo.font`, `envo.lumen`, `envo.ui`, `envo.gpu`, `envo.markdown`, `envo.web`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M8 on |
+| **Standard platform** (`lib/`) | Experimental | `core`, `alloc`, `ports`, `std` (io, fs, path, time, env, random, process), `envo.eon`, `envo.json`, `envo.crypto`, `envo.http`, `envo.tls`, `envo.cli`, `envo.term`, `envo.gfx`, `envo.font`, `envo.lumen`, `envo.ui`, `envo.gpu`, `envo.markdown`, `envo.web`, `envo.math`, `envo.ecs`, `envo.render3d`, in Envo-S1 through `envoc --lib` | Other domain modules (`envo.*`), threads and async, floats | M8 on |
 | **Adapters** (`adapters/os`, `window`, `gpu`, …) | Experimental (`os`) | `os/none` (reference), `os/windows`, `os/linux`: Console, FileSystem, Clock, Entropy, Environment, Process, Net, Trust, Terminal, Window (Win32; Linux after M8), Gpu (Direct3D 12; software elsewhere); every conformance suite passes on both hosts | Vulkan, audio, threads, Linux windows | M8 on |
 | **Tools** (`tools/`) | Experimental | `envo`: `new`, `build`, `run` (script runtime or `--native`), `check`, `test`, `fmt`, `lsp`, `repl`, `explain`, `version`; scripts | `doc`, `lint`, `pkg`, `dbg`, `prof`, `fuzz` | later milestones |
 | **Templates** (`templates/`) | — | — | Everything | M5, M9 |

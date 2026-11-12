@@ -1,0 +1,147 @@
+// envo.ecs: entities and components (PLAN D54). An entity is an index with a generation,
+// so a handle to a despawned entity never reaches the one that reuses its index. Each
+// component type lives in its own sparse set (Store<T>): the values are dense, in one
+// list, so systems run through them in order; adding, removing and finding one is O(1).
+// Envo-S1 has no runtime types, so a program declares a store per component type and
+// writes its systems as functions over the stores they use.
+namespace envo.ecs;
+
+// An entity: its index and the generation of that index when it was spawned.
+public struct Entity {
+    u32 Index;
+    u32 Gen;
+
+    // No entity.
+    public static Entity None() => new Entity { Index = 0xFFFFFFFF, Gen = 0 };
+    public bool IsNone(in this) => this.Index == 0xFFFFFFFF;
+    public bool Is(in this, Entity o) => this.Index == o.Index && this.Gen == o.Gen;
+    public u32 IndexOf(in this) => this.Index;
+    public u32 Generation(in this) => this.Gen;
+}
+
+// Which entities exist.
+public struct World {
+    List<u32> Gens;         // per index: its current generation
+    List<bool> Alive;
+    List<u32> Free;         // despawned indices, reused last in, first out
+    usize Live;
+
+    public static World New() => new World { Gens = List<u32>.New(), Alive = List<bool>.New(), Free = List<u32>.New(), Live = 0 };
+
+    // A new entity (reusing a despawned index, with the next generation).
+    public Entity Spawn(ref this) {
+        this.Live++;
+        u32? reuse = this.Free.Pop();
+        if (reuse.IsSome()) {
+            u32 i = reuse.Unwrap();
+            this.Alive.Set(i as usize, true);
+            return new Entity { Index = i, Gen = this.Gens.Get(i as usize) };
+        }
+        u32 i = this.Gens.Len() as u32;
+        this.Gens.Push(0);
+        this.Alive.Push(true);
+        return new Entity { Index = i, Gen = 0 };
+    }
+
+    // Ends e: its handle stops being alive, and its index will be reused. The program
+    // removes its components from the stores (Store.Remove), or they stay unreachable.
+    public bool Despawn(ref this, Entity e) {
+        if (!this.IsAlive(e)) return false;
+        this.Alive.Set(e.Index as usize, false);
+        this.Gens.Set(e.Index as usize, e.Gen + 1);
+        this.Free.Push(e.Index);
+        this.Live--;
+        return true;
+    }
+
+    public bool IsAlive(in this, Entity e) {
+        if (e.Index as usize >= this.Gens.Len()) return false;
+        return this.Alive.Get(e.Index as usize) && this.Gens.Get(e.Index as usize) == e.Gen;
+    }
+
+    // How many entities are alive.
+    public usize Count(in this) => this.Live;
+}
+
+// The components of one type: a sparse set. Values sit in a dense list (Values), with the
+// entity owning each beside it (Entities), in no particular order.
+public struct Store<T> {
+    List<u32> Sparse;       // per entity index: dense position + 1, 0 if none
+    List<Entity> Owners;
+    List<T> Items;
+
+    public static Store<T> New() => new Store<T> { Sparse = List<u32>.New(), Owners = List<Entity>.New(), Items = List<T>.New() };
+
+    public usize Len(in this) => this.Items.Len();
+
+    // The dense position of e's component, or Len() if e has none.
+    public usize Find(in this, Entity e) {
+        if (e.Index as usize >= this.Sparse.Len()) return this.Items.Len();
+        u32 at = this.Sparse.Get(e.Index as usize);
+        if (at == 0) return this.Items.Len();
+        usize i = (at - 1) as usize;
+        if (!this.Owners.Get(i).Is(e)) return this.Items.Len();
+        return i;
+    }
+
+    public bool Has(in this, Entity e) => this.Find(e) < this.Items.Len();
+
+    // Gives e a component, replacing the one it had.
+    public void Set(ref this, Entity e, T value) {
+        usize at = this.Find(e);
+        if (at < this.Items.Len()) {
+            this.Items.Set(at, value);
+            return;
+        }
+        while (this.Sparse.Len() <= e.Index as usize) this.Sparse.Push(0);
+        // an older generation's slot at this index is simply overwritten
+        usize stale = this.StaleAt(e.Index);
+        if (stale < this.Items.Len()) {
+            this.Owners.Set(stale, e);
+            this.Items.Set(stale, value);
+            return;
+        }
+        this.Items.Push(value);
+        this.Owners.Push(e);
+        this.Sparse.Set(e.Index as usize, this.Items.Len() as u32);
+    }
+
+    // The dense position held for index (by any generation), or Len().
+    usize StaleAt(in this, u32 index) {
+        u32 at = this.Sparse.Get(index as usize);
+        if (at == 0) return this.Items.Len();
+        return (at - 1) as usize;
+    }
+
+    // A copy of e's component; panics if it has none.
+    public T Get(in this, Entity e) where T : Copy {
+        usize at = this.Find(e);
+        if (at >= this.Items.Len()) panic("ecs: the entity has no such component");
+        return this.Items.Get(at);
+    }
+
+    // Removes e's component (the last one takes its place). False if it had none.
+    public bool Remove(ref this, Entity e) where T : Copy {
+        usize at = this.Find(e);
+        usize n = this.Items.Len();
+        if (at >= n) return false;
+        usize last = n - 1;
+        if (at != last) {
+            Entity moved = this.Owners.Get(last);
+            T v = this.Items.Get(last);
+            this.Items.Set(at, v);
+            this.Owners.Set(at, moved);
+            this.Sparse.Set(moved.Index as usize, (at + 1) as u32);
+        }
+        this.Items.Pop();
+        this.Owners.Pop();
+        this.Sparse.Set(e.Index as usize, 0);
+        return true;
+    }
+
+    // The components, dense: a system reads or changes them in place.
+    public T[] Values(in this) => this.Items.AsSlice();
+    public mut T[] ValuesMut(ref this) => this.Items.AsMutSlice();
+    // The entity owning each value, at the same positions.
+    public Entity[] Entities(in this) => this.Owners.AsSlice();
+}

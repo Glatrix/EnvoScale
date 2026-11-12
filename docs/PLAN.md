@@ -88,6 +88,10 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D50 | **`envo.web`** on `envo.http`: a router with path parameters, static files with types and confined paths, an HTML builder that escapes by default, and page rendering on the server (SSR) and to files (SSG) from the same code. | `lib/envo/web/README.md` |
 | D51 | **Markdown** (`envo.markdown`: CommonMark's blocks and inlines, with GitHub's tables) and **Lumen templates** for pages (Landing and Docs), with the CSS generated from Lumen's tokens. | `lib/envo/web/README.md` |
 | D52 | **The website is an Envo program** (`website/`, its plan in `website/PLAN.md`) that builds the pages and `docs/` into static files with the Landing and Docs templates, served locally by `envo.web`. Publishing it (#61) is the owner's call. The sandbox runs `envoc` itself, built for `wasm32-web`, in the browser. | `website/README.md` |
+| D53 | **`envo.math`** for 3D is `f32`, column-major matrices acting on column vectors, a right-handed world (y up, the camera looking down -z), and clip-space depth from 0 (near) to 1 (far), as Direct3D, Vulkan and WebGPU use. | `lib/envo/math/README.md` |
+| D54 | **`envo.ecs`**: entities are generational ids; each component type has its own sparse set (`Store<T>`), dense and cache-friendly, with O(1) add, remove and lookup. Envo-S1 has no runtime types, so a program declares its stores; systems are functions over them. Archetype tables and a scheduler come with threads. | `lib/envo/ecs/README.md` |
+| D55 | **`envo.render3d` renders in software first**: perspective-correct triangles with a depth buffer, physically based shading (Cook-Torrance: GGX, Smith, Schlick) for directional and point lights, ACES tone mapping and sRGB output, into an `envo.gfx` canvas a window presents. The GPU adapters draw the same frames later. | `lib/envo/render3d/README.md` |
+| D56 | **glTF 2.0 import**: `.gltf` with `.bin` buffers or base64 data URIs; meshes (positions, normals, indices), the metallic-roughness material's factors, and the node hierarchy. Textures, skins and animation follow. | `lib/envo/render3d/README.md` |
 
 ## 3. Open questions
 
@@ -206,9 +210,17 @@ Mac for Mach-O and the macOS adapters. None is available here, and GitHub's arm6
 macOS runners are billed for private repositories, so how to test is the owner's decision
 (STATUS). Until then, work moves to what M11 and M12 need first:
 
-- **Floats in Envo-S1** (RFC 0006): `f32` and `f64` through the front end, EIR, both
-  backends and the script runtime, with formatting and parsing in `core.text`. The 3D
-  renderer (M11) and the tensors (M12) are float code.
+- **Floats in Envo-S1** (RFC 0006): done.
+- **M11 (3D)** goes ahead of it:
+
+| # | Increment | Tested by | State |
+|---|---|---|---|
+| 11.1 | `envo.math`: vectors, matrices, quaternions (D53) | `lib/envo/math/tests/` | done |
+| 11.2 | `envo.ecs` (D54) | `lib/envo/ecs/tests/` || done |
+| 11.3 | `envo.render3d`: the software PBR renderer (D55) | golden frames || done |
+| 11.4 | glTF 2.0 import (D56) | a test asset | |
+| 11.5 | The `scene` simple door: a scene in a window in a few lines | the Hello World Gallery's 3D entry || done |
+| 11.6 | Docs and status; M11 complete | CI | |
 
 ## 6. Risks
 
