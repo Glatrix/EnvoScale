@@ -54,6 +54,11 @@ struct Gen {
     u32 Fused;              // -O2: a compare left for the branch after it to do, or 0
     u32 FoldedField;        // -O2: a field or element address left for the load or store after it, or 0
     u32 FoldedInst;         // its instruction
+    // -O2: the value last stored to its stack slot, the register it came from, and the
+    // code offset just after: a load of it right there reads the register instead
+    u32 SpillV;
+    u8 SpillReg;
+    usize SpillAt;
 
     // ------------------------------------------------------------------ helpers
 
@@ -89,6 +94,11 @@ struct Gen {
             }
         }
         i32 off = this.VOff(v);
+        // just stored from a register, with no code or label since: that register has it
+        if (this.Opt && v == this.SpillV && this.A.Code.Len() == this.SpillAt && this.A.LastBind < this.SpillAt) {
+            if (r != this.SpillReg) this.A.MovRR(r, this.SpillReg);
+            return;
+        }
         this.A.Load(r, RBP, off, 8, false);
     }
 
@@ -102,6 +112,11 @@ struct Gen {
         }
         i32 off = this.VOff(v);
         this.A.Store(RBP, off, r, 8);
+        if (this.Opt) {
+            this.SpillV = v;
+            this.SpillReg = r;
+            this.SpillAt = this.A.Code.Len();
+        }
     }
 
     // The value of operand o (a value or an integer) into register r.
@@ -617,6 +632,7 @@ struct Gen {
         u32 t = inst.Ty;
         ETy ty = m.Ty(t);
         bool signed = m.IsSigned(t);
+        i32 storeImm = 0;
         if (this.Opt && inst.Result != 0 && this.RematKind.Get((inst.Result - this.FirstValue) as usize) != 0) return;
         if (sh == SH_CONST) {
             this.A.MovRI(RAX, inst.Imm);
@@ -820,6 +836,12 @@ struct Gen {
             this.StoreV(inst.Result, d);
             return;
             this.StoreV(inst.Result, RAX);
+        } else if (sh == SH_STORE && this.Opt && this.SmallImm(m, f, ref storeImm)) {
+            // a small constant is stored as an immediate
+            i32 disp = 0;
+            u8 rb = this.AddrOf(m, f + 1, RCX, ref disp);
+            this.A.StoreImm(rb, disp, storeImm, ty.Size);
+            this.A.Idx = NO_INDEX;
         } else if (sh == SH_STORE) {
             u8 rv = RAX;
             if (this.Opt) rv = this.InReg(m, f, RAX);
@@ -897,7 +919,17 @@ struct Gen {
             this.A.Alu(ALU_ADD, RAX, RCX);
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_VALUES) {
-            if (op == 47) {
+            if (op == 47 && this.Opt && this.SmallConst(m, f + 2) != NOT_SMALL) {
+                // a small copy through rax, with the addresses where they are (rsi and
+                // rdi stay free: regalloc.envol's Clobbers)
+                u8 rd = this.InReg(m, f, RCX);
+                u8 rs = this.InReg(m, f + 1, RDX);
+                this.MoveBytes(rd, 0, rs, 0, this.SmallConst(m, f + 2));
+            } else if (op == 48 && this.Opt && this.SmallConst(m, f + 1) != NOT_SMALL) {
+                u8 rd = this.InReg(m, f, RCX);
+                this.A.Alu(ALU_XOR, RAX, RAX);
+                this.ZeroBytes(rd, 0, this.SmallConst(m, f + 1));
+            } else if (op == 47) {
                 this.LoadOp(m, RDI, f);
                 this.LoadOp(m, RSI, f + 1);
                 u64 size = this.SmallConst(m, f + 2);
@@ -1639,7 +1671,8 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
         Imports = new WinImports { Dir = 0, Iat = 0 }, Opt = opt, Regs = List<u8>.New(),
         RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0,
-        Uses = List<u32>.New(), NextBlock = 0, BlockEnd = 0, Fused = 0, FoldedField = 0, FoldedInst = 0
+        Uses = List<u32>.New(), NextBlock = 0, BlockEnd = 0, Fused = 0, FoldedField = 0, FoldedInst = 0,
+        SpillV = 0, SpillReg = 0, SpillAt = 0
     };
     g.A.Short = opt;
     for (usize i = 0; i < m.Funcs.Len(); i++) g.FuncLabels.Push(0);

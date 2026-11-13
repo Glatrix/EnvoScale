@@ -39,6 +39,9 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   the stack; a parameter keeps the register it arrives in when its interval allows. The
   `-O0` convention, all arguments on the stack, stays Stage 1's.
 - **Select.** `select` is a `test` and a `cmov`, without a branch.
+- **Stores of constants.** A constant that fits 32 bits is stored as an immediate.
+- **Spills.** A value just stored to its stack slot is read from the register it came
+  from, when no code or label lies between.
 - **Division by a constant.** Unsigned `/` and `%` by a constant are a shift and a mask
   for a power of two, else a multiply by the divisor's reciprocal and a shift when a
   64-bit reciprocal is exact for every dividend (as for 10), or a few more steps when
@@ -63,8 +66,10 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   both are done. A branch edge whose arguments already sit in its parameters' places is
   taken by the `jcc` itself.
 - **Small copies and zeroing.** `copy` and `zero` of a constant size up to 256 bytes,
-  and the zeroing of a frame's slots, become 8/4/2/1-byte moves instead of
-  `rep movsb`/`rep stosb`.
+  and the zeroing of a frame's slots, become 8/4/2/1-byte moves through rax, with the
+  addresses in their own registers, instead of `rep movsb`/`rep stosb` (so they leave rsi
+  and rdi alone). A call of the prelude's `string.CopyBytes` with a small constant length
+  becomes such a copy.
 - **Slots that need no zeroing.** A slot every path writes in full before reading it (or
   passing its address on) is not zeroed on entry (`frame.envol`). Stores, loads, copies
   and zeroing through the slot and field addresses inside it are followed byte by byte

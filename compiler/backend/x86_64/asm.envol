@@ -76,9 +76,10 @@ public struct Asm {
     bool Short;         // -O2: memory operands with no or an 8-bit displacement where they fit
     u8 Idx;             // -O2: the next memory operand's index register, or NO_INDEX
     u8 Scale;           // its scale, as a shift (0-3)
+    usize LastBind;     // the code offset a label was last bound at
 
     public static Asm New() {
-        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New(), Short = false, Idx = NO_INDEX, Scale = 0 };
+        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New(), Short = false, Idx = NO_INDEX, Scale = 0, LastBind = 0 };
         a.Labels.Push(UNBOUND);     // label 0: none
         return a;
     }
@@ -93,6 +94,7 @@ public struct Asm {
     public void Bind(ref this, u32 l) {
         u64 at = this.Code.Len() as u64;
         this.Labels.Set(l as usize, at);
+        this.LastBind = this.Code.Len();
     }
 
     // Binds label l to the current data offset.
@@ -279,6 +281,22 @@ public struct Asm {
         if (size == 1) this.B(0x88);
         else this.B(0x89);
         this.ModMem(src, rb, disp);
+    }
+
+    // mov size [rb + disp], imm (the low size bytes; 8 bytes sign-extend imm)
+    public void StoreImm(ref this, u8 rb, i32 disp, i32 imm, u32 size) {
+        if (size == 2) this.B(0x66);
+        this.Rex(size == 8, 0, rb, false);
+        if (size == 1) this.B(0xC6);
+        else this.B(0xC7);
+        this.ModMem(0, rb, disp);
+        if (size == 1) this.B(imm as u8);
+        else if (size == 2) {
+            this.B(imm as u8);
+            this.B((imm >> 8) as u8);
+        } else {
+            this.U32(imm as u32);
+        }
     }
 
     // lea dst, [rb + disp]

@@ -103,12 +103,24 @@ u8 AllocReg(u32 i) {
 }
 
 // The caller-saved registers instruction inst overwrites (bit i - NSAVED for AllocReg(i)).
-u32 Clobbers(in EInst inst) {
+u32 Clobbers(in Module m, in EInst inst) {
     u16 op = inst.Op;
     if (op == 52 || op == 53 || op == 54) return 31;    // call, call.ind, intrinsic
-    if (op == 47) return 3;                             // copy: rsi, rdi
-    if (op == 48) return 2;                             // zero: rdi
+    // a copy or zero of up to 256 constant bytes goes through rax (gen.envol)
+    if (op == 47 && !SmallSize(m, inst.FirstOp + 2)) return 3;     // copy: rsi, rdi
+    if (op == 48 && !SmallSize(m, inst.FirstOp + 1)) return 2;     // zero: rdi
     return 0;
+}
+
+// Is operand o a constant of at most 256 (written, or a `const`)?
+bool SmallSize(in Module m, u32 o) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) return op.Int <= 256;
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    return d.Op == OP_CONST && d.Imm <= 256;
 }
 
 // A set of values (relative to the function's first) per block.
@@ -212,7 +224,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         pos++;
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
-            clob.Push(Clobbers(inst));
+            clob.Push(Clobbers(m, inst));
             posBlock.Push(bi);
             posInst.Push(i);
             for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {

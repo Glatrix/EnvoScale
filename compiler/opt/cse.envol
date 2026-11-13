@@ -12,6 +12,8 @@
 // so loads through them match, but stay where they are: the backend folds each into the
 // one load or store after it.
 //
+// A call of the prelude's string.CopyBytes with a small constant length becomes a `copy`.
+//
 // A local filled whole by a `copy` from s, with nothing written since, is s: a field read
 // from it reads s's, and a copy out of it copies from s. The local then often goes. Simplification runs afterwards and drops what is unused.
 namespace envoc.opt;
@@ -280,6 +282,19 @@ bool CseFunc(ref Module m, u32 fi) {
         }
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
+            if (inst.Op == 52 && inst.NOps == 4 && TextIs(m.Func(m.Op(inst.FirstOp).Ref).Name, "string.CopyBytes")) {
+                // the prelude's byte copy of a small constant length is a `copy`, which
+                // the backend unrolls
+                u64 n = 0;
+                if (WholeSizeOf(m, inst.FirstOp + 3, ref n) && n <= 256) {
+                    inst.Op = COP_COPY;
+                    inst.FirstOp = inst.FirstOp + 1;
+                    inst.NOps = 3;
+                    inst.Imm = 0;
+                    m.Insts.Set(i as usize, inst);
+                    changed = true;
+                }
+            }
             if (MayWrite(inst.Op)) {
                 if (inst.Op == COP_COPY && inst.NOps == 3) {
                     // a copy out of a local just filled whole from s copies from s
@@ -521,6 +536,22 @@ u32 MemGet(in Cse c, u32 mask, u32 ty, u32 addr, u32 ver, u32 b, in BlockSets do
 void CountUse(ref List<u32> uses, u32 first, u32 v) {
     u32 k = v - first;
     if (k < uses.Len() as u32) uses.Set(k as usize, uses.Get(k as usize) + 1);
+}
+
+// Operand o as a constant (written or a `const`), if it is one.
+bool WholeSizeOf(in Module m, u32 o, ref u64 n) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) {
+        n = op.Int;
+        return true;
+    }
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    if (d.Op != 1) return false;
+    n = d.Imm;
+    return true;
 }
 
 // Is operand o (a copy's size) the number n, written or as a `const`?
