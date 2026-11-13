@@ -95,31 +95,36 @@ void PromoteFunc(ref Module m, u32 fi) {
         if (s != NONE) slotOf.Set(k as usize, promOf.Get(s as usize));
     }
 
-    // liveness of each local at block entries: read before written (ue), written (def)
-    List<bool> ue = List<bool>.New();
-    List<bool> def = List<bool>.New();
-    List<bool> liveIn = List<bool>.New();
-    for (u32 k = 0; k < nb * p; k++) {
-        ue.Push(false);
-        def.Push(false);
-        liveIn.Push(false);
+    // liveness of each local at block entries: read before written (ue), written (def);
+    // 64 locals to a word, words per block
+    u32 words = (p + 63) / 64;
+    List<u64> ue = List<u64>.New();
+    List<u64> def = List<u64>.New();
+    List<u64> liveW = List<u64>.New();
+    for (u32 k = 0; k < nb * words; k++) {
+        ue.Push(0);
+        def.Push(0);
+        liveW.Push(0);
     }
     for (u32 bi = 0; bi < nb; bi++) {
         EBlock blk = m.Block(f.FirstBlock + bi);
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
+            u32 s = NONE;
+            if (inst.Op == OP_LOAD) s = SlotAt(m, slotOf, f, inst.FirstOp);
+            else if (inst.Op == OP_STORE) s = SlotAt(m, slotOf, f, inst.FirstOp + 1);
+            else if (inst.Op == OP_ZERO) s = SlotAt(m, slotOf, f, inst.FirstOp);
+            if (s == NONE) continue;
+            usize w = (bi * words + s / 64) as usize;
+            u64 bit = (1 as u64) << (s % 64) as u64;
             if (inst.Op == OP_LOAD) {
-                u32 s = SlotAt(m, slotOf, f, inst.FirstOp);
-                if (s != NONE && !def.Get((bi * p + s) as usize)) ue.Set((bi * p + s) as usize, true);
-            } else if (inst.Op == OP_STORE) {
-                u32 s = SlotAt(m, slotOf, f, inst.FirstOp + 1);
-                if (s != NONE) def.Set((bi * p + s) as usize, true);
-            } else if (inst.Op == OP_ZERO) {
-                u32 s = SlotAt(m, slotOf, f, inst.FirstOp);
-                if (s != NONE) def.Set((bi * p + s) as usize, true);
+                if (def.Get(w) & bit == 0) ue.Set(w, ue.Get(w) | bit);
+            } else {
+                def.Set(w, def.Get(w) | bit);
             }
         }
     }
+    // live-in = ue | (the successors' live-in) & ~def, until nothing changes
     bool changed = true;
     while (changed) {
         changed = false;
@@ -128,22 +133,24 @@ void PromoteFunc(ref Module m, u32 fi) {
             bi--;
             EBlock blk = m.Block(f.FirstBlock + bi);
             EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
-            for (u32 s = 0; s < p; s++) {
-                usize at = (bi * p + s) as usize;
-                if (liveIn.Get(at)) continue;
-                bool live = ue.Get(at);
-                if (!live && !def.Get(at)) {
-                    for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps && !live; o++) {
-                        EOp op = m.Op(o);
-                        if (op.Kind == OK_TARGET && liveIn.Get(((op.Ref - f.FirstBlock) * p + s) as usize)) live = true;
-                    }
+            for (u32 w = 0; w < words; w++) {
+                usize at = (bi * words + w) as usize;
+                u64 out2 = 0;
+                for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+                    EOp op = m.Op(o);
+                    if (op.Kind == OK_TARGET) out2 = out2 | liveW.Get(((op.Ref - f.FirstBlock) * words + w) as usize);
                 }
-                if (live) {
-                    liveIn.Set(at, true);
+                u64 v = ue.Get(at) | (out2 & ~def.Get(at));
+                if (v != liveW.Get(at)) {
+                    liveW.Set(at, v);
                     changed = true;
                 }
             }
         }
+    }
+    List<bool> liveIn = List<bool>.New();
+    for (u32 bi = 0; bi < nb; bi++) {
+        for (u32 s = 0; s < p; s++) liveIn.Push((liveW.Get((bi * words + s / 64) as usize) >> (s % 64) as u64) & 1 != 0);
     }
 
     // extended ids: the function's values, then each block's new parameters, then one

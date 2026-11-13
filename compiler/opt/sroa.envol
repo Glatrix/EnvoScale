@@ -1,0 +1,366 @@
+// -O2 scalar replacement of aggregates. A local of a struct type without padding whose
+// fields are all scalars (a `str`, a slice, a `string`, a small struct), used only through
+// its fields' addresses (loads and stores of the field's own type), whole copies into and
+// out of it, `zero` of all of it and `slot.end`, becomes one local per field. A copy into
+// it becomes a load and a store per field, a copy out of it the same the other way, and
+// a `zero` zeroes each field. Locals then promotes the field locals to values, so a `str`
+// a function works on lives in two registers instead of on the stack.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u32 SR_MAX_FIELDS = 8;
+
+// Can slot type t be split: a struct of up to SR_MAX_FIELDS scalar fields, no padding?
+bool Splittable(in Module m, u32 t) {
+    ETy ty = m.Ty(t);
+    if (ty.Kind != EK_STRUCT || ty.Packed || ty.NFields == 0 || ty.NFields > SR_MAX_FIELDS) return false;
+    u64 sum = 0;
+    for (u32 k = 0; k < ty.NFields; k++) {
+        u32 ft = m.Field(ty.Fields + k);
+        if (!m.IsScalar(ft)) return false;
+        sum += m.Ty(ft).Size as u64;
+    }
+    return sum == ty.Size as u64;
+}
+
+// Is operand o the constant n (written, or a `const`)?
+bool SizeIs(in Module m, u32 o, u64 n) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) return op.Int == n;
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    return d.Op == OP_CONST && d.Imm == n;
+}
+
+struct Splitter {
+    u32 FirstValue;
+    List<u32> Slot;         // per value (relative): the split slot it is, or NONE
+    List<u32> FieldOf;      // per value: for a field address of a split slot, the slot
+    List<u32> FieldIdx;     //   and the field
+    List<bool> Bad;         // per value (slot): a use that keeps it whole
+    List<u32> First;        // per slot value: its first field local (new id), or NONE
+
+    // The split slot value v is (relative), or NONE.
+    u32 SlotOfV(in this, u32 v) {
+        u32 k = v - this.FirstValue;
+        if (k >= this.Slot.Len() as u32) return NONE;
+        return this.Slot.Get(k as usize);
+    }
+}
+
+// Splits the aggregate locals of every function definition.
+public void SplitLocals(ref Module m) {
+    for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
+        if (!m.Func(fi).Extern) SplitFunc(ref m, fi);
+    }
+}
+
+void SplitFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    u32 nb = f.NBlocks;
+    if (nb == 0) return;
+    Splitter sp = new Splitter {
+        FirstValue = f.FirstValue, Slot = List<u32>.New(), FieldOf = List<u32>.New(), FieldIdx = List<u32>.New(),
+        Bad = List<bool>.New(), First = List<u32>.New()
+    };
+    for (u32 k = 0; k < nv; k++) {
+        sp.Slot.Push(NONE);
+        sp.FieldOf.Push(NONE);
+        sp.FieldIdx.Push(0);
+        sp.Bad.Push(false);
+        sp.First.Push(NONE);
+    }
+    // candidates: the splittable slots of the entry block
+    EBlock entry = m.Block(f.FirstBlock);
+    bool any = false;
+    for (u32 i = entry.FirstInst; i < entry.FirstInst + entry.NInsts; i++) {
+        EInst inst = m.Inst(i);
+        if (inst.Op != OP_SLOT || !Splittable(m, inst.Ty)) continue;
+        u32 k = inst.Result - f.FirstValue;
+        sp.Slot.Set(k as usize, k);
+        any = true;
+    }
+    if (!any) return;
+    // their field addresses
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op != 44 || inst.Result == 0 || m.Op(inst.FirstOp).Kind != OK_VALUE) continue;
+            u32 s = sp.SlotOfV(m.Op(inst.FirstOp).Ref);
+            if (s == NONE) continue;
+            EInst si = m.Inst(m.Val(f.FirstValue + s).Inst);
+            if (inst.Ty != si.Ty || inst.Imm >= m.Ty(si.Ty).NFields as u64) {
+                sp.Bad.Set(s as usize, true);
+                continue;
+            }
+            u32 r = inst.Result - f.FirstValue;
+            sp.FieldOf.Set(r as usize, s);
+            sp.FieldIdx.Set(r as usize, inst.Imm as u32);
+        }
+    }
+    // every use must be one the split can rewrite
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp x = m.Op(o);
+                if (x.Kind == OK_TARGET) {
+                    for (u32 a = 0; a < x.NArgs; a++) MarkBad(ref sp, m.Arg(x.Args + a));
+                    continue;
+                }
+                if (x.Kind != OK_VALUE) continue;
+                u32 at = o - inst.FirstOp;
+                u32 k = x.Ref - f.FirstValue;
+                if (k >= nv) continue;
+                u32 s = sp.Slot.Get(k as usize);
+                if (s != NONE) {
+                    // the slot itself
+                    u64 size = m.Ty(m.Inst(m.Val(x.Ref).Inst).Ty).Size as u64;
+                    bool ok = false;
+                    if (inst.Op == 44 && at == 0) ok = sp.FieldOf.Get((inst.Result - f.FirstValue) as usize) == s;
+                    else if (inst.Op == 47 && at <= 1) ok = SizeIs(m, inst.FirstOp + 2, size) && !SameValue(m, inst);
+                    else if (inst.Op == 48 && at == 0) ok = SizeIs(m, inst.FirstOp + 1, size);
+                    else if (inst.Op == 4) ok = true;
+                    if (!ok) sp.Bad.Set(s as usize, true);
+                    continue;
+                }
+                u32 fs = sp.FieldOf.Get(k as usize);
+                if (fs == NONE) continue;
+                // a field address: only the address of a load or store of the field's type
+                EInst si = m.Inst(m.Val(f.FirstValue + fs).Inst);
+                u32 ft = m.Field(m.Ty(si.Ty).Fields + sp.FieldIdx.Get(k as usize));
+                bool fok = false;
+                if (inst.Op == 42 && at == 0) fok = inst.Ty == ft;
+                else if (inst.Op == 43 && at == 1) fok = inst.Ty == ft;
+                if (!fok) sp.Bad.Set(fs as usize, true);
+            }
+        }
+    }
+    // the slots that stay whole release their field addresses
+    u32 split = 0;
+    for (u32 k = 0; k < nv; k++) {
+        u32 s = sp.Slot.Get(k as usize);
+        if (s == NONE) continue;
+        if (sp.Bad.Get(s as usize)) sp.Slot.Set(k as usize, NONE);
+        else split++;
+    }
+    if (split == 0) return;
+    for (u32 k = 0; k < nv; k++) {
+        u32 s = sp.FieldOf.Get(k as usize);
+        if (s != NONE && sp.Slot.Get(s as usize) == NONE) sp.FieldOf.Set(k as usize, NONE);
+    }
+
+    // the new body: the old values first (renumbered from v0), then the field locals, then
+    // the values the rewritten copies need
+    u32 v0 = m.Vals.Len() as u32;
+    u32 b0 = m.Blocks.Len() as u32;
+    for (u32 k = 0; k < nv; k++) {
+        EVal old = m.Val(f.FirstValue + k);
+        if (old.Block >= f.FirstBlock && old.Block < f.FirstBlock + nb) old.Block = old.Block - f.FirstBlock + b0;
+        else old.Block = 0;
+        old.Inst = 0;       // set again where it is emitted
+        m.Vals.Push(old);
+    }
+    u32 next = v0 + nv;
+    for (u32 k = 0; k < nv; k++) {
+        if (sp.Slot.Get(k as usize) == NONE) continue;
+        EInst si = m.Inst(m.Val(f.FirstValue + k).Inst);
+        ETy ty = m.Ty(si.Ty);
+        sp.First.Set(k as usize, next);
+        for (u32 j = 0; j < ty.NFields; j++) {
+            m.Vals.Push(new EVal { Type = ET_PTR, Block = b0, Inst = 0, Pos = 0 });
+            next++;
+        }
+    }
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        u32 first = m.Insts.Len() as u32;
+        if (b == 0) {
+            // the field locals, before the other slots
+            for (u32 k = 0; k < nv; k++) {
+                if (sp.Slot.Get(k as usize) == NONE) continue;
+                EInst si = m.Inst(m.Val(f.FirstValue + k).Inst);
+                ETy ty = m.Ty(si.Ty);
+                for (u32 j = 0; j < ty.NFields; j++) {
+                    EInst fs = si;
+                    fs.Ty = m.Field(ty.Fields + j);
+                    fs.Result = sp.First.Get(k as usize) + j;
+                    fs.FirstOp = m.Ops.Len() as u32;
+                    fs.NOps = 0;
+                    fs.Block = b0;
+                    Emit(ref m, fs);
+                }
+            }
+        }
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            u32 rk = 0;
+            if (inst.Result != 0) rk = inst.Result - f.FirstValue;
+            if (inst.Result != 0 && (sp.Slot.Get(rk as usize) != NONE || sp.FieldOf.Get(rk as usize) != NONE)) continue;
+            if (inst.Op == 4 && sp.SlotOfV(m.Op(inst.FirstOp).Ref) != NONE) continue;
+            if (inst.Op == 48 && sp.SlotOfV(m.Op(inst.FirstOp).Ref) != NONE) {
+                // zero each field
+                u32 s = sp.SlotOfV(m.Op(inst.FirstOp).Ref);
+                EInst si = m.Inst(m.Val(f.FirstValue + s).Inst);
+                ETy ty = m.Ty(si.Ty);
+                for (u32 j = 0; j < ty.NFields; j++) {
+                    EInst z = inst;
+                    z.FirstOp = m.Ops.Len() as u32;
+                    z.NOps = 2;
+                    z.Block = b0 + b;
+                    m.Ops.Push(ValOp(sp.First.Get(s as usize) + j));
+                    m.Ops.Push(IntOp(m.Ty(m.Field(ty.Fields + j)).Size as u64));
+                    Emit(ref m, z);
+                }
+                continue;
+            }
+            if (inst.Op == 47 && (sp.SlotOfV(m.Op(inst.FirstOp).Ref) != NONE || sp.SlotOfV(m.Op(inst.FirstOp + 1).Ref) != NONE)) {
+                // a field at a time: load from the source's field, store to the destination's
+                u32 ds = sp.SlotOfV(m.Op(inst.FirstOp).Ref);
+                u32 ss = sp.SlotOfV(m.Op(inst.FirstOp + 1).Ref);
+                u32 s = ds;
+                if (s == NONE) s = ss;
+                EInst si = m.Inst(m.Val(f.FirstValue + s).Inst);
+                u32 st = si.Ty;
+                ETy ty = m.Ty(st);
+                for (u32 j = 0; j < ty.NFields; j++) {
+                    u32 ft = m.Field(ty.Fields + j);
+                    u32 from = 0;
+                    if (ss != NONE) {
+                        from = sp.First.Get(ss as usize) + j;
+                    } else {
+                        from = next;
+                        next++;
+                        m.Vals.Push(new EVal { Type = ET_PTR, Block = b0 + b, Inst = 0, Pos = 0 });
+                        Emit(ref m, FieldInst(ref m, inst, st, j, Mapped(sp, m, v0, m.Op(inst.FirstOp + 1).Ref), from, b0 + b));
+                    }
+                    u32 val = next;
+                    next++;
+                    m.Vals.Push(new EVal { Type = ft, Block = b0 + b, Inst = 0, Pos = 0 });
+                    EInst ld = inst;
+                    ld.Op = 42;
+                    ld.Ty = ft;
+                    ld.Ty2 = 0;
+                    ld.Imm = 0;
+                    ld.Result = val;
+                    ld.FirstOp = m.Ops.Len() as u32;
+                    ld.NOps = 1;
+                    ld.Block = b0 + b;
+                    m.Ops.Push(ValOp(from));
+                    Emit(ref m, ld);
+                    u32 to = 0;
+                    if (ds != NONE) {
+                        to = sp.First.Get(ds as usize) + j;
+                    } else {
+                        to = next;
+                        next++;
+                        m.Vals.Push(new EVal { Type = ET_PTR, Block = b0 + b, Inst = 0, Pos = 0 });
+                        Emit(ref m, FieldInst(ref m, inst, st, j, Mapped(sp, m, v0, m.Op(inst.FirstOp).Ref), to, b0 + b));
+                    }
+                    EInst sto = inst;
+                    sto.Op = 43;
+                    sto.Ty = ft;
+                    sto.Ty2 = 0;
+                    sto.Imm = 0;
+                    sto.Result = 0;
+                    sto.FirstOp = m.Ops.Len() as u32;
+                    sto.NOps = 2;
+                    sto.Block = b0 + b;
+                    m.Ops.Push(ValOp(val));
+                    m.Ops.Push(ValOp(to));
+                    Emit(ref m, sto);
+                }
+                continue;
+            }
+            // any other instruction, its operands renumbered (a field address of a split
+            // slot becomes the field's local)
+            u32 firstOp = m.Ops.Len() as u32;
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) {
+                    op.Ref = Mapped(sp, m, v0, op.Ref);
+                } else if (op.Kind == OK_TARGET) {
+                    op.Ref = b0 + op.Ref - f.FirstBlock;
+                    u32 args = m.Args.Len() as u32;
+                    for (u32 a = 0; a < op.NArgs; a++) m.Args.Push(Mapped(sp, m, v0, m.Arg(op.Args + a)));
+                    op.Args = args;
+                }
+                m.Ops.Push(op);
+            }
+            inst.FirstOp = firstOp;
+            inst.Block = b0 + b;
+            if (inst.Result != 0) inst.Result = v0 + rk;
+            Emit(ref m, inst);
+        }
+        u32 fp = 0;
+        if (blk.NParams > 0) fp = v0 + blk.FirstParam - f.FirstValue;
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = blk.NParams, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = blk.Pos });
+    }
+    EFunc nf = m.Func(fi);
+    nf.FirstValue = v0;
+    nf.NValues = next - v0;
+    nf.FirstBlock = b0;
+    m.Funcs.Set(fi as usize, nf);
+}
+
+void MarkBad(ref Splitter sp, u32 v) {
+    u32 k = v - sp.FirstValue;
+    if (k >= sp.Slot.Len() as u32) return;
+    u32 s = sp.Slot.Get(k as usize);
+    if (s == NONE) s = sp.FieldOf.Get(k as usize);
+    if (s != NONE) sp.Bad.Set(s as usize, true);
+}
+
+// Does copy inst copy a value onto itself?
+bool SameValue(in Module m, in EInst inst) {
+    EOp a = m.Op(inst.FirstOp);
+    EOp b = m.Op(inst.FirstOp + 1);
+    return a.Kind == OK_VALUE && b.Kind == OK_VALUE && a.Ref == b.Ref;
+}
+
+// The new id of old value v: a split slot's field address becomes the field's local.
+u32 Mapped(in Splitter sp, in Module m, u32 v0, u32 v) {
+    u32 k = v - sp.FirstValue;
+    if (k < sp.FieldOf.Len() as u32) {
+        u32 s = sp.FieldOf.Get(k as usize);
+        if (s != NONE) return sp.First.Get(s as usize) + sp.FieldIdx.Get(k as usize);
+    }
+    return v0 + k;
+}
+
+// `r = fieldaddr $st bv, j`, shaped from instruction like (for its source position).
+EInst FieldInst(ref Module m, in EInst like, u32 st, u32 j, u32 bv, u32 r, u32 nb) {
+    EInst fa = like;
+    fa.Op = 44;
+    fa.Ty = st;
+    fa.Ty2 = 0;
+    fa.Imm = j as u64;
+    fa.Result = r;
+    fa.FirstOp = m.Ops.Len() as u32;
+    fa.NOps = 1;
+    fa.Block = nb;
+    m.Ops.Push(ValOp(bv));
+    return fa;
+}
+
+EOp ValOp(u32 v) => new EOp { Kind = OK_VALUE, Ref = v, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 };
+
+EOp IntOp(u64 n) => new EOp { Kind = OK_INT, Ref = 0, Int = n, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 };
+
+// Appends inst and records its result's definition.
+void Emit(ref Module m, in EInst inst) {
+    m.Insts.Push(inst);
+    if (inst.Result != 0) {
+        EVal v = m.Val(inst.Result);
+        v.Block = inst.Block;
+        v.Inst = m.Insts.Len() as u32 - 1;
+        m.Vals.Set(inst.Result as usize, v);
+    }
+}

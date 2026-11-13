@@ -168,6 +168,17 @@ bool HoistLoads(ref Module m, u32 fi) {
     EFunc f = m.Func(fi);
     if (f.NBlocks < 2) return false;
     u32 nb = f.NBlocks;
+    // a loop needs a branch to a block at or before its own: without one, nothing to do
+    bool backward = false;
+    for (u32 b = 0; b < nb && !backward; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind == OK_TARGET && op.Ref - f.FirstBlock <= b) backward = true;
+        }
+    }
+    if (!backward) return false;
     Cfg g = BuildCfg(m, f);
     List<u32> sfirst = g.SFirst;
     List<u32> slist = g.SList;
@@ -191,10 +202,13 @@ bool HoistLoads(ref Module m, u32 fi) {
             List<bool> inLoop = List<bool>.New();
             for (u32 b = 0; b < nb; b++) inLoop.Push(false);
             inLoop.Set(h as usize, true);
+            List<u32> body = List<u32>.New();      // the loop's blocks
+            body.Push(h);
             List<u32> work = List<u32>.New();
             if (t != h) {
                 inLoop.Set(t as usize, true);
                 work.Push(t);
+                body.Push(t);
             }
             while (work.Len() > 0) {
                 u32 b = work.Pop().Unwrap();
@@ -203,6 +217,7 @@ bool HoistLoads(ref Module m, u32 fi) {
                     if (!inLoop.Get(p as usize)) {
                         inLoop.Set(p as usize, true);
                         work.Push(p);
+                        body.Push(p);
                     }
                 }
             }
@@ -220,8 +235,8 @@ bool HoistLoads(ref Module m, u32 fi) {
             if (m.Inst(pb.FirstInst + pb.NInsts - 1).Op != OP_BR) continue;
             // loads move only out of loops that write no memory
             bool writes = false;
-            for (u32 b = 0; b < nb && !writes; b++) {
-                if (!inLoop.Get(b as usize)) continue;
+            for (usize bj = 0; bj < body.Len() && !writes; bj++) {
+                u32 b = body.Get(bj);
                 EBlock blk = m.Block(f.FirstBlock + b);
                 for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
                     if (Writes(m.Inst(i).Op)) writes = true;
@@ -240,8 +255,8 @@ bool HoistLoads(ref Module m, u32 fi) {
             bool more = true;
             while (more) {
                 more = false;
-                for (u32 b = 0; b < nb; b++) {
-                    if (!inLoop.Get(b as usize)) continue;
+                for (usize bj = 0; bj < body.Len(); bj++) {
+                    u32 b = body.Get(bj);
                     EBlock blk = m.Block(f.FirstBlock + b);
                     for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
                         EInst inst = m.Inst(i);
@@ -281,6 +296,15 @@ bool HoistLoads(ref Module m, u32 fi) {
     // preheader, before its branch, in their original order
     u32 v0 = m.Vals.Len() as u32;
     u32 b0 = m.Blocks.Len() as u32;
+    // the hoisted instructions, in their original order
+    List<u32> moving = List<u32>.New();
+    for (u32 c = 0; c < nb; c++) {
+        EBlock cb = m.Block(f.FirstBlock + c);
+        for (u32 i = cb.FirstInst; i < cb.FirstInst + cb.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Result != 0 && hoist.Get((inst.Result - f.FirstValue) as usize)) moving.Push(i);
+        }
+    }
     List<bool> placed = List<bool>.New();
     for (u32 k = 0; k < f.NValues; k++) placed.Push(false);
     for (u32 k = 0; k < f.NValues; k++) {
@@ -300,11 +324,10 @@ bool HoistLoads(ref Module m, u32 fi) {
         bool again = true;
         while (again) {
             again = false;
-            for (u32 c = 0; c < nb; c++) {
-                EBlock cb = m.Block(f.FirstBlock + c);
-                for (u32 i = cb.FirstInst; i < cb.FirstInst + cb.NInsts; i++) {
+            for (usize mj = 0; mj < moving.Len(); mj++) {
+                {
+                    u32 i = moving.Get(mj);
                     EInst inst = m.Inst(i);
-                    if (inst.Result == 0) continue;
                     u32 rk = inst.Result - f.FirstValue;
                     if (!hoist.Get(rk as usize) || dest.Get(rk as usize) != b || placed.Get(rk as usize)) continue;
                     bool ready = true;

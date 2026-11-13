@@ -12,7 +12,7 @@ in `tests/golden/opt/` use it.
 
 The order: locals become values; every function is simplified once (and its common
 subexpressions merged), so a callee is measured at its real size; small functions are
-inlined; locals become values again; then per function simplification, jump threading,
+inlined; aggregate locals are split into scalars; locals become values again; then per function simplification, jump threading,
 common subexpressions, loop-invariant loads, checks that cannot fail, and block layout.
 
 ## `inline.envol`: inlining
@@ -79,6 +79,17 @@ Below the true edge of `x < y`, `x + 1` cannot overflow, and below the true edge
 becomes a plain one. The edge's block must have the compare's branch as its only way in,
 so everything it dominates runs only when the compare held. A counting loop then runs
 without a check per step.
+
+## `sroa.envol`: aggregates become scalars
+
+Right after inlining, a local of a struct type without padding whose fields are all
+scalars (a `str`, a slice, a `string`, a small struct), used only through its fields'
+addresses (loads and stores of the field's own type), whole copies into and out of it,
+`zero` of all of it and `slot.end`, becomes one local per field. A copy into it becomes a
+load and a store per field, a copy out of it the same the other way, and `zero` zeroes
+each field. Promoting locals then turns the fields into values, so a `str` a function
+works on lives in two registers instead of on the stack. A local whose address goes
+anywhere else (to a call, into memory) stays whole.
 
 ## `cse.envol`: common subexpressions, loads and decided branches
 

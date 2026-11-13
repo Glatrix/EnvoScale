@@ -1,0 +1,10 @@
+eir 1 target "x86_64-linux"
+
+type $str = { ptr, u64 }
+
+func @Len(%0: ptr) -> u64 {
+^bb0:
+  %1 = fieldaddr $str %0, 1
+  %2 = load u64 %1
+  ret %2
+}

@@ -1,0 +1,16 @@
+eir 1 target "x86_64-linux"
+
+type $str = { ptr, u64 }
+
+; a `str` local used only through its fields and whole copies is split into one local
+; per field, and those become values: the length is read once, from the argument
+func @Len(%0: ptr) -> u64 {
+^bb0:
+  %1 = slot $str
+  %2 = const u64 16
+  copy %1, %0, %2
+  %3 = fieldaddr $str %1, 1
+  %4 = load u64 %3
+  ret %4
+}
+
