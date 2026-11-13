@@ -4,9 +4,8 @@
 
 One document per subsystem describing how it is built and why:
 
-- [`bootstrap.md`](bootstrap.md): Stage 0 and the bootstrap chain.
-- [`stage1.md`](stage1.md): Stage 1 (`envoc1`).
-- [`stage2.md`](stage2.md): Stage 2 (`envoc`), the self-hosting compiler.
+- [`stage2.md`](stage2.md): the compiler (`envoc`). How it is built up from assembly is
+  in [EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm).
 - [`ports-and-adapters.md`](ports-and-adapters.md): the shape of the platform.
 - [`library.md`](library.md): the standard platform as built in M4 (layers, module
   resolution, the `platform` binding, adapters, conformance).

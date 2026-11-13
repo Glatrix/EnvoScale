@@ -1,6 +1,6 @@
 # `tests/sandbox` — script permissions
 
-> **Status:** M6. Run by `bootstrap.ps1 test` / `bootstrap.sh test`.
+> **Status:** M6. Run by `build.ps1 test` / `build.sh test`.
 
 Each program runs in the script runtime (`envo run`) in a scratch copy of this folder,
 with one `--allow` per `// allow:` line. Its standard output must be its `// expect:`

@@ -21,8 +21,8 @@ The AArch64 backend, for Linux and macOS:
 The runtime's OS layers are `compiler/runtime/linux_aarch64.envo` and
 `compiler/runtime/macos_aarch64.envo` (embedded as `compiler/driver/runtime_a64.envo` and
 `runtime_macos.envo`). On Linux the standard platform's adapter takes its system calls
-from `adapters/os/linux/sys/sys.aarch64.envo`. `bootstrap.sh cross` builds the run tests
-and the library's tests for both, and `bootstrap.sh cross-run` runs them on an AArch64
+from `adapters/os/linux/sys/sys.aarch64.envo`. `build.sh cross` builds the run tests
+and the library's tests for both, and `build.sh cross-run` runs them on an AArch64
 machine.
 
 Still to come: the macOS adapters (files, processes, network, terminal, window, Metal),

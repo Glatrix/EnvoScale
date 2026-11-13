@@ -8,7 +8,7 @@
 - **Affects:** language (chapters 1, 2, 3 and 5, Envo-S1); not Envo-Core
 - **Tracking:** [#30](https://github.com/envoscale/EnvoScale/issues/30), milestone M2.
   Implemented by Stage 1 in M2.9 (function values for every position; see
-  [`architecture/stage1.md`](../architecture/stage1.md), "Closures"); `extern "C" fn` is
+  [`architecture/stage1.md`](https://github.com/envoscale/EnvoScaleAsm/blob/main/docs/stage1.md), "Closures"); `extern "C" fn` is
   not part of Envo-S1 and comes with Stage 2.
 
 ## Summary

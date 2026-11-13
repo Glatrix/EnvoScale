@@ -1,6 +1,6 @@
 # `tests/envo` — the `envo` tool's own tests
 
-> **Status:** M5. Run by `bootstrap.ps1 test` / `bootstrap.sh test` ("envo commands").
+> **Status:** M5. Run by `build.ps1 test` / `build.sh test` ("envo commands").
 
 The scripts check each `envo` command end to end, in a scratch folder
 (`build/run-envo`):

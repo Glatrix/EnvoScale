@@ -7,7 +7,7 @@
 
 The unified `envo` CLI. One binary that holds the compiler (PLAN D26): it is built from
 the files in `files.txt` plus `compiler/files.txt` without `driver/main.envo`, by Stage 2
-with the library (`envoc build --lib`). `bootstrap.ps1 build` / `bootstrap.sh build`
+with the library (`envoc build --lib`). `build.ps1 build` / `build.sh build`
 write it to `build/envo/envo(.exe)`. The compiler is called as a library through
 `compiler/driver/build.envo` (`BuildProgram`, `CheckProgram`); a compile error is printed
 in the shared format and ends `envo` with exit code 1.
@@ -24,7 +24,7 @@ in the shared format and ends `envo` with exit code 1.
 | `envo test [path...] [-O0] [-v]` | Builds and runs test programs and compares their output with their `// expect:` lines |
 | `envo fmt [path...] [--check \| --stdout]` | Lays out `.envo` files in the canonical format (see `fmt.envo`); `--check` lists what would change and exits 1 |
 | `envo repl [--allow …]` | An interactive session on the script runtime: cells of declarations and statements; each cell's new output shows; `:show`, `:reset`, `:quit` |
-| `envo lsp` | A language server for editors: diagnostics over JSON-RPC ([`tools/lsp`](../lsp/README.md)) |
+| `envo lsp` | A language server for editors: diagnostics over JSON-RPC ([`tools/lsp`](README.md#lsp)) |
 | `envo explain <code>` | Prints a diagnostic code's entry from `docs/spec/errors.md` and the text of the rules it cites |
 | `envo version`, `envo help` | |
 

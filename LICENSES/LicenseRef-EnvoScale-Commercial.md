@@ -15,5 +15,5 @@ A commercial license consists of:
 If you do not have a signed Order Form, the only license that can apply to you is the
 Community License, [PolyForm Noncommercial 1.0.0](PolyForm-Noncommercial-1.0.0.md).
 
-See [`LICENSING.md`](../LICENSING.md) for who needs a commercial license and how to get
+See [`docs/legal/licensing.md`](../docs/legal/licensing.md) for who needs a commercial license and how to get
 one.

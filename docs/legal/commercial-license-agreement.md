@@ -90,7 +90,7 @@ Agreement.
 them, its Licensed Programs. Licensor claims no rights to them.
 
 4.3 If Customer gives Licensor suggestions or feedback, Licensor may use them without
-obligation. Code contributions are governed by [`CLA.md`](../../CLA.md), not by this
+obligation. Code contributions are governed by [`CLA.md`](cla.md), not by this
 section.
 
 ## 5. Fees and payment
@@ -116,7 +116,7 @@ for the Support Level in the Order Form and in the Support Policy published at
 [URL], including response targets and support channels.
 
 6.2 Licensor gives commercial customers advance notice of security fixes as described
-in [`SECURITY.md`](../../SECURITY.md) and the Support Policy. Customer keeps that notice
+in [`SECURITY.md`](../../.github/SECURITY.md) and the Support Policy. Customer keeps that notice
 confidential until the public advisory.
 
 6.3 Each LTS release receives security and critical fixes for the period stated in the
@@ -156,7 +156,7 @@ reasonable time, to let Customer terminate the affected Order Form and refund th
 Fees for the remainder of its Subscription Term.
 
 9.2 **Original work.** Licensor warrants that the Software contains no code copied from
-third-party software, as [`CHARTER.md`](../../CHARTER.md) requires. Test data from
+third-party software, as [`CHARTER.md`](../principles.md) requires. Test data from
 published standards is identified in the repository with its source and license.
 
 9.3 **Disclaimer.** Except as this section 9 states, the Software is provided "as is",

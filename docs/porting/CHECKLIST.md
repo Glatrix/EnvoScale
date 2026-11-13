@@ -19,9 +19,9 @@ compiler core changes.
 ## 1. Stage 0 (so the bootstrap runs natively)
 
 - [ ] Add `bootstrap/stage0/platform/<os>.eas` implementing the eight `sys_*` routines and
-      the executable header (see [`architecture/bootstrap.md`](../architecture/bootstrap.md)).
+      the executable header (see https://github.com/envoscale/EnvoScaleAsm).
 - [ ] Add `bootstrap/stage0/envoc0-<os>.eas` that includes it and `src/*`.
-- [ ] Teach `bootstrap.sh` / `bootstrap.ps1` the new target.
+- [ ] Teach `build.sh` / `build.ps1` the new target.
 - [ ] `tests/golden/lexer` and `tests/spec` pass with the new binary.
 
 ## 2. Executable format (only if new)
@@ -61,8 +61,8 @@ Until a port is implemented, its reference adapter (`adapters/os/none`, `gpu/sof
 ## Worked example: AArch64 Linux and macOS (M10, PLAN D69, D70)
 
 - **No Stage 0 port.** Programs for the new CPU are cross-compiled on x86-64
-  (`--target aarch64-linux`, `--target aarch64-macos`); `bootstrap.sh cross` builds the
-  run tests and the library's tests, and `bootstrap.sh cross-run` runs them on the target
+  (`--target aarch64-linux`, `--target aarch64-macos`); `build.sh cross` builds the
+  run tests and the library's tests, and `build.sh cross-run` runs them on the target
   (CI's arm64 Linux and macOS runners), with no compiler there.
 - **Backend:** `compiler/backend/aarch64/`: the encoder, the code generator (it follows
   the x86-64 one instruction for instruction, so the same tests apply), and the ELF and

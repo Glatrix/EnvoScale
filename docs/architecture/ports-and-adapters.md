@@ -57,4 +57,4 @@ An adapter is complete when its suite passes; that is the definition used by
 ## Stage 0
 
 Stage 0 follows the same idea at the smallest possible scale: its whole OS interface is
-eight `sys_*` routines in one platform file per OS ([`bootstrap.md`](bootstrap.md)).
+eight `sys_*` routines in one platform file per OS ([`bootstrap.md`](https://github.com/envoscale/EnvoScaleAsm/blob/main/docs/bootstrap.md)).

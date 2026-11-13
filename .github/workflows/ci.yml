@@ -1,14 +1,13 @@
-# CI adapter for GitHub Actions. See adapters/ci/github/README.md.
-# Contract: no build logic here. Every step calls a repository entry point
-# (bootstrap.ps1 / bootstrap.sh today; `envo` from milestone M5).
+# No build logic here: every step calls build.sh or build.ps1, so the same checks run the
+# same way on a laptop.
 name: ci
 
 on:
   push:
   pull_request:
 
-# Least privilege: the jobs only read the repository. Actions are pinned to commit SHAs
-# (tags can be moved); the comment says which release each SHA is.
+# The jobs only read the repository. Actions are pinned to commit SHAs (tags can be
+# moved); the comment says which release each SHA is.
 permissions:
   contents: read
 
@@ -19,67 +18,64 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: ./bootstrap.sh check
+      - run: ./build.sh check
 
-  stage0-linux:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
-      - run: sh adapters/ci/github/install-nasm.sh
-      # An X server without a screen (M14.7): the window conformance suite opens a real
-      # X11 window through the Linux adapter.
+      # An X server without a screen: the window suite opens a real X11 window.
       - run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
-      - run: xvfb-run -a ./bootstrap.sh test
+      - run: xvfb-run -a ./build.sh test
       # ...and a window must really open there (the suite also passes where Open says no)
       - run: |
           out=$(ENVO_WINDOW_REQUIRED=1 xvfb-run -a build/envo/envo run --native tests/conformance/window/window.envo)
           echo "$out"
           [ "$out" = "window: done" ]
-      # The X11 clipboard both ways with another program (M14.7b)
+      # The X11 clipboard both ways with another program
       - run: command -v xclip || (sudo apt-get update && sudo apt-get install -y xclip)
       - run: xvfb-run -a sh adapters/os/linux/x11/check/clipboard.sh build/envo/envo
-      # The VS Code extension (adapters/editors/vscode, M14.9) against the envo just built
+      # The VS Code extension against the envo just built
       - run: ENVO=build/envo/envo node --test adapters/editors/vscode/test/*.test.js
+      - run: ./build.sh dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: stage0-built-on-linux
+          name: built-on-linux
           path: |
-            build/stage0/envoc0
-            build/stage0/envoc0.exe
-            build/stage1/envoc1
-            build/stage1/envoc1.exe
-            build/stage2/envoc
-            build/stage2/envoc.exe
+            build/envoc/envoc
+            build/envoc/envoc.exe
+            build/envo/envo
+            build/envo/envo.exe
+            build/dist/SHA256SUMS
 
-  stage0-windows:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # Phase A bootstrap adapter (adapters/bootstrap/nasm); removed in Phase B.
-      - run: choco install nasm --no-progress -y
-      - run: .\bootstrap.ps1 check
+      - run: .\build.ps1 check
         shell: powershell
-      - run: .\bootstrap.ps1 test
+      - run: .\build.ps1 test
+        shell: powershell
+      - run: .\build.ps1 dist
         shell: powershell
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: stage0-built-on-windows
+          name: built-on-windows
           path: |
-            build/stage0/envoc0
-            build/stage0/envoc0.exe
-            build/stage1/envoc1
-            build/stage1/envoc1.exe
-            build/stage2/envoc
-            build/stage2/envoc.exe
+            build/envoc/envoc
+            build/envoc/envoc.exe
+            build/envo/envo
+            build/envo/envo.exe
+            build/dist/SHA256SUMS
 
-  # Brief 4.1 and 18: the same sources must give byte-identical binaries on every host.
+  # The same sources must give byte-identical compilers, tools and release archives on
+  # both hosts.
   reproducible:
-    needs: [stage0-linux, stage0-windows]
+    needs: [linux, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -87,25 +83,23 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: stage0-built-on-linux
+          name: built-on-linux
           path: build/from-linux
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: stage0-built-on-windows
+          name: built-on-windows
           path: build/from-windows
-      - run: ./bootstrap.sh compare build/from-linux build/from-windows
+      - run: ./build.sh compare build/from-linux build/from-windows
 
-  # M10 (PLAN D69, D70): the run and library tests built for aarch64-linux and
-  # aarch64-macos on x86-64, then run on arm64 Linux and macOS machines (free for public
-  # repositories).
+  # The run and library tests built for aarch64-linux and aarch64-macos on x86-64, then
+  # run on arm64 Linux and macOS machines.
   aarch64-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: sh adapters/ci/github/install-nasm.sh
-      - run: ./bootstrap.sh cross
+      - run: ./build.sh cross
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: aarch64-linux-programs
@@ -126,7 +120,7 @@ jobs:
         with:
           name: aarch64-linux-programs
           path: build/cross/aarch64-linux
-      - run: ./bootstrap.sh cross-run build/cross/aarch64-linux
+      - run: ./build.sh cross-run build/cross/aarch64-linux
 
   aarch64-macos:
     needs: [aarch64-build]
@@ -139,72 +133,4 @@ jobs:
         with:
           name: aarch64-macos-programs
           path: build/cross/aarch64-macos
-      - run: ./bootstrap.sh cross-run build/cross/aarch64-macos
-
-  # PLAN D18 (M3.9): Stage 2 built by itself at -O2 reproduces itself, on both hosts, and
-  # the fixed-point compilers are the same bytes on both.
-  fixed-point-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - run: sh adapters/ci/github/install-nasm.sh
-      - run: ./bootstrap.sh fixedpoint
-      # the release archive (docs/guides/offline-install.md): the same bytes on both hosts
-      - run: ./bootstrap.sh dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: fixed-point-on-linux
-          path: |
-            build/dist/SHA256SUMS
-            build/stage0/envoc0
-            build/stage0/envoc0.exe
-            build/stage1/envoc1
-            build/stage1/envoc1.exe
-            build/stage2/envoc
-            build/stage2/envoc.exe
-            build/stage2c/envoc
-            build/stage2c/envoc.exe
-
-  fixed-point-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - run: choco install nasm --no-progress -y
-      - run: .\bootstrap.ps1 fixedpoint
-        shell: powershell
-      - run: .\bootstrap.ps1 dist
-        shell: powershell
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: fixed-point-on-windows
-          path: |
-            build/dist/SHA256SUMS
-            build/stage0/envoc0
-            build/stage0/envoc0.exe
-            build/stage1/envoc1
-            build/stage1/envoc1.exe
-            build/stage2/envoc
-            build/stage2/envoc.exe
-            build/stage2c/envoc
-            build/stage2c/envoc.exe
-
-  fixed-point:
-    needs: [fixed-point-linux, fixed-point-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: fixed-point-on-linux
-          path: build/from-linux
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: fixed-point-on-windows
-          path: build/from-windows
-      - run: ./bootstrap.sh compare build/from-linux build/from-windows
+      - run: ./build.sh cross-run build/cross/aarch64-macos

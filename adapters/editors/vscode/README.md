@@ -17,7 +17,7 @@ dependencies**: nothing to install, nothing to audit but these files.
 
 ## Install from this folder
 
-1. Build EnvoScale (`./bootstrap.sh build`, or `.\bootstrap.ps1 build`) and put
+1. Build EnvoScale (`./build.sh build`, or `.\build.ps1 build`) and put
    `build/envo` on `PATH`, or set **Envo: Path** (`envo.path`) to the program.
 2. Copy this folder to your VS Code extensions folder as `envoscale.envo-0.1.0`:
    `%USERPROFILE%\.vscode\extensions\` on Windows, `~/.vscode/extensions/` elsewhere.

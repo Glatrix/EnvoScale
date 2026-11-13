@@ -48,7 +48,7 @@ kernel; on Windows, only system DLLs.
   (ASLR) on both Windows and Linux (PLAN D68).
 - Parsers of untrusted input (HTTP, JSON, Markdown, GGUF, the tokenizer, EON) are fuzzed
   in CI (`tests/fuzz`).
-- `envo.crypto` has not had an independent audit yet; see [SECURITY.md](../../SECURITY.md).
+- `envo.crypto` has not had an independent audit yet; see [SECURITY.md](../../.github/SECURITY.md).
 
 ## Licensing compliance
 

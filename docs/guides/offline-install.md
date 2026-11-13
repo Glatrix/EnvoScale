@@ -14,7 +14,7 @@ organization.
 | `envoscale-<version>.provenance.json` | how the archive was built (see [Provenance](#provenance)) |
 | `SHA256SUMS` | the archive's SHA-256 |
 
-The archive is reproducible: `bootstrap.sh dist` (or `bootstrap.ps1 dist`) on the same
+The archive is reproducible: `build.sh dist` (or `build.ps1 dist`) on the same
 source gives the same bytes on Linux and Windows, so anyone can rebuild a release and
 compare. Stage 0 itself can be built from the hex seed with no assembler installed
 (`bootstrap/seed`), so the whole chain can be rebuilt from source and the OS alone.
@@ -82,7 +82,7 @@ block, against your signing keys, wherever it came from.
 [in-toto](https://in-toto.io) statement in the SLSA provenance v1 format: the archive's
 SHA-256, the source commit, the command that built it, the build time it used
 (`SOURCE_DATE_EPOCH`), the CI run that built it (or `local`), and the SHA-256 of each
-compiler stage on the way (`envoc0`, `envoc1`, `envoc`). The release manager signs it
+compiler on the way (the seed and `envoc`). The release manager signs it
 with `envo sign` like the archive. CI builds the archive on Linux and on Windows from the
 same commit and fails if the two digests differ.
 

@@ -1,6 +1,6 @@
 # `tests/lsp` — the language server
 
-> **Status:** M5. Run by `bootstrap.ps1 test` / `bootstrap.sh test` ("envo lsp").
+> **Status:** M5. Run by `build.ps1 test` / `build.sh test` ("envo lsp").
 
 `session.jsonl` is what an editor sends, one JSON message per line; `${URI}` stands for
 the document's `file:` URI (`build/run-lsp/doc.envo` under the repository). The scripts

@@ -1,106 +1,113 @@
 # EnvoScale
 
-**One environment, every platform, built from the first byte up.**
+**Envo** is a programming language, and **EnvoScale** is everything around it in one
+place: the compiler, the standard library and the `envo` tool. Command-line programs,
+servers, desktop and terminal apps, websites, graphics and AI all use the same language
+and the same library, with no third-party code anywhere.
 
-EnvoScale is one language (**Envo**), one toolchain (`envo`) and one standard platform
-(`envo.*`) for systems code, scripts, desktop apps, websites, terminals, graphics, AI,
-crypto and networking. It has no third-party dependencies, and its compiler is
-bootstrapped from assembly so the whole chain can be audited.
-
-> **Status: early, and Experimental throughout.** M0–M8 are done. `envoc0` (assembly)
-> and `envoc1` (Envo) bootstrap `envoc`, the compiler that compiles itself, for Windows,
-> Linux and now WebAssembly. On top of it:
-> - the `envo` tool, with a sandboxed script runtime;
-> - crypto, TLS and HTTP;
-> - terminal and desktop UI, fonts, 2D and GPU (Direct3D 12) drawing.
->
-> M9, the web, is under way: this repository's website is an Envo program
-> ([`website/`](website/README.md)). See [`STATUS.md`](STATUS.md) for details.
-
-## Goals
-
-- Hello World for any domain in one to three lines.
-- Every layer open to experts, down to inline assembly and custom backends.
-- Everything EnvoScale needs, it builds itself.
-- A new OS, CPU or GPU API is an adapter, not a rewrite.
-
-The rules the project holds itself to are in [`CHARTER.md`](CHARTER.md).
-
-## Quick start
-
-You need [NASM](https://www.nasm.us/) ([setup](adapters/bootstrap/nasm/README.md)) and
-nothing else.
-
-Windows (PowerShell):
-
-```powershell
-.\bootstrap.ps1 build      # builds all three compilers into build\
-.\bootstrap.ps1 test       # runs the test suites
-build\stage0\envoc0.exe lex examples\00-hello\main.envo
+```envo
+print("Hello, World!");
 ```
 
-Linux:
-
-```sh
-./bootstrap.sh build
-./bootstrap.sh test
-build/stage0/envoc0 lex examples/00-hello/main.envo
+```envo
+use envo.crypto;
+print(crypto.Sha256("Hello, World!").Hex().AsStr());
 ```
 
-`lex` prints the tokens:
+```envo
+use envo.http;
 
-```text
-1:1 n ident print
-1:6 j punct (
-1:7 j string "Hello, World!"
-1:22 j punct )
-2:1 n eof
+http.Response Hello(in http.Request req) => http.Response.Text(200, "Hello, World!");
+
+http.Router app = http.Router.New();
+app.Get("/", new http.Handler { Fn = Hello });
+http.Serve(ref app, "127.0.0.1", 8080);
 ```
 
-## Hello World Gallery
+The editor parts of the UI library, drawn by Envo itself, in a window and in a terminal:
 
-These live in [`tests/spec/hello/`](tests/spec/hello/), and CI fails if one gets longer
-than its limit. Each becomes runnable at the milestone shown ([`docs/PLAN.md`](docs/PLAN.md)).
+<img src="docs/images/editor.png" width="49%"> <img src="docs/images/editor-terminal.png" width="49%">
 
-| Domain | Program | Runs from |
-|---|---|---|
-| Console | `print("Hello, World!")` | M1 |
-| CLI tool | `[Command] void Greet(string name = "World") => print($"Hello, {name}!")` | M8 |
-| Window | `use envo.ui;` / `window("Hello") { Text("Hello, World!") }` | M8 |
-| Website | `use envo.web;` / `site("Hello") { page("/") => Landing(title: "Hello, World!") }` | M9 |
-| HTTP API | `use envo.http;` / `serve(8080) { get("/") => "Hello, World!" }` | M7 |
-| Terminal UI | `use envo.term;` / `tui { Text("Hello, World!").Bold() }` | M8 |
-| 3D | `use envo.render3d;` / `scene { cube().Spin(); light.Sun(); }` | M11 |
-| 2D | `use envo.gfx;` / `window("Hi") { canvas(c => c.Circle(100, 100, 50, Lumen.Accent)) }` | M8 |
-| Crypto | `print(crypto.sha256("Hello, World!").Hex())` | M7 |
-| AI | `use envo.ai;` / `print(ai.Load("tiny.gguf").Ask("Say hello"))` | M12 |
-| Systems | `[NoAlloc] extern "C" int main() { unsafe { asm x86_64 { /* … */ } } return 0; }` | M3 |
+> **Early and experimental.** It works, it is tested on every commit, and things still
+> change. [docs/status.md](docs/status.md) says what is done.
 
-`/` separates lines.
+## Try it
 
-## Repository map
+You need Git Bash or a Linux shell (or PowerShell on Windows), and nothing else.
 
-| Path | Contents |
+```bash
+git clone https://github.com/envoscale/EnvoScale
+cd EnvoScale
+./build.sh build
+build/envo/envo run examples/00-hello/main.envo
+```
+
+On Windows without Git Bash, use `.\build.ps1 build` and `build\envo\envo.exe`.
+
+`build` downloads a small starting compiler (see [below](#where-the-compiler-comes-from)),
+uses it to build the compiler from this repository, and builds `envo` with that. It takes
+about a minute.
+
+## The `envo` tool
+
+| Command | What it does |
 |---|---|
-| [`bootstrap/`](bootstrap/README.md) | Seed, Stage 0 (assembly) and Stage 1 (Envo-Core) |
-| [`compiler/`](compiler/README.md) | Stage 2 `envoc`, the real compiler |
-| [`runtime/`](runtime/README.md) | Startup, panics, ARC, the EIR VM and JIT |
-| [`lib/`](lib/README.md) | The standard platform: pure code and port interfaces |
-| [`adapters/`](adapters/README.md) | All platform-specific code, and editor support (the VS Code extension) |
-| [`tools/`](tools/README.md) | `envo` CLI, LSP, formatter, debugger |
-| [`templates/`](templates/README.md) | Project and site templates |
-| [`examples/`](examples/README.md) | Small runnable programs |
-| [`tests/`](tests/README.md) | Spec, golden, conformance, bootstrap and fuzz tests |
-| [`docs/`](docs/README.md) | Language spec, architecture notes, RFCs |
+| `envo run app.envo` | Runs a program as a script, sandboxed: `--allow net,fs:./data` to give it more |
+| `envo build app.envo -o app` | Builds a native executable for Windows, Linux or macOS, x86-64 or AArch64, or WebAssembly |
+| `envo new hello` | Starts a project |
+| `envo test` | Runs the tests in `tests/` folders |
+| `envo fmt` | Formats code; there is one layout |
+| `envo lsp` | The language server, for any editor; there is a [VS Code extension](adapters/editors/vscode) |
+| `envo dbg`, `envo prof`, `envo fuzz` | Debugger, profiler and fuzzer |
+| `envo repl` | An interactive prompt |
+| `envo explain E0203` | Explains an error |
+
+## The standard library
+
+| | |
+|---|---|
+| `std` | Files, paths, processes, environment, time, randomness, the clipboard |
+| `envo.http`, `envo.tls`, `envo.crypto` | HTTP/1.1 client and server, a TLS 1.3 client, SHA-2, ChaCha20-Poly1305, AES-GCM, X25519, Ed25519 |
+| `envo.json`, `envo.eon`, `envo.markdown` | Data formats |
+| `envo.ui`, `envo.edit`, `envo.lumen` | A UI toolkit with editors, trees, tabs and a command palette, one look in a window or a terminal |
+| `envo.gfx`, `envo.font`, `envo.gpu`, `envo.render3d` | 2D drawing, TrueType fonts, the GPU, 3D |
+| `envo.term`, `envo.cli` | Terminal apps and command-line parsing |
+| `envo.web` | Websites; [this project's site](website) is an Envo program |
+| `envo.ai` | Tensors, training, tokenizers, and running Llama-family models locally |
+
+Operating system and driver code lives only in [`adapters/`](adapters); the library
+itself never touches the OS ([how that works](docs/principles.md#ports-and-adapters)).
+
+## Where the compiler comes from
+
+The compiler is written in Envo and compiles itself. To build it you need a compiler to
+start with: `build.sh` downloads one from
+[EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm), which builds it from a few
+kilobytes of assembly you can read, and publishes it only when Linux and Windows built the
+same bytes. The compiler then rebuilds itself from this repository's sources, so what you
+get depends on these sources, not on the downloaded one.
+
+## Repository
+
+| Folder | |
+|---|---|
+| [`compiler/`](compiler) | The compiler, `envoc` |
+| [`lib/`](lib) | The standard library |
+| [`adapters/`](adapters) | Everything platform-specific: Windows, Linux, macOS, the browser, Direct3D, editors |
+| [`runtime/`](runtime) | The interpreter behind `envo run` |
+| [`tools/`](tools) | The `envo` tool |
+| [`tests/`](tests) | The test suites |
+| [`examples/`](examples) | Small programs |
+| [`website/`](website) | The website, written in Envo |
+| [`docs/`](docs) | The language specification and how everything is built |
 
 ## Contributing
 
-Start with [`CONTRIBUTING.md`](CONTRIBUTING.md). Language and API changes go through
-[RFCs](docs/rfcs/README.md). Report security issues as described in [`SECURITY.md`](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). `./build.sh test` runs every test.
 
 ## License
 
-Free for individuals and noncommercial use under the PolyForm Noncommercial License 1.0.0.
-Companies need a commercial license. [`LICENSING.md`](LICENSING.md) explains who needs
-which, [`LICENSE`](LICENSE) has the terms, [`docs/legal/`](docs/legal/) has the commercial
-templates, and [`TRADEMARKS.md`](TRADEMARKS.md) covers the name and logos.
+Free for personal, educational and other noncommercial use under the PolyForm
+Noncommercial License 1.0.0; companies need a commercial license.
+[docs/legal/licensing.md](docs/legal/licensing.md) explains it, and [LICENSE](LICENSE)
+has the terms.

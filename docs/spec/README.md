@@ -19,7 +19,6 @@
 |---|---|---|
 | [`envo-core.md`](envo-core.md) | **Envo-Core**, the subset compiled by Stage 0 | Implemented by Stage 0 (M1) |
 | [`envo-s1.md`](envo-s1.md) | **Envo-S1**, the subset compiled by Stage 1 | Draft; being implemented (M2) |
-| [`eas.md`](eas.md) | `.eas`, the Envo assembly syntax | Normative for the Stage 0 subset |
 | [`eon.md`](eon.md) | **EON**, Envo Object Notation (`.envon`) | Draft |
 | [`eir.md`](eir.md) | **EIR**, the Envo intermediate representation | Version 1 specified ([RFC 0005](../rfcs/0005-eir-v1.md)); being implemented (M2) |
 | [`errors.md`](errors.md) | Registry of diagnostic codes | Live |

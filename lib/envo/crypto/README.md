@@ -2,7 +2,7 @@
 
 > **Status:** Experimental, **not audited** (M7, in progress). Do not use it to protect
 > anything that matters until an independent audit is published in
-> [`SECURITY.md`](../../../SECURITY.md).
+> [`SECURITY.md`](../../../.github/SECURITY.md).
 
 Cryptography in Envo-S1 (PLAN D37), one module per family:
 
@@ -22,7 +22,7 @@ Cryptography in Envo-S1 (PLAN D37), one module per family:
 
 Rules (brief §7.2): standardized algorithms only; constant-time code paths (no branch,
 loop bound or memory index depends on a secret; tags compare in constant time); every
-algorithm passes its official vectors ([`tests/vectors`](../../../tests/vectors/README.md)).
+algorithm passes its official vectors (copied into the tests in each module's `tests/` folder, with their source named).
 
 ## Simple door
 

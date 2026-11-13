@@ -1,11 +1,11 @@
 # EnvoScale — Working Plan
 
-This file is required by §0.1 of the founding brief ([`ENVOSCALE_PROMPT.md`](../ENVOSCALE_PROMPT.md)).
-It records how the brief was understood, the questions still open, and the task
-breakdown for the current milestone. It is rewritten at the start of each milestone.
+The working plan: the decisions made along the way (D1, D2, ...), the questions still
+open, and the task breakdown for the current milestone. "The brief" below is the
+project's original design document; its rules now live in [`principles.md`](principles.md).
 
 - **Current milestones:** M14, the application platform, then M15, the IDE (§6, phase 2: applications). M10 (AArch64 and macOS, §5) continues alongside: AArch64 Linux (D69) and macOS executables (D70) are done; the macOS adapters are next. M0–M9 and M11–M13 are done (records in §4).
-- **Live status:** [`STATUS.md`](../STATUS.md) is authoritative for what works today.
+- **Live status:** [`status.md`](status.md) is authoritative for what works today.
 
 ---
 
@@ -113,6 +113,7 @@ These are interpretation choices, not deviations. Each is written down where it 
 | D75 | **Language intelligence through the language server**: `envo query` indexes a checked program (declarations, references, types and doc comments); `envo lsp` answers completion, hover, go-to-definition and symbols from the last good index of each package. Editors, the IDE included, use it over LSP. | §6 |
 | D76 | **The runtime's heap frees**: `__rt_alloc` takes blocks from per-size free lists (powers of two, 16 bytes to 1 MiB, each with a 16-byte header) and `__rt_free` returns them; memory stays zeroed when handed out, as before. Long-running programs (an IDE, a server) stop growing. Frees of pointers the heap did not hand out, or twice, are ignored. | §6 |
 | D77 | **The browser host yields through JSPI**: a windowed program keeps its blocking `while (w.IsOpen())` loop on every host. In a page, `envo.js` wraps its one import in `WebAssembly.Suspending` and starts the program through `WebAssembly.promising`, so a `Poll` that finds no event waits for the next animation frame and the page stays responsive. The compiler and the program are unchanged (no second import, no Asyncify). Where a browser lacks JSPI, `EnvoWeb.canYield()` is false and a page says so instead of freezing. | `adapters/interop/js/README.md` |
+| D78 | **The bootstrap lives in its own repository** (2026-11-13): the seed, stage 0 and stage 1 moved to [EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm). EnvoScale builds from a seed compiler that EnvoScaleAsm builds from assembly: `build.sh` downloads it from a `seed-*` release, or builds it from EnvoScaleAsm at a pinned commit when no release is available, and checks its SHA-256 either way; the seed builds the compiler, which builds itself again, and `test` checks the fixed point. EnvoScaleAsm checks the other direction (the compiler built by stage 1 behaves as the one built by itself) at the EnvoScale commit it pins. The compiler stays in Envo-S1 while stage 1 must build it; moving it to full Envo means bumping the seed and leaving stage 1 behind on purpose. The runtime sources the compiler embeds moved to `compiler/runtime/`, and `envoc embed` makes `driver/runtime*.envo`. | §6 |
 
 ## 3. Open questions
 
@@ -156,7 +157,7 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
    Stage 1 runtime is written in Envo-Core and compiled into every program `envoc1`
    builds, on top of two target intrinsics the backend encodes (`syscall` on Linux,
    `wincall` for `KERNEL32.dll` imports on Windows). See
-   [`architecture/stage1.md`](architecture/stage1.md). Original question: Stage 0 copies
+   [`architecture/stage1.md`](https://github.com/envoscale/EnvoScaleAsm/blob/main/docs/stage1.md). Original question: Stage 0 copies
    its own assembled runtime block into each output program; `envoc1` cannot do that.
 
 ## 4. Done milestones
@@ -174,7 +175,7 @@ Items marked **RFC** conflict with the brief as written and are tracked in an RF
   lowering and backend, generics and interfaces, closures, ownership, enums with
   payloads, views and collections and namespaces, and the S1 suite complete. 739/739
   tests on both OSes. DoD record in `STATUS.md`; design in
-  [`architecture/stage1.md`](architecture/stage1.md).
+  [`architecture/stage1.md`](https://github.com/envoscale/EnvoScaleAsm/blob/main/docs/stage1.md).
 
 - **M3 — Self-hosting.** `envoc`, written in Envo-S1 in `compiler/`, built by `envoc1`.
   Increments 3.1–3.10 were: skeleton, lexer, parser, checker, ownership (each matching

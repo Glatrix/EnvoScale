@@ -1,0 +1,122 @@
+# Licensing
+
+EnvoScale is **free for individuals and noncommercial use**. **Companies need a
+commercial license.** The legal terms are in [`LICENSE`](../../LICENSE); this page explains
+them in plain words. If this page and `LICENSE` ever disagree, `LICENSE` wins.
+
+> EnvoScale is *source-available*, not *open source* in the OSI sense: anyone can read,
+> build, change and learn from the code, but commercial use is licensed separately.
+
+In machine-readable form (SPDX), EnvoScale's license is
+`PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial`.
+
+## Which license do I need?
+
+| You are… | You may use EnvoScale under | Cost |
+|---|---|---|
+| An individual learning, experimenting, or building personal or hobby projects | Community License (PolyForm Noncommercial 1.0.0) | Free |
+| A student, teacher, school, university or public research institution | Community License | Free |
+| A charity, public-health, public-safety or environmental organization, or a government institution | Community License | Free |
+| A company, of any size, using EnvoScale for its work, product or services | **Commercial License** | Paid |
+| An individual using EnvoScale to earn money (freelance work, a paid product, a commercial service) | **Commercial License** | Paid |
+| A company that wants to try EnvoScale before buying | **Evaluation license** (30 days, internal only) | Free, on request |
+
+When in doubt, you need a commercial license, or you can ask (see below).
+
+## What each license covers
+
+### Community License
+
+- Use, build, modify and share EnvoScale for noncommercial purposes.
+- Programs you build for those purposes are yours, and you can share them for
+  noncommercial use.
+- No warranty and no support guarantees. Community help is best-effort through the
+  repository's issues.
+
+### Commercial License
+
+A commercial license is a signed **Order Form** that incorporates the standard
+**EnvoScale Commercial License Agreement**. Both templates are public, so you can read the
+terms before asking: [agreement](commercial-license-agreement.md),
+[order form](order-form.md). It covers:
+
+- Use of EnvoScale by your organization for any purpose, including in products and
+  services you sell, and internal tools.
+- Distribution of programs built with EnvoScale. Compiled programs contain parts of the
+  EnvoScale runtime and standard platform, so shipping them commercially is part of
+  what the commercial license grants.
+- Planned enterprise terms (see [Enterprise](#enterprise)): support with response times,
+  long-term-support releases, security advisories ahead of public disclosure, and
+  indemnification, as agreed in the license agreement.
+
+## Programs you build with EnvoScale
+
+Your own source code belongs to you under either license. The compiled output also
+contains EnvoScale's runtime and standard platform code, which is licensed to you on the
+same terms as the toolchain you built it with:
+
+- built under the Community License → usable and shareable for noncommercial purposes;
+- built under a Commercial License → usable and distributable commercially, as your
+  agreement says.
+
+## Sharing programs under the Community License
+
+The Community License requires that anyone who gets a copy of any part of EnvoScale from
+you also gets the license terms (or their URL) and the `Required Notice:` line. Compiled
+programs contain the runtime, so when you share one, include this text with it, for
+example in its README or "about" screen:
+
+```
+Contains EnvoScale, licensed under PolyForm Noncommercial 1.0.0
+(https://polyformproject.org/licenses/noncommercial/1.0.0).
+Required Notice: Copyright (c) 2026 Glatrix (https://github.com/envoscale)
+```
+
+## Name and logo
+
+The licenses cover the software, not the EnvoScale name and logos. See
+[`TRADEMARKS.md`](TRADEMARKS.md).
+
+## Enterprise
+
+EnvoScale is being built to be enterprise-ready by the end of its roadmap: reproducible
+and signed releases, a software bill of materials for every build, long-term-support
+releases, a published security response process, offline installation, and a private
+package registry option. Progress is tracked under the **Enterprise readiness** milestone
+on the [roadmap project](https://github.com/orgs/envoscale/projects/3).
+
+## Getting a commercial license
+
+Contact the licensor through the [envoscale organization on
+GitHub](https://github.com/envoscale). Standard editions and prices are being set
+([#36](https://github.com/envoscale/EnvoScale/issues/36)); until then, Order Forms are
+quoted per customer. No commercial agreement is signed before the templates' legal review
+([#35](https://github.com/envoscale/EnvoScale/issues/35)) is complete.
+
+## Why PolyForm Noncommercial
+
+The Community License is a standard license, not one written for EnvoScale: the
+[PolyForm Project](https://polyformproject.org) publishes it, lawyers drafted it, and it
+has an official SPDX identifier, so the license scanners companies use recognize it. Its
+full text is in [`LICENSES/`](../../LICENSES/PolyForm-Noncommercial-1.0.0.md). The other
+common source-available licenses were rejected because they do not keep companies out
+without a license:
+
+- **Business Source License 1.1** must turn into an open-source license within four years
+  of each release, after which companies could use that release for free.
+- **Functional Source License** does the same after two years.
+- **Elastic License 2.0** and the **Server Side Public License** allow most commercial use
+  and restrict only hosted services.
+- **PolyForm Small Business** lets companies under a size limit use it for free.
+
+## Contributing
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md), which
+lets the project offer contributed work under both licenses.
+
+## Why this model
+
+The Community License keeps EnvoScale free for the people the project is built for at
+skill levels 0–4: beginners, students, researchers and hobbyists. Commercial licenses
+fund full-time work on the compiler, the standard platform, security audits (for
+example of `envo.crypto`, see [`SECURITY.md`](../../.github/SECURITY.md)) and long-term support.

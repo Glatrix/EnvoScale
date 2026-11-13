@@ -1,34 +1,25 @@
-# `adapters/` — the only place platform code may live
+# `adapters/`
 
-> **Status:** CI adapter (`ci/github`) and the Phase A bootstrap adapter
-> (`bootstrap/nasm`) exist. Everything else starts with **M4**.
+The only place code may talk to an operating system, a driver, a browser or an editor.
+Each adapter implements the [ports](../lib/ports/README.md) the library defines, for one
+platform.
 
-An **adapter** implements a port from [`lib/ports`](../lib/ports/README.md) for one
-specific platform, or connects EnvoScale to an outside system (CI, interop, remote APIs).
+| Folder | What |
+|---|---|
+| [`os/windows`](os/windows) | Windows: files, processes, console, terminal, network, windows (Win32), the clipboard, Direct3D 12 |
+| [`os/linux`](os/linux) | Linux, x86-64 and AArch64: the same ports over system calls, windows and the clipboard over X11 |
+| [`os/wasm`](os/wasm) | The browser and Node.js, over the JavaScript host |
+| [`os/none`](os/none) | The reference adapters: in memory, for the tests and as a fallback |
+| [`interop/js`](interop/js) | The JavaScript host that runs Envo's WebAssembly |
+| [`editors/vscode`](editors/vscode) | The VS Code extension, a client of `envo lsp` |
 
-## Rules
+Rules:
 
-- `adapters/<kind>/<name>/` may import `lib/**` and its own folder only. Never another adapter.
-- `lib/**` never imports anything from here.
-- OS and hardware interfaces are reached with **hand-written bindings**. No vendor SDK
-  headers, no binding generators.
-- Every port has a **reference adapter** (in-memory, null or software) that passes the
-  port's conformance suite and serves as the universal fallback.
-- Adapters are selected by target triple and build profile, or explicitly by the user.
+- An adapter may use `lib/` and its own folder, never another adapter. `lib/` never uses
+  `adapters/`.
+- Operating system and driver interfaces are bound by hand: no vendor SDK headers and no
+  binding generators.
+- Every port has a reference adapter in `os/none` that passes the port's conformance suite
+  in [`tests/conformance`](../tests/conformance).
 
-## Kinds
-
-| Folder | Port(s) | Examples |
-|---|---|---|
-| `os/` | FileSystem, Console, Clock, Threads, Entropy, Executor, NetStack | windows, linux, macos, wasm, none |
-| `window/` | Window | win32, wayland, x11, cocoa, web |
-| `gpu/` | GpuDevice | vulkan, d3d12, metal, webgpu, software |
-| `audio/` | AudioDevice | wasapi, alsa, pulse, coreaudio, webaudio, null |
-| `input/`, `clipboard/`, `fonts-system/` | Input, Clipboard, FontSource | per platform |
-| `interop/` | — | c-abi, js |
-| `editors/` | — | vscode (the language server's client, M14.9) |
-| `ai-remote/` | — | HTTP adapters to external model APIs (optional) |
-| `ci/` | — | github |
-| `bootstrap/` | — | nasm (active), fasm (optional) — Phase A only |
-
-Adding a new platform? Start with [`docs/porting/CHECKLIST.md`](../docs/porting/CHECKLIST.md).
+Bringing EnvoScale to a new platform: [docs/porting/CHECKLIST.md](../docs/porting/CHECKLIST.md).

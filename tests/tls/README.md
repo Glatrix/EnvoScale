@@ -1,6 +1,6 @@
 # `tests/tls` — the TLS 1.3 client against a real server
 
-> **Status:** M7. Run by `bootstrap.ps1 test` / `bootstrap.sh test` when `openssl` is
+> **Status:** M7. Run by `build.ps1 test` / `build.sh test` when `openssl` is
 > installed (it is on the CI runners); skipped, with a note, when it is not.
 
 The scripts make a throwaway CA (P-256) and two server certificates it signs (RSA-2048

@@ -1,17 +1,23 @@
-# Stage 2 (`envoc`)
+# The compiler (`envoc`)
 
-`envoc` is the self-hosting compiler (M3). Until it reaches a fixed point it is written in
-Envo-S1 and built by `envoc1` (PLAN D16). This page grows with each increment of PLAN §5.
+`envoc` compiles itself. It is written in Envo-S1, the subset the stage 1 compiler in
+[EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm) accepts, so that it can still
+be built up from assembly. It was called "Stage 2" while that chain was being built, and
+much of this page and the code's comments still say so; `envoc0` and `envoc1` are stages 0
+and 1, which now live in EnvoScaleAsm.
 
 ## Build
 
 ```
-envoc0 (assembly) → envoc1 (Envo-Core) → envoc (Envo-S1)
+seed envoc --build--> build/envoc-seeded --build -O2--> build/envoc --build -O2--> the same bytes
 ```
 
-Both bootstrap scripts build `build/stage2/envoc.exe` and `build/stage2/envoc` with
-`envoc1`, from the files in `compiler/files.txt` (the first is the entry file). CI checks
-that the Linux-host and Windows-host builds are byte-identical.
+`build.sh build` downloads a seed compiler built by EnvoScaleAsm, builds the compiler
+from `compiler/files.txt` (the first is the entry file) with it, and builds it again with
+the result, for Windows and Linux. `build.sh test` checks that `build/envoc` rebuilds
+itself into the same bytes, and CI checks that the Linux-host and Windows-host builds are
+byte-identical. EnvoScaleAsm checks the other direction: that the compiler built by stage 1
+behaves exactly as the one built by itself.
 
 ## Layout
 
@@ -176,16 +182,10 @@ the build system (M5).
 
 ## The fixed point (M3.9)
 
-```
-envoc1 --build--> stage2a (build/stage2) --build -O2--> stage2b --build -O2--> stage2c
-```
-
-`bootstrap fixedpoint` builds stage2b and stage2c for both targets and requires them to
-be byte-identical (D18). stage2a and stage2b run different code (`envoc1`'s and `-O2`'s),
-so their outputs may differ; stage2b and stage2c are the same compiler built by itself.
-In CI, `fixed-point-linux` and `fixed-point-windows` run it on each host, and
-`fixed-point` compares the two hosts' stage2c byte for byte, so the fixed point is the
-same on both.
+The seed and the compiler it builds run different code, so their outputs may differ; the
+compiler built by the seed's build and the one it builds are the same compiler built by
+itself, and must be byte-identical (D18). `build.sh test` checks it for both targets, and
+CI compares the two hosts' builds byte for byte.
 
 ## -O2 (M3.8)
 

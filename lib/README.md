@@ -1,37 +1,18 @@
-# `lib/` — the standard platform
+# `lib/`
 
-> **Status:** `core`, `alloc`, `ports` and `std` are Experimental (M4), written in
-> Envo-S1 and compiled by `envoc --lib`; see
-> [`docs/architecture/library.md`](../docs/architecture/library.md). Domain modules
-> follow the milestone table in [`docs/PLAN.md`](../docs/PLAN.md).
+The standard library, in Envo. Nothing here touches an operating system: it reaches the
+outside world only through **ports**, interfaces defined in [`ports/`](ports/README.md)
+and implemented in [`adapters/`](../adapters/README.md). Using an adapter from `lib/` is a
+compile error (E0215); the one meeting point is the `platform` binding, which the build
+picks for the target. More: [docs/architecture/library.md](../docs/architecture/library.md).
 
-Pure, platform-free Envo code. Everything here reaches the outside world only through
-**ports**: interfaces defined in [`ports/`](ports/README.md) and implemented in
-[`adapters/`](../adapters/README.md).
-
-## The one rule
-
-**`lib/**` may import only `lib/**`.** Using an adapter namespace (`os.*`) from a file
-under `lib/` is a compile error (E0215); the one meeting point is the `platform`
-binding, which the build picks for the target.
-
-## Layers
-
-| Folder | Depends on | Purpose |
+| Folder | Needs | |
 |---|---|---|
-| `core/` | nothing | Works on bare metal: primitives, `Option`/`Result`, interfaces, slices, `str`, formatting |
-| `alloc/` | `core` | Allocators, `Box`, `List`, `string`, `Map`, `Set` |
-| `ports/` | `core` | Every port interface |
-| `std/` | `core`, `alloc`, `ports` | io, fs, path, process, env, time, thread, sync, async |
-| `prelude/` | the above | Names every file sees without a `use` |
-| `envo/*` | any of the above | Domain modules: text, crypto, net, http, gfx, ui, web, ai, … |
+| [`core/`](core) | nothing | Works anywhere, even without an OS: `Option`, `Result`, slices, `str`, text and number formatting |
+| [`alloc/`](alloc) | `core` | `List`, `string`, `Map` and the allocators |
+| [`ports/`](ports) | `core` | Every port interface |
+| [`std/`](std) | the above | Files, paths, processes, environment, time, randomness, the clipboard |
+| [`envo/`](envo) | any of the above | Everything else: crypto, TLS, HTTP, JSON, UI, graphics, fonts, 3D, the web, AI |
 
-## Module folder layout
-
-Every module folder contains:
-
-- `README.md`: purpose, the **simple door**, the **full-control door**, ports used,
-  and stability tier
-- the source
-- `tests/`
-- an `examples/` snippet
+Each module folder has a README (what it is for, the simple way in, the full-control way
+in, and the ports it uses), its source and a `tests/` folder that `envo test` runs.

@@ -1,7 +1,7 @@
 # 5. Ownership and Borrowing
 
 > **Status:** Draft. Stage 1 implements moves, drops and a basic borrow checker (M2.10,
-> [`architecture/stage1.md`](../architecture/stage1.md), "Ownership"); Stage 2 the full
+> [`architecture/stage1.md`](https://github.com/envoscale/EnvoScaleAsm/blob/main/docs/stage1.md), "Ownership"); Stage 2 the full
 > flow-sensitive one (M3). Envo-Core has no borrow checking. Tests: `tests/spec/s1-own/`
 > (E0501–E0508) and `tests/spec/s1-run/drops.envo`.
 
