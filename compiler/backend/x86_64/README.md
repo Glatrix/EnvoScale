@@ -55,7 +55,12 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed
   to a parameter takes the parameter's, and the result of an add, sub, `and`, `or` or
-  `xor` takes its first operand's when that operand dies there, if each is free.
+  `xor` takes its first operand's when that operand dies there, if each is free. A
+  value may also share a register with one that is dead all through the value's interval
+  (block liveness says no path from there reaches a use), which removes the copy of a
+  loop counter that is returned after the loop; the register then stays reserved until
+  both are done. A branch edge whose arguments already sit in its parameters' places is
+  taken by the `jcc` itself.
 - **Small copies and zeroing.** `copy` and `zero` of a constant size up to 256 bytes,
   and the zeroing of a frame's slots, become 8/4/2/1-byte moves instead of
   `rep movsb`/`rep stosb`.

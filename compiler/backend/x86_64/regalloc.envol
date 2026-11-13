@@ -42,6 +42,49 @@ u32 ArgRegIndex(u32 k) {
     return 7 + k - 2;
 }
 
+// Is value a dead at every position of [cs, ce] (cur's interval, which starts where cur is
+// defined), after the instruction at cs reads it? Then
+// a value living only there can share a's register: a's later uses are on paths that do
+// not pass through it. The instruction at cs may read a only as the first operand of an
+// add, sub, and, or or xor (which reads it before writing the result), and with strict,
+// not at all.
+bool DeadThrough(in Module m, in EFunc f, u32 a, u32 cur, u32 cs, u32 ce, in List<u32> posBlock, in List<u32> posInst, in List<u32> bstart, in BitSets live, in BitSets liveOut, in BitSets defs, bool strict) {
+    u32 cb = posBlock.Get(cs as usize);
+    if (liveOut.Has(cb, a)) return false;
+    EBlock blk = m.Block(f.FirstBlock + cb);
+    u32 from = blk.FirstInst;
+    u32 at = posInst.Get(cs as usize);
+    // cs must be where cur is defined
+    if (at != NOHINT && m.Inst(at).Result - f.FirstValue != cur) return false;
+    if (at == NOHINT && (cur + f.FirstValue < blk.FirstParam || cur + f.FirstValue >= blk.FirstParam + blk.NParams)) return false;
+    if (at != NOHINT) {
+        from = at + 1;
+        if (strict && Reads(m, f, at, a)) return false;
+    }
+    for (u32 i = from; i < blk.FirstInst + blk.NInsts; i++) {
+        if (Reads(m, f, i, a)) return false;
+    }
+    for (u32 bi = cb + 1; bi < f.NBlocks && bstart.Get(bi as usize) <= ce; bi++) {
+        if (live.Has(bi, a) || defs.Has(bi, a)) return false;
+    }
+    return true;
+}
+
+// Does instruction i read value a (relative)?
+bool Reads(in Module m, in EFunc f, u32 i, u32 a) {
+    EInst inst = m.Inst(i);
+    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        if (op.Kind == OK_VALUE && op.Ref - f.FirstValue == a) return true;
+        if (op.Kind == OK_TARGET) {
+            for (u32 k = 0; k < op.NArgs; k++) {
+                if (m.Arg(op.Args + k) - f.FirstValue == a) return true;
+            }
+        }
+    }
+    return false;
+}
+
 // The allocation index of register r (AllocReg's inverse), NREGS for none.
 u32 RegIndex(u8 r) {
     if (r == NOREG) return NREGS;
@@ -145,6 +188,10 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
     List<u64> weight = List<u64>.New();
     for (u32 k = 0; k < nv; k++) weight.Push(0);
     u32 pos = 1;
+    List<u32> posBlock = List<u32>.New();       // per position: its block
+    List<u32> posInst = List<u32>.New();        // per position: its instruction, NOHINT at a block's start
+    posBlock.Push(0);
+    posInst.Push(NOHINT);
     for (u32 bi = 0; bi < nb; bi++) {
         u32 dd = depth.Get(bi as usize);
         if (dd > 6) dd = 6;
@@ -152,6 +199,8 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         EBlock blk = m.Block(f.FirstBlock + bi);
         bstart.Push(pos);
         clob.Push(0);
+        posBlock.Push(bi);
+        posInst.Push(NOHINT);
         for (u32 k = 0; k < blk.NParams; k++) {
             u32 v = blk.FirstParam + k - f.FirstValue;
             defs.Add(bi, v);
@@ -164,6 +213,8 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
             clob.Push(Clobbers(inst));
+            posBlock.Push(bi);
+            posInst.Push(i);
             for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
                 EOp op = m.Op(o);
                 if (op.Kind == OK_VALUE) {
@@ -285,6 +336,10 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
     }
     List<u32> holder = List<u32>.New();    // per register: the value + 1 holding it, or 0
     for (u32 r = 0; r < NREGS; r++) holder.Push(0);
+    // per register: 1 + the last position of values that share it with its holder, inside
+    // a stretch where the holder is dead (0: none); the register is busy until then
+    List<u32> shareEnd = List<u32>.New();
+    for (u32 r = 0; r < NREGS; r++) shareEnd.Push(0);
     for (u32 p = 0; p <= pos; p++) {
         u32 h = heads.Get(p as usize);
         while (h != 0) {
@@ -307,21 +362,25 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             // a parameter: the register it arrives in, if it may have it; else a free
             // caller-saved register it may have, else a free callee-saved one
             u32 pick = NREGS;
+            bool shared = false;
             if (cur < f.NParams && cur < NARGREGS) {
                 u32 a = ArgRegIndex(cur);
-                if ((forbid >> (a - NSAVED)) & 1 == 0 && holder.Get(a as usize) == 0) pick = a;
+                if ((forbid >> (a - NSAVED)) & 1 == 0 && holder.Get(a as usize) == 0 && shareEnd.Get(a as usize) <= cs) pick = a;
             }
             // a register a related value has, if it is free and allowed
             if (pick == NREGS) {
                 u32 a = op0.Get(cur as usize);
                 if (a != NOHINT) {
                     u32 ri = RegIndex(regs.Get(a as usize));
-                    // the operand's register, free or freed by this very instruction
-                    if (ri != NREGS && (holder.Get(ri as usize) == 0 || (holder.Get(ri as usize) == a + 1 && end.Get(a as usize) == cs))) {
-                        if (ri < NSAVED || (forbid >> (ri - NSAVED)) & 1 == 0) {
-                            holder.Set(ri as usize, 0);
-                            pick = ri;
-                        }
+                    // the operand's register, free or freed by this very instruction, or
+                    // shared while the operand is dead
+                    bool allowed = ri != NREGS && (ri < NSAVED || (forbid >> (ri - NSAVED)) & 1 == 0) && (ri == NREGS || shareEnd.Get(ri as usize) <= cs);
+                    if (allowed && (holder.Get(ri as usize) == 0 || (holder.Get(ri as usize) == a + 1 && end.Get(a as usize) == cs))) {
+                        holder.Set(ri as usize, 0);
+                        pick = ri;
+                    } else if (allowed && holder.Get(ri as usize) == a + 1 && DeadThrough(m, f, a, cur, cs, ce, posBlock, posInst, bstart, live, liveOut, defs, false)) {
+                        pick = ri;
+                        shared = true;
                     }
                 }
             }
@@ -329,15 +388,20 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 u32 other = partner.Get(j as usize);
                 if (other == cur) continue;
                 u32 ri = RegIndex(regs.Get(other as usize));
-                if (ri == NREGS || holder.Get(ri as usize) != 0) continue;
+                if (ri == NREGS || shareEnd.Get(ri as usize) > cs) continue;
                 if (ri >= NSAVED && (forbid >> (ri - NSAVED)) & 1 != 0) continue;
-                pick = ri;
+                if (holder.Get(ri as usize) == 0) {
+                    pick = ri;
+                } else if (holder.Get(ri as usize) == other + 1 && DeadThrough(m, f, other, cur, cs, ce, posBlock, posInst, bstart, live, liveOut, defs, true)) {
+                    pick = ri;
+                    shared = true;
+                }
             }
             for (u32 r = NSAVED; r < NREGS && pick == NREGS; r++) {
-                if ((forbid >> (r - NSAVED)) & 1 == 0 && holder.Get(r as usize) == 0) pick = r;
+                if ((forbid >> (r - NSAVED)) & 1 == 0 && holder.Get(r as usize) == 0 && shareEnd.Get(r as usize) <= cs) pick = r;
             }
             for (u32 r = 0; r < NSAVED && pick == NREGS; r++) {
-                if (holder.Get(r as usize) == 0) pick = r;
+                if (holder.Get(r as usize) == 0 && shareEnd.Get(r as usize) <= cs) pick = r;
             }
             if (pick == NREGS) {
                 // all it may have are taken: the cheapest of the holders and this one goes
@@ -345,6 +409,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 u32 far = NREGS;
                 for (u32 r = 0; r < NREGS; r++) {
                     if (r >= NSAVED && (forbid >> (r - NSAVED)) & 1 != 0) continue;
+                    if (holder.Get(r as usize) == 0 || shareEnd.Get(r as usize) > cs) continue;
                     if (far == NREGS) {
                         far = r;
                         continue;
@@ -355,6 +420,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                     u64 wf = weight.Get(hf as usize);
                     if (wr < wf || (wr == wf && end.Get(hr as usize) > end.Get(hf as usize))) far = r;
                 }
+                if (far == NREGS) continue;
                 u32 victim = holder.Get(far as usize) - 1;
                 u64 wv = weight.Get(victim as usize);
                 u64 wc = weight.Get(cur as usize);
@@ -362,7 +428,11 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 regs.Set(victim as usize, NOREG);
                 pick = far;
             }
-            holder.Set(pick as usize, cur + 1);
+            if (shared) {
+                if (shareEnd.Get(pick as usize) < ce + 1) shareEnd.Set(pick as usize, ce + 1);
+            } else {
+                holder.Set(pick as usize, cur + 1);
+            }
             regs.Set(cur as usize, AllocReg(pick));
             used.Set(pick as usize, true);
         }

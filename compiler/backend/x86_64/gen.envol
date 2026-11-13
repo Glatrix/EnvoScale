@@ -509,6 +509,18 @@ struct Gen {
         return SLOT + k as u32;
     }
 
+    // -O2: does branch op's parallel move do nothing (every argument already in place)?
+    bool MovesNothing(in this, in Module m, in EOp op) {
+        EBlock target = m.Block(op.Ref);
+        for (u32 i = 0; i < op.NArgs; i++) {
+            u32 pv = target.FirstParam + i;
+            u32 av = m.Arg(op.Args + i);
+            if (av == pv || this.Uses.Get((pv - this.FirstValue) as usize) == 0) continue;
+            if (this.Loc(pv) != this.SrcLoc(av)) return false;
+        }
+        return true;
+    }
+
     // -O2: branch op's arguments into target's parameters (unused parameters get nothing).
     void ParallelMove(ref this, in Module m, in EOp op, in EBlock target) {
         List<u32> dst = List<u32>.New();
@@ -1023,14 +1035,18 @@ struct Gen {
             }
             EOp yes = m.Op(f + 1);
             EOp no = m.Op(f + 2);
-            if (this.Opt && yes.NArgs == 0 && no.Ref == this.NextBlock) {
+            // an edge whose arguments are already where its block's parameters live moves
+            // nothing, so a jcc can take it directly
+            bool yesBare = yes.NArgs == 0 || (this.Opt && this.MovesNothing(m, yes));
+            bool noBare = no.NArgs == 0 || (this.Opt && this.MovesNothing(m, no));
+            if (this.Opt && yesBare && no.Ref == this.NextBlock) {
                 // the false side is next: branch on true, fall through
                 this.A.Jcc(ccTrue, this.BlockLabels.Get(yes.Ref as usize));
                 this.Jump(m, f + 2, true);
-            } else if (this.Opt && no.NArgs == 0) {
+            } else if (this.Opt && noBare) {
                 this.A.Jcc(ccTrue ^ 1, this.BlockLabels.Get(no.Ref as usize));
                 this.Jump(m, f + 1, true);
-            } else if (this.Opt && yes.NArgs == 0) {
+            } else if (this.Opt && yesBare) {
                 this.A.Jcc(ccTrue, this.BlockLabels.Get(yes.Ref as usize));
                 this.Jump(m, f + 2, true);
             } else {
