@@ -669,6 +669,24 @@ function Invoke-Test {
     Copy-Item -Recurse (Join-Path $Root 'tests\envo\pkg') $pk
     $r = Invoke-Tool $envo @('run', 'pk/app') $envoRun
     if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, app!`n") { Pass 'packages: a path dependency' } else { Bad 'packages: a path dependency' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    # a git dependency, by commit: pk\greet as a repository of its own (where git is installed)
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $gdir = Join-Path $envoRun 'pk\greet-git'
+        $adir = Join-Path $envoRun 'pk\appg'
+        foreach ($d in @($gdir, $adir)) { if (Test-Path -LiteralPath $d) { Remove-Item -Recurse -Force $d } }
+        Copy-Item -Recurse (Join-Path $envoRun 'pk\greet') $gdir
+        & git -C $gdir init -q | Out-Null
+        & git -C $gdir add -A 2>$null | Out-Null
+        & git -C $gdir -c user.name=t -c user.email=t@t commit -q -m greet | Out-Null
+        $grev = (& git -C $gdir rev-parse HEAD).Trim()
+        New-Item -ItemType Directory -Force $adir | Out-Null
+        $gurl = $gdir.Replace('\', '/')
+        [IO.File]::WriteAllText((Join-Path $adir 'envo.envon'), "#eon 1`npackage {`n    name = `"appg`"`n}`ndependencies {`n    greet = { git = `"$gurl`", rev = `"$grev`" }`n}`n", $Utf8)
+        [IO.File]::WriteAllText((Join-Path $adir 'main.envol'), "use greet;`nprint(greet.Hello(`"appg`").AsStr());`n", $Utf8)
+        $r = Invoke-Tool $envo @('run', 'pk/appg') $envoRun
+        $dep = Join-Path $adir "build\deps\greet-$grev\envo.envon"
+        if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, appg!`n" -and (Test-Path -LiteralPath $dep)) { Pass 'packages: a git dependency' } else { Bad 'packages: a git dependency' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
+    }
     $r = Invoke-Tool $envo @('key', 'pk/publisher.key') $envoRun
     $pub = ($r.Out.Trim() -replace '^public key ', '')
     $r = Invoke-Tool $envo @('key', 'pk/other.key') $envoRun

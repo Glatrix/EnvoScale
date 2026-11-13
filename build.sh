@@ -695,6 +695,20 @@ EOF_ERR
     cp -r "$ROOT/tests/envo/pkg" "$erun/pk"
     envo_do run pk/app
     if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, app!' ]; then pass; else bad 'packages: a path dependency' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    # a git dependency, by commit: pk/greet as a repository of its own (where git is installed)
+    if command -v git >/dev/null 2>&1; then
+        rm -rf "$erun/pk/greet-git" "$erun/pk/appg"
+        cp -r "$erun/pk/greet" "$erun/pk/greet-git"
+        git -C "$erun/pk/greet-git" init -q && git -C "$erun/pk/greet-git" add -A \
+            && git -C "$erun/pk/greet-git" -c user.name=t -c user.email=t@t commit -q -m greet
+        grev=$(git -C "$erun/pk/greet-git" rev-parse HEAD)
+        gurl=$(cd "$erun/pk/greet-git" && (pwd -W 2>/dev/null || pwd))     # C:/... on Git Bash
+        mkdir -p "$erun/pk/appg"
+        printf '#eon 1\npackage {\n    name = "appg"\n}\ndependencies {\n    greet = { git = "%s", rev = "%s" }\n}\n' "$gurl" "$grev" > "$erun/pk/appg/envo.envon"
+        printf 'use greet;\nprint(greet.Hello("appg").AsStr());\n' > "$erun/pk/appg/main.envol"
+        envo_do run pk/appg
+        if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, appg!' ] && [ -f "$erun/pk/appg/build/deps/greet-$grev/envo.envon" ]; then pass; else bad 'packages: a git dependency' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
+    fi
     envo_do key pk/publisher.key
     pub=$(sed -n 's/^public key //p' "$TMP/out" | tr -d '\r')
     envo_do key pk/other.key

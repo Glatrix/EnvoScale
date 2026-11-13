@@ -1,10 +1,14 @@
-// Dependencies (PLAN D66): a package's `dependencies` block names other packages, by path
-// or from a registry:
+// Dependencies (PLAN D66): a package's `dependencies` block names other packages, by path,
+// from a registry, or from a git repository at a commit:
 //
 //     dependencies {
 //         greet = { path = "../greet" }
 //         words = { version = "1.2.0", registry = "../registry" }
+//         envor = { git = "https://github.com/envoscale/Envor", rev = "<40-digit commit>" }
 //     }
+//
+// A git dependency is cloned once into build/deps/<name>-<commit>; the commit pins it, so
+// it needs no lock entry. It runs the `git` program, which must be on the PATH.
 //
 // Their sources are compiled with the package's (each keeps its own namespaces). A
 // registry package arrives as an archive (.envopkg: its files, sorted, with sizes), is
@@ -23,6 +27,7 @@ use envo.crypto.curve25519;
 use core.fmt;
 use std.env;
 use ports.{IoError};
+use std.process;
 
 struct Dep {
     string Name;
@@ -80,7 +85,12 @@ void Visit(str dir, ref List<Dep> got, ref List<string> seen, in eon.Value lock,
         Dep d = new Dep { Name = string.From(name), Version = string.New(), Dir = string.New(), Sha256 = string.New(), Registry = string.New() };
         str? p = items[i].GetStr("path");
         str? v = items[i].GetStr("version");
-        if (p.IsSome()) {
+        str? g = items[i].GetStr("git");
+        if (g.IsSome()) {
+            str? rev = items[i].GetStr("rev");
+            if (rev.IsNone() || !IsCommit(rev.Unwrap())) DepFail(manifest.AsStr(), name, "needs `rev = \"…\"`: the full commit hash (40 hex digits)");
+            GitFetch(ref d, manifest.AsStr(), g.Unwrap(), rev.Unwrap(), root);
+        } else if (p.IsSome()) {
             d.Dir = path.Join(dir, p.Unwrap());
             if (!IsPackageDir(d.Dir.AsStr())) DepFail(manifest.AsStr(), name, "has no package at its path");
         } else if (v.IsSome()) {
@@ -91,13 +101,55 @@ void Visit(str dir, ref List<Dep> got, ref List<string> seen, in eon.Value lock,
             else d.Registry = path.Join(dir, reg.Unwrap());
             Fetch(ref d, lock, locked, root, doc);
         } else {
-            DepFail(manifest.AsStr(), name, "needs `path = \"…\"`, or `version` and `registry`");
+            DepFail(manifest.AsStr(), name, "needs `path = \"…\"`, `version` and `registry`, or `git` and `rev`");
         }
         // its own dependencies
         string sub = string.From(d.Dir.AsStr());
         got.Push(d);
         Visit(sub.AsStr(), ref got, ref seen, lock, locked, root);
     }
+}
+
+// Is s a full commit hash: 40 lowercase hex digits?
+bool IsCommit(str s) {
+    if (s.Len != 40) return false;
+    for (usize i = 0; i < s.Len; i++) {
+        u8 c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+// Clones git dependency d (the repository at url) into build/deps/<name>-<rev> and checks
+// out commit rev, unless that folder already holds it.
+void GitFetch(ref Dep d, str manifest, str url, str rev, str root) {
+    string folder = string.From(d.Name.AsStr());
+    folder.AppendByte('-');
+    folder.Append(rev);
+    string deps = path.Join(root, "build/deps");
+    string dest = path.Join(deps.AsStr(), folder.AsStr());
+    if (!IsPackageDir(dest.AsStr())) {
+        fs.CreateDirAll(deps.AsStr());
+        List<str> clone = List<str>.New();
+        clone.Push("clone");
+        clone.Push("--quiet");
+        clone.Push(url);
+        clone.Push(dest.AsStr());
+        var r = process.Run("git", clone.AsSlice());
+        if (r.IsErr() || r.Unwrap() != 0) DepFail(manifest, d.Name.AsStr(), "could not be cloned (is git on the PATH, and the URL right?)");
+        List<str> co = List<str>.New();
+        co.Push("-C");
+        co.Push(dest.AsStr());
+        co.Push("-c");
+        co.Push("advice.detachedHead=false");
+        co.Push("checkout");
+        co.Push("--quiet");
+        co.Push(rev);
+        var c = process.Run("git", co.AsSlice());
+        if (c.IsErr() || c.Unwrap() != 0) DepFail(manifest, d.Name.AsStr(), "has no such commit `rev`");
+        if (!IsPackageDir(dest.AsStr())) DepFail(manifest, d.Name.AsStr(), "has no envo.envon at the root of its repository");
+    }
+    d.Dir = dest;
 }
 
 void DepFail(str manifest, str name, str why) {
