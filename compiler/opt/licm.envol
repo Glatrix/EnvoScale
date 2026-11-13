@@ -75,10 +75,17 @@ bool Outside(in Module m, in EFunc f, u32 v, in List<bool> hoist, in List<bool> 
     return !inLoop.Get((val.Block - f.FirstBlock) as usize) || hoist.Get(k as usize);
 }
 
-// Hoists the invariant loads of function fi's loops; true if any moved.
-bool HoistLoads(ref Module m, u32 fi) {
-    EFunc f = m.Func(fi);
-    if (f.Deref == 0 || f.NBlocks < 2) return false;
+// Each block's successors and predecessors in flat lists (block b's at [first[b],
+// first[b + 1])), and the dominator sets (entry block 0).
+struct Cfg {
+    List<u32> SFirst;
+    List<u32> SList;
+    List<u32> PFirst;
+    List<u32> PList;
+    BlockSets Dom;
+}
+
+Cfg BuildCfg(in Module m, in EFunc f) {
     u32 nb = f.NBlocks;
     // successors and predecessors, each block's in one flat list
     List<u32> sfirst = List<u32>.New();
@@ -135,6 +142,21 @@ bool HoistLoads(ref Module m, u32 fi) {
             }
         }
     }
+
+    return new Cfg { SFirst = sfirst, SList = slist, PFirst = pfirst, PList = plist, Dom = dom };
+}
+
+// Hoists the invariant loads of function fi's loops; true if any moved.
+bool HoistLoads(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    if (f.Deref == 0 || f.NBlocks < 2) return false;
+    u32 nb = f.NBlocks;
+    Cfg g = BuildCfg(m, f);
+    List<u32> sfirst = g.SFirst;
+    List<u32> slist = g.SList;
+    List<u32> pfirst = g.PFirst;
+    List<u32> plist = g.PList;
+    BlockSets dom = g.Dom;
 
     List<bool> hoist = List<bool>.New();       // per value: its instruction moves
     List<u32> dest = List<u32>.New();          // per value: the preheader (relative) it moves to

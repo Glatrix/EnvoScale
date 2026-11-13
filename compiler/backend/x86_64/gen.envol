@@ -52,7 +52,7 @@ struct Gen {
     u32 NextBlock;          // the block emitted next (0 at the function's end): a jump there falls through
     u32 BlockEnd;           // one past the current block's last instruction
     u32 Fused;              // -O2: a compare left for the branch after it to do, or 0
-    u32 FoldedField;        // -O2: a field address left for the load or store after it, or 0
+    u32 FoldedField;        // -O2: a field or element address left for the load or store after it, or 0
     u32 FoldedInst;         // its instruction
 
     // ------------------------------------------------------------------ helpers
@@ -142,7 +142,21 @@ struct Gen {
             this.FoldedField = 0;
             i32 inner = 0;
             u8 rb = this.AddrOf(m, fi.FirstOp, scratch, ref inner);
-            disp = inner + m.FieldOffset(fi.Ty, fi.Imm as u32) as i32;
+            if (fi.Op == OP_FIELDADDR_X) {
+                disp = inner + m.FieldOffset(fi.Ty, fi.Imm as u32) as i32;
+                return rb;
+            }
+            // elemaddr: [base + index * size]; an index that is a constant is a displacement
+            u32 size = m.Ty(fi.Ty).Size;
+            i32 imm = 0;
+            if (this.SmallImm(m, fi.FirstOp + 1, ref imm) && (imm as i64) * (size as i64) < 0x40000000 && (imm as i64) * (size as i64) > -0x40000000) {
+                disp = inner + imm * size as i32;
+                return rb;
+            }
+            u8 ri = this.InReg(m, fi.FirstOp + 1, RDX);
+            disp = inner;
+            this.A.Idx = ri;
+            this.A.Scale = ScaleShift(size);
             return rb;
         }
         if (this.Opt && op.Kind == OK_VALUE) {
@@ -745,6 +759,7 @@ struct Gen {
             u8 rb = this.AddrOf(m, f, RCX, ref disp);
             u8 d = this.DestReg(inst.Result);
             this.A.Load(d, rb, disp, ty.Size, signed);
+            this.A.Idx = NO_INDEX;
             this.StoreV(inst.Result, d);
             return;
             this.StoreV(inst.Result, RAX);
@@ -755,6 +770,28 @@ struct Gen {
             i32 disp = 0;
             u8 rb = this.AddrOf(m, f + 1, RCX, ref disp);
             this.A.Store(rb, disp, rv, ty.Size);
+            this.A.Idx = NO_INDEX;
+        } else if (sh == SH_ELEM && this.Opt && ScaleShift(ty.Size) != NO_SCALE) {
+            if (this.FoldsIntoAccess(m, i, inst)) {
+                this.FoldedField = inst.Result;
+                this.FoldedInst = i;
+                return;
+            }
+            // lea d, [base + index * size]
+            u8 d = this.DestReg(inst.Result);
+            i32 imm = 0;
+            if (this.SmallImm(m, f + 1, ref imm) && (imm as i64) * (ty.Size as i64) < 0x40000000 && (imm as i64) * (ty.Size as i64) > -0x40000000) {
+                u8 rb = this.InReg(m, f, RAX);
+                this.A.LeaRM(d, rb, imm * ty.Size as i32);
+            } else {
+                u8 rb = this.InReg(m, f, RAX);
+                u8 ri = this.InReg(m, f + 1, RCX);
+                this.A.Idx = ri;
+                this.A.Scale = ScaleShift(ty.Size);
+                this.A.LeaRM(d, rb, 0);
+                this.A.Idx = NO_INDEX;
+            }
+            this.StoreV(inst.Result, d);
         } else if (sh == SH_FIELD) {
             u64 foff = m.FieldOffset(t, inst.Imm as u32);
             if (this.Opt && foff < 0x40000000 && this.FoldsIntoAccess(m, i, inst)) {
@@ -1463,6 +1500,18 @@ struct Gen {
         }
         while (this.A.Data.Len() < start + ty.Size as usize) this.A.DataByte(0);
     }
+}
+
+const u16 OP_FIELDADDR_X = 44;
+const u8 NO_SCALE = 0xFF;
+
+// The SIB scale for an element of size bytes, as a shift; NO_SCALE if it has none.
+u8 ScaleShift(u32 size) {
+    if (size == 1) return 0;
+    if (size == 2) return 1;
+    if (size == 4) return 2;
+    if (size == 8) return 3;
+    return NO_SCALE;
 }
 
 // The condition code of integer compare op: true when the compare holds.

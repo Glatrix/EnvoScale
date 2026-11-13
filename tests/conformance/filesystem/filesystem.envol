@@ -19,6 +19,14 @@ bool IsErr<T>(Result<T, IoError> r, IoError e) {
     }
 }
 
+// Does ReadUpTo(path, max) give exactly want?
+bool PrefixIs<F>(ref F fs, str path, usize max, str want) where F : IFileSystem {
+    var r = fs.ReadUpTo(path, max);
+    if (r.IsErr()) return false;
+    string got = r.Unwrap();
+    return got.Equals(want);
+}
+
 // Does List(path) give exactly want, the names joined by "|"?
 bool ListsAs<F>(ref F fs, str path, str want) where F : IFileSystem {
     Result<List<string>, IoError> r = fs.List(path);
@@ -65,6 +73,11 @@ void Run<F>(ref F fs) where F : IFileSystem {
     Check(fs.IsFile(a) && !fs.IsDir(a), "a written file is a file");
     Check(ReadsAs(ref fs, a, "hello"), "Read gives what Write wrote");
     Check(fs.Write(a, "bye").IsOk() && ReadsAs(ref fs, a, "bye"), "Write replaces the content");
+    Check(fs.Write(a, "hello").IsOk() && PrefixIs(ref fs, a, 3, "hel") && PrefixIs(ref fs, a, 5, "hello") && PrefixIs(ref fs, a, 99, "hello") && PrefixIs(ref fs, a, 0, ""), "ReadUpTo gives the first max bytes");
+    string long = string.New();
+    for (usize i = 0; i < 10000; i++) long.AppendByte('a' + (i % 26) as u8);
+    Check(fs.Write(a, long.AsStr()).IsOk() && PrefixIs(ref fs, a, 4097, long.AsStr()[0..4097]) && ReadsAs(ref fs, a, long.AsStr()), "ReadUpTo and Read across chunks");
+    Check(fs.ReadUpTo("conformance-fs/missing.txt", 4).IsErr(), "ReadUpTo of a missing file is an error");
     Check(fs.Write(a, "").IsOk() && ReadsAs(ref fs, a, ""), "an empty file");
     Check(fs.Write(uni, "\u{e9}").IsOk() && ReadsAs(ref fs, uni, "\u{e9}") && fs.IsFile(uni), "UTF-8 names and content");
     Check(IsErr(fs.Write("conformance-fs/none/b.txt", "x"), IoError.NotFound), "Write without its directory is NotFound");

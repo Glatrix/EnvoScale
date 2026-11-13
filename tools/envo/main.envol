@@ -24,7 +24,7 @@ void EnvoUsage(i32 fd) {
     write(fd, "\n");
     write(fd, "commands:\n");
     write(fd, "  new <name>              create a package in the folder <name>\n");
-    write(fd, "  build [dir | file.envol...] [-O0|-O2] [-o <output>] [--os none] [--target <t>] [--sbom]\n");
+    write(fd, "  build [dir | file.envol...] [-O0|-O2] [-o <output>] [--os none] [--target <t>] [--sbom] [--map <file>]\n");
     write(fd, "                          build a package's program (dir/build/<name>), or the\n");
     write(fd, "                          program in the given files\n");
     write(fd, "  run [dir | file.envol...] [--allow <permissions>] [--native] [-- <arguments>]\n");
@@ -140,12 +140,13 @@ struct BuildOpts {
     bool Native;            // run: build and run native code instead of the script runtime
     List<string> Allows;    // run: `--allow` permissions for the script runtime
     bool Sbom;              // build: write an SPDX SBOM beside the executable
+    string Map;             // build: write a link map (function addresses) here, for profilers
 }
 
 BuildOpts ParseOpts(usize from) {
     BuildOpts o = new BuildOpts {
         Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
-        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false,
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false, Map = string.New(),
     };
     usize i = from;
     while (i < env.ArgCount()) {
@@ -163,6 +164,9 @@ BuildOpts ParseOpts(usize from) {
         } else if (Eq(a, "--sbom")) {
             o.Sbom = true;
             i++;
+        } else if (Eq(a, "--map") && i + 1 < env.ArgCount()) {
+            o.Map = string.From(env.Arg(i + 1));
+            i += 2;
         } else if (Eq(a, "-A")) {
             o.Allows.Push(string.From("all"));
             i++;
@@ -267,7 +271,7 @@ i32 CmdEnvoBuild(usize from, bool quiet) {
         }
         code = BuildWithSbom(p, o, home.AsStr(), deps);
     } else {
-        code = BuildProgram(p.Files, p.Output.AsStr(), o.Target, o.Opt, home.AsStr(), o.Os.AsStr(), "");
+        code = BuildProgram(p.Files, p.Output.AsStr(), o.Target, o.Opt, home.AsStr(), o.Os.AsStr(), o.Map.AsStr());
     }
     if (code == 0 && !quiet) {
         write(1, "built ");

@@ -1,0 +1,100 @@
+// -O2: overflow checks that cannot fail. Below the true edge of `x < y`, x + 1 cannot
+// overflow (x is less than something of its own type), and below the true edge of
+// `x > y`, x - 1 cannot; for an unsigned x, `x != 0` is enough for x - 1 too. The edge's
+// block must have that branch as its only way in, so every block it dominates runs only
+// when the compare held. A loop `for (i = 0; i < n; i++)` then counts without a check.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 OP_ADDW = 5;
+const u16 OP_SUBW = 6;
+const u16 OP_ADDCHK = 8;
+const u16 OP_SUBCHK = 9;
+const u16 OP_CMPNE = 21;
+const u16 OP_CMPLT = 22;
+const u16 OP_CMPGT = 24;
+
+// Is operand o the integer 1, written or as a `const`?
+bool IsOne(in Module m, u32 o) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) return op.Int == 1;
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    return d.Op == OP_CONST && d.Imm == 1;
+}
+
+// Is operand o the integer 0?
+bool IsZero(in Module m, u32 o) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) return op.Int == 0;
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    return d.Op == OP_CONST && d.Imm == 0;
+}
+
+// Drops the checks of function fi that cannot fail; true if any went.
+bool DropChecks(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nb = f.NBlocks;
+    if (nb < 2) return false;
+    Cfg g = BuildCfg(m, f);
+    BlockSets dom = g.Dom;
+    List<u32> npred = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) npred.Push(g.PFirst.Get((b + 1) as usize) - g.PFirst.Get(b as usize));
+    // facts: (block where it holds, x, the change that cannot overflow: +1 or -1)
+    List<u32> factBlock = List<u32>.New();
+    List<u32> factValue = List<u32>.New();
+    List<bool> factInc = List<bool>.New();
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        if (term.Op != OP_CONDBR) continue;
+        EOp c = m.Op(term.FirstOp);
+        if (c.Kind != OK_VALUE) continue;
+        EVal cv = m.Val(c.Ref);
+        if (cv.Inst == 0) continue;
+        EInst cmp = m.Inst(cv.Inst);
+        EOp yes = m.Op(term.FirstOp + 1);
+        u32 t = yes.Ref - f.FirstBlock;
+        if (yes.NArgs != 0 || npred.Get(t as usize) != 1 || t == b) continue;
+        EOp x = m.Op(cmp.FirstOp);
+        if (x.Kind != OK_VALUE) continue;
+        if (cmp.Op == OP_CMPLT) {
+            factBlock.Push(t);
+            factValue.Push(x.Ref);
+            factInc.Push(true);
+        } else if (cmp.Op == OP_CMPGT || (cmp.Op == OP_CMPNE && !m.IsSigned(cmp.Ty) && IsZero(m, cmp.FirstOp + 1))) {
+            factBlock.Push(t);
+            factValue.Push(x.Ref);
+            factInc.Push(false);
+        }
+    }
+    if (factBlock.Len() == 0) return false;
+    bool dropped = false;
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op != OP_ADDCHK && inst.Op != OP_SUBCHK) continue;
+            EOp x = m.Op(inst.FirstOp);
+            if (x.Kind != OK_VALUE || !IsOne(m, inst.FirstOp + 1)) continue;
+            bool inc = inst.Op == OP_ADDCHK;
+            for (usize k = 0; k < factBlock.Len(); k++) {
+                if (factValue.Get(k) != x.Ref || factInc.Get(k) != inc) continue;
+                if (!dom.Has(b, factBlock.Get(k))) continue;
+                if (inc) inst.Op = OP_ADDW;
+                else inst.Op = OP_SUBW;
+                m.Insts.Set(i as usize, inst);
+                dropped = true;
+                break;
+            }
+        }
+    }
+    return dropped;
+}

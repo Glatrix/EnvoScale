@@ -65,15 +65,20 @@ void PutBytes(ref string s, usize at, u64 v, usize n) {
     }
 }
 
+// Asm.Idx when a memory operand has no index register.
+public const u8 NO_INDEX = 0xFF;
+
 public struct Asm {
     string Code;
     string Data;
     List<u64> Labels;   // per label: (in data << 63) | offset, or UNBOUND
     List<Fixup> Fixups;
     bool Short;         // -O2: memory operands with no or an 8-bit displacement where they fit
+    u8 Idx;             // -O2: the next memory operand's index register, or NO_INDEX
+    u8 Scale;           // its scale, as a shift (0-3)
 
     public static Asm New() {
-        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New(), Short = false };
+        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New(), Short = false, Idx = NO_INDEX, Scale = 0 };
         a.Labels.Push(UNBOUND);     // label 0: none
         return a;
     }
@@ -179,6 +184,7 @@ public struct Asm {
         u8 rex = 0x40;
         if (w) rex = rex | 8;
         if (reg >= 8) rex = rex | 4;
+        if (this.Idx != NO_INDEX && this.Idx >= 8) rex = rex | 2;
         if (rm >= 8) rex = rex | 1;
         if (rex != 0x40 || (byteReg && reg >= 4 && reg < 8)) this.B(rex);
     }
@@ -188,6 +194,23 @@ public struct Asm {
 
     // ModRM (+ SIB) + disp32 for [base + disp].
     void ModMem(ref this, u8 reg, u8 rb, i32 disp) {
+        if (this.Idx != NO_INDEX) {
+            // [rb + Idx << Scale + disp]: ModRM's rm is 100, and a SIB byte follows
+            u8 sib = this.Scale << 6 | (this.Idx & 7) << 3 | rb & 7;
+            if (disp == 0 && rb & 7 != RBP) {
+                this.B((reg & 7) << 3 | 4);
+                this.B(sib);
+            } else if (disp >= -128 && disp <= 127) {
+                this.B(0x40 | (reg & 7) << 3 | 4);
+                this.B(sib);
+                this.B((disp as u32 & 0xFF) as u8);
+            } else {
+                this.B(0x80 | (reg & 7) << 3 | 4);
+                this.B(sib);
+                this.U32(disp as u32);
+            }
+            return;
+        }
         if (this.Short && disp == 0 && rb & 7 != RBP) {
             this.B((reg & 7) << 3 | rb & 7);
             if (rb & 7 == RSP) this.B(0x24);

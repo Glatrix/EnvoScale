@@ -95,7 +95,9 @@ public struct FileSystem {
 }
 
 impl IFileSystem for FileSystem {
-    Result<string, IoError> Read(ref this, str path) {
+    Result<string, IoError> Read(ref this, str path) => this.ReadUpTo(path, 0xFFFFFFFFFFFFFFFF);
+
+    Result<string, IoError> ReadUpTo(ref this, str path, usize max) {
         u32 kind = Kind(path);
         if (kind == S_IFDIR) return Err(IoError.Invalid);
         i32 fd = open(path, 0);
@@ -106,15 +108,17 @@ impl IFileSystem for FileSystem {
         }
         string s = string.New();
         u8[4096] buf;
-        while (true) {
+        while (s.Len() < max) {
+            usize want = 4096;
+            if (max - s.Len() < want) want = max - s.Len();
             isize n = 0;
-            unsafe { n = read(fd, &buf[0], 4096); }
+            unsafe { n = read(fd, &buf[0], want); }
             if (n < 0) {
                 close(fd);
                 return Err(IoError.Other);
             }
             if (n == 0) break;
-            for (usize i = 0; i < n as usize; i++) s.AppendByte(buf[i]);
+            unsafe { s.Append(str_from(&buf[0], n as usize)); }
         }
         close(fd);
         return Ok(s);
@@ -1206,6 +1210,17 @@ impl IWindow for Window {
             this.Live = false;
         }
         return e;
+    }
+
+    Event Wait(ref this, u32 ms) {
+        Event e = this.Poll();
+        if (!e.Is(EventKind.None) || !this.Live) return e;
+        u8[8] pfd;          // struct pollfd: the X connection, events POLLIN
+        i64 fd = this.C.Handle();
+        for (usize i = 0; i < 4; i++) pfd[i] = (fd >> (8 * i as i64)) as u8;
+        pfd[4] = 1;
+        unsafe { sys.Poll(Ptr(&pfd[0]), 1, ms as i64); }
+        return this.Poll();
     }
 
     void Present(ref this, u8[] rgba, u32 width, u32 height) {

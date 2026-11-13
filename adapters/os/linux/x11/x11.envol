@@ -694,6 +694,9 @@ public struct Conn {
     // ---------------------------------------------------------------- events
 
     // The next event, without waiting; EventKind.None when there is none.
+    // The connection's socket, for waiting on it.
+    public i64 Handle(in this) => this.Fd;
+
     public Event Poll(ref this) {
         if (this.Queue.Len() == 0) {
             this.Fill(0);

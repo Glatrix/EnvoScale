@@ -26,8 +26,9 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **Parallel moves.** Branch arguments, call arguments and incoming parameters are moved
   as one parallel copy: a move goes once nothing still to be read lives in its
   destination, a value already in place is not moved, and a cycle goes through r11.
-- **Addressing.** A field address used only by the load or store right after it is not
-  computed: the access addresses `[base + offset]` itself. Memory operands use no
+- **Addressing.** A field or element address used only by the load or store right after
+  it is not computed: the access addresses `[base + offset]` or `[base + index * size]`
+  itself, and an element address that is kept is one `lea`. Memory operands use no
   displacement or an 8-bit one where it fits, so most loads and stores are 3 or 4 bytes.
 - **Arguments in registers.** Calls pass their first five arguments in rdi, rsi, r8, r9
   and r10 (the caller-saved registers, which a call overwrites anyway) and the rest on

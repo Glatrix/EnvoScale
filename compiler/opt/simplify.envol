@@ -692,5 +692,6 @@ public void Optimize(ref Module m) {
         SimplifyFunc(ref m, fi);
         if (ThreadFunc(ref m, fi)) SimplifyFunc(ref m, fi);
         HoistLoads(ref m, fi);
+        DropChecks(ref m, fi);
     }
 }

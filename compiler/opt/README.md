@@ -57,6 +57,14 @@ block outside the loop that branches unconditionally into its header). A loop ov
 `str` parameter then keeps its pointer and length in registers. EIR read from text or
 object files has no `Deref` bits, so it hoists nothing there.
 
+## `checks.envol`: overflow checks that cannot fail
+
+Below the true edge of `x < y`, `x + 1` cannot overflow, and below the true edge of
+`x > y` (or `x != 0` for an unsigned `x`), `x - 1` cannot; the checked add or subtract
+becomes a plain one. The edge's block must have the compare's branch as its only way in,
+so everything it dominates runs only when the compare held. A counting loop then runs
+without a check per step.
+
 ## `simplify.envol`: folding, copy propagation, dead code, CFG
 
 Per function, repeated until nothing changes (at most 8 rounds):

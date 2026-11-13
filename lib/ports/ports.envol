@@ -33,6 +33,9 @@ public interface IConsole {
 public interface IFileSystem {
     // The whole content of the file at path.
     Result<string, IoError> Read(ref this, str path);
+    // The first max bytes of the file at path (all of it if it is shorter). Asking for
+    // one byte more than a limit tells whether a file is over it without reading it all.
+    Result<string, IoError> ReadUpTo(ref this, str path, usize max);
     // Replaces the file at path with data, creating it if needed; its directory must
     // exist. Returns the number of bytes written.
     Result<usize, IoError> Write(ref this, str path, str data);
@@ -262,6 +265,10 @@ public interface IWindow {
     u32 Height(ref this);
     // The next event, without waiting; EventKind.None when there is none.
     Event Poll(ref this);
+    // The next event, waiting up to ms milliseconds for one when there is none yet;
+    // EventKind.None if none came. A program with nothing to draw calls this instead of
+    // Poll, so an idle window uses no CPU.
+    Event Wait(ref this, u32 ms);
     // Shows a frame: width x height pixels, RGBA, rows from the top.
     void Present(ref this, u8[] rgba, u32 width, u32 height);
     void SetTitle(ref this, str title);

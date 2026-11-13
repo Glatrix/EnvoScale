@@ -127,7 +127,9 @@ public struct FileSystem {
 }
 
 impl IFileSystem for FileSystem {
-    Result<string, IoError> Read(ref this, str path) {
+    Result<string, IoError> Read(ref this, str path) => this.ReadUpTo(path, 0xFFFFFFFFFFFFFFFF);
+
+    Result<string, IoError> ReadUpTo(ref this, str path, usize max) {
         i32 fd = open(path, 0);
         if (fd < 0) {
             // a folder cannot be opened either (ACCESS_DENIED too): look before deciding;
@@ -144,15 +146,17 @@ impl IFileSystem for FileSystem {
         }
         string s = string.New();
         u8[4096] buf;
-        while (true) {
+        while (s.Len() < max) {
+            usize want = 4096;
+            if (max - s.Len() < want) want = max - s.Len();
             isize n = 0;
-            unsafe { n = read(fd, &buf[0], 4096); }
+            unsafe { n = read(fd, &buf[0], want); }
             if (n < 0) {
                 close(fd);
                 return Err(IoError.Other);
             }
             if (n == 0) break;
-            for (usize i = 0; i < n as usize; i++) s.AppendByte(buf[i]);
+            unsafe { s.Append(str_from(&buf[0], n as usize)); }
         }
         close(fd);
         return Ok(s);
@@ -1443,18 +1447,32 @@ impl IClipboard for Clipboard {
     }
 }
 
-// A Win32 window (PLAN D45). Its window procedure is DefWindowProcW itself, so no call
-// comes back into EnvoL code: events are read from the message queue, a closed window is
-// one that no longer exists, and a new size is seen by asking for it.
+// A Win32 window (PLAN D45). Events are read from the message queue, so no call comes
+// back into EnvoL code. The window procedure is a few bytes of machine code (WindowProc):
+// it answers WM_PAINT by copying the last frame, which Present keeps in a DIB section, and
+// passes every other message to DefWindowProcW. So while Windows runs its own loop to
+// move or resize the window, the window still shows the program's last frame, and space a
+// resize adds is filled with that frame's background color.
 public struct Window {
     i64 Hwnd;
     u32 W;
     u32 H;
     bool Closed;        // the Close event was given
-    List<u8> Bgra;      // the frame, converted for GDI
     u32 High;           // a UTF-16 high surrogate waiting for its pair
+    i64 Dc;             // memory DC holding the frame's bitmap
+    i64 Bitmap;         // the DIB section
+    i64 Old;            // the DC's bitmap before ours
+    usize Bits;         // the DIB section's pixels, BGRA, rows from the top
+    u32 BW;
+    u32 BH;
+    usize Frame;        // *u64: Dc, BW, BH, which WindowProc reads (window extra bytes 0-7)
+    i64 Brush;          // the class background brush, the frame's background color
+    u32 BrushColor;
 
-    public static Window New() => new Window { Hwnd = 0, W = 0, H = 0, Closed = false, Bgra = List<u8>.New(), High = 0 };
+    public static Window New() => new Window {
+        Hwnd = 0, W = 0, H = 0, Closed = false, High = 0, Dc = 0, Bitmap = 0, Old = 0, Bits = 0,
+        BW = 0, BH = 0, Frame = 0, Brush = 0, BrushColor = 0xFFFFFFFF
+    };
 
     // The client area's size, from the system.
     void Measure(ref this, ref u32 w, ref u32 h) {
@@ -1463,6 +1481,141 @@ public struct Window {
         w = rc[8] as u32 | (rc[9] as u32) << 8 | (rc[10] as u32) << 16 | (rc[11] as u32) << 24;
         h = rc[12] as u32 | (rc[13] as u32) << 8 | (rc[14] as u32) << 16 | (rc[15] as u32) << 24;
     }
+
+    // A DIB section of w x h for the frame, selected into the memory DC.
+    bool Surface(ref this, u32 w, u32 h) {
+        if (this.Dc == 0) {
+            this.Dc = CallPointer(Gdi().CreateCompatibleDC, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            if (this.Dc == 0) return false;
+        }
+        u8[44] bmi;     // BITMAPINFO: a BITMAPINFOHEADER and no color table
+        Le32At(bmi[0..44], 0, 40);
+        Le32At(bmi[0..44], 4, w as u64);
+        Le32At(bmi[0..44], 8, (0 - h as i64) as u64);     // negative: rows from the top
+        bmi[12] = 1;        // planes
+        bmi[14] = 32;       // bits per pixel
+        u8[8] bits;
+        i64 bmp = 0;
+        unsafe { bmp = CallPointer(Gdi().CreateDIBSection, this.Dc, Ptr(&bmi[0]), 0, Ptr(&bits[0]), 0, 0, 0, 0, 0, 0, 0, 0); }
+        if (bmp == 0) return false;
+        i64 prev = CallPointer(Gdi().SelectObject, this.Dc, bmp, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        if (this.Bitmap == 0) this.Old = prev;
+        else CallPointer(Gdi().DeleteObject, this.Bitmap, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        this.Bitmap = bmp;
+        this.Bits = Get64(bits[0..8], 0) as usize;
+        this.BW = w;
+        this.BH = h;
+        unsafe {
+            *u64 rec = this.Frame as *u64;
+            rec[0] = this.Dc as u64;
+            rec[1] = w as u64;
+            rec[2] = h as u64;
+        }
+        return true;
+    }
+
+    // The class background (what a resize shows before the next frame): color, 0xBBGGRR.
+    void Background(ref this, u32 color) {
+        if (color == this.BrushColor) return;
+        i64 brush = CallPointer(Gdi().CreateSolidBrush, color as i64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        if (brush == 0) return;
+        CallPointer(Gdi().SetClassLongPtrW, this.Hwnd, -10, brush, 0, 0, 0, 0, 0, 0, 0, 0, 0);     // GCLP_HBRBACKGROUND
+        if (this.Brush != 0) CallPointer(Gdi().DeleteObject, this.Brush, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        this.Brush = brush;
+        this.BrushColor = color;
+    }
+}
+
+// Functions the window looks up once (they are not in the import table).
+struct GdiProcs {
+    i64 CreateCompatibleDC;
+    i64 CreateDIBSection;
+    i64 SelectObject;
+    i64 DeleteObject;
+    i64 DeleteDC;
+    i64 BitBlt;
+    i64 CreateSolidBrush;
+    i64 SetClassLongPtrW;
+    i64 SetWindowLongPtrW;
+    i64 MsgWaitForMultipleObjects;
+    i64 WndProc;            // WindowProc's code
+}
+
+static usize GdiTable = 0;
+
+GdiProcs Gdi() {
+    unsafe {
+        if (GdiTable != 0) return (GdiTable as *GdiProcs)[0];
+        *GdiProcs t = alloc(sizeof(GdiProcs)) as *GdiProcs;
+        t[0] = new GdiProcs {
+            CreateCompatibleDC = ProcAddress("GDI32.dll", "CreateCompatibleDC"),
+            CreateDIBSection = ProcAddress("GDI32.dll", "CreateDIBSection"),
+            SelectObject = ProcAddress("GDI32.dll", "SelectObject"),
+            DeleteObject = ProcAddress("GDI32.dll", "DeleteObject"),
+            DeleteDC = ProcAddress("GDI32.dll", "DeleteDC"),
+            BitBlt = ProcAddress("GDI32.dll", "BitBlt"),
+            CreateSolidBrush = ProcAddress("GDI32.dll", "CreateSolidBrush"),
+            SetClassLongPtrW = ProcAddress("USER32.dll", "SetClassLongPtrW"),
+            SetWindowLongPtrW = ProcAddress("USER32.dll", "SetWindowLongPtrW"),
+            MsgWaitForMultipleObjects = ProcAddress("USER32.dll", "MsgWaitForMultipleObjects"),
+            WndProc = 0
+        };
+        t[0].WndProc = MakeWindowProc();
+        GdiTable = t as usize;
+        return t[0];
+    }
+}
+
+// WindowProc, assembled (the scratch assembler's listing is in the comments of
+// MakeWindowProc). G, the table of the functions it calls, goes at bytes 27 and 190.
+const str WINDOW_PROC = "81FA0F0000000F85B00000005341544881ECA80000004889CB49BC000000000000000031D241FF5424204885C0747548898424980000004883380074674889D9488D54245041FF5424084889C131D24531C0488B8424980000004C8B48084C8B50104C895424204C8B104C8954242831C048894424304889442438B82000CC00488944244041FF5424184889D9488D54245041FF54241031C04881C4A8000000415C5BC34889D9BA0F0000004531C04531C94881C4A8000000415C5B48B80000000000000000FF20";
+
+// The window procedure, in executable memory of its own (written, then made read-only
+// and executable: never writable and executable at once). 0 if the system refuses.
+//
+//   cmp edx, WM_PAINT; jne default
+//   push rbx; push r12; sub rsp, 168; mov rbx, rcx; mov r12, G
+//   P = GetWindowLongPtrW(hwnd, 0); if P == 0 or P.dc == 0: default
+//   hdc = BeginPaint(hwnd, &ps); BitBlt(hdc, 0, 0, P.w, P.h, P.dc, 0, 0, SRCCOPY)
+//   EndPaint(hwnd, &ps); return 0
+//   default: jmp [G + 0] (DefWindowProcW)
+i64 MakeWindowProc() {
+    i64 def = ProcAddress("USER32.dll", "DefWindowProcW");
+    i64 begin = ProcAddress("USER32.dll", "BeginPaint");
+    i64 end = ProcAddress("USER32.dll", "EndPaint");
+    i64 blt = ProcAddress("GDI32.dll", "BitBlt");
+    i64 getLong = ProcAddress("USER32.dll", "GetWindowLongPtrW");
+    i64 valloc = ProcAddress("KERNEL32.dll", "VirtualAlloc");
+    i64 vprotect = ProcAddress("KERNEL32.dll", "VirtualProtect");
+    if (def == 0 || begin == 0 || end == 0 || blt == 0 || getLong == 0 || valloc == 0 || vprotect == 0) return def;
+    unsafe {
+        *u64 g = alloc(40) as *u64;
+        g[0] = def as u64;
+        g[1] = begin as u64;
+        g[2] = end as u64;
+        g[3] = blt as u64;
+        g[4] = getLong as u64;
+        usize n = WINDOW_PROC.Len / 2;
+        i64 mem = __wincallp(valloc, 0, 4096, 0x3000, 4, 0, 0, 0, 0, 0, 0, 0, 0);    // MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
+        if (mem == 0) return def;
+        *u8 code = mem as usize as *u8;
+        for (usize i = 0; i < n; i++) code[i] = HexByte(WINDOW_PROC, 2 * i);
+        for (usize k = 0; k < 8; k++) {
+            code[27 + k] = ((g as usize as u64) >> (8 * k as u64)) as u8;
+            code[190 + k] = ((g as usize as u64) >> (8 * k as u64)) as u8;
+        }
+        u8[8] old;
+        if (__wincallp(vprotect, mem, 4096, 0x20, Ptr(&old[0]), 0, 0, 0, 0, 0, 0, 0, 0) == 0) return def;    // PAGE_EXECUTE_READ
+        return mem;
+    }
+}
+
+u8 HexByte(str s, usize at) => (HexDigit(s[at]) << 4) | HexDigit(s[at + 1]);
+
+u8 HexDigit(u8 c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return c - 'a' + 10;
 }
 
 impl IWindow for Window {
@@ -1470,18 +1623,14 @@ impl IWindow for Window {
         if (this.Hwnd != 0) return false;
         Call(W_SETPROCESSDPIAWARE, 0, 0, 0, 0, 0, 0);
         i64 inst = Call(W_GETMODULEHANDLEW, 0, 0, 0, 0, 0, 0);
-        i64 user32 = 0;
-        i64 proc = 0;
-        unsafe {
-            user32 = Call(W_GETMODULEHANDLEW, Ptr(Wide("USER32.dll")), 0, 0, 0, 0, 0);
-            proc = Call(W_GETPROCADDRESS, user32, Ptr(CName("DefWindowProcW")), 0, 0, 0, 0);
-        }
+        i64 proc = Gdi().WndProc;
         if (proc == 0) return false;
-        *u8 className = Wide("EnvoWindow");
+        *u8 className = Wide("EnvoLWindow");
         u8[80] wc;      // WNDCLASSEXW
         Le32At(wc[0..80], 0, 80);
         Le32At(wc[0..80], 4, 3);        // CS_HREDRAW | CS_VREDRAW
         Le64At(wc[0..80], 8, proc as u64);
+        Le32At(wc[0..80], 20, 8);       // cbWndExtra: the frame record
         Le64At(wc[0..80], 24, inst as u64);
         Le64At(wc[0..80], 40, Call(W_LOADCURSORW, 0, 32512, 0, 0, 0, 0) as u64);      // IDC_ARROW
         unsafe {
@@ -1504,6 +1653,10 @@ impl IWindow for Window {
         if (hwnd == 0) return false;
         this.Hwnd = hwnd;
         this.Closed = false;
+        unsafe {
+            if (this.Frame == 0) this.Frame = alloc(24) as usize;
+            CallPointer(Gdi().SetWindowLongPtrW, hwnd, 0, this.Frame as i64, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
         u32 w = 0;
         u32 h = 0;
         this.Measure(ref w, ref h);
@@ -1579,32 +1732,33 @@ impl IWindow for Window {
         return Event.Nothing();
     }
 
+    // The next event, waiting up to ms milliseconds for input when there is none.
+    Event Wait(ref this, u32 ms) {
+        Event e = this.Poll();
+        if (!e.Is(EventKind.None) || this.Hwnd == 0) return e;
+        i64 wait = Gdi().MsgWaitForMultipleObjects;
+        if (wait != 0) CallPointer(wait, 0, 0, 0, ms as i64, 0x4FF, 0, 0, 0, 0, 0, 0, 0);    // QS_ALLINPUT
+        return this.Poll();
+    }
+
     void Present(ref this, u8[] rgba, u32 width, u32 height) {
         if (this.Hwnd == 0 || width == 0 || height == 0) return;
-        usize n = (width * height * 4) as usize;
-        if (rgba.Len < n) return;
-        if (this.Bgra.Len() != n) {
-            this.Bgra = List<u8>.New();
-            for (usize i = 0; i < n; i++) this.Bgra.Push(0);
+        usize n = (width as usize) * (height as usize);
+        if (rgba.Len < n * 4) return;
+        if ((width != this.BW || height != this.BH) && !this.Surface(width, height)) return;
+        // RGBA to the DIB's BGRA, a pixel at a time, opaque
+        unsafe {
+            *u32 src = &rgba[0] as *u32;
+            *u32 dst = this.Bits as *u32;
+            for (usize i = 0; i < n; i++) {
+                u32 v = src[i];
+                dst[i] = 0xFF000000 | (v & 0x0000FF00) | (v & 0xFF) << 16 | (v >> 16) & 0xFF;
+            }
         }
-        mut u8[] px = this.Bgra.AsMutSlice();
-        for (usize i = 0; i < n; i += 4) {
-            px[i] = rgba[i + 2];
-            px[i + 1] = rgba[i + 1];
-            px[i + 2] = rgba[i];
-            px[i + 3] = 255;
-        }
-        u8[44] bmi;     // BITMAPINFO: a BITMAPINFOHEADER and no color table
-        Le32At(bmi[0..44], 0, 40);
-        Le32At(bmi[0..44], 4, width as u64);
-        Le32At(bmi[0..44], 8, (0 - height as i64) as u64);     // negative: rows from the top
-        bmi[12] = 1;        // planes
-        bmi[14] = 32;       // bits per pixel
+        this.Background((rgba[0] as u32) | (rgba[1] as u32) << 8 | (rgba[2] as u32) << 16);
         i64 dc = Call(W_GETDC, this.Hwnd, 0, 0, 0, 0, 0);
         if (dc == 0) return;
-        unsafe {
-            __wincall12(W_SETDIBITSTODEVICE, dc, 0, 0, width as i64, height as i64, 0, 0, 0, height as i64, Ptr(&this.Bgra.AsMutSlice()[0]), Ptr(&bmi[0]), 0);
-        }
+        CallPointer(Gdi().BitBlt, dc, 0, 0, width as i64, height as i64, this.Dc, 0, 0, 0x00CC0020, 0, 0, 0);     // SRCCOPY
         Call(W_RELEASEDC, this.Hwnd, dc, 0, 0, 0, 0);
     }
 
@@ -1618,6 +1772,18 @@ impl IWindow for Window {
         Call(W_DESTROYWINDOW, this.Hwnd, 0, 0, 0, 0, 0);
         this.Closed = true;
         this.Hwnd = 0;
+        if (this.Dc != 0) {
+            if (this.Old != 0) CallPointer(Gdi().SelectObject, this.Dc, this.Old, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            if (this.Bitmap != 0) CallPointer(Gdi().DeleteObject, this.Bitmap, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            CallPointer(Gdi().DeleteDC, this.Dc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        if (this.Brush != 0) CallPointer(Gdi().DeleteObject, this.Brush, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        this.Dc = 0;
+        this.Bitmap = 0;
+        this.Old = 0;
+        this.Brush = 0;
+        this.BW = 0;
+        this.BH = 0;
     }
 }
 

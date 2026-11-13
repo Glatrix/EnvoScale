@@ -158,6 +158,14 @@ string Parent(str path) {
 }
 
 impl IFileSystem for FileSystem {
+    Result<string, IoError> ReadUpTo(ref this, str path, usize max) {
+        var r = this.Read(path);
+        if (r.IsErr()) return r;
+        string all = r.Unwrap();
+        if (all.Len() <= max) return Ok(all);
+        unsafe { return Ok(string.From(str_from(all.AsStr().Ptr, max))); }
+    }
+
     Result<string, IoError> Read(ref this, str path) {
         if (BadPath(path)) return Err(IoError.Invalid);
         string p = Clean(path);
@@ -1126,6 +1134,9 @@ impl IWindow for Window {
     u32 Height(ref this) {
         unsafe { return this.State[0].H; }
     }
+
+    // Nothing here can block: the next event, if any.
+    Event Wait(ref this, u32 ms) => this.Poll();
 
     Event Poll(ref this) {
         unsafe {

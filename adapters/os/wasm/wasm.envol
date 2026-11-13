@@ -96,7 +96,9 @@ public struct FileSystem {
 }
 
 impl IFileSystem for FileSystem {
-    Result<string, IoError> Read(ref this, str path) {
+    Result<string, IoError> Read(ref this, str path) => this.ReadUpTo(path, 0xFFFFFFFFFFFFFFFF);
+
+    Result<string, IoError> ReadUpTo(ref this, str path, usize max) {
         if (HasNul(path)) return Err(IoError.Invalid);
         i64 kind = __hostcall(H_STAT, StrPtr(path), path.Len as i64, 0, 0);
         if (kind == 0) return Err(IoError.NotFound);
@@ -105,11 +107,13 @@ impl IFileSystem for FileSystem {
         if (fd < 0) return Err(IoError.Denied);
         string s = string.New();
         u8[4096] buf;
-        while (true) {
+        while (s.Len() < max) {
+            usize want = 4096;
+            if (max - s.Len() < want) want = max - s.Len();
             isize n = 0;
-            unsafe { n = read(fd, &buf[0], 4096); }
+            unsafe { n = read(fd, &buf[0], want); }
             if (n <= 0) break;
-            for (usize i = 0; i < n as usize; i++) s.AppendByte(buf[i]);
+            unsafe { s.Append(str_from(&buf[0], n as usize)); }
         }
         close(fd);
         return Ok(s);
@@ -325,6 +329,9 @@ impl IWindow for Window {
     bool IsOpen(ref this) => this.Live;
     u32 Width(ref this) => this.W;
     u32 Height(ref this) => this.H;
+
+    // Nothing here can block: the next event, if any.
+    Event Wait(ref this, u32 ms) => this.Poll();
 
     Event Poll(ref this) {
         if (!this.Live) return Event.Nothing();

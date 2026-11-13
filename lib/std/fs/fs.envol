@@ -11,6 +11,12 @@ public Result<string, IoError> ReadText(str path) {
     return fs.Read(path);
 }
 
+// The first max bytes of the file at path, or all of it if it is shorter.
+public Result<string, IoError> ReadPrefix(str path, usize max) {
+    var fs = platform.FileSystem();
+    return fs.ReadUpTo(path, max);
+}
+
 public Result<usize, IoError> WriteText(str path, str text) {
     var fs = platform.FileSystem();
     return fs.Write(path, text);

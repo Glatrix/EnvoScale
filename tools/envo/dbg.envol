@@ -11,7 +11,7 @@ use envo.vm;
 i32 CmdEnvoDbg(usize from) {
     BuildOpts o = new BuildOpts {
         Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
-        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false,
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false, Map = string.New(),
     };
     usize i = from;
     while (i < env.ArgCount()) {
