@@ -1,0 +1,2 @@
+square: 16
+triangle: 21

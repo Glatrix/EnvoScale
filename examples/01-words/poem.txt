@@ -1,0 +1,2 @@
+The compiler reads the file, the compiler checks the file,
+and the program it writes is small, and the program is fast.

@@ -53,6 +53,12 @@ public str ByteSlice(str s, usize a, usize b) {
     }
 }
 
+// The bytes of s, as a view of them (no copy): for hashing, signing and writing text
+// where bytes are wanted.
+public u8[] Bytes(str s) from s {
+    unsafe { return slice_from(s.Ptr, s.Len); }
+}
+
 // Does needle occur in s at byte offset at? (Compares bytes: at need not be a character
 // boundary.)
 public bool MatchesAt(str s, usize at, str needle) {

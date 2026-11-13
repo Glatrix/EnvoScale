@@ -1,0 +1,7 @@
+#eon 1
+package {
+    name    = "json"
+    version = "0.1.0"
+}
+dependencies {
+}

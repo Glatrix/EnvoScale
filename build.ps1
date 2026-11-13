@@ -464,6 +464,23 @@ function Invoke-Test {
         $nfail = [int]$m.Groups[2].Value
         if ($nfail -gt 0 -or $r.Code -ne 0) { Bad 'envo test' (Normalize $r.Out).Trim(); $script:failed += [Math]::Max(0, $nfail - 1) }
     }
+    # The examples: each runs, as a script and natively, and prints its output.txt
+    Say 'examples: each one, as a script and natively, against its output.txt'
+    $envoExe = Join-Path $Root 'build\envo\envo.exe'
+    foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root 'examples') -Directory | Sort-Object Name) {
+        $want = Join-Path $d.FullName 'output.txt'
+        if (-not (Test-Path -LiteralPath $want)) { continue }
+        $expected = Normalize ([IO.File]::ReadAllText($want, $Utf8))
+        $extra = @()
+        $argsFile = Join-Path $d.FullName 'run.args'
+        if (Test-Path -LiteralPath $argsFile) { $extra = @(([IO.File]::ReadAllText($argsFile)).Trim() -split '\s+') }
+        foreach ($mode in @('script', 'native')) {
+            if ($mode -eq 'script') { $r = Invoke-Tool $envoExe (@('run') + $extra + @('.')) $d.FullName }
+            else { $r = Invoke-Tool $envoExe @('run', '--native', '.') $d.FullName }
+            if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass "example $($d.Name) ($mode)" }
+            else { Bad "example $($d.Name) ($mode)" "exit $($r.Code): $($r.Err.Trim())" }
+        }
+    }
     # The script runtime (PLAN D35): every spec run program, and every multi-file one, runs
     # in the VM (`envo run -A`) with the output, exit code and panic it has natively.
     Say 'script runtime: tests/spec/core-run, s1-run, s2-run and the multi-file programs in the VM'

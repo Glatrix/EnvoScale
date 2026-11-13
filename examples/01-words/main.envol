@@ -1,24 +1,20 @@
-// Counts the words of a text file: std.fs reads it, alloc.map counts the words, and
-// std.io prints the result. Run it on itself, or name a file:
-//     envoc build --lib <repo> main.envol -o words && words notes.txt
 use std.fs;
-use std.io;
 use std.env;
 use alloc.map.{Map};
 use alloc.text;
 use core.text as ct;
 
-str path = "main.envol";
+str path = "poem.txt";
 if (env.ArgCount() > 1) path = env.Arg(1);
-Result<string, ports.IoError> read = fs.ReadText(path);
+var read = fs.ReadText(path);
 if (read.IsErr()) {
-    io.Error("cannot read the file");
+    print("cannot read the file");
     return 1;
 }
 string content = read.Unwrap();
 str all = content.AsStr();
 
-// words are runs of letters and digits
+// a word is a run of letters and digits
 Map<str, u64> counts = Map<str, u64>.New();
 u64 total = 0;
 usize i = 0;
@@ -37,7 +33,7 @@ str best = "";
 u64 most = 0;
 foreach (var w in counts.Keys().AsSlice()) {
     u64 n = counts.GetOr(w, 0);
-    if (n > most) {
+    if (n > most || (n == most && ct.Compare(w, best) < 0)) {
         most = n;
         best = w;
     }
@@ -46,9 +42,7 @@ foreach (var w in counts.Keys().AsSlice()) {
 string line = text.Uint(total);
 line.Append(" words, ");
 line.Append(text.Uint(counts.Len() as u64));
-line.Append(" different; the most common is `");
+line.Append(" different; the most common is \"");
 line.Append(best);
-line.Append("` (");
-line.Append(text.Uint(most));
-line.Append(" times)");
-io.Print(line);
+line.Append("\"");
+print(line.AsStr());

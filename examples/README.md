@@ -1,17 +1,13 @@
-# `examples/`
+# Examples
 
-Small, complete programs, one per domain. Each folder has a `main.envol`, an `envo.envon`
-manifest, and a README saying what it shows and from which milestone it runs.
+Small programs, one idea each. Each folder is a package: `cd` into it and run `envo run .`;
+CI runs every one, as a script and natively, and checks its output against `output.txt`.
 
-| Example | Shows | Runs from |
-|---|---|---|
-| [`00-hello`](00-hello/README.md) | The one-line console program | M1 |
-| [`01-files`](01-files/README.md) | Counting words in a file with `std.fs`, `alloc.map` and `std.io` | M4 |
-| `02-cli` | Argument parsing with `envo.cli` | M8 |
-| `03-window` | A desktop window with `envo.ui` | M8 |
-| `04-site` | A Lumen website | M9 |
-| `05-3d` | A spinning cube | M11 |
-| `06-ai` | Local inference | M12 |
-
-Only examples that exist are linked. New examples are added when the feature they show
-works, never before.
+| | |
+|---|---|
+| [`00-hello`](00-hello) | The smallest program: one line, no `main` needed. |
+| [`01-words`](01-words) | Reads a file and counts its words: `std.fs`, a hash map, and string building. |
+| [`02-shapes`](02-shapes) | Enums with data, `match` as an expression, a struct with a method, and `foreach`. |
+| [`03-generics`](03-generics) | An interface, two structs that implement it, and a generic function constrained by it. |
+| [`04-json`](04-json) | Parses a JSON document, reads a field, changes it, and writes it back. |
+| [`05-crypto`](05-crypto) | A SHA-256 digest, and an Ed25519 signature that catches a changed message. |

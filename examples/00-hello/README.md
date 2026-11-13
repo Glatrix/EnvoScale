@@ -1,30 +1,12 @@
-# 00-hello
+# hello
 
-> **Status:** Compiles and runs with every stage: `envoc0` (M1), `envoc1` (M2) and
-> `envoc` (M3). Runs as a script from M6.
+The smallest program: one line, no `main` needed.
 
-The smallest complete Envol program:
-
-```envo
-print("Hello, World!")
+```cs
+print("Hello, World!");
 ```
 
-It is a valid program in both compiled and script mode: top-level statements are allowed
-in the entry file, `print` comes from the implicit prelude, and no semicolon is needed at
-the end of the file. It is also valid **Envo-Core**, which makes it the first program
-Stage 0 will compile.
-
-## Try it today
-
-```sh
-build/stage2/envoc build examples/00-hello/main.envol -o hello && ./hello
 ```
-
-## When the toolchain exists
-
-```sh
-envo run examples/00-hello/main.envol     # script mode (M6)
-envo build examples/00-hello             # native executable (M5)
+$ envo run .
+Hello, World!
 ```
-
-`envo.envon` is the package manifest (format: [`docs/spec/eon.md`](../../docs/spec/eon.md)).

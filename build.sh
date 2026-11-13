@@ -477,6 +477,27 @@ do_test() {
             if [ "$nf" -gt 1 ]; then failed=$((failed + nf - 1)); fi
         fi
     fi
+    # The examples: each runs, as a script and natively, and prints its output.txt
+    # (run.args: what the script needs allowed)
+    say 'examples: each one, as a script and natively, against its output.txt'
+    for d in "$ROOT"/examples/*/; do
+        [ -f "$d/output.txt" ] || continue
+        extra=$(tr -d '\r' < "$d/run.args" 2>/dev/null || true)
+        for mode in script native; do
+            set +e
+            if [ "$mode" = script ]; then
+                # shellcheck disable=SC2086
+                (cd "$d" && "$envo" run $extra .) > "$TMP/out" 2> "$TMP/err"
+            else
+                (cd "$d" && "$envo" run --native .) > "$TMP/out" 2> "$TMP/err"
+            fi
+            rc=$?
+            set -e
+            tr -d '\r' < "$TMP/out" > "$TMP/actual"
+            if [ "$rc" -eq 0 ] && cmp -s "$TMP/actual" "$d/output.txt"; then pass
+            else bad "example $(basename "$d") ($mode)" "exit $rc: $(head -c 300 "$TMP/err")"; diff "$d/output.txt" "$TMP/actual" | head -n 5 || true; fi
+        done
+    done
     # The script runtime (PLAN D35): every spec run program, and every multi-file one, runs
     # in the VM (`envo run -A`) with the output, exit code and panic it has natively.
     say 'script runtime: tests/spec/core-run, s1-run, s2-run and the multi-file programs in the VM'

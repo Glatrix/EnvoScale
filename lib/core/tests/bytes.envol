@@ -1,0 +1,14 @@
+// core.text.Bytes: a str's bytes as a u8[] view, without a copy.
+// expect: 3 bytes, the last 33
+// expect: empty 0
+use core.text as ct;
+use alloc.text;
+
+u8[] b = ct.Bytes("hi!");
+string s = string.From(text.Uint(b.Len as u64).AsStr());
+s.Append(" bytes, the last ");
+s.Append(text.Uint(b[2] as u64).AsStr());
+print(s.AsStr());
+string e = string.From("empty ");
+e.Append(text.Uint(ct.Bytes("").Len as u64).AsStr());
+print(e.AsStr());
