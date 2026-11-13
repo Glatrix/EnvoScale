@@ -193,6 +193,11 @@ public const u32 KEY_DELETE = 46;
 public const u32 KEY_0 = 48;           // to KEY_0 + 9
 public const u32 KEY_A = 65;           // to KEY_A + 25
 public const u32 KEY_F1 = 112;         // to KEY_F1 + 11
+public const u32 KEY_EQUAL = 187;       // = and +, beside Backspace on most layouts
+public const u32 KEY_COMMA = 188;
+public const u32 KEY_MINUS = 189;
+public const u32 KEY_PERIOD = 190;
+public const u32 KEY_SLASH = 191;
 
 // Modifier keys held during an event (Event.Mods).
 public const u32 MOD_SHIFT = 1;

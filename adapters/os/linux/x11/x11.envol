@@ -854,6 +854,11 @@ u32 KeyCode(u32 sym) {
     if (sym >= 'A' as u32 && sym <= 'Z' as u32) return ports.KEY_A + sym - 'A' as u32;
     if (sym >= '0' as u32 && sym <= '9' as u32) return ports.KEY_0 + sym - '0' as u32;
     if (sym == ' ' as u32) return ports.KEY_SPACE;
+    if (sym == '=' as u32 || sym == '+' as u32) return ports.KEY_EQUAL;
+    if (sym == ',' as u32 || sym == '<' as u32) return ports.KEY_COMMA;
+    if (sym == '-' as u32 || sym == '_' as u32) return ports.KEY_MINUS;
+    if (sym == '.' as u32 || sym == '>' as u32) return ports.KEY_PERIOD;
+    if (sym == '/' as u32 || sym == '?' as u32) return ports.KEY_SLASH;
     if (sym >= 0xFFBE && sym <= 0xFFC9) return ports.KEY_F1 + sym - 0xFFBE;
     if (sym == 0xFF08) return ports.KEY_BACKSPACE;
     if (sym == 0xFF09 || sym == 0xFE20) return ports.KEY_TAB;          // Tab, ISO_Left_Tab
