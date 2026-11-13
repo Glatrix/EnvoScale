@@ -66,5 +66,6 @@ The compiler compiles itself. The first compiler comes from
 
 ## License
 
-Free for noncommercial use under the PolyForm Noncommercial License 1.0.0. Companies need a
-commercial license ([licensing](https://github.com/envoscale/EnvoScale/blob/main/legal/licensing.md)).
+Apache-2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Free for any use, including
+commercial. The names and the logo are covered by the
+[trademark policy](https://github.com/envoscale/EnvoScale/blob/main/legal/trademarks.md).

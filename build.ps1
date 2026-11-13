@@ -866,7 +866,7 @@ function Invoke-Check {
     $problems = New-Object System.Collections.Generic.List[string]
 
     foreach ($f in @('README.md', 'LICENSE', 'CONTRIBUTING.md', 'build.sh', 'build.ps1', 'spec/README.md', 'spec/errors.md',
-                     'LICENSES/PolyForm-Noncommercial-1.0.0.md', 'LICENSES/LicenseRef-EnvoScale-Commercial.md')) {
+                     'NOTICE')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $f))) { $problems.Add("missing file: $f") }
     }
 
@@ -895,8 +895,8 @@ function Invoke-Dist {
     $top = Join-Path $dist "envoscale-$v"
     New-Item -ItemType Directory -Force (Join-Path $top 'bin') | Out-Null
     foreach ($f in @('build\envo\envo', 'build\envo\envo.exe', 'build\envoc\envoc', 'build\envoc\envoc.exe')) { Copy-Item (Join-Path $Root $f) (Join-Path $top 'bin') }
-    foreach ($d in @('lib', 'adapters', 'spec', 'LICENSES')) { Copy-Item -Recurse (Join-Path $Root $d) (Join-Path $top $d) }
-    foreach ($f in @('LICENSE', 'README.md')) { Copy-Item (Join-Path $Root $f) $top }
+    foreach ($d in @('lib', 'adapters', 'spec')) { Copy-Item -Recurse (Join-Path $Root $d) (Join-Path $top $d) }
+    foreach ($f in @('LICENSE', 'NOTICE', 'README.md')) { Copy-Item (Join-Path $Root $f) $top }
     $env:SOURCE_DATE_EPOCH = '0'
     $r = Invoke-Tool (Join-Path $Root 'build\envo\envo.exe') @('archive', "envoscale-$v", "envoscale-$v.tar") $dist
     Remove-Item Env:SOURCE_DATE_EPOCH

@@ -6,7 +6,7 @@ workspace {
     name    = "envolang"
     version = "0.0.1"
     edition = "2027"
-    license = "PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial"
+    license = "Apache-2.0"
 
     // Packages built as part of the workspace. Each member has its own envo.envon.
     members = [

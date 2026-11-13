@@ -4,10 +4,10 @@ Thanks for helping. A few rules keep the project in good shape.
 
 ## Before you start
 
-EnvoScale is dual-licensed (free for noncommercial use, paid for companies; see
-[licensing](https://github.com/envoscale/EnvoScale/blob/main/legal/licensing.md)). Contributions are accepted under the
-[Contributor License Agreement](https://github.com/envoscale/EnvoScale/blob/main/legal/cla.md): say in your first pull request that you
-agree to it. Pull requests without that are not merged.
+EnvoL is licensed under Apache-2.0, and contributions are accepted under the same license,
+with the [Contributor License Agreement](https://github.com/envoscale/EnvoScale/blob/main/legal/cla.md):
+say in your first pull request that you agree to it. Pull requests without that are not
+merged.
 
 ## Rules
 

@@ -873,7 +873,7 @@ do_check() {
     problem() { printf 'check: %s\n' "$*" >&2; problems=$((problems + 1)); }
 
     for f in README.md LICENSE CONTRIBUTING.md build.sh build.ps1 spec/README.md spec/errors.md \
-             LICENSES/PolyForm-Noncommercial-1.0.0.md LICENSES/LicenseRef-EnvoScale-Commercial.md; do
+             NOTICE; do
         [ -f "$ROOT/$f" ] || problem "missing file: $f"
     done
 
@@ -908,7 +908,7 @@ do_compare() {
 
 # ------------------------------------------------------------------- dist
 # dist: the release archive (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md): build/dist/envoscale-<v>.tar
-# with bin/ (envo and envoc for both OSes), lib/, adapters/, spec/ and the licenses, packed
+# with bin/ (envo and envoc for both OSes), lib/, adapters/, spec/, LICENSE and NOTICE, packed
 # reproducibly by `envo archive`, and SHA256SUMS. Signing it is the release manager's step
 # (`envo sign`), with the project's key.
 # provenance <version> <sha256> <command>: an in-toto statement (SLSA provenance v1) of how
@@ -946,8 +946,8 @@ do_dist() {
     rm -rf "$dist"
     mkdir -p "$dist/envoscale-$v/bin"
     cp "$ROOT/build/envo/envo" "$ROOT/build/envo/envo.exe" "$BUILD2/envoc" "$BUILD2/envoc.exe" "$dist/envoscale-$v/bin/"
-    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/spec" "$ROOT/LICENSES" "$dist/envoscale-$v/"
-    cp "$ROOT/LICENSE" "$ROOT/README.md" "$dist/envoscale-$v/"
+    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/spec" "$dist/envoscale-$v/"
+    cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/README.md" "$dist/envoscale-$v/"
     (cd "$dist" && SOURCE_DATE_EPOCH=0 "$ROOT/build/envo/envo$(host_suffix)" archive "envoscale-$v" "envoscale-$v.tar") || fail "envo archive failed"
     (cd "$dist" && printf '%s  %s\n' "$(sha256 "envoscale-$v.tar")" "envoscale-$v.tar" > SHA256SUMS)
     provenance "$v" "$(sha256 "$dist/envoscale-$v.tar")" "build.sh dist" > "$dist/envoscale-$v.provenance.json"

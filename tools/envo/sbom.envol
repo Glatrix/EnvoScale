@@ -17,7 +17,7 @@ use envo.crypto;
 use envoc.eir;
 use envoc.diag;
 
-const str ENVOSCALE_LICENSE = "PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial";
+const str ENVOSCALE_LICENSE = "Apache-2.0";
 
 // Builds the program in p and writes its SBOM; gives the build's exit code.
 i32 BuildWithSbom(in Plan p, in BuildOpts o, str home, in List<Dep> deps) {
@@ -154,13 +154,6 @@ string SbomFor(in Plan p, in Sources src, str image, in List<Dep> deps) {
     }
     doc.Set("packages", pkgs);
     doc.Set("relationships", rels);
-    json.Value lic = json.Value.NewObject();
-    lic.Set("licenseId", JStr("LicenseRef-EnvoScale-Commercial"));
-    lic.Set("name", JStr("EnvoScale Commercial License"));
-    lic.Set("extractedText", JStr("The EnvoScale commercial license: see LICENSING.md in the EnvoScale distribution."));
-    json.Value lics = json.Value.NewArray();
-    lics.Push(lic);
-    doc.Set("hasExtractedLicensingInfos", lics);
     string text0 = json.Write(doc);
     text0.AppendByte('\n');
     return text0;

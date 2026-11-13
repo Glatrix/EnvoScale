@@ -14,8 +14,6 @@ you; the default is 90 days after the report or when a fix ships, whichever is s
 EnvoL is before 1.0. Until then, only the `main` branch is supported, and
 every subsystem is **Experimental** unless [the status page](https://github.com/envoscale/EnvoScale/blob/main/project/status.md) says otherwise.
 
-From 1.0, commercial licensees get long-term-support releases and advance notice of
-security fixes, as their license agreement specifies (see [licensing](https://github.com/envoscale/EnvoScale/blob/main/legal/licensing.md)).
 The public response process above applies to everyone.
 
 ## Cryptography audit status
