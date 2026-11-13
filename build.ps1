@@ -558,7 +558,7 @@ function Invoke-Test {
         $os = $openssl.Source
         [IO.File]::WriteAllText((Join-Path $tdir 'leaf.ext'), "subjectAltName=DNS:localhost,IP:127.0.0.1`nbasicConstraints=CA:FALSE`n", $Utf8)
         $steps = @(
-            @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '30', '-subj', '/CN=Envol Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign'),
+            @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '30', '-subj', '/CN=EnvoL Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign'),
             @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'other.key', '-out', 'other.pem', '-days', '30', '-subj', '/CN=Other CA'),
             @('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rsa.key', '-out', 'rsa.csr', '-subj', '/CN=localhost'),
             @('x509', '-req', '-in', 'rsa.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'rsa.pem', '-days', '30', '-sha256', '-extfile', 'leaf.ext'),

@@ -11,8 +11,8 @@ A panic is a bug.
 |---|---|---|
 | `json.envol` | `envo.json.Parse`, then `Write` | invalid UTF-8 after a number panicked (`lib/envo/json/tests/hostile.envol`) |
 | `eon.envol` | `envo.eon.Parse`, then `Write` | nothing in 3,000 runs |
-| `markdown.envol` | `envo.markdown.ToHtml` | an empty list item (`-` alone) indexed out of bounds; bytes that are not UTF-8 panicked (now replaced by U+FFFD) (`lib/envo/markdown/tests/hostile.envol`) |
-| `http.envol` | `envo.http.ParseRequest`, `ParseResponse` | bytes that are not UTF-8 in the head or body, a huge Content-Length and a huge chunk size panicked: a remote crash of `envo.web` servers (`lib/envo/http/tests/hostile.envol`) |
+| `markdown.envol` | `envoweb.markdown.ToHtml` | an empty list item (`-` alone) indexed out of bounds; bytes that are not UTF-8 panicked (now replaced by U+FFFD) (`EnvoWeb/markdown/tests/hostile.envol`) |
+| `http.envol` | `envo.http.ParseRequest`, `ParseResponse` | bytes that are not UTF-8 in the head or body, a huge Content-Length and a huge chunk size panicked: a remote crash of `envoweb` servers (`lib/envo/http/tests/hostile.envol`) |
 | `gguf.envol` | `envo.ai.gguf.File.Parse`, every tensor and key | nothing in 1,500 runs |
 | `tokenizer.envol` | `Tokenizer.Train`, `Encode`, `Decode` (must round trip) | bytes that are not UTF-8 panicked (`lib/envo/ai/tokenizer/tests/bytes.envol`) |
 

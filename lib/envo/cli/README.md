@@ -31,7 +31,7 @@ and reflection, which Envo-S1 does not have; it becomes sugar over this door.
   Flags as `--name value`, `--name=value` or `-n value`; `--` ends the flags.
 - `Table` (`Row("a|b|c")`, `Render`), `ProgressBar(done, total, width)`.
 
-Colors, prompts and spinners come with `envo.term` (M8.1).
+Colors, prompts and spinners come with `envoui.term` (M8.1).
 
 ## Ports used
 

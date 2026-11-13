@@ -6,7 +6,7 @@
 > EON files use the extension `.envon`. It was `.eon` until it turned out several formats
 > already use that one, among them another configuration language.
 
-EON is EnvoScale's data and configuration format: manifests, Lumen design tokens,
+EON is EnvoScale's data and configuration format: manifests, theme tokens,
 linker layouts, lockfiles. It is a **strict literal subset of EnvoL syntax**: an EON
 document contains only literals, arrays and blocks, so it can never run code.
 

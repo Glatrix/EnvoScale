@@ -22,4 +22,4 @@ Rules:
 - Every port has a reference adapter in `os/none` that passes the port's conformance suite
   in [`tests/conformance`](../tests/conformance).
 
-Bringing EnvoScale to a new platform: [docs/porting/CHECKLIST.md](https://github.com/envoscale/EnvoScale/blob/main/porting/CHECKLIST.md).
+Bringing EnvoScale to a new platform: [EnvoScale/porting/CHECKLIST.md](https://github.com/envoscale/EnvoScale/blob/main/porting/CHECKLIST.md).

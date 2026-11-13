@@ -148,7 +148,7 @@ public interface ITrust {
 // The terminal a program runs in (PLAN D43): its size, raw input and VT output. Output is
 // UTF-8 with VT escape sequences (colors, cursor moves), which every supported terminal
 // understands once the adapter has switched them on. Input arrives as bytes, keys as the
-// VT sequences terminals send (envo.term decodes them).
+// VT sequences terminals send (envoui.term decodes them).
 public interface ITerminal {
     // Is standard output a terminal (not a file or a pipe)?
     bool IsTerminal(ref this);
@@ -249,7 +249,7 @@ public interface IClipboard {
 }
 
 // A window on the desktop (PLAN D45): a title, a drawable area of pixels, and events.
-// The program draws into memory (envo.gfx) and presents whole frames.
+// The program draws into memory (envor.gfx) and presents whole frames.
 public interface IWindow {
     // Opens the window with a drawable area of width x height pixels (a system may make
     // a small window larger: Width and Height tell). False if this system cannot open

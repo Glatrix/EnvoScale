@@ -131,7 +131,7 @@ task without waiting for it, use `async { … }` or `spawn(…)`.
 *Rationale:* a prefix `await` that applied only to its nearest call would need
 parentheses at every step of a chain, and a postfix `.await` reads backwards. One `await`
 marking a whole expression keeps the prefix form and makes the example above mean what it
-reads as. (Decision D7 in `docs/PLAN.md`.)
+reads as. (Decision D7 in `EnvoScale/project/plan.md`.)
 
 ## 3.6 `match` and patterns
 

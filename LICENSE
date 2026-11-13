@@ -42,7 +42,7 @@ needs a commercial license. Evaluation licenses for businesses are available on
 request.
 
 The identifier LicenseRef-EnvoScale-Commercial refers to that agreement; see
-LICENSES/LicenseRef-EnvoScale-Commercial.md. docs/legal/licensing.md explains in
+LICENSES/LicenseRef-EnvoScale-Commercial.md. EnvoScale/legal/licensing.md explains in
 plain words who needs which license and how to obtain one.
 
 
@@ -50,14 +50,14 @@ plain words who needs which license and how to obtain one.
 -------------
 
 Neither license grants rights to the EnvoScale name or logos, except as
-docs/legal/trademarks.md allows.
+EnvoScale/legal/trademarks.md allows.
 
 
 4. Contributions
 ----------------
 
 Contributions are accepted only under the Contributor License Agreement in
-docs/legal/cla.md, which lets the licensor offer contributed work under both licenses
+EnvoScale/legal/cla.md, which lets the licensor offer contributed work under both licenses
 above.
 
 

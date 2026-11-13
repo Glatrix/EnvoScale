@@ -217,7 +217,7 @@ platform shim: `write(i32 fd, ptr, u64 len)`, `read(i32 fd, ptr, u64 n) -> i64`,
 `panic.msg(ptr, u64 len)` (prints `panic: ` and the message, then exits 101).
 
 Two **target intrinsics** exist only in the runtime's OS layer and only for their
-target (docs/architecture/stage1.md): `syscall(i64 n, i64 a1, …, i64 a6) -> i64` on Linux
+target (EnvoScale/architecture/stage1.md): `syscall(i64 n, i64 a1, …, i64 a6) -> i64` on Linux
 and `wincall(i64 k, i64 a1, …, i64 a10) -> i64` on Windows, which calls import *k* of the
 image's import address table; `wincall` may also take 12 arguments (`a1` … `a12`), for
 the few imports that need them (`CreateWindowExW`, `SetDIBitsToDevice`). On Windows,

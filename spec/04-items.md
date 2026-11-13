@@ -9,7 +9,7 @@ implementations and constants.
 ## 4.1 Files, modules and namespaces
 
 **[item.mod.1]** A **package** is a folder with an `envo.envon` manifest. Its **modules**
-are named by `snake_case` dotted paths (`envo.math`, `shapes.geometry`).
+are named by `snake_case` dotted paths (`envor.math`, `shapes.geometry`).
 
 **[item.mod.2]** A file declares its module with a file-scoped namespace as its first
 item: `namespace Shapes;`. Several files may share a namespace. A file without a
@@ -23,8 +23,8 @@ otherwise the exit code is 0. Only one file per program may have top-level state
 ## 4.2 Imports
 
 ```envo
-use envo.math;                 // `math.sqrt(…)`
-use envo.math.{sqrt, PI};      // `sqrt(…)`, `PI`
+use envor.math;                 // `math.sqrt(…)`
+use envor.math.{sqrt, PI};      // `sqrt(…)`, `PI`
 use envo.collections as col;   // `col.Map<…>`
 ```
 

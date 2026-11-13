@@ -969,7 +969,7 @@ struct TerminalState {
 }
 
 // A terminal of a given size that keeps what is written to it and reads from text given
-// to it: what envo.term's tests drive.
+// to it: what envoui.term's tests drive.
 public struct Terminal {
     *TerminalState State;
 

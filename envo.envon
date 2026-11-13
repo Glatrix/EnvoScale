@@ -1,6 +1,6 @@
 #eon 1
 // The EnvoScale workspace: `envo` commands run here treat the repository as one
-// workspace. Format: docs/spec/eon.md.
+// workspace. Format: spec/eon.md.
 
 workspace {
     name    = "envolang"

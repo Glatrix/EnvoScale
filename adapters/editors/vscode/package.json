@@ -1,7 +1,7 @@
 {
   "name": "envol",
-  "displayName": "Envol",
-  "description": "The Envol language: highlighting, diagnostics, completion, hover, go to definition, symbols and formatting through envo lsp.",
+  "displayName": "EnvoL",
+  "description": "The EnvoL language: highlighting, diagnostics, completion, hover, go to definition, symbols and formatting through envo lsp.",
   "version": "0.1.0",
   "publisher": "envolang",
   "license": "SEE LICENSE IN LICENSE",
@@ -25,7 +25,7 @@
       {
         "id": "envol",
         "aliases": [
-          "Envol",
+          "EnvoL",
           "envol"
         ],
         "extensions": [
@@ -42,7 +42,7 @@
       }
     ],
     "configuration": {
-      "title": "Envol",
+      "title": "EnvoL",
       "properties": {
         "envo.path": {
           "type": "string",
@@ -52,14 +52,14 @@
         "envo.trace": {
           "type": "boolean",
           "default": false,
-          "description": "Log the messages between the editor and envo lsp in the Envol output channel."
+          "description": "Log the messages between the editor and envo lsp in the EnvoL output channel."
         }
       }
     },
     "commands": [
       {
         "command": "envo.restart",
-        "title": "Envol: Restart the Language Server"
+        "title": "EnvoL: Restart the Language Server"
       }
     ]
   }

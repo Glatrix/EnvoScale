@@ -1,7 +1,7 @@
 # Envo-S1
 
 > **Status:** Draft, accepted for M2 (2026-11-11). Implemented by Stage 1 (`envoc1`,
-> milestone M2, increments 2.3–2.13 in [`docs/PLAN.md`](https://github.com/envoscale/EnvoScale/blob/main/project/plan.md) §5). Tests:
+> milestone M2, increments 2.3–2.13 in [`EnvoScale/project/plan.md`](https://github.com/envoscale/EnvoScale/blob/main/project/plan.md) §5). Tests:
 > `tests/spec/s1-*` (from M2.4).
 
 Envo-S1 is the language `envoc1` accepts: **Envo-Core plus what a compiler needs to be
