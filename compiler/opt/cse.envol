@@ -4,7 +4,8 @@
 // replaced by it. A load is replaced by an earlier load of the same address, or by the
 // value an earlier store wrote there, when no instruction that may write memory runs
 // between them: each block starts a new memory version unless its only predecessor ends
-// where it starts, and every store, copy, zero, call or intrinsic starts another. A
+// where it starts (or the function writes nothing at all), and every store, copy, zero,
+// call or intrinsic starts another. A
 // branch whose condition a dominating branch has already decided (the same compare, or
 // its opposite) becomes a plain branch. Field and element addresses get value numbers,
 // so loads through them match, but stay where they are: the backend folds each into the
@@ -190,6 +191,15 @@ bool CseFunc(ref Module m, u32 fi) {
     List<u32> exitVer = List<u32>.New();
     for (u32 b = 0; b < nb; b++) exitVer.Push(NONE);
     u32 versions = 0;
+    // a function that writes no memory has one version throughout
+    bool writes = false;
+    for (u32 b = 0; b < nb && !writes; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            if (MayWrite(m.Inst(i).Op)) writes = true;
+        }
+    }
+    if (!writes) versions = 1;
     // decided conditions: (block from which on it holds, compare form, value)
     List<u32> factBlock = List<u32>.New();
     List<u16> factOp = List<u16>.New();
@@ -255,7 +265,9 @@ bool CseFunc(ref Module m, u32 fi) {
                 }
             }
         }
-        if (ver == NONE) {
+        if (!writes) {
+            ver = 1;
+        } else if (ver == NONE) {
             versions++;
             ver = versions;
         }

@@ -1323,9 +1323,34 @@ struct Gen {
             if (this.Saved.Get(r as usize)) this.A.Push(AllocReg(r));
         }
         this.ReserveFrame(frame);
-        if (slotArea > 0 && this.Opt && slotArea <= SMALL_BYTES) {
-            this.A.Alu(ALU_XOR, RAX, RAX);
-            this.ZeroBytes(RBP, (0 -% (save + valueArea + slotArea)) as i32, slotArea);
+        if (slotArea > 0 && this.Opt) {
+            // only the slots something may read before writing all of them (frame.envol)
+            List<bool> zero = SlotsToZero(m, fi);
+            bool cleared = false;
+            bool kept = false;
+            for (u32 i = entry.FirstInst; i < entry.FirstInst + entry.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                if (inst.Op != OP_SLOT) break;
+                if (!zero.Get((inst.Result - f.FirstValue) as usize)) continue;
+                u64 size = m.Ty(inst.Ty).Size as u64;
+                if (size == 0) continue;
+                if (!cleared) {
+                    this.A.Alu(ALU_XOR, RAX, RAX);
+                    cleared = true;
+                }
+                if (size <= SMALL_BYTES) {
+                    this.ZeroBytes(RBP, inst.Imm as i32, size);
+                } else {
+                    if (!kept && f.NParams > 0) {
+                        this.A.MovRR(R11, RDI);
+                        kept = true;
+                    }
+                    this.A.LeaRM(RDI, RBP, inst.Imm as i32);
+                    this.A.MovRI(RCX, size);
+                    this.A.RepStosb();
+                }
+            }
+            if (kept) this.A.MovRR(RDI, R11);
         } else if (slotArea > 0) {
             bool keep = this.Opt && f.NParams > 0;
             if (keep) this.A.MovRR(R11, RDI);

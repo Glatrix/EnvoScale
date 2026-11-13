@@ -55,3 +55,8 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **Small copies and zeroing.** `copy` and `zero` of a constant size up to 256 bytes,
   and the zeroing of a frame's slots, become 8/4/2/1-byte moves instead of
   `rep movsb`/`rep stosb`.
+- **Slots that need no zeroing.** A slot every path writes in full before reading it (or
+  passing its address on) is not zeroed on entry (`frame.envol`). Stores, loads, copies
+  and zeroing through the slot and field addresses inside it are followed byte by byte
+  for slots of up to 64 bytes; a call whose aggregate result comes back through the slot
+  (lowering marks it with `Imm` 1) writes all of it.

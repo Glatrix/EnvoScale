@@ -577,6 +577,9 @@ impl Lower {
         EInst inst = NoInst(OP_CALL);
         inst.Block = this.Block;
         inst.FirstOp = this.M.Ops.Len() as u32;
+        // Imm 1: the first argument is the storage of the aggregate result, which the
+        // callee writes whole and does not read (x64 frame.envol relies on it)
+        if (retTmp != 0) inst.Imm = 1;
         EOp g = OpNone();
         g.Kind = OK_GLOBAL;
         g.Str = callee.Name;

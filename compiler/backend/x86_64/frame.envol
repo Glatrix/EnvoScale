@@ -1,0 +1,270 @@
+// -O2: which slots a function must zero on entry. A slot starts zeroed so nothing reads
+// memory no one wrote; one that every path writes in full before reading it, or before
+// its address goes anywhere else, needs no zeroing. Writes and reads through the slot's
+// own address and field addresses inside it are followed byte by byte for slots of up
+// to 64 bytes; a larger slot counts as written only by a `copy` or `zero` of all of it.
+// A call whose result comes back through a slot (lowering marks it with Imm 1) writes
+// all of that slot. Any other use of an address inside a slot (passing it to a call,
+// storing it, a branch argument) counts as reading all of it.
+namespace envoc.x64;
+
+use envoc.util;
+use envoc.eir;
+
+const u32 NOSLOT = 0xFFFFFFFF;
+const u64 ALLBYTES = 0xFFFFFFFFFFFFFFFF;
+
+// The bytes [off, off + n) of a slot as a mask (all of a slot over 64 bytes is ALLBYTES).
+u64 ByteRange(u64 off, u64 n) {
+    if (off >= 64 || n == 0) return 0;
+    u64 end = off + n;
+    if (end > 64) end = 64;
+    u64 hi = ALLBYTES;
+    if (end < 64) hi = ((1 as u64) << end) - 1;
+    u64 lo = ((1 as u64) << off) - 1;
+    return hi & ~lo;
+}
+
+// The whole of a slot of size bytes.
+u64 WholeSlot(u64 size) {
+    if (size >= 64) return ALLBYTES;
+    return ((1 as u64) << size) - 1;
+}
+
+// Operand o as a constant, if it is one.
+bool ConstSize(in Module m, u32 o, ref u64 n) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) {
+        n = op.Int;
+        return true;
+    }
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    if (d.Op != OP_CONST) return false;
+    n = d.Imm;
+    return true;
+}
+
+struct SlotFlow {
+    u32 First;              // the function's first value
+    List<u32> SlotOf;       // per value: the slot it points into, or NOSLOT
+    List<u64> Off;          // per value: where in it
+    List<u64> Size;         // per slot
+    List<u32> Value;        // per slot: its value (relative)
+    List<bool> Need;        // per slot: must be zeroed
+
+    // Reading [off, off + n) of slot s in state w (n 0: all of it).
+    void Read(ref this, in List<u64> w, u32 s, u64 off, u64 n, bool mark) {
+        u64 size = this.Size.Get(s as usize);
+        u64 want = WholeSlot(size);
+        if (n != 0 && size <= 64) want = ByteRange(off, n);
+        if (w.Get(s as usize) & want != want && mark) this.Need.Set(s as usize, true);
+    }
+
+    // Writing [off, off + n) of slot s into state w.
+    void Write(ref this, ref List<u64> w, u32 s, u64 off, u64 n) {
+        u64 size = this.Size.Get(s as usize);
+        if (size > 64) {
+            if (off == 0 && n >= size) w.Set(s as usize, ALLBYTES);
+            return;
+        }
+        w.Set(s as usize, w.Get(s as usize) | ByteRange(off, n));
+    }
+
+    // The slot value v points into, or NOSLOT.
+    u32 Of(in this, u32 v) {
+        u32 k = v - this.First;
+        if (k >= this.SlotOf.Len() as u32) return NOSLOT;
+        return this.SlotOf.Get(k as usize);
+    }
+
+    u64 OffOf(in this, u32 v) => this.Off.Get((v - this.First) as usize);
+
+    // Instruction i's effect on state w; record: mark the slots read too early.
+    void Step(ref this, in Module m, u32 i, ref List<u64> w, bool mark) {
+        EInst inst = m.Inst(i);
+        u16 op = inst.Op;
+        // reads and other uses first
+        for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+            EOp x = m.Op(o);
+            if (x.Kind == OK_TARGET) {
+                for (u32 a = 0; a < x.NArgs; a++) {
+                    u32 s = this.Of(m.Arg(x.Args + a));
+                    if (s != NOSLOT) this.Read(w, s, 0, 0, mark);
+                }
+                continue;
+            }
+            if (x.Kind != OK_VALUE) continue;
+            u32 s = this.Of(x.Ref);
+            if (s == NOSLOT) continue;
+            u32 at = o - inst.FirstOp;
+            u64 off = this.OffOf(x.Ref);
+            if (op == 44 && at == 0) continue;                  // fieldaddr: followed
+            if (op == 4) continue;                              // slot.end
+            if (op == 43 && at == 1) continue;                  // store's address: a write
+            if ((op == 47 || op == 48) && at == 0) continue;    // copy's or zero's destination
+            if (op == 52 && inst.Imm == 1 && at == 1 && off == 0) continue;     // a call's result storage
+            if (op == 42 && at == 0) {
+                this.Read(w, s, off, m.Ty(inst.Ty).Size as u64, mark);
+                continue;
+            }
+            if (op == 47 && at == 1) {
+                u64 n = 0;
+                if (ConstSize(m, inst.FirstOp + 2, ref n) && n > 0) this.Read(w, s, off, n, mark);
+                else this.Read(w, s, 0, 0, mark);
+                continue;
+            }
+            this.Read(w, s, 0, 0, mark);
+        }
+        // then writes
+        if (op == 43 && inst.NOps == 2) {
+            EOp a = m.Op(inst.FirstOp + 1);
+            if (a.Kind == OK_VALUE) {
+                u32 s = this.Of(a.Ref);
+                if (s != NOSLOT) this.Write(ref w, s, this.OffOf(a.Ref), m.Ty(inst.Ty).Size as u64);
+            }
+        } else if (op == 52 && inst.Imm == 1 && inst.NOps >= 2) {
+            // the callee writes its result whole
+            EOp a = m.Op(inst.FirstOp + 1);
+            if (a.Kind == OK_VALUE) {
+                u32 s = this.Of(a.Ref);
+                if (s != NOSLOT && this.OffOf(a.Ref) == 0) this.Write(ref w, s, 0, this.Size.Get(s as usize));
+            }
+        } else if ((op == 47 || op == 48) && inst.NOps >= 2) {
+            EOp a = m.Op(inst.FirstOp);
+            u64 n = 0;
+            u32 so = inst.FirstOp + 1;
+            if (op == 47) so = inst.FirstOp + 2;
+            if (a.Kind == OK_VALUE && ConstSize(m, so, ref n)) {
+                u32 s = this.Of(a.Ref);
+                if (s != NOSLOT) this.Write(ref w, s, this.OffOf(a.Ref), n);
+            }
+        }
+    }
+}
+
+// Per value of function fi: false for a slot that need not start zeroed (true otherwise).
+List<bool> SlotsToZero(in Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    u32 nb = f.NBlocks;
+    List<bool> out2 = List<bool>.New();
+    for (u32 k = 0; k < nv; k++) out2.Push(true);
+    if (nb == 0) return out2;
+    SlotFlow sf = new SlotFlow {
+        First = f.FirstValue, SlotOf = List<u32>.New(), Off = List<u64>.New(), Size = List<u64>.New(),
+        Value = List<u32>.New(), Need = List<bool>.New()
+    };
+    for (u32 k = 0; k < nv; k++) {
+        sf.SlotOf.Push(NOSLOT);
+        sf.Off.Push(0);
+    }
+    EBlock entry = m.Block(f.FirstBlock);
+    for (u32 i = entry.FirstInst; i < entry.FirstInst + entry.NInsts; i++) {
+        EInst inst = m.Inst(i);
+        if (inst.Op != OP_SLOT) continue;
+        u32 k = inst.Result - f.FirstValue;
+        sf.SlotOf.Set(k as usize, sf.Size.Len() as u32);
+        sf.Size.Push(m.Ty(inst.Ty).Size as u64);
+        sf.Value.Push(k);
+        sf.Need.Push(false);
+    }
+    u32 ns = sf.Size.Len() as u32;
+    if (ns == 0) return out2;
+    // field addresses inside slots (a chain settles in a few rounds)
+    bool grew = true;
+    u32 rounds = 0;
+    while (grew && rounds < 8) {
+        grew = false;
+        rounds++;
+        for (u32 b = 0; b < nb; b++) {
+            EBlock blk = m.Block(f.FirstBlock + b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                if (inst.Op != 44 || inst.Result == 0 || m.Op(inst.FirstOp).Kind != OK_VALUE) continue;
+                u32 bv = m.Op(inst.FirstOp).Ref;
+                u32 s = sf.Of(bv);
+                u32 r = inst.Result - f.FirstValue;
+                if (s == NOSLOT || sf.SlotOf.Get(r as usize) != NOSLOT) continue;
+                sf.SlotOf.Set(r as usize, s);
+                sf.Off.Set(r as usize, sf.OffOf(bv) + m.FieldOffset(inst.Ty, inst.Imm as u32));
+                grew = true;
+            }
+        }
+    }
+    // predecessors, each block's in one flat list
+    List<u32> pfirst = List<u32>.New();
+    for (u32 b = 0; b <= nb; b++) pfirst.Push(0);
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+            EOp x = m.Op(o);
+            if (x.Kind == OK_TARGET) pfirst.Set((x.Ref - f.FirstBlock + 1) as usize, pfirst.Get((x.Ref - f.FirstBlock + 1) as usize) + 1);
+        }
+    }
+    for (u32 b = 1; b <= nb; b++) pfirst.Set(b as usize, pfirst.Get(b as usize) + pfirst.Get((b - 1) as usize));
+    List<u32> plist = List<u32>.New();
+    List<u32> fill = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) fill.Push(pfirst.Get(b as usize));
+    for (u32 j = 0; j < pfirst.Get(nb as usize); j++) plist.Push(0);
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+            EOp x = m.Op(o);
+            if (x.Kind != OK_TARGET) continue;
+            u32 t = x.Ref - f.FirstBlock;
+            plist.Set(fill.Get(t as usize) as usize, b);
+            fill.Set(t as usize, fill.Get(t as usize) + 1);
+        }
+    }
+    // written bytes at each block's end; ALLBYTES until computed (the meet is AND)
+    List<u64> outs = List<u64>.New();
+    for (u32 k = 0; k < nb * ns; k++) outs.Push(ALLBYTES);
+    List<u64> w = List<u64>.New();
+    for (u32 s = 0; s < ns; s++) w.Push(0);
+    bool changed = true;
+    u32 guard = 0;
+    while (changed && guard < 64) {
+        changed = false;
+        guard++;
+        for (u32 b = 0; b < nb; b++) {
+            In(ref w, outs, pfirst, plist, b, ns);
+            EBlock blk = m.Block(f.FirstBlock + b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) sf.Step(m, i, ref w, false);
+            for (u32 s = 0; s < ns; s++) {
+                usize at = (b * ns + s) as usize;
+                if (outs.Get(at) != w.Get(s as usize)) {
+                    outs.Set(at, w.Get(s as usize));
+                    changed = true;
+                }
+            }
+        }
+    }
+    if (changed) return out2;       // did not settle: zero everything
+    for (u32 b = 0; b < nb; b++) {
+        In(ref w, outs, pfirst, plist, b, ns);
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) sf.Step(m, i, ref w, true);
+    }
+    for (u32 s = 0; s < ns; s++) out2.Set(sf.Value.Get(s as usize) as usize, sf.Need.Get(s as usize));
+    return out2;
+}
+
+// The bytes written on entry to block b: nothing at the entry block, else what every
+// predecessor has written by its end.
+void In(ref List<u64> w, in List<u64> outs, in List<u32> pfirst, in List<u32> plist, u32 b, u32 ns) {
+    for (u32 s = 0; s < ns; s++) {
+        u64 v = ALLBYTES;
+        if (b == 0) v = 0;
+        w.Set(s as usize, v);
+    }
+    if (b == 0) return;
+    for (u32 j = pfirst.Get(b as usize); j < pfirst.Get((b + 1) as usize); j++) {
+        u32 p = plist.Get(j as usize);
+        for (u32 s = 0; s < ns; s++) w.Set(s as usize, w.Get(s as usize) & outs.Get((p * ns + s) as usize));
+    }
+}
