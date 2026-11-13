@@ -642,6 +642,7 @@ struct Gen {
         ETy ty = m.Ty(t);
         bool signed = m.IsSigned(t);
         i32 storeImm = 0;
+        i32 shiftBy = 0;
         if (this.Opt && inst.Result != 0 && this.RematKind.Get((inst.Result - this.FirstValue) as usize) != 0) return;
         if (sh == SH_CONST) {
             this.A.MovRI(RAX, inst.Imm);
@@ -719,7 +720,13 @@ struct Gen {
             } else if (op == 14) this.A.Alu(ALU_AND, RAX, RCX);
             else if (op == 15) this.A.Alu(ALU_OR, RAX, RCX);
             else if (op == 16) this.A.Alu(ALU_XOR, RAX, RCX);
-            else if (op == OP_SHL || op == OP_SHR) {
+            else if ((op == OP_SHL || op == OP_SHR) && this.Opt && this.SmallImm(m, f + 1, ref shiftBy) && shiftBy >= 0 && shiftBy < (ty.Size * 8) as i32) {
+                // a constant amount in range: no check, an immediate shift
+                u8 sext = 5;
+                if (op == OP_SHL) sext = 4;
+                else if (signed) sext = 7;
+                this.A.ShiftImm(sext, RAX, shiftBy as u8);
+            } else if (op == OP_SHL || op == OP_SHR) {
                 if (signed) {
                     this.A.TestRR(RCX, RCX);
                     u32 shTrap = this.TrapLabel(TRAP_SHIFT);
