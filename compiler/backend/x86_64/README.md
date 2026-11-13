@@ -70,6 +70,8 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   addresses in their own registers, instead of `rep movsb`/`rep stosb` (so they leave rsi
   and rdi alone). A call of the prelude's `string.CopyBytes` with a small constant length
   becomes such a copy.
+- **Compact frames.** Only values that got no register (and are not recomputed) have a
+  stack slot, so frames are small and most offsets fit a byte.
 - **Slots that need no zeroing.** A slot every path writes in full before reading it (or
   passing its address on) is not zeroed on entry (`frame.envol`). Stores, loads, copies
   and zeroing through the slot and field addresses inside it are followed byte by byte

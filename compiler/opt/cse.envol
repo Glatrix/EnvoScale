@@ -220,7 +220,12 @@ bool CseFunc(ref Module m, u32 fi) {
     List<u32> slotVer = List<u32>.New();
     List<u32> slotBlock = List<u32>.New();
     List<u32> uses = List<u32>.New();
+    // locals known to be all zero: the memory version after their zeroing, and its block
+    List<u32> zeroVer = List<u32>.New();
+    List<u32> zeroBlock = List<u32>.New();
     for (u32 k = 0; k < nv; k++) {
+        zeroVer.Push(NONE);
+        zeroBlock.Push(0);
         slotSrc.Push(NONE);
         slotVer.Push(0);
         slotBlock.Push(0);
@@ -296,6 +301,28 @@ bool CseFunc(ref Module m, u32 fi) {
                 }
             }
             if (MayWrite(inst.Op)) {
+                // writes into a local that is all zero, of zeros, change nothing
+                u32 zs = ZeroTarget(m, f, inst);
+                if (zs != NONE && zeroVer.Get(zs as usize) == ver && dom.Has(b, zeroBlock.Get(zs as usize))) {
+                    EInst gone = inst;
+                    gone.Op = 0;
+                    gone.NOps = 0;
+                    m.Insts.Set(i as usize, gone);
+                    changed = true;
+                    continue;
+                }
+                // a whole copy out of a local that is all zero zeroes its destination
+                if (inst.Op == COP_COPY && inst.NOps == 3 && m.Op(inst.FirstOp + 1).Kind == OK_VALUE) {
+                    u32 zk = m.Op(inst.FirstOp + 1).Ref - f.FirstValue;
+                    u64 zn = 0;
+                    if (zk < nv && zeroVer.Get(zk as usize) == ver && dom.Has(b, zeroBlock.Get(zk as usize)) && WholeSizeOf(m, inst.FirstOp + 2, ref zn) && zn <= SlotSize(m, f, zk)) {
+                        m.Ops.Set((inst.FirstOp + 1) as usize, m.Op(inst.FirstOp + 2));
+                        inst.Op = 48;
+                        inst.NOps = 2;
+                        m.Insts.Set(i as usize, inst);
+                        changed = true;
+                    }
+                }
                 if (inst.Op == COP_COPY && inst.NOps == 3) {
                     // a copy out of a local just filled whole from s copies from s
                     EOp cs = m.Op(inst.FirstOp + 1);
@@ -314,6 +341,14 @@ bool CseFunc(ref Module m, u32 fi) {
                 }
                 versions++;
                 ver = versions;
+                if (inst.Op == 48 && inst.NOps == 2 && m.Op(inst.FirstOp).Kind == OK_VALUE) {
+                    u32 zk = m.Op(inst.FirstOp).Ref - f.FirstValue;
+                    u64 zn = 0;
+                    if (zk < nv && SlotSize(m, f, zk) != 0 && WholeSizeOf(m, inst.FirstOp + 1, ref zn) && zn == SlotSize(m, f, zk)) {
+                        zeroVer.Set(zk as usize, ver);
+                        zeroBlock.Set(zk as usize, b);
+                    }
+                }
                 if (inst.Op == COP_STORE && inst.NOps == 2) {
                     EOp sv = m.Op(inst.FirstOp);
                     EOp sa = m.Op(inst.FirstOp + 1);
@@ -552,6 +587,64 @@ bool WholeSizeOf(in Module m, u32 o, ref u64 n) {
     if (d.Op != 1) return false;
     n = d.Imm;
     return true;
+}
+
+// The size of local k (relative) of f, if k is a slot; else 0.
+u64 SlotSize(in Module m, in EFunc f, u32 k) {
+    EVal v = m.Val(f.FirstValue + k);
+    if (v.Inst == 0) return 0;
+    EInst d = m.Inst(v.Inst);
+    if (d.Op != OP_SLOT || d.Result != f.FirstValue + k) return 0;
+    return m.Ty(d.Ty).Size as u64;
+}
+
+// Is operand o zero: a `const` 0, or a conversion (such as `0 as usize as *u8`) of one?
+bool IsZeroValue(in Module m, u32 o) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) return op.Int == 0;
+    if (op.Kind != OK_VALUE) return false;
+    u32 v = op.Ref;
+    for (u32 guard = 0; guard < 4; guard++) {
+        EVal val = m.Val(v);
+        if (val.Inst == 0) return false;
+        EInst d = m.Inst(val.Inst);
+        if (d.Op == 1) return d.Imm == 0;
+        // integer and pointer conversions keep zero zero (float ones are left alone)
+        if (!(d.Op >= 32 && d.Op <= 34) && d.Op != 39 && d.Op != 40 && d.Op != 41) return false;
+        EOp x = m.Op(d.FirstOp);
+        if (x.Kind != OK_VALUE) return false;
+        v = x.Ref;
+    }
+    return false;
+}
+
+// If instruction inst writes only zeros into a local (a `zero` of all or part of it, or a
+// store of 0 to it or a field of it), that local (relative); else NONE.
+u32 ZeroTarget(in Module m, in EFunc f, in EInst inst) {
+    u32 at = 0;
+    if (inst.Op == 48 && inst.NOps == 2) {
+        u64 n = 0;
+        if (!WholeSizeOf(m, inst.FirstOp + 1, ref n)) return NONE;
+        at = inst.FirstOp;
+    } else if (inst.Op == 43 && inst.NOps == 2) {
+        if (!IsZeroValue(m, inst.FirstOp)) return NONE;
+        at = inst.FirstOp + 1;
+    } else {
+        return NONE;
+    }
+    EOp a = m.Op(at);
+    if (a.Kind != OK_VALUE) return NONE;
+    u32 k = a.Ref - f.FirstValue;
+    if (k >= f.NValues) return NONE;
+    if (SlotSize(m, f, k) != 0) return k;
+    // a field address inside a slot
+    EVal av = m.Val(a.Ref);
+    if (av.Inst == 0) return NONE;
+    EInst fa = m.Inst(av.Inst);
+    if (fa.Op != 44 || m.Op(fa.FirstOp).Kind != OK_VALUE) return NONE;
+    u32 bk = m.Op(fa.FirstOp).Ref - f.FirstValue;
+    if (bk >= f.NValues || SlotSize(m, f, bk) == 0) return NONE;
+    return bk;
 }
 
 // Is operand o (a copy's size) the number n, written or as a `const`?

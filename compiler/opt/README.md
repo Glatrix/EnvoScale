@@ -91,7 +91,9 @@ starts a new memory version unless its only predecessor ends where it starts, an
 store, copy, zero, call or intrinsic starts another. A field read from a local that a
 `copy` filled whole, with nothing written since, reads the copy's source instead, so the
 local often goes; a copy out of such a local copies from the source, so chains of copies
-through temporaries collapse. A branch whose condition a dominating branch already decided (the same
+through temporaries collapse. A local known to be all zero (zeroed, nothing written
+since) needs no second `zero` and no stores of 0, and a copy out of it zeroes its
+destination instead. A branch whose condition a dominating branch already decided (the same
 compare, or its opposite, for integers) becomes a plain branch, and a `bounds` check
 of an index that a dominating unsigned `i < n` already bounds goes. Field and element
 addresses get value numbers, so loads through them match, but stay in place: the backend

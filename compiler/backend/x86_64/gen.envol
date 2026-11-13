@@ -24,6 +24,7 @@ const u8 REMAT_CONST = 1;      // const: the immediate
 const u8 REMAT_FRAME = 2;      // slot: rbp + the offset
 const u8 REMAT_LABEL = 3;      // addr: the label's address
 const u64 SMALL_BYTES = 256;
+const u32 NO_SPILL = 0xFFFFFFFF;
 const u64 NOT_SMALL = 0xFFFFFFFFFFFFFFFF;
 // The largest frame: displacements from rbp are 32-bit.
 const u64 FRAME_MAX = 0x7FFF0000;
@@ -44,6 +45,8 @@ struct Gen {
     WinImports Imports;
     bool Opt;               // -O2: registers and rematerialization (regalloc.envol)
     List<u8> Regs;          // per value of the function: its register, or NOREG
+    List<u32> SpillIdx;     // -O2: per value kept in memory, its stack slot's index (else NO_SPILL)
+    u32 NSpill;             // -O2: how many such slots
     List<u8> RematKind;     // per value of the function: REMAT_*, or 0
     List<u64> RematImm;
     List<bool> Saved;       // the callee-saved registers the function uses (AllocReg order)
@@ -68,6 +71,12 @@ struct Gen {
         u32 k = v - this.FirstValue;
         if (k < this.NParams && !this.Opt) return (16 + 8 * k) as i32;
         if (k < this.NParams && k >= NARGREGS) return (16 + 8 * (k - NARGREGS)) as i32;
+        if (this.Opt) {
+            // -O2: only values kept in memory have a slot
+            u32 idx = this.SpillIdx.Get(k as usize);
+            if (idx == NO_SPILL) Bug("x64: a value in a register has no stack slot");
+            return 0 - (this.SaveArea + 8 * (idx + 1)) as i32;
+        }
         return 0 - (this.SaveArea + 8 * (k + 1)) as i32;
     }
 
@@ -1386,6 +1395,7 @@ struct Gen {
         // (zeroed on entry)
         u64 save = this.SaveArea as u64;
         u64 valueArea = 8 * f.NValues as u64;
+        if (this.Opt) valueArea = 8 * this.NSpill as u64;
         u64 slotArea = 0;
         EBlock entry = m.Block(f.FirstBlock);
         for (u32 i = entry.FirstInst; i < entry.FirstInst + entry.NInsts; i++) {
@@ -1586,6 +1596,18 @@ struct Gen {
             if (this.Saved.Get(r as usize)) n++;
         }
         this.SaveArea = 8 * n;
+        // stack slots for the values that got no register and are not recomputed
+        this.SpillIdx = List<u32>.New();
+        this.NSpill = 0;
+        for (u32 k = 0; k < f.NValues; k++) {
+            bool stackParam = k < f.NParams && k >= NARGREGS;
+            if (!stackParam && this.RematKind.Get(k as usize) == 0 && this.Regs.Get(k as usize) == NOREG) {
+                this.SpillIdx.Push(this.NSpill);
+                this.NSpill++;
+            } else {
+                this.SpillIdx.Push(NO_SPILL);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ data
@@ -1671,7 +1693,7 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
         Imports = new WinImports { Dir = 0, Iat = 0 }, Opt = opt, Regs = List<u8>.New(),
         RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0,
-        Uses = List<u32>.New(), NextBlock = 0, BlockEnd = 0, Fused = 0, FoldedField = 0, FoldedInst = 0,
+        Uses = List<u32>.New(), SpillIdx = List<u32>.New(), NSpill = 0, NextBlock = 0, BlockEnd = 0, Fused = 0, FoldedField = 0, FoldedInst = 0,
         SpillV = 0, SpillReg = 0, SpillAt = 0
     };
     g.A.Short = opt;
