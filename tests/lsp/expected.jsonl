@@ -1,4 +1,4 @@
-{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"completionProvider":{"triggerCharacters":["."]},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"documentFormattingProvider":true},"serverInfo":{"name":"envo","version":"0.5.0-dev"}}}
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"completionProvider":{"triggerCharacters":["."]},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"documentFormattingProvider":true},"serverInfo":{"name":"envo","version":"0.5.0"}}}
 {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"${URI}","diagnostics":[{"range":{"start":{"line":0,"character":8},"end":{"line":0,"character":9}},"severity":1,"code":"E0101","source":"envo","message":"expected an expression, found `;`"}]}}
 {"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"${URI}","diagnostics":[]}}
 {"jsonrpc":"2.0","id":10,"result":{"contents":{"kind":"markdown","value":"```envo\ni32 Answer()\n```\n\nThe answer."}}}
