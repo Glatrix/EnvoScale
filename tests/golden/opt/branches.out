@@ -9,13 +9,13 @@ func @Pick(%0: i64) -> i64 {
 
 func @Loop(%0: i64) -> i64 {
 ^bb0:
+  %1 = const i64 1
+  %2 = const i64 0
   br ^bb1(%0)
-^bb1(%1: i64):
-  %2 = const i64 1
-  %3 = sub.wrap i64 %1, %2
-  %4 = const i64 0
-  %5 = cmp.eq i64 %3, %4
-  condbr %5, ^bb2, ^bb1(%3)
+^bb1(%3: i64):
+  %4 = sub.wrap i64 %3, %1
+  %5 = cmp.eq i64 %4, %2
+  condbr %5, ^bb2, ^bb1(%4)
 ^bb2:
   ret %0
 }

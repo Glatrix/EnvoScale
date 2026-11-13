@@ -9,7 +9,10 @@
 // branch whose condition a dominating branch has already decided (the same compare, or
 // its opposite) becomes a plain branch. Field and element addresses get value numbers,
 // so loads through them match, but stay where they are: the backend folds each into the
-// one load or store after it. Simplification runs afterwards and drops what is unused.
+// one load or store after it.
+//
+// A local filled whole by a `copy` from s, with nothing written since, is s: a field read
+// from it reads s's, and a copy out of it copies from s. The local then often goes. Simplification runs afterwards and drops what is unused.
 namespace envoc.opt;
 
 use envoc.util;
@@ -274,6 +277,22 @@ bool CseFunc(ref Module m, u32 fi) {
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
             if (MayWrite(inst.Op)) {
+                if (inst.Op == COP_COPY && inst.NOps == 3) {
+                    // a copy out of a local just filled whole from s copies from s
+                    EOp cs = m.Op(inst.FirstOp + 1);
+                    EOp cd = m.Op(inst.FirstOp);
+                    if (cs.Kind == OK_VALUE) {
+                        u32 k = cs.Ref - f.FirstValue;
+                        if (k < nv && slotSrc.Get(k as usize) != NONE && slotVer.Get(k as usize) == ver && dom.Has(b, slotBlock.Get(k as usize))) {
+                            u32 s = slotSrc.Get(k as usize);
+                            if (cd.Kind != OK_VALUE || cd.Ref != s) {
+                                cs.Ref = s;
+                                m.Ops.Set((inst.FirstOp + 1) as usize, cs);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
                 versions++;
                 ver = versions;
                 if (inst.Op == COP_STORE && inst.NOps == 2) {

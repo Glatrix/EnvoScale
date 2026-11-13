@@ -39,8 +39,10 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   the stack; a parameter keeps the register it arrives in when its interval allows. The
   `-O0` convention, all arguments on the stack, stays Stage 1's.
 - **Division by a constant.** Unsigned `/` and `%` by a constant are a shift and a mask
-  for a power of two, else a multiply by the divisor's reciprocal and a few shifts
-  (Granlund and Montgomery), instead of `div`.
+  for a power of two, else a multiply by the divisor's reciprocal and a shift when a
+  64-bit reciprocal is exact for every dividend (as for 10), or a few more steps when
+  not (Granlund and Montgomery), instead of `div`. Lowering writes an unsigned `x % c` as
+  `x - (x / c) * c`, so `x % c` and `x / c` side by side share one quotient.
 - **Jump tables.** A `switch` of at least 4 cases whose keys are dense jumps through a
   table indexed by the key; a sparse one stays a chain of compares.
 - **Registers.** Linear scan over one interval per value (definition to last use,
@@ -48,7 +50,9 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   callee-saved and go to any value (a function pushes the ones it uses after rbp); rsi,
   rdi and r8-r10 go only to values whose interval holds no call or system call (and rsi
   and rdi no copy or fill), and need no saving. A value that gets no register keeps its
-  stack slot. rax, rcx, rdx and r11 are the code generator's scratch. Hints keep copies
+  stack slot. When registers run out, the value that would cost least in memory (its
+  uses, weighted by 8 for each loop around them) is the one that stays there. rax, rcx,
+  rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed
   to a parameter takes the parameter's, and the result of an add, sub, `and`, `or` or
   `xor` takes its first operand's when that operand dies there, if each is free.

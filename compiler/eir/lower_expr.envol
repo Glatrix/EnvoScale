@@ -326,7 +326,24 @@ impl Lower {
             return this.Bin(cmp, et, a, b);
         }
         if (this.C.IsFloatType(lt)) return this.Bin(FloatOp(ArithOp(this.C.TokText(node.Tok))), et, a, b);
-        return this.Bin(ArithOp(this.C.TokText(node.Tok)), et, a, b);
+        return this.Arith(ArithOp(this.C.TokText(node.Tok)), et, a, b);
+    }
+
+    // Integer arithmetic. An unsigned x % c, for a constant c that is not a power of two,
+    // is x - (x / c) * c, so -O2 computes one quotient for it and an x / c next to it.
+    u32 Arith(ref this, u16 op, u32 et, u32 a, u32 b) {
+        if (op == 13 && !this.M.IsSigned(et)) {
+            EVal bv = this.M.Val(b);
+            if (bv.Inst != 0) {
+                EInst d = this.M.Inst(bv.Inst);
+                if (d.Op == OP_CONST && d.Imm > 1 && d.Imm & (d.Imm - 1) != 0) {
+                    u32 q = this.Bin(12, et, a, b);
+                    u32 p = this.Bin(7, et, q, b);
+                    return this.Bin(6, et, a, p);
+                }
+            }
+        }
+        return this.Bin(op, et, a, b);
     }
 
     // a << n, a >> n: the amount may have any integer type; it is checked against the bit

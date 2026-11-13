@@ -291,7 +291,7 @@ impl Lower {
                 u32 rt = this.LNType(node.B);
                 v = this.LowerShift(Same(opBase, "<<"), t, old, r, rt);
             } else if (this.C.IsFloatType(t)) v = this.Bin(FloatOp(ArithOp(opBase)), et, old, r);
-            else v = this.Bin(ArithOp(opBase), et, old, r);
+            else v = this.Arith(ArithOp(opBase), et, old, r);
             this.Store(et, v, p);
             return;
         }

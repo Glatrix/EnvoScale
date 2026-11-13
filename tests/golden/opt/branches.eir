@@ -16,7 +16,8 @@ func @Pick(%0: i64) -> i64 {
   ret %5
 }
 
-; a loop keeps its blocks; a parameter passed itself or one value is that value
+; a loop keeps its blocks; a parameter passed itself or one value is that value, and
+; the constants move out of the loop
 func @Loop(%0: i64) -> i64 {
 ^bb0:
   br ^bb1(%0, %0)

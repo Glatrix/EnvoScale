@@ -55,7 +55,13 @@ and every branch passes the current value along. The local starts as 0, as a slo
 The pass runs before inlining and again after it (inlined copies bring their own slots);
 simplification then removes the parameters that receive one value on every edge.
 
-## `licm.envol`: loop-invariant loads
+## `licm.envol`: loop-invariant code
+
+Arithmetic, bitwise operations, conversions and constants whose operands all come from
+outside a loop move to its preheader. One that may panic (a checked operation, a
+division, a shift) moves only from the loop's header, which runs whenever the
+preheader's branch is taken, and only from before the header's first write. Compares
+stay next to their branch, which the backend fuses with them.
 
 In a loop that writes no memory (no store, copy, zero, call or intrinsic), a load from a
 field of a parameter that points to valid memory for the whole call reads the same value
@@ -84,7 +90,8 @@ earlier store wrote there, when nothing that may write memory runs between them:
 starts a new memory version unless its only predecessor ends where it starts, and every
 store, copy, zero, call or intrinsic starts another. A field read from a local that a
 `copy` filled whole, with nothing written since, reads the copy's source instead, so the
-local often goes. A branch whose condition a dominating branch already decided (the same
+local often goes; a copy out of such a local copies from the source, so chains of copies
+through temporaries collapse. A branch whose condition a dominating branch already decided (the same
 compare, or its opposite, for integers) becomes a plain branch. Field and element
 addresses get value numbers, so loads through them match, but stay in place: the backend
 folds each into the one load or store after it.

@@ -1,7 +1,9 @@
 // Register allocation at -O2 (PLAN D20, D79): linear scan. Each SSA value gets one
 // interval, from its definition to its last use in the order of the function's blocks,
 // widened to every block where it is live, so loops are covered. Values then take a
-// register for their whole interval or stay in their stack slot. The callee-saved
+// register for their whole interval or stay in their stack slot. When registers run out,
+// the value that would cost least in memory (its uses, weighted by 8 per enclosing loop)
+// is the one that stays there. The callee-saved
 // registers rbx and r12-r15 survive everything; rsi, rdi and r8-r10 are free between
 // calls, so they go only to values whose interval holds no call or system call (and rsi
 // and rdi none of the copies and fills that use them). The code generator's scratch
@@ -123,8 +125,30 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
     List<u32> op0 = List<u32>.New();
     for (u32 k = 0; k < nv; k++) op0.Push(NOHINT);
     clob.Push(0);
+    // how deep in loops each block is: a branch back to an earlier block (in the order
+    // the blocks are emitted) closes a loop over the blocks between
+    List<u32> depth = List<u32>.New();
+    for (u32 bi = 0; bi < nb; bi++) depth.Push(0);
+    for (u32 bi = 0; bi < nb; bi++) {
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind != OK_TARGET) continue;
+            u32 tb = op.Ref - f.FirstBlock;
+            if (tb > bi) continue;
+            for (u32 k = tb; k <= bi; k++) depth.Set(k as usize, depth.Get(k as usize) + 1);
+        }
+    }
+    // what keeping each value in memory would cost: its uses and definition, each weighted
+    // by 8 per loop around it
+    List<u64> weight = List<u64>.New();
+    for (u32 k = 0; k < nv; k++) weight.Push(0);
     u32 pos = 1;
     for (u32 bi = 0; bi < nb; bi++) {
+        u32 dd = depth.Get(bi as usize);
+        if (dd > 6) dd = 6;
+        u64 wt = (1 as u64) << (3 * dd) as u64;
         EBlock blk = m.Block(f.FirstBlock + bi);
         bstart.Push(pos);
         clob.Push(0);
@@ -144,12 +168,14 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 EOp op = m.Op(o);
                 if (op.Kind == OK_VALUE) {
                     u32 v = op.Ref - f.FirstValue;
+                    weight.Set(v as usize, weight.Get(v as usize) + wt);
                     if (!defs.Has(bi, v)) uses.Add(bi, v);
                     if (end.Get(v as usize) < pos) end.Set(v as usize, pos);
                 } else if (op.Kind == OK_TARGET) {
                     EBlock tb = m.Block(op.Ref);
                     for (u32 a = 0; a < op.NArgs; a++) {
                         u32 v = m.Arg(op.Args + a) - f.FirstValue;
+                        weight.Set(v as usize, weight.Get(v as usize) + wt);
                         if (!defs.Has(bi, v)) uses.Add(bi, v);
                         if (end.Get(v as usize) < pos) end.Set(v as usize, pos);
                         pairP.Push(tb.FirstParam + a - f.FirstValue);
@@ -159,6 +185,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             }
             if (inst.Result != 0) {
                 u32 v = inst.Result - f.FirstValue;
+                weight.Set(v as usize, weight.Get(v as usize) + wt);
                 u16 iop = inst.Op;
                 if ((iop == 5 || iop == 6 || iop == 8 || iop == 9 || iop == 14 || iop == 15 || iop == 16) && inst.NOps == 2 && m.Op(inst.FirstOp).Kind == OK_VALUE && !m.IsFloat(inst.Ty)) {
                     op0.Set(v as usize, m.Op(inst.FirstOp).Ref - f.FirstValue);
@@ -313,15 +340,25 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 if (holder.Get(r as usize) == 0) pick = r;
             }
             if (pick == NREGS) {
-                // all it may have are taken: evict the interval that ends last, if it ends
-                // after this one
+                // all it may have are taken: the cheapest of the holders and this one goes
+                // to memory (of equal cost, the one that ends last)
                 u32 far = NREGS;
                 for (u32 r = 0; r < NREGS; r++) {
                     if (r >= NSAVED && (forbid >> (r - NSAVED)) & 1 != 0) continue;
-                    if (far == NREGS || end.Get((holder.Get(r as usize) - 1) as usize) > end.Get((holder.Get(far as usize) - 1) as usize)) far = r;
+                    if (far == NREGS) {
+                        far = r;
+                        continue;
+                    }
+                    u32 hr = holder.Get(r as usize) - 1;
+                    u32 hf = holder.Get(far as usize) - 1;
+                    u64 wr = weight.Get(hr as usize);
+                    u64 wf = weight.Get(hf as usize);
+                    if (wr < wf || (wr == wf && end.Get(hr as usize) > end.Get(hf as usize))) far = r;
                 }
                 u32 victim = holder.Get(far as usize) - 1;
-                if (end.Get(victim as usize) <= ce) continue;
+                u64 wv = weight.Get(victim as usize);
+                u64 wc = weight.Get(cur as usize);
+                if (wc < wv || (wc == wv && end.Get(victim as usize) <= ce)) continue;
                 regs.Set(victim as usize, NOREG);
                 pick = far;
             }

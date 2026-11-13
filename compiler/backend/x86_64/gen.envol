@@ -305,6 +305,34 @@ struct Gen {
             }
             return true;
         }
+        // the short form when d allows it: q = (x * m) >> 64 >> s with m = ceil(2^(64+s) / d),
+        // which is exact for every x when m * d - 2^(64+s) <= 2^s
+        for (u8 s = 0; s < l; s++) {
+            u64 r = (1 as u64) << s as u64;     // below d, so the quotient fits 64 bits
+            u64 fq = 0;
+            for (u32 i = 0; i < 64; i++) {
+                bool top = r >> 63 != 0;
+                r = r << 1;
+                fq = fq << 1;
+                if (top || r >= d) {
+                    r = r -% d;
+                    fq = fq | 1;
+                }
+            }
+            if (r == 0 || fq == 0xFFFFFFFFFFFFFFFF || d - r > ((1 as u64) << s as u64)) continue;
+            this.A.MovRR(RCX, RAX);             // x
+            this.A.MovRI(RAX, fq + 1);
+            this.A.Group3(4, RCX);              // mul rcx: the high half in rdx
+            this.A.MovRR(RAX, RDX);
+            if (s > 0) this.A.ShiftImm(5, RAX, s);
+            if (op == 13) {
+                this.A.MovRI(RDX, d);
+                this.A.ImulRR(RAX, RDX);
+                this.A.Alu(ALU_SUB, RCX, RAX);
+                this.A.MovRR(RAX, RCX);
+            }
+            return true;
+        }
         // m: 2^64 (2^l - d) / d by long division; the high half 2^l - d is below d
         u64 rem = ((1 as u64) << l as u64) -% d;
         u64 q = 0;

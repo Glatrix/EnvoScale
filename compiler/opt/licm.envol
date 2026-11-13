@@ -1,4 +1,9 @@
-// -O2 loop-invariant loads. In a loop that writes no memory (no store, copy, zero, call or
+// -O2 loop-invariant code. Arithmetic and conversions whose operands all come from outside
+// a loop move to its preheader; one that may panic (a checked operation, a division, a
+// shift) only from the loop's header, which runs whenever the preheader's branch is taken,
+// and only from before the header's first write. Compares stay by their branch.
+//
+// Loads: in a loop that writes no memory (no store, copy, zero, call or
 // intrinsic), a load whose address is a field of a parameter that points to valid memory
 // for the whole call (EFunc.Deref: `in` and `ref` parameters, `this`, aggregates passed by
 // pointer) reads the same value every time round. It moves, with the field addresses it
@@ -75,6 +80,18 @@ bool Outside(in Module m, in EFunc f, u32 v, in List<bool> hoist, in List<bool> 
     return !inLoop.Get((val.Block - f.FirstBlock) as usize) || hoist.Get(k as usize);
 }
 
+// Can an instruction of opcode op move out of a loop when its operands come from outside?
+// 0 no, 1 yes, 2 only from the loop's header (it may panic). Compares stay by their branch
+// (the backend fuses the two), and addresses by their load or store.
+u32 Movable(u16 op) {
+    if (op == 1 || op == 5 || op == 6 || op == 7) return 1;     // const, wrapping arithmetic
+    if (op >= 14 && op <= 17) return 1;                         // bitwise
+    if (op >= 32 && op <= 41) return 1;                         // conversions
+    if (op >= 8 && op <= 13) return 2;                          // checked arithmetic, div, rem
+    if (op == 18 || op == 19) return 2;                         // shifts
+    return 0;
+}
+
 // Each block's successors and predecessors in flat lists (block b's at [first[b],
 // first[b + 1])), and the dominator sets (entry block 0).
 struct Cfg {
@@ -149,7 +166,7 @@ Cfg BuildCfg(in Module m, in EFunc f) {
 // Hoists the invariant loads of function fi's loops; true if any moved.
 bool HoistLoads(ref Module m, u32 fi) {
     EFunc f = m.Func(fi);
-    if (f.Deref == 0 || f.NBlocks < 2) return false;
+    if (f.NBlocks < 2) return false;
     u32 nb = f.NBlocks;
     Cfg g = BuildCfg(m, f);
     List<u32> sfirst = g.SFirst;
@@ -201,7 +218,7 @@ bool HoistLoads(ref Module m, u32 fi) {
             if (outside != 1) continue;
             EBlock pb = m.Block(f.FirstBlock + pre);
             if (m.Inst(pb.FirstInst + pb.NInsts - 1).Op != OP_BR) continue;
-            // no memory written inside
+            // loads move only out of loops that write no memory
             bool writes = false;
             for (u32 b = 0; b < nb && !writes; b++) {
                 if (!inLoop.Get(b as usize)) continue;
@@ -210,8 +227,16 @@ bool HoistLoads(ref Module m, u32 fi) {
                     if (Writes(m.Inst(i).Op)) writes = true;
                 }
             }
-            if (writes) continue;
-            // field addresses and loads of valid pointers, until nothing more moves
+            bool loads = !writes && f.Deref != 0;
+            // where the header first writes memory (a check after that stays: moving it
+            // would panic before the write)
+            EBlock hb = m.Block(f.FirstBlock + h);
+            u32 firstWrite = hb.FirstInst + hb.NInsts;
+            for (u32 i = hb.FirstInst; i < hb.FirstInst + hb.NInsts; i++) {
+                if (Writes(m.Inst(i).Op) && firstWrite == hb.FirstInst + hb.NInsts) firstWrite = i;
+            }
+            // field addresses and loads of valid pointers, and computations of values from
+            // outside, until nothing more moves
             bool more = true;
             while (more) {
                 more = false;
@@ -223,11 +248,24 @@ bool HoistLoads(ref Module m, u32 fi) {
                         if (inst.Result == 0) continue;
                         u32 rk = inst.Result - f.FirstValue;
                         if (hoist.Get(rk as usize)) continue;
-                        if (inst.Op != OP_FIELDADDR && inst.Op != OP_LOADOP) continue;
-                        u32 a = m.Op(inst.FirstOp).Ref;
-                        if (m.Op(inst.FirstOp).Kind != OK_VALUE || !Outside(m, f, a, hoist, inLoop)) continue;
-                        if (inst.Op == OP_LOADOP && !Valid(m, f, a, hoist, inLoop)) continue;
-                        if (inst.Op == OP_FIELDADDR && !Valid(m, f, a, hoist, inLoop)) continue;
+                        if (inst.Op == OP_FIELDADDR || inst.Op == OP_LOADOP) {
+                            if (!loads) continue;
+                            u32 a = m.Op(inst.FirstOp).Ref;
+                            if (m.Op(inst.FirstOp).Kind != OK_VALUE || !Outside(m, f, a, hoist, inLoop)) continue;
+                            if (!Valid(m, f, a, hoist, inLoop)) continue;
+                        } else {
+                            u32 kind = Movable(inst.Op);
+                            if (kind == 0) continue;
+                            // a check moves only from the header, from before any write
+                            if (kind == 2 && (b != h || i >= firstWrite)) continue;
+                            bool from = true;
+                            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps && from; o++) {
+                                EOp x = m.Op(o);
+                                if (x.Kind == OK_VALUE && !Outside(m, f, x.Ref, hoist, inLoop)) from = false;
+                                if (x.Kind == OK_TARGET) from = false;
+                            }
+                            if (!from) continue;
+                        }
                         hoist.Set(rk as usize, true);
                         dest.Set(rk as usize, pre);
                         more = true;
@@ -269,8 +307,14 @@ bool HoistLoads(ref Module m, u32 fi) {
                     if (inst.Result == 0) continue;
                     u32 rk = inst.Result - f.FirstValue;
                     if (!hoist.Get(rk as usize) || dest.Get(rk as usize) != b || placed.Get(rk as usize)) continue;
-                    u32 a = m.Op(inst.FirstOp).Ref - f.FirstValue;
-                    if (a < f.NValues && hoist.Get(a as usize) && !placed.Get(a as usize)) continue;
+                    bool ready = true;
+                    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                        EOp x = m.Op(o);
+                        if (x.Kind != OK_VALUE) continue;
+                        u32 a = x.Ref - f.FirstValue;
+                        if (a < f.NValues && hoist.Get(a as usize) && !placed.Get(a as usize)) ready = false;
+                    }
+                    if (!ready) continue;
                     Move(ref m, i, b0 + b, f, v0, b0);
                     placed.Set(rk as usize, true);
                     again = true;
