@@ -214,7 +214,7 @@ http.Response Home() {
     l.SecondaryText = string.From("See where it stands");
     l.SecondaryHref = string.From("docs/status.html");
     l.Features.Push(templates.Feature.Of("One language", "Envo reads like C# and compiles to native code: scripts, apps, servers and low-level code in one language, from a one-line program up.", "docs/spec/README.html"));
-    l.Features.Push(templates.Feature.Of("Built from the first byte", "A few kilobytes of readable assembly build the compiler that EnvoScale starts from, and the compiler rebuilds itself to the same bytes on every OS. Every step is checked in CI.", "https://github.com/envoscale/EnvoScaleAsm"));
+    l.Features.Push(templates.Feature.Of("Built from the ground up", "A few kilobytes of readable assembly build the compiler that EnvoScale starts from, and the compiler rebuilds itself to the same bytes on every OS. Every step is checked in CI.", "https://github.com/envoscale/EnvoScaleAsm"));
     l.Features.Push(templates.Feature.Of("Every platform is an adapter", "Programs talk to ports; Windows, Linux and WebAssembly are adapters behind them, and each passes the same conformance suites.", "docs/architecture/ports-and-adapters.html"));
     l.Features.Push(templates.Feature.Of("Batteries, not dependencies", "Crypto and TLS, HTTP, terminal and desktop UI, fonts, 2D and GPU drawing, all in the standard platform, all written in Envo.", "lib/README.html"));
     markdown.Doc body = markdown.Render(HOME_BODY, markdown.Options.Site());

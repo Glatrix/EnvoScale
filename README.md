@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/images/wordmark.svg" alt="EnvoScale" width="380"></p>
 
+<img src="docs/images/experimental.svg" alt="Experimental: this project is an experiment, built with heavy use of AI. While it is early, some functionality may not work as intended." width="100%">
+
 **Envo** is a programming language, and **EnvoScale** is everything around it in one
 place: the compiler, the standard library and the `envo` tool. Command-line programs,
 servers, desktop and terminal apps, websites, graphics and AI all use the same language
@@ -28,8 +30,6 @@ The editor parts of the UI library, drawn by Envo itself, in a window and in a t
 
 <img src="docs/images/editor.png" width="49%"> <img src="docs/images/editor-terminal.png" width="49%">
 
-> **Early and experimental.** It works, it is tested on every commit, and things still
-> change. [docs/status.md](docs/status.md) says what is done.
 
 ## Try it
 
