@@ -52,13 +52,13 @@ function Get-Seed {
             Say '          not available: building the seed from assembly (EnvoScaleAsm)'
             $asm = Join-Path $Root 'build\seed\EnvoScaleAsm'
             if (-not (Test-Path -LiteralPath (Join-Path $asm '.git'))) {
-                & git clone -q $SeedAsmRepo $asm
+                & git clone -q $SeedAsmRepo $asm | Out-Host
                 if ($LASTEXITCODE -ne 0) { Fail "cloning $SeedAsmRepo failed; set `$env:ENVO_SEED to an envoc" }
             }
-            & git -C $asm fetch -q origin
-            & git -C $asm -c advice.detachedHead=false checkout -q $SeedAsmRef
+            & git -C $asm fetch -q origin | Out-Host
+            & git -C $asm -c advice.detachedHead=false checkout -q $SeedAsmRef | Out-Host
             if ($LASTEXITCODE -ne 0) { Fail "EnvoScaleAsm: cannot check out $SeedAsmRef" }
-            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $asm 'bootstrap.ps1') seed
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $asm 'bootstrap.ps1') seed | Out-Host
             if ($LASTEXITCODE -ne 0) { Fail 'building the seed from assembly failed' }
             Copy-Item (Join-Path $asm 'build\seed-release\envoc-x86_64-windows.exe') $part
         }
