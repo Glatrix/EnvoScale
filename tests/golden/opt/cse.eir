@@ -28,3 +28,19 @@ func @Checked(%0: u64, %1: u64) -> u64 {
 ^bb3:
   ret %0
 }
+
+; below the true edge of `i < n` (unsigned), `bounds i, n` cannot fail and goes
+func @First(%0: ptr, %1: u64) -> u8 {
+^bb0:
+  %2 = const u64 0
+  %3 = cmp.lt u64 %2, %1
+  condbr %3, ^bb1, ^bb2
+^bb1:
+  bounds u64 %2, %1
+  %4 = elemaddr u8 %0, %2
+  %5 = load u8 %4
+  ret %5
+^bb2:
+  %6 = const u8 0
+  ret %6
+}

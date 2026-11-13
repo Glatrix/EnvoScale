@@ -38,6 +38,7 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   and r10 (the caller-saved registers, which a call overwrites anyway) and the rest on
   the stack; a parameter keeps the register it arrives in when its interval allows. The
   `-O0` convention, all arguments on the stack, stays Stage 1's.
+- **Select.** `select` is a `test` and a `cmov`, without a branch.
 - **Division by a constant.** Unsigned `/` and `%` by a constant are a shift and a mask
   for a power of two, else a multiply by the divisor's reciprocal and a shift when a
   64-bit reciprocal is exact for every dividend (as for 10), or a few more steps when

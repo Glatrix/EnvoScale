@@ -763,6 +763,14 @@ struct Gen {
             }
             this.A.SetCC(CmpCC(op, signed), RAX);
             this.StoreV(inst.Result, RAX);
+        } else if (sh == SH_SELECT && this.Opt) {
+            // the false value, then the true one over it if the condition holds: no branch
+            this.LoadOp(m, RAX, f + 2);
+            this.LoadOp(m, RCX, f + 1);
+            this.LoadOp(m, R11, f);
+            this.A.TestRR(R11, R11);
+            this.A.CmovRR(CC_NE, RAX, RCX);
+            this.StoreV(inst.Result, RAX);
         } else if (sh == SH_SELECT) {
             u32 done = this.A.NewLabel();
             this.LoadOp(m, RAX, f + 1);

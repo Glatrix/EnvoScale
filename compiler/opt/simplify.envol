@@ -503,6 +503,7 @@ void Rebuild(ref Module m, u32 fi, in Simplifier s) {
         EBlock blk = m.Block(f.FirstBlock + b);
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
+            if (inst.Op == 0) work.Push(i);     // an instruction a pass removed in place
             if (inst.Result == 0) continue;
             defOf.Set((inst.Result - f.FirstValue) as usize, i);
             if (IsPure(inst.Op) && uses.Get((inst.Result - f.FirstValue) as usize) == 0) work.Push(i);

@@ -330,6 +330,14 @@ public struct Asm {
         this.U32(imm as u32);
     }
 
+    // cmovcc dst, src (64-bit): dst = src when condition cc holds
+    public void CmovRR(ref this, u8 cc, u8 dst, u8 src) {
+        this.Rex(true, dst, src, false);
+        this.B(0x0F);
+        this.B(0x40 | cc);
+        this.ModRR(dst, src);
+    }
+
     // op dst, src on the low 32 bits
     public void Alu32(ref this, u8 op, u8 dst, u8 src) {
         this.Rex(false, src, dst, false);

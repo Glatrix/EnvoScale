@@ -92,7 +92,8 @@ store, copy, zero, call or intrinsic starts another. A field read from a local t
 `copy` filled whole, with nothing written since, reads the copy's source instead, so the
 local often goes; a copy out of such a local copies from the source, so chains of copies
 through temporaries collapse. A branch whose condition a dominating branch already decided (the same
-compare, or its opposite, for integers) becomes a plain branch. Field and element
+compare, or its opposite, for integers) becomes a plain branch, and a `bounds` check
+of an index that a dominating unsigned `i < n` already bounds goes. Field and element
 addresses get value numbers, so loads through them match, but stay in place: the backend
 folds each into the one load or store after it.
 

@@ -7,7 +7,8 @@
 // where it starts (or the function writes nothing at all), and every store, copy, zero,
 // call or intrinsic starts another. A
 // branch whose condition a dominating branch has already decided (the same compare, or
-// its opposite) becomes a plain branch. Field and element addresses get value numbers,
+// its opposite) becomes a plain branch, and a `bounds` check of an index that a
+// dominating unsigned `i < n` already bounds goes. Field and element addresses get value numbers,
 // so loads through them match, but stay where they are: the backend folds each into the
 // one load or store after it.
 //
@@ -30,6 +31,7 @@ const u16 COP_ELEMADDR = 45;
 const u16 COP_PTRADD = 46;
 const u16 COP_FIELDADDR = 44;
 const u16 COP_COPY = 47;
+const u16 COP_BOUNDS = 49;
 const u16 COP_BRANCH = 55;
 const u16 COP_CONDBR2 = 56;
 
@@ -206,6 +208,7 @@ bool CseFunc(ref Module m, u32 fi) {
     // decided conditions: (block from which on it holds, compare form, value)
     List<u32> factBlock = List<u32>.New();
     List<u16> factOp = List<u16>.New();
+    List<bool> factSigned = List<bool>.New();   // the compare is of a signed type
     List<u32> factA = List<u32>.New();
     List<u32> factB = List<u32>.New();
     List<u32> factCond = List<u32>.New();       // the condition's number
@@ -257,6 +260,7 @@ bool CseFunc(ref Module m, u32 fi) {
                         EVal val = m.Val(cv);
                         bool form = false;
                         if (val.Inst != 0) form = CmpForm(m, c, m.Inst(val.Inst), ref op, ref a, ref bb);
+                        factSigned.Push(val.Inst != 0 && m.IsSigned(m.Inst(val.Inst).Ty));
                         factBlock.Push(b);
                         factOp.Push(op);
                         factA.Push(a);
@@ -370,6 +374,30 @@ bool CseFunc(ref Module m, u32 fi) {
                     br.NOps = 1;
                     m.Insts.Set(i as usize, br);
                     changed = true;
+                }
+                continue;
+            }
+            if (inst.Op == COP_BOUNDS && inst.NOps == 2) {
+                // an index a dominating unsigned `i < n` already bounds: the check goes
+                EOp xi = m.Op(inst.FirstOp);
+                EOp xn = m.Op(inst.FirstOp + 1);
+                if (xi.Kind != OK_VALUE || xn.Kind != OK_VALUE) continue;
+                u32 ia = c.Num(xi.Ref);
+                u32 na = c.Num(xn.Ref);
+                for (usize k = 0; k < factBlock.Len(); k++) {
+                    if (factOp.Get(k) == 0 || factSigned.Get(k) || !dom.Has(b, factBlock.Get(k))) continue;
+                    u16 fo = factOp.Get(k);
+                    u32 fa = factA.Get(k);
+                    u32 fb = factB.Get(k);
+                    if (!factHolds.Get(k)) Negate(ref fo, ref fa, ref fb);
+                    if (fo == 22 && fa == ia && fb == na) {
+                        EInst gone = inst;
+                        gone.Op = 0;            // nothing: simplification drops it
+                        gone.NOps = 0;
+                        m.Insts.Set(i as usize, gone);
+                        changed = true;
+                        break;
+                    }
                 }
                 continue;
             }
