@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>EnvoScale</title>
+  <rect width="512" height="512" rx="112" fill="#0a64d4"/>
+  <g fill="#ffffff">
+    <rect x="112" y="120" width="56" height="272" rx="12"/>
+    <rect x="112" y="120" width="176" height="56" rx="12"/>
+    <rect x="112" y="228" width="232" height="56" rx="12"/>
+    <rect x="112" y="336" width="288" height="56" rx="12"/>
+  </g>
+</svg>

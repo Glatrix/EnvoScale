@@ -10,7 +10,7 @@ use envoc.lower;
 use envoc.x64;
 use envoc.opt;
 
-const str VERSION = "envoc 0.3.0-dev (EnvoScale stage 2, Envo-S1; ";
+const str VERSION = "envoc 0.5.0 (EnvoScale, Envo-S1; ";
 
 void Usage(i32 fd) {
     write(fd, "usage: envoc [--core] <command> [arguments]\n");

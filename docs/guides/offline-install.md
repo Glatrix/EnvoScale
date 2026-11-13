@@ -16,8 +16,9 @@ organization.
 
 The archive is reproducible: `build.sh dist` (or `build.ps1 dist`) on the same
 source gives the same bytes on Linux and Windows, so anyone can rebuild a release and
-compare. Stage 0 itself can be built from the hex seed with no assembler installed
-(`bootstrap/seed`), so the whole chain can be rebuilt from source and the OS alone.
+compare. The seed compiler the build starts from can itself be rebuilt from a hex seed
+and the OS alone ([EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm)), so the whole
+chain can be rebuilt from source.
 
 ## 1. Check the archive
 

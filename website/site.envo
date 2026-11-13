@@ -21,6 +21,9 @@ use alloc.text;
 
 const str SITE = "EnvoScale";
 
+// The EnvoScale mark (docs/images/logo.svg): an E whose bars widen toward its base.
+const str LOGO_SVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 512 512\" width=\"512\" height=\"512\"><title>EnvoScale</title><rect width=\"512\" height=\"512\" rx=\"112\" fill=\"#0a64d4\"/><g fill=\"#ffffff\"><rect x=\"112\" y=\"120\" width=\"56\" height=\"272\" rx=\"12\"/><rect x=\"112\" y=\"120\" width=\"176\" height=\"56\" rx=\"12\"/><rect x=\"112\" y=\"228\" width=\"232\" height=\"56\" rx=\"12\"/><rect x=\"112\" y=\"336\" width=\"288\" height=\"56\" rx=\"12\"/></g></svg>\n";
+
 // ------------------------------------------------------------------ the pages
 
 // The Markdown files the site publishes, as repository paths ("docs/spec/eir.md").
@@ -36,7 +39,7 @@ List<string> Sources() {
         string[] ns = names.AsSlice();
         for (usize i = 0; i < ns.Len; i++) {
             str n = ns[i].AsStr();
-            if (n.Len == 0 || n[0] == '.') continue;
+            if (n.Len == 0 || (n[0] == '.' && !IsText(n, ".github"))) continue;
             string p = string.New();
             if (!dir.Equals(".")) {
                 p.Append(dir.AsStr());
@@ -46,7 +49,7 @@ List<string> Sources() {
             if (fs.IsDir(p.AsStr())) {
                 if (IsText(n, "build") || IsText(n, "node_modules")) continue;
                 dirs.Push(p);
-            } else if (HasSuffix(n, ".md") && !IsText(n, "ENVOSCALE_PROMPT.md")) {
+            } else if (HasSuffix(n, ".md")) {
                 all.Push(p);
             }
         }
@@ -166,9 +169,9 @@ List<templates.NavItem> Nav(str from) {
     List<templates.NavItem> nav = List<templates.NavItem>.New();
     nav.Push(templates.NavItem.Heading("Start"));
     Add(ref nav, from, "Overview", "README.md", 0);
-    Add(ref nav, from, "Status", "STATUS.md", 0);
+    Add(ref nav, from, "Status", "docs/status.md", 0);
     Add(ref nav, from, "Plan", "docs/PLAN.md", 0);
-    Add(ref nav, from, "Charter", "CHARTER.md", 0);
+    Add(ref nav, from, "Principles", "docs/principles.md", 0);
     Add(ref nav, from, "Documentation", "docs/README.md", 0);
     Add(ref nav, from, "Guides", "docs/guides/README.md", 0);
     Group(ref nav, from, "Language", "docs/spec");
@@ -180,11 +183,11 @@ List<templates.NavItem> Nav(str from) {
     nav.Push(templates.NavItem.Heading("Project"));
     Add(ref nav, from, "Contributing", "CONTRIBUTING.md", 0);
     Add(ref nav, from, "RFCs", "docs/rfcs/README.md", 0);
-    Add(ref nav, from, "Security", "SECURITY.md", 0);
+    Add(ref nav, from, "Security", ".github/SECURITY.md", 0);
     Add(ref nav, from, "Enterprise", "docs/guides/enterprise.md", 0);
-    Add(ref nav, from, "Licensing", "LICENSING.md", 0);
-    Add(ref nav, from, "Trademarks", "TRADEMARKS.md", 0);
-    Add(ref nav, from, "Code of conduct", "CODE_OF_CONDUCT.md", 0);
+    Add(ref nav, from, "Licensing", "docs/legal/licensing.md", 0);
+    Add(ref nav, from, "Trademarks", "docs/legal/trademarks.md", 0);
+    Add(ref nav, from, "Code of conduct", ".github/CODE_OF_CONDUCT.md", 0);
     return nav;
 }
 
@@ -192,24 +195,26 @@ templates.Frame FrameFor(str page) {
     string home = Rel(page, "/");
     string css = Rel(page, "/lumen.css");
     templates.Frame f = templates.Frame.New(SITE, home.AsStr(), css.AsStr());
+    string logo = Rel(page, "/logo.svg");
+    f.Logo = logo;
     f.Top.Push(templates.NavItem.Link("Docs", Rel(page, "/docs/README.html").AsStr(), 0));
     f.Top.Push(templates.NavItem.Link("Learn", Rel(page, "/docs/guides/README.html").AsStr(), 0));
     f.Top.Push(templates.NavItem.Link("Language", Rel(page, "/docs/spec/README.html").AsStr(), 0));
     f.Top.Push(templates.NavItem.Link("Sandbox", Rel(page, "/sandbox/").AsStr(), 0));
-    f.Top.Push(templates.NavItem.Link("Status", Rel(page, "/STATUS.html").AsStr(), 0));
+    f.Top.Push(templates.NavItem.Link("Status", Rel(page, "/docs/status.html").AsStr(), 0));
     f.Footer = string.From("EnvoScale. This site is built by an Envo program (website/site.envo) with envo.web and Lumen.");
     return f;
 }
 
 http.Response Home() {
     templates.Frame f = FrameFor("/");
-    templates.Landing l = templates.Landing.New("One environment, every platform, built from the first byte up.", "One language, Envo, one toolchain and one standard platform for systems code, scripts, desktop apps, websites, terminals, graphics, crypto and networking. No third-party dependencies, and a compiler bootstrapped from assembly, so the whole chain can be audited.");
+    templates.Landing l = templates.Landing.New("One language for everything you build.", "Envo is a programming language, and EnvoScale is everything around it in one place: the compiler, the standard library and the envo tool. Command-line programs, servers, desktop and terminal apps, websites, graphics and AI, with no third-party code anywhere.");
     l.PrimaryText = string.From("Read the docs");
     l.PrimaryHref = string.From("docs/README.html");
     l.SecondaryText = string.From("See where it stands");
-    l.SecondaryHref = string.From("STATUS.html");
+    l.SecondaryHref = string.From("docs/status.html");
     l.Features.Push(templates.Feature.Of("One language", "Envo reads like C# and compiles to native code: scripts, apps, servers and low-level code in one language, from a one-line program up.", "docs/spec/README.html"));
-    l.Features.Push(templates.Feature.Of("Built from the first byte", "Assembly builds Stage 1, Stage 1 builds the compiler, and the compiler rebuilds itself to the same bytes. Every step is checked in CI.", "docs/architecture/bootstrap.html"));
+    l.Features.Push(templates.Feature.Of("Built from the first byte", "A few kilobytes of readable assembly build the compiler that EnvoScale starts from, and the compiler rebuilds itself to the same bytes on every OS. Every step is checked in CI.", "https://github.com/envoscale/EnvoScaleAsm"));
     l.Features.Push(templates.Feature.Of("Every platform is an adapter", "Programs talk to ports; Windows, Linux and WebAssembly are adapters behind them, and each passes the same conformance suites.", "docs/architecture/ports-and-adapters.html"));
     l.Features.Push(templates.Feature.Of("Batteries, not dependencies", "Crypto and TLS, HTTP, terminal and desktop UI, fonts, 2D and GPU drawing, all in the standard platform, all written in Envo.", "lib/README.html"));
     markdown.Doc body = markdown.Render(HOME_BODY, markdown.Options.Site());
@@ -217,7 +222,7 @@ http.Response Home() {
     return http.Response.Html(200, templates.LandingPage(f, l).AsStr());
 }
 
-const str HOME_BODY = "## Hello, World\n\n```envo\nprint(\"Hello, World!\");\n```\n\nOne line is a whole program. The same holds for a website, a terminal UI or a window: the [Hello World Gallery](README.html#hello-world-gallery) shows each, and CI fails if one grows past its limit.\n\n## Try it\n\nBuild from source with nothing but NASM: `bootstrap.ps1 build` on Windows, `bootstrap.sh build` on Linux. The [status page](STATUS.html) says what works today.\n";
+const str HOME_BODY = "## Hello, World\n\n```envo\nprint(\"Hello, World!\");\n```\n\nOne line is a whole program, and the same language takes you to servers, windows and websites: the [README](README.html) has more.\n\n## Try it\n\nDownload a release from [GitHub](https://github.com/envoscale/EnvoScale/releases), or build from source with only what your OS ships: `./build.sh build` on Linux and Git Bash, `.\\build.ps1 build` on Windows. The [status page](docs/status.html) says what works today.\n";
 
 http.Response DocPage(str page, str source) {
     var r = fs.ReadText(source);
@@ -262,6 +267,11 @@ http.Response SitePage(in http.Request req, in web.Params ps) {
     if (IsText(path, "sandbox/envo.js")) return FileOf("adapters/interop/js/envo.js", "text/javascript; charset=utf-8");
     if (IsText(path, "sandbox/sandbox.js")) return FileOf("adapters/interop/js/sandbox.js", "text/javascript; charset=utf-8");
     if (IsText(path, "sandbox/envoc.wasm")) return FileOf("build/envoc.wasm", "application/wasm");
+    if (IsText(path, "logo.svg")) {
+        http.Response svg = http.Response.Text(200, LOGO_SVG);
+        svg.SetHeader("Content-Type", "image/svg+xml");
+        return svg;
+    }
     if (IsText(path, "lumen.css")) {
         http.Response css = http.Response.Text(200, templates.Css(lumen.Light(), lumen.Dark()).AsStr());
         css.SetHeader("Content-Type", "text/css; charset=utf-8");
@@ -300,6 +310,7 @@ if (IsText(command, "serve")) {
     List<string> pages = List<string>.New();
     pages.Push(string.From("/"));
     pages.Push(string.From("/lumen.css"));
+    pages.Push(string.From("/logo.svg"));
     pages.Push(string.From("/sandbox/"));
     pages.Push(string.From("/sandbox/envo.js"));
     pages.Push(string.From("/sandbox/sandbox.js"));

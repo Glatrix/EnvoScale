@@ -1,4 +1,4 @@
-# EnvoScale
+<p align="center"><img src="docs/images/wordmark.svg" alt="EnvoScale" width="380"></p>
 
 **Envo** is a programming language, and **EnvoScale** is everything around it in one
 place: the compiler, the standard library and the `envo` tool. Command-line programs,
@@ -33,7 +33,9 @@ The editor parts of the UI library, drawn by Envo itself, in a window and in a t
 
 ## Try it
 
-You need Git Bash or a Linux shell (or PowerShell on Windows), and nothing else.
+Download the latest [release](https://github.com/envoscale/EnvoScale/releases), unpack it,
+and run `bin/envo run hello.envo`. Or build from source; you need Git Bash or a Linux shell
+(or PowerShell on Windows), and nothing else:
 
 ```bash
 git clone https://github.com/envoscale/EnvoScale

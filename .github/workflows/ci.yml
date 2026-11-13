@@ -49,6 +49,8 @@ jobs:
             build/envo/envo
             build/envo/envo.exe
             build/dist/SHA256SUMS
+            build/dist/*.tar
+            build/dist/*.provenance.json
 
   windows:
     runs-on: windows-latest
@@ -134,3 +136,26 @@ jobs:
           name: aarch64-macos-programs
           path: build/cross/aarch64-macos
       - run: ./build.sh cross-run build/cross/aarch64-macos
+
+  # A tag v<version> publishes the archive, once both hosts built the same bytes and the
+  # AArch64 tests passed. The notes are docs/releases/<tag>.md.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [reproducible, aarch64-linux, aarch64-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: built-on-linux
+          path: build/from-linux
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          [ -f "build/from-linux/dist/envoscale-$v.tar" ] || { echo "the tag $GITHUB_REF_NAME does not match ENVO_VERSION"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" build/from-linux/dist/* --repo "$GITHUB_REPOSITORY" --title "EnvoScale $v" --notes-file "docs/releases/$GITHUB_REF_NAME.md"

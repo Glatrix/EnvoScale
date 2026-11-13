@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 128" width="640" height="128">
+  <title>EnvoScale</title>
+  <style>
+    .w { fill: #0d1117; font: 600 84px "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: -1.5px; }
+    @media (prefers-color-scheme: dark) { .w { fill: #f0f3f6; } }
+  </style>
+  <rect width="128" height="128" rx="28" fill="#0a64d4"/>
+  <g fill="#ffffff">
+    <rect x="28" y="30" width="14" height="68" rx="3"/>
+    <rect x="28" y="30" width="44" height="14" rx="3"/>
+    <rect x="28" y="57" width="58" height="14" rx="3"/>
+    <rect x="28" y="84" width="72" height="14" rx="3"/>
+  </g>
+  <text class="w" x="156" y="94">EnvoScale</text>
+</svg>

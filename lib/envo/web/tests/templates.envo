@@ -2,7 +2,7 @@
 // Landing pages' structure: the skip link, landmarks, the current page, the page's
 // contents, and escaping of every text.
 // expect: css: light accent yes, dark accent yes, focus ring yes, reduced motion yes
-// expect: docs: skip yes, main yes, current yes, toc yes, title escaped yes, content yes
+// expect: docs: skip yes, main yes, current yes, toc yes, title escaped yes, content yes, logo yes
 // expect: landing: hero yes, primary yes, cards 2, body yes
 use envo.web;
 use envo.web.templates;
@@ -58,6 +58,10 @@ nav.Push(templates.NavItem.Heading("Start"));
 nav.Push(templates.NavItem.Link("Intro", "intro.html", 0));
 nav.Push(templates.NavItem.Link("Other", "other.html", 1));
 markdown.Doc d = markdown.Render("# Intro\n\n## First\n\nText.\n\n### Deeper\n", markdown.Options.Site());
+templates.Frame lf = templates.Frame.New("Site", "index.html", "lumen.css");
+lf.Logo = string.From("logo.svg");
+string withLogo = templates.Docs(lf, "Intro", "", nav, "intro.html", d);
+
 string page = templates.Docs(f, "Intro <x>", "", nav, "intro.html", d);
 str p = page.AsStr();
 write(1, "docs:");
@@ -67,6 +71,7 @@ Yes(", current", Has(p, "<a href=\"intro.html\" aria-current=\"page\">Intro</a>"
 Yes(", toc", Has(p, "<a href=\"#first\">First</a>") && Has(p, "class=\"l3\""));
 Yes(", title escaped", Has(p, "<title>Intro &lt;x&gt; · Site &lt;&amp;&gt;</title>"));
 Yes(", content", Has(p, "<h2 id=\"first\">First</h2>"));
+Yes(", logo", Has(withLogo.AsStr(), "<link rel=\"icon\" type=\"image/svg+xml\" href=\"logo.svg\">") && Has(withLogo.AsStr(), "<img src=\"logo.svg\" alt=\"\" width=\"28\" height=\"28\">") && !Has(p, "rel=\"icon\""));
 print("");
 
 templates.Landing l = templates.Landing.New("Hello", "A lead.");

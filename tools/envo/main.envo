@@ -12,7 +12,7 @@ use envo.eon;
 use ports.{IoError};
 use envoc.diag;
 
-const str ENVO_VERSION = "0.5.0-dev";
+const str ENVO_VERSION = "0.5.0";
 const u32 TGT_LINUX = 1;
 const u32 TGT_WINDOWS = 2;
 const u32 TGT_A64 = 4;          // aarch64-linux (M10)

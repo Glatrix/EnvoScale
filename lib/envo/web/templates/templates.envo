@@ -111,7 +111,7 @@ void BaseCss(ref string css) {
     css.Append("hr { border: 0; border-top: 1px solid var(--sep); margin: var(--xl) 0; }\n");
     css.Append("img { max-width: 100%; }\n");
     css.Append(".bar { display: flex; align-items: center; gap: var(--l); padding: var(--m) var(--xl); border-bottom: 1px solid var(--sep); background: var(--surface); position: sticky; top: 0; z-index: 5; }\n");
-    css.Append(".brand { font: var(--headline); font-weight: 700; color: var(--text); text-decoration: none; }\n");
+    css.Append(".brand { font: var(--headline); font-weight: 700; color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: var(--s); }\n");
     css.Append(".bar nav { display: flex; gap: var(--l); flex-wrap: wrap; }\n");
     css.Append(".bar nav a { color: var(--text2); text-decoration: none; }\n");
     css.Append(".bar nav a:hover, .bar nav a[aria-current] { color: var(--text); }\n");
@@ -178,8 +178,9 @@ public struct Frame {
     string CssHref;
     List<NavItem> Top;
     string Footer;
+    string Logo;        // the site's mark (an SVG), beside its name and as the icon; empty for none
 
-    public static Frame New(str site, str home, str cssHref) => new Frame { Site = string.From(site), Home = string.From(home), CssHref = string.From(cssHref), Top = List<NavItem>.New(), Footer = string.New() };
+    public static Frame New(str site, str home, str cssHref) => new Frame { Site = string.From(site), Home = string.From(home), CssHref = string.From(cssHref), Top = List<NavItem>.New(), Footer = string.New(), Logo = string.New() };
 }
 
 void Head(ref web.Html h, in Frame f, str title, str description) {
@@ -201,6 +202,13 @@ void Head(ref web.Html h, in Frame f, str title, str description) {
         h.Attr("content", description);
         h.Raw("\n");
     }
+    if (f.Logo.Len() > 0) {
+        h.Open("link");
+        h.Attr("rel", "icon");
+        h.Attr("type", "image/svg+xml");
+        h.Attr("href", f.Logo.AsStr());
+        h.Raw("\n");
+    }
     h.Open("link");
     h.Attr("rel", "stylesheet");
     h.Attr("href", f.CssHref.AsStr());
@@ -212,6 +220,13 @@ void Bar(ref web.Html h, in Frame f, str current) {
     h.Open("a");
     h.Attr("class", "brand");
     h.Attr("href", f.Home.AsStr());
+    if (f.Logo.Len() > 0) {
+        h.Open("img");
+        h.Attr("src", f.Logo.AsStr());
+        h.Attr("alt", "");
+        h.Attr("width", "28");
+        h.Attr("height", "28");
+    }
     h.Text(f.Site.AsStr());
     h.Close("a");
     h.Raw("\n<nav aria-label=\"Site\">");
