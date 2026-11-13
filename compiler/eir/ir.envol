@@ -87,6 +87,7 @@ public struct EFunc {
     u32 FirstValue;     // its parameters are its first values
     u32 NValues;
     u32 Pos;
+    u64 Deref;      // -O2: parameters (bit k) that point to memory valid for the whole call
 }
 
 public struct EBlock {
@@ -186,7 +187,7 @@ public struct Module {
         m.Fields.Push(0);
         m.Globals.Push(new EGlobal { Name = none, Type = 0, ReadOnly = false, Init = 0, Pos = 0 });
         m.Inits.Push(new EInit { Kind = 0, Int = 0, Bytes = none, First = 0, Next = 0 });
-        m.Funcs.Push(new EFunc { Name = none, Extern = false, Abi = none, Ret = 0, NParams = 0, FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0 });
+        m.Funcs.Push(new EFunc { Name = none, Extern = false, Abi = none, Ret = 0, NParams = 0, FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0, Deref = 0 });
         m.Blocks.Push(new EBlock { Func = 0, FirstParam = 0, NParams = 0, FirstInst = 0, NInsts = 0, Pos = 0 });
         m.Vals.Push(new EVal { Type = 0, Block = 0, Inst = 0, Pos = 0 });
         m.Insts.Push(new EInst { Op = 0, Ty = 0, Ty2 = 0, Result = 0, FirstOp = 0, NOps = 0, Block = 0, Imm = 0, Str = none, Pos = 0, Src = 0 });

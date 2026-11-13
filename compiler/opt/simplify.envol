@@ -691,5 +691,6 @@ public void Optimize(ref Module m) {
         if (m.Func(fi).Extern) continue;
         SimplifyFunc(ref m, fi);
         if (ThreadFunc(ref m, fi)) SimplifyFunc(ref m, fi);
+        HoistLoads(ref m, fi);
     }
 }

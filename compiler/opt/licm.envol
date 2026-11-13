@@ -1,0 +1,296 @@
+// -O2 loop-invariant loads. In a loop that writes no memory (no store, copy, zero, call or
+// intrinsic), a load whose address is a field of a parameter that points to valid memory
+// for the whole call (EFunc.Deref: `in` and `ref` parameters, `this`, aggregates passed by
+// pointer) reads the same value every time round. It moves, with the field addresses it
+// needs, to the end of the loop's preheader: the one block outside the loop that branches
+// unconditionally into its header. A loop over a `str` parameter then keeps the string's
+// pointer and length in registers instead of reloading them each iteration.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 OP_FIELDADDR = 44;
+const u16 OP_LOADOP = 42;
+
+// Does instruction op write memory (or call something that may)?
+bool Writes(u16 op) => op == 43 || op == 47 || op == 48 || op == 52 || op == 53 || op == 54;
+
+// Block sets, nb bits each.
+struct BlockSets {
+    usize Words;
+    List<u64> Bits;
+
+    static BlockSets New(u32 sets, u32 nb, bool full) {
+        BlockSets s = new BlockSets { Words = ((nb + 63) / 64) as usize, Bits = List<u64>.New() };
+        if (s.Words == 0) s.Words = 1;
+        u64 fill = 0;
+        if (full) fill = 0xFFFFFFFFFFFFFFFF;
+        for (usize i = 0; i < s.Words * sets as usize; i++) s.Bits.Push(fill);
+        return s;
+    }
+
+    bool Has(in this, u32 set, u32 b) {
+        u64 w = this.Bits.Get(set as usize * this.Words + (b / 64) as usize);
+        return (w >> (b % 64) as u64) & 1 != 0;
+    }
+
+    void Add(ref this, u32 set, u32 b) {
+        usize at = set as usize * this.Words + (b / 64) as usize;
+        this.Bits.Set(at, this.Bits.Get(at) | ((1 as u64) << (b % 64) as u64));
+    }
+}
+
+// The blocks (relative) the terminator of block b branches to.
+List<u32> Succs(in Module m, in EFunc f, u32 b) {
+    List<u32> out2 = List<u32>.New();
+    EBlock blk = m.Block(f.FirstBlock + b);
+    EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+    for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+        EOp op = m.Op(o);
+        if (op.Kind == OK_TARGET) out2.Push(op.Ref - f.FirstBlock);
+    }
+    return out2;
+}
+
+// Is v (a value of f) a pointer valid for the whole call: a Deref parameter, or a field
+// address inside one, computed outside the loop or by an instruction being hoisted?
+bool Valid(in Module m, in EFunc f, u32 v, in List<bool> hoist, in List<bool> inLoop) {
+    u32 k = v - f.FirstValue;
+    if (k < f.NParams) return k < 64 && (f.Deref >> k as u64) & 1 != 0;
+    EVal val = m.Val(v);
+    if (val.Inst == 0) return false;
+    EInst d = m.Inst(val.Inst);
+    if (d.Op != OP_FIELDADDR) return false;
+    u32 db = val.Block - f.FirstBlock;
+    if (inLoop.Get(db as usize) && !hoist.Get(k as usize)) return false;
+    return Valid(m, f, m.Op(d.FirstOp).Ref, hoist, inLoop);
+}
+
+// Is operand value v available before the loop: defined outside it, or hoisted?
+bool Outside(in Module m, in EFunc f, u32 v, in List<bool> hoist, in List<bool> inLoop) {
+    u32 k = v - f.FirstValue;
+    if (k < f.NParams) return true;
+    EVal val = m.Val(v);
+    return !inLoop.Get((val.Block - f.FirstBlock) as usize) || hoist.Get(k as usize);
+}
+
+// Hoists the invariant loads of function fi's loops; true if any moved.
+bool HoistLoads(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    if (f.Deref == 0 || f.NBlocks < 2) return false;
+    u32 nb = f.NBlocks;
+    // successors and predecessors, each block's in one flat list
+    List<u32> sfirst = List<u32>.New();
+    List<u32> slist = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) {
+        sfirst.Push(slist.Len() as u32);
+        foreach (var s in Succs(m, f, b).AsSlice()) slist.Push(s);
+    }
+    sfirst.Push(slist.Len() as u32);
+    List<u32> pcount = List<u32>.New();
+    for (u32 b = 0; b <= nb; b++) pcount.Push(0);
+    foreach (var s in slist.AsSlice()) pcount.Set((s + 1) as usize, pcount.Get((s + 1) as usize) + 1);
+    for (u32 b = 1; b <= nb; b++) pcount.Set(b as usize, pcount.Get(b as usize) + pcount.Get((b - 1) as usize));
+    List<u32> pfirst = List<u32>.New();
+    List<u32> plist = List<u32>.New();
+    for (u32 b = 0; b <= nb; b++) pfirst.Push(pcount.Get(b as usize));
+    for (usize i = 0; i < slist.Len(); i++) plist.Push(0);
+    List<u32> fill = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) fill.Push(pfirst.Get(b as usize));
+    for (u32 b = 0; b < nb; b++) {
+        for (u32 j = sfirst.Get(b as usize); j < sfirst.Get((b + 1) as usize); j++) {
+            u32 s = slist.Get(j as usize);
+            plist.Set(fill.Get(s as usize) as usize, b);
+            fill.Set(s as usize, fill.Get(s as usize) + 1);
+        }
+    }
+    // dominators (iterative; entry is block 0)
+    BlockSets dom = BlockSets.New(nb, nb, true);
+    for (usize w = 0; w < dom.Words; w++) dom.Bits.Set(w, 0);
+    dom.Add(0, 0);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (u32 b = 1; b < nb; b++) {
+            // the intersection of the predecessors' sets, plus b
+            List<u64> acc = List<u64>.New();
+            for (usize w = 0; w < dom.Words; w++) acc.Push(0xFFFFFFFFFFFFFFFF);
+            bool any = false;
+            for (u32 j = pfirst.Get(b as usize); j < pfirst.Get((b + 1) as usize); j++) {
+                u32 p = plist.Get(j as usize);
+                any = true;
+                for (usize w = 0; w < dom.Words; w++) acc.Set(w, acc.Get(w) & dom.Bits.Get(p as usize * dom.Words + w));
+            }
+            if (!any) {
+                for (usize w = 0; w < dom.Words; w++) acc.Set(w, 0);
+            }
+            usize at = (b / 64) as usize;
+            acc.Set(at, acc.Get(at) | ((1 as u64) << (b % 64) as u64));
+            for (usize w = 0; w < dom.Words; w++) {
+                if (acc.Get(w) != dom.Bits.Get(b as usize * dom.Words + w)) {
+                    dom.Bits.Set(b as usize * dom.Words + w, acc.Get(w));
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    List<bool> hoist = List<bool>.New();       // per value: its instruction moves
+    List<u32> dest = List<u32>.New();          // per value: the preheader (relative) it moves to
+    for (u32 k = 0; k < f.NValues; k++) {
+        hoist.Push(false);
+        dest.Push(0);
+    }
+    bool moved = false;
+    // each back edge t -> h (h dominates t) makes a natural loop
+    for (u32 t = 0; t < nb; t++) {
+        for (u32 sj = sfirst.Get(t as usize); sj < sfirst.Get((t + 1) as usize); sj++) {
+            u32 h = slist.Get(sj as usize);
+            if (!dom.Has(t, h)) continue;
+            // the loop's blocks: h, and everything that reaches t without passing h
+            List<bool> inLoop = List<bool>.New();
+            for (u32 b = 0; b < nb; b++) inLoop.Push(false);
+            inLoop.Set(h as usize, true);
+            List<u32> work = List<u32>.New();
+            if (t != h) {
+                inLoop.Set(t as usize, true);
+                work.Push(t);
+            }
+            while (work.Len() > 0) {
+                u32 b = work.Pop().Unwrap();
+                for (u32 j = pfirst.Get(b as usize); j < pfirst.Get((b + 1) as usize); j++) {
+                    u32 p = plist.Get(j as usize);
+                    if (!inLoop.Get(p as usize)) {
+                        inLoop.Set(p as usize, true);
+                        work.Push(p);
+                    }
+                }
+            }
+            // the preheader: the one outside predecessor of h, ending in `br h`
+            u32 pre = nb;
+            u32 outside = 0;
+            for (u32 j = pfirst.Get(h as usize); j < pfirst.Get((h + 1) as usize); j++) {
+                u32 p = plist.Get(j as usize);
+                if (inLoop.Get(p as usize)) continue;
+                outside++;
+                pre = p;
+            }
+            if (outside != 1) continue;
+            EBlock pb = m.Block(f.FirstBlock + pre);
+            if (m.Inst(pb.FirstInst + pb.NInsts - 1).Op != OP_BR) continue;
+            // no memory written inside
+            bool writes = false;
+            for (u32 b = 0; b < nb && !writes; b++) {
+                if (!inLoop.Get(b as usize)) continue;
+                EBlock blk = m.Block(f.FirstBlock + b);
+                for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                    if (Writes(m.Inst(i).Op)) writes = true;
+                }
+            }
+            if (writes) continue;
+            // field addresses and loads of valid pointers, until nothing more moves
+            bool more = true;
+            while (more) {
+                more = false;
+                for (u32 b = 0; b < nb; b++) {
+                    if (!inLoop.Get(b as usize)) continue;
+                    EBlock blk = m.Block(f.FirstBlock + b);
+                    for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                        EInst inst = m.Inst(i);
+                        if (inst.Result == 0) continue;
+                        u32 rk = inst.Result - f.FirstValue;
+                        if (hoist.Get(rk as usize)) continue;
+                        if (inst.Op != OP_FIELDADDR && inst.Op != OP_LOADOP) continue;
+                        u32 a = m.Op(inst.FirstOp).Ref;
+                        if (m.Op(inst.FirstOp).Kind != OK_VALUE || !Outside(m, f, a, hoist, inLoop)) continue;
+                        if (inst.Op == OP_LOADOP && !Valid(m, f, a, hoist, inLoop)) continue;
+                        if (inst.Op == OP_FIELDADDR && !Valid(m, f, a, hoist, inLoop)) continue;
+                        hoist.Set(rk as usize, true);
+                        dest.Set(rk as usize, pre);
+                        more = true;
+                        moved = true;
+                    }
+                }
+            }
+        }
+    }
+    if (!moved) return false;
+
+    // the new body: the same values and blocks, hoisted instructions at the end of their
+    // preheader, before its branch, in their original order
+    u32 v0 = m.Vals.Len() as u32;
+    u32 b0 = m.Blocks.Len() as u32;
+    List<bool> placed = List<bool>.New();
+    for (u32 k = 0; k < f.NValues; k++) placed.Push(false);
+    for (u32 k = 0; k < f.NValues; k++) {
+        EVal old = m.Val(f.FirstValue + k);
+        old.Block = old.Block - f.FirstBlock + b0;
+        m.Vals.Push(old);
+    }
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        u32 first = m.Insts.Len() as u32;
+        for (u32 i = blk.FirstInst; i + 1 < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Result != 0 && hoist.Get((inst.Result - f.FirstValue) as usize)) continue;
+            Move(ref m, i, b0 + b, f, v0, b0);
+        }
+        // instructions hoisted here, each after the hoisted ones it uses
+        bool again = true;
+        while (again) {
+            again = false;
+            for (u32 c = 0; c < nb; c++) {
+                EBlock cb = m.Block(f.FirstBlock + c);
+                for (u32 i = cb.FirstInst; i < cb.FirstInst + cb.NInsts; i++) {
+                    EInst inst = m.Inst(i);
+                    if (inst.Result == 0) continue;
+                    u32 rk = inst.Result - f.FirstValue;
+                    if (!hoist.Get(rk as usize) || dest.Get(rk as usize) != b || placed.Get(rk as usize)) continue;
+                    u32 a = m.Op(inst.FirstOp).Ref - f.FirstValue;
+                    if (a < f.NValues && hoist.Get(a as usize) && !placed.Get(a as usize)) continue;
+                    Move(ref m, i, b0 + b, f, v0, b0);
+                    placed.Set(rk as usize, true);
+                    again = true;
+                }
+            }
+        }
+        Move(ref m, blk.FirstInst + blk.NInsts - 1, b0 + b, f, v0, b0);
+        u32 fp = 0;
+        if (blk.NParams > 0) fp = v0 + blk.FirstParam - f.FirstValue;
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = blk.NParams, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+    }
+    EFunc nf = m.Func(fi);
+    nf.FirstValue = v0;
+    nf.FirstBlock = b0;
+    m.Funcs.Set(fi as usize, nf);
+    return true;
+}
+
+// Copies instruction i into new block nb, values renumbered from v0 and blocks from b0.
+void Move(ref Module m, u32 i, u32 nb, in EFunc f, u32 v0, u32 b0) {
+    EInst inst = m.Inst(i);
+    u32 firstOp = m.Ops.Len() as u32;
+    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        if (op.Kind == OK_VALUE) {
+            op.Ref = v0 + op.Ref - f.FirstValue;
+        } else if (op.Kind == OK_TARGET) {
+            op.Ref = b0 + op.Ref - f.FirstBlock;
+            u32 args = m.Args.Len() as u32;
+            for (u32 a = 0; a < op.NArgs; a++) m.Args.Push(v0 + m.Arg(op.Args + a) - f.FirstValue);
+            op.Args = args;
+        }
+        m.Ops.Push(op);
+    }
+    inst.FirstOp = firstOp;
+    inst.Block = nb;
+    if (inst.Result != 0) inst.Result = v0 + inst.Result - f.FirstValue;
+    m.Insts.Push(inst);
+    if (inst.Result != 0) {
+        EVal val = m.Val(inst.Result);
+        val.Block = nb;
+        val.Inst = m.Insts.Len() as u32 - 1;
+        m.Vals.Set(inst.Result as usize, val);
+    }
+}

@@ -437,7 +437,7 @@ public struct Lower {
         Text name = this.M.Own(given);         // given may be the checker's, which goes first
         this.M.Funcs.Push(new EFunc {
             Name = name, Extern = false, Abi = TextOf(""), Ret = ret, NParams = nparams,
-            FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0
+            FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0, Deref = 0
         });
         this.M.Names.Put(TextStr(name), (NAME_FUNC << 32) | f as u64);
         return f;
@@ -678,6 +678,7 @@ public struct Lower {
         this.RetSlot = 0;
         if (this.IsAggregate(ret)) {
             this.SetValType(first, ET_PTR);
+            this.MarkDeref(first);
             this.RetSlot = first;
             k = 1;
         }
@@ -731,6 +732,7 @@ public struct Lower {
         if (byref || this.IsAggregate(pt)) {
             // the caller passes a pointer to a copy this function owns, or to the borrowed place
             this.SetValType(v, ET_PTR);
+            this.MarkDeref(v);
             this.SetSymSlot(s, v);
             this.DebugLocal(s, v, et);
         } else {
@@ -742,6 +744,15 @@ public struct Lower {
             this.SetSymSlot(s, slot);
             this.DebugLocal(s, slot, et);
         }
+    }
+
+    // Parameter v of the function being lowered points to memory valid for the whole call.
+    void MarkDeref(ref this, u32 v) {
+        EFunc ef = this.M.Func(this.Func);
+        u32 k = v - ef.FirstValue;
+        if (k >= 64) return;
+        ef.Deref = ef.Deref | ((1 as u64) << k as u64);
+        this.M.Funcs.Set(this.Func as usize, ef);
     }
 
     // The local symbol the checker made for parameter node p.

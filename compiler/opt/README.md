@@ -46,6 +46,17 @@ and every branch passes the current value along. The local starts as 0, as a slo
 The pass runs before inlining and again after it (inlined copies bring their own slots);
 simplification then removes the parameters that receive one value on every edge.
 
+## `licm.envol`: loop-invariant loads
+
+In a loop that writes no memory (no store, copy, zero, call or intrinsic), a load from a
+field of a parameter that points to valid memory for the whole call reads the same value
+every time round. Lowering records those parameters in `EFunc.Deref`: `in` and `ref`
+parameters, `this`, aggregates passed by pointer, and the hidden result pointer. The load
+moves, with the field addresses it needs, to the end of the loop's preheader (the one
+block outside the loop that branches unconditionally into its header). A loop over a
+`str` parameter then keeps its pointer and length in registers. EIR read from text or
+object files has no `Deref` bits, so it hoists nothing there.
+
 ## `simplify.envol`: folding, copy propagation, dead code, CFG
 
 Per function, repeated until nothing changes (at most 8 rounds):

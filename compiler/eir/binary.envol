@@ -367,7 +367,7 @@ struct Decoder {
         }
         EFunc f = new EFunc {
             Name = name, Extern = flags == 1, Abi = abi, Ret = ret, NParams = nparams,
-            FirstBlock = m.Blocks.Len() as u32, NBlocks = 0, FirstValue = firstValue, NValues = nvalues, Pos = 0
+            FirstBlock = m.Blocks.Len() as u32, NBlocks = 0, FirstValue = firstValue, NValues = nvalues, Pos = 0, Deref = 0
         };
         m.Funcs.Push(f);
         this.Name(ref m, name, NAME_FUNC, fi);

@@ -451,7 +451,7 @@ struct Reader {
         this.Next();
         u32 f = m.Funcs.Len() as u32;
         Text none = TextOf("");
-        m.Funcs.Push(new EFunc { Name = none, Extern = false, Abi = none, Ret = 0, NParams = 0, FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0 });
+        m.Funcs.Push(new EFunc { Name = none, Extern = false, Abi = none, Ret = 0, NParams = 0, FirstBlock = 0, NBlocks = 0, FirstValue = 0, NValues = 0, Pos = 0, Deref = 0 });
         this.Func = f;
         this.Values = StrMap<u32>.New();
         this.Blocks = StrMap<u32>.New();

@@ -139,6 +139,7 @@ impl Lower {
         this.RetSlot = 0;
         if (this.IsAggregate(fty.Elem)) {
             this.SetValType(first, ET_PTR);
+            this.MarkDeref(first);
             this.RetSlot = first;
             k = 1;
         }
