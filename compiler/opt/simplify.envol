@@ -155,6 +155,11 @@ struct Simplifier {
             if (this.KnownOp(m, f)) {
                 if (this.ConstOp(m, f) != 0) this.MakeBr(ref m, i, f + 1);
                 else this.MakeBr(ref m, i, f + 2);
+            } else if (OnlyUnreachable(m, m.Op(f + 2).Ref)) {
+                // the other side cannot happen (a `match` arm no value reaches)
+                this.MakeBr(ref m, i, f + 1);
+            } else if (OnlyUnreachable(m, m.Op(f + 1).Ref)) {
+                this.MakeBr(ref m, i, f + 2);
             }
             return;
         }
@@ -423,6 +428,29 @@ void SimplifyFunc(ref Module m, u32 fi) {
     Rebuild(ref m, fi, s);
 }
 
+// Is block b nothing but `unreachable`?
+bool OnlyUnreachable(in Module m, u32 b) {
+    EBlock blk = m.Block(b);
+    return blk.NInsts == 1 && m.Inst(blk.FirstInst).Op == 60;
+}
+
+// If instruction i writes into a local of f (a store, copy or zero into a slot, or the
+// slot's end), the slot's value (relative); else NONE.
+u32 WrittenLocal(in Module m, in EFunc f, in List<u32> defOf, u32 i) {
+    EInst inst = m.Inst(i);
+    u32 at = 0;
+    if (inst.Op == 43 && inst.NOps == 2) at = inst.FirstOp + 1;
+    else if ((inst.Op == 47 || inst.Op == 48 || inst.Op == 4) && inst.NOps >= 1) at = inst.FirstOp;
+    else return NONE;
+    EOp op = m.Op(at);
+    if (op.Kind != OK_VALUE) return NONE;
+    u32 k = op.Ref - f.FirstValue;
+    if (k >= f.NValues) return NONE;
+    u32 d = defOf.Get(k as usize);
+    if (d == NONE || m.Inst(d).Op != OP_SLOT) return NONE;
+    return k;
+}
+
 // Dead-code elimination, block merging and renumbering: a new body for function fi at
 // the end of the module's lists.
 void Rebuild(ref Module m, u32 fi, in Simplifier s) {
@@ -465,13 +493,35 @@ void Rebuild(ref Module m, u32 fi, in Simplifier s) {
         if (blk.FirstInst + blk.NInsts > lastInst) lastInst = blk.FirstInst + blk.NInsts;
     }
     for (u32 i = firstInst; i < lastInst; i++) dead.Push(false);
+    // each value's defining instruction in reachable code (NONE otherwise); a value's
+    // recorded Inst can be stale once an earlier pass has moved the body
+    List<u32> defOf = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) defOf.Push(NONE);
     List<u32> work = List<u32>.New();
     for (u32 b = 0; b < nb; b++) {
         if (!s.Reach.Get(b as usize)) continue;
         EBlock blk = m.Block(f.FirstBlock + b);
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
-            if (inst.Result != 0 && IsPure(inst.Op) && uses.Get((inst.Result - f.FirstValue) as usize) == 0) work.Push(i);
+            if (inst.Result == 0) continue;
+            defOf.Set((inst.Result - f.FirstValue) as usize, i);
+            if (IsPure(inst.Op) && uses.Get((inst.Result - f.FirstValue) as usize) == 0) work.Push(i);
+        }
+    }
+    // a local that is only written (stored, copied or zeroed into, ended) is never read:
+    // its writes go, and then the local
+    List<u32> writes = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) writes.Push(0);
+    for (u32 pass = 0; pass < 2; pass++) {
+        for (u32 b = 0; b < nb; b++) {
+            if (!s.Reach.Get(b as usize)) continue;
+            EBlock blk = m.Block(f.FirstBlock + b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                u32 d = WrittenLocal(m, f, defOf, i);
+                if (d == NONE) continue;
+                if (pass == 0) writes.Set(d as usize, writes.Get(d as usize) + 1);
+                else if (uses.Get(d as usize) == writes.Get(d as usize)) work.Push(i);
+            }
         }
     }
     while (work.Len() > 0) {
@@ -485,8 +535,8 @@ void Rebuild(ref Module m, u32 fi, in Simplifier s) {
             usize v = (op.Ref - f.FirstValue) as usize;
             u32 left = uses.Get(v) - 1;
             uses.Set(v, left);
-            EVal val = m.Val(op.Ref);
-            if (left == 0 && val.Inst != 0 && IsPure(m.Inst(val.Inst).Op)) work.Push(val.Inst);
+            u32 d = defOf.Get(v);
+            if (left == 0 && d != NONE && IsPure(m.Inst(d).Op)) work.Push(d);
         }
     }
     // merges: a block reached only by an unconditional branch joins its predecessor
@@ -685,13 +735,21 @@ void Rebuild(ref Module m, u32 fi, in Simplifier s) {
 // -O2's EIR passes over every function definition of m.
 public void Optimize(ref Module m) {
     PromoteLocals(ref m);
+    // cleaned up first, a callee is inlined at its real size
+    for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
+        if (m.Func(fi).Extern) continue;
+        SimplifyFunc(ref m, fi);
+        if (CseFunc(ref m, fi)) SimplifyFunc(ref m, fi);
+    }
     InlineSmall(ref m);
     PromoteLocals(ref m);
     for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
         if (m.Func(fi).Extern) continue;
         SimplifyFunc(ref m, fi);
         if (ThreadFunc(ref m, fi)) SimplifyFunc(ref m, fi);
+        if (CseFunc(ref m, fi)) SimplifyFunc(ref m, fi);
         HoistLoads(ref m, fi);
         DropChecks(ref m, fi);
+        LayoutFunc(ref m, fi);
     }
 }

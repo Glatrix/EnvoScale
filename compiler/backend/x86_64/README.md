@@ -20,9 +20,13 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **In place.** Add, sub, the bitwise operations, loads, field addresses, pointer adds
   and integer conversions compute straight into the result's register, with the other
   operand from its register or as an immediate; loads and stores address a value's
-  register or the frame directly.
+  register or the frame directly. A 32-bit add or subtract runs on the low half, so the
+  carry or overflow flag is its check and the result needs no re-normalizing; `and`,
+  `or` and `xor` of normal values are normal and are not re-extended. Immediates that fit
+  in a byte use the short form.
 - **Compare and branch.** A compare used only by the `condbr` after it becomes `cmp` and
-  one `jcc`; a branch to the block emitted next falls through.
+  one `jcc`; a branch to the block emitted next falls through, the false side as well as
+  the true one (the blocks' order is `compiler/opt/layout.envol`'s).
 - **Parallel moves.** Branch arguments, call arguments and incoming parameters are moved
   as one parallel copy: a move goes once nothing still to be read lives in its
   destination, a value already in place is not moved, and a cycle goes through r11.
@@ -44,7 +48,10 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   callee-saved and go to any value (a function pushes the ones it uses after rbp); rsi,
   rdi and r8-r10 go only to values whose interval holds no call or system call (and rsi
   and rdi no copy or fill), and need no saving. A value that gets no register keeps its
-  stack slot. rax, rcx, rdx and r11 are the code generator's scratch.
+  stack slot. rax, rcx, rdx and r11 are the code generator's scratch. Hints keep copies
+  away: a block parameter takes a register one of its incoming values has, a value passed
+  to a parameter takes the parameter's, and the result of an add, sub, `and`, `or` or
+  `xor` takes its first operand's when that operand dies there, if each is free.
 - **Small copies and zeroing.** `copy` and `zero` of a constant size up to 256 bytes,
   and the zeroing of a frame's slots, become 8/4/2/1-byte moves instead of
   `rep movsb`/`rep stosb`.

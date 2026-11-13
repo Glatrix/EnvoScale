@@ -52,6 +52,8 @@ opt/mem2reg.envol
 opt/thread.envol
 opt/licm.envol
 opt/checks.envol
+opt/cse.envol
+opt/layout.envol
 backend/x86_64/asm.envol
 backend/x86_64/image.envol
 backend/x86_64/regalloc.envol

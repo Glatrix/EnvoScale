@@ -249,17 +249,26 @@ struct Gen {
             ext = 6;
             code = ALU_XOR;
         }
+        // 32-bit add and sub: the flags check them, and the result is already normal
+        bool wide32 = size == 4 && op != 7 && op <= 9;
         if (op == 7) this.A.ImulRR(d, rb);
+        else if (wide32 && isImm) this.A.AluImm32(ext, d, imm);
+        else if (wide32) this.A.Alu32(code, d, rb);
         else if (isImm) this.A.AluImm(ext, d, imm);
         else this.A.Alu(code, d, rb);
         if (op == 8 || op == 9) {
-            if (size == 8) {
+            if (size == 8 || wide32) {
                 u32 ovTrap = this.TrapLabel(TRAP_OVERFLOW);
                 if (signed) this.A.Jcc(CC_O, ovTrap);
                 else this.A.Jcc(CC_B, ovTrap);
+                if (wide32 && signed) this.A.Extend(d, 4, true);
             } else {
                 this.CheckNormal(m, d, inst.Ty);
             }
+        } else if (op >= 14 && op <= 16) {
+            // and, or, xor of normal values are normal
+        } else if (wide32) {
+            if (signed) this.A.Extend(d, 4, true);
         } else if (inst.Ty != ET_BOOL) {
             this.A.Extend(d, size, signed);
         }
@@ -986,7 +995,11 @@ struct Gen {
             }
             EOp yes = m.Op(f + 1);
             EOp no = m.Op(f + 2);
-            if (this.Opt && no.NArgs == 0) {
+            if (this.Opt && yes.NArgs == 0 && no.Ref == this.NextBlock) {
+                // the false side is next: branch on true, fall through
+                this.A.Jcc(ccTrue, this.BlockLabels.Get(yes.Ref as usize));
+                this.Jump(m, f + 2, true);
+            } else if (this.Opt && no.NArgs == 0) {
                 this.A.Jcc(ccTrue ^ 1, this.BlockLabels.Get(no.Ref as usize));
                 this.Jump(m, f + 1, true);
             } else if (this.Opt && yes.NArgs == 0) {

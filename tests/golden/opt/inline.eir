@@ -2,8 +2,8 @@ eir 1 target "x86_64-linux"
 
 type $Pair = { i64, i64 }
 
-; a small single-block function is inlined; its slot moves to the caller's entry block
-; and is zeroed where the call was
+; a small single-block function is inlined; the fields of the copy in its slot are read
+; from where they were copied, so the slot goes, and the second load is the first one
 func @Second(%0: ptr) -> i64 {
 ^bb0:
   %1 = slot $Pair

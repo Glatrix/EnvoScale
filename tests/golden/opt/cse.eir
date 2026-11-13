@@ -1,0 +1,30 @@
+eir 1 target "x86_64-linux"
+
+; common subexpressions: the second `a + b` is the first; a load after a store of the
+; same address gets the stored value, and a second load with nothing written between is
+; the first; below `i < n`, `i >= n` is false, so its branch goes
+func @Twice(%0: ptr, %1: i64, %2: i64) -> i64 {
+^bb0:
+  %3 = add.wrap i64 %1, %2
+  store i64 %3, %0
+  %4 = load i64 %0
+  %5 = load i64 %0
+  %6 = add.wrap i64 %1, %2
+  %7 = add.wrap i64 %4, %5
+  %8 = add.wrap i64 %7, %6
+  ret %8
+}
+
+func @Checked(%0: u64, %1: u64) -> u64 {
+^bb0:
+  %2 = cmp.lt u64 %0, %1
+  condbr %2, ^bb1, ^bb3
+^bb1:
+  %3 = cmp.ge u64 %0, %1
+  condbr %3, ^bb2, ^bb3
+^bb2:
+  %4 = const u64 7
+  ret %4
+^bb3:
+  ret %0
+}

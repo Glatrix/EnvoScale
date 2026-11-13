@@ -1,0 +1,486 @@
+// -O2 common subexpressions, redundant loads and decided branches. Blocks are visited so
+// that a block's dominators come first. An instruction that computes what one in a
+// dominating position already computed (the same operation on the same values) is
+// replaced by it. A load is replaced by an earlier load of the same address, or by the
+// value an earlier store wrote there, when no instruction that may write memory runs
+// between them: each block starts a new memory version unless its only predecessor ends
+// where it starts, and every store, copy, zero, call or intrinsic starts another. A
+// branch whose condition a dominating branch has already decided (the same compare, or
+// its opposite) becomes a plain branch. Field and element addresses get value numbers,
+// so loads through them match, but stay where they are: the backend folds each into the
+// one load or store after it. Simplification runs afterwards and drops what is unused.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 COP_ADDR = 2;
+const u16 COP_SLOTEND = 4;
+const u16 COP_CMPEQ = 20;
+const u16 COP_CMPLE = 23;
+const u16 COP_CMPGE = 25;
+const u16 COP_SELECT = 26;
+const u16 COP_LOAD = 42;
+const u16 COP_STORE = 43;
+const u16 COP_ELEMADDR = 45;
+const u16 COP_PTRADD = 46;
+const u16 COP_FIELDADDR = 44;
+const u16 COP_COPY = 47;
+const u16 COP_BRANCH = 55;
+const u16 COP_CONDBR2 = 56;
+
+// May instruction op write memory? (slot.end ends a local's life.)
+bool MayWrite(u16 op) => op == COP_SLOTEND || op == 43 || op == 47 || op == 48 || op == 52 || op == 53 || op == 54;
+
+// Does op compute a value from its operands alone (traps aside), so two of them with the
+// same operands are the same?
+bool Numbered(u16 op) {
+    if (op == 1 || op == 2) return true;            // const, addr
+    if (op >= 5 && op <= 41) return true;           // arithmetic, compares, select, conversions
+    return op == 44 || op == COP_ELEMADDR || op == COP_PTRADD;
+}
+
+// Is op an address computation (left in place for the backend to fold), or a constant
+// (cheaper to rematerialize than to keep in a register)?
+bool KeptInPlace(u16 op) => op == 1 || op == COP_ADDR || op == 44 || op == COP_ELEMADDR || op == COP_PTRADD;
+
+struct Cse {
+    u32 FirstValue;
+    List<u32> Vn;           // per value (relative): its number, the value it equals
+    List<u32> Table;        // inst + 1 per slot, 0 empty
+    List<u32> TableBlock;   // the block (relative) of each slot's instruction
+    // loads and stores: (type, address number, memory version) -> value, block
+    List<u32> MemTy;
+    List<u32> MemAddr;
+    List<u32> MemVer;
+    List<u32> MemVal;
+    List<u32> MemBlock;
+    List<u32> MemTable;     // index + 1 into the Mem* lists, 0 empty
+
+    u32 Num(in this, u32 v) {
+        u32 k = v - this.FirstValue;
+        if (k >= this.Vn.Len() as u32) return v;
+        return this.Vn.Get(k as usize) + this.FirstValue;
+    }
+}
+
+u64 CseMix(u64 h, u64 x) => (h ^ x) *% 0x100000001B3;
+
+// The hash of instruction inst through the value numbers.
+u64 HashInst(in Module m, in Cse c, in EInst inst) {
+    u64 h = 0xCBF29CE484222325;
+    h = CseMix(h, inst.Op as u64);
+    h = CseMix(h, inst.Ty as u64);
+    h = CseMix(h, inst.Ty2 as u64);
+    h = CseMix(h, inst.Imm);
+    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        h = CseMix(h, op.Kind as u64);
+        if (op.Kind == OK_VALUE) h = CseMix(h, c.Num(op.Ref) as u64);
+        else if (op.Kind == OK_INT) h = CseMix(h, op.Int);
+        else h = CseMix(h, op.Ref as u64);
+    }
+    return h;
+}
+
+// Do a and b compute the same, through the value numbers?
+bool SameInst(in Module m, in Cse c, in EInst a, in EInst b) {
+    if (a.Op != b.Op || a.Ty != b.Ty || a.Ty2 != b.Ty2 || a.Imm != b.Imm || a.NOps != b.NOps) return false;
+    for (u32 k = 0; k < a.NOps; k++) {
+        EOp x = m.Op(a.FirstOp + k);
+        EOp y = m.Op(b.FirstOp + k);
+        if (x.Kind != y.Kind) return false;
+        if (x.Kind == OK_VALUE) {
+            if (c.Num(x.Ref) != c.Num(y.Ref)) return false;
+        } else if (x.Kind == OK_INT) {
+            if (x.Int != y.Int) return false;
+        } else if (x.Kind == OK_GLOBAL) {
+            if (x.Ref != y.Ref || x.Int != y.Int || !Same(TextStr(x.Str), TextStr(y.Str))) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+u64 HashMem(u32 ty, u32 addr, u32 ver) => CseMix(CseMix(CseMix(0xCBF29CE484222325, ty as u64), addr as u64), ver as u64);
+
+// A compare in a canonical form: lt or le (gt and ge swap their operands), eq and ne with
+// the lower number first. Returns false if inst is not an integer compare.
+bool CmpForm(in Module m, in Cse c, in EInst inst, ref u16 op, ref u32 a, ref u32 b) {
+    if (inst.Op < COP_CMPEQ || inst.Op > COP_CMPGE || inst.NOps != 2) return false;
+    if (m.IsFloat(inst.Ty)) return false;
+    EOp x = m.Op(inst.FirstOp);
+    EOp y = m.Op(inst.FirstOp + 1);
+    if (x.Kind != OK_VALUE || y.Kind != OK_VALUE) return false;
+    u32 xa = c.Num(x.Ref);
+    u32 yb = c.Num(y.Ref);
+    op = inst.Op;
+    a = xa;
+    b = yb;
+    if (op == 24 || op == COP_CMPGE) {       // gt, ge: swap to lt, le
+        op = op - 2;
+        a = yb;
+        b = xa;
+    } else if ((op == COP_CMPEQ || op == 21) && yb < xa) {
+        a = yb;
+        b = xa;
+    }
+    return true;
+}
+
+// The canonical form of not (op a b), for integers: not lt(a, b) is le(b, a).
+void Negate(ref u16 op, ref u32 a, ref u32 b) {
+    if (op == COP_CMPEQ) { op = 21; return; }
+    if (op == 21) { op = COP_CMPEQ; return; }
+    u32 t = a;
+    a = b;
+    b = t;
+    if (op == 22) op = COP_CMPLE;
+    else op = 22;
+}
+
+// Runs the pass on function fi; true if anything changed.
+bool CseFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nb = f.NBlocks;
+    u32 nv = f.NValues;
+    if (nb == 0) return false;
+    Cfg g = BuildCfg(m, f);
+    BlockSets dom = g.Dom;
+    // blocks by the number of their dominators: a dominator comes before what it dominates
+    List<u32> depth = List<u32>.New();
+    u32 most = 0;
+    for (u32 b = 0; b < nb; b++) {
+        u32 d = 0;
+        for (usize w = 0; w < dom.Words; w++) d += PopCount(dom.Bits.Get(b as usize * dom.Words + w));
+        depth.Push(d);
+        if (d > most) most = d;
+    }
+    List<u32> order = List<u32>.New();
+    List<u32> count = List<u32>.New();
+    for (u32 d = 0; d <= most + 1; d++) count.Push(0);
+    for (u32 b = 0; b < nb; b++) count.Set((depth.Get(b as usize) + 1) as usize, count.Get((depth.Get(b as usize) + 1) as usize) + 1);
+    for (u32 d = 1; d <= most + 1; d++) count.Set(d as usize, count.Get(d as usize) + count.Get((d - 1) as usize));
+    for (u32 b = 0; b < nb; b++) order.Push(0);
+    for (u32 b = 0; b < nb; b++) {
+        u32 d = depth.Get(b as usize);
+        order.Set(count.Get(d as usize) as usize, b);
+        count.Set(d as usize, count.Get(d as usize) + 1);
+    }
+    u32 ninsts = 0;
+    for (u32 b = 0; b < nb; b++) ninsts += m.Block(f.FirstBlock + b).NInsts;
+    u32 size = 16;
+    while (size < ninsts * 2) size = size * 2;
+    Cse c = new Cse {
+        FirstValue = f.FirstValue, Vn = List<u32>.New(), Table = List<u32>.New(), TableBlock = List<u32>.New(),
+        MemTy = List<u32>.New(), MemAddr = List<u32>.New(), MemVer = List<u32>.New(), MemVal = List<u32>.New(), MemBlock = List<u32>.New(),
+        MemTable = List<u32>.New()
+    };
+    for (u32 k = 0; k < nv; k++) c.Vn.Push(k);
+    for (u32 s = 0; s < size; s++) {
+        c.Table.Push(0);
+        c.TableBlock.Push(0);
+        c.MemTable.Push(0);
+    }
+    u32 mask = size - 1;
+    List<bool> replaced = List<bool>.New();     // per value: its uses move to Vn
+    for (u32 k = 0; k < nv; k++) replaced.Push(false);
+    // the memory version at each block's end; NONE until visited
+    List<u32> exitVer = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) exitVer.Push(NONE);
+    u32 versions = 0;
+    // decided conditions: (block from which on it holds, compare form, value)
+    List<u32> factBlock = List<u32>.New();
+    List<u16> factOp = List<u16>.New();
+    List<u32> factA = List<u32>.New();
+    List<u32> factB = List<u32>.New();
+    List<u32> factCond = List<u32>.New();       // the condition's number
+    List<bool> factHolds = List<bool>.New();
+    // locals filled whole by a copy: the source, the memory version after it, its block
+    List<u32> slotSrc = List<u32>.New();
+    List<u32> slotVer = List<u32>.New();
+    List<u32> slotBlock = List<u32>.New();
+    List<u32> uses = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) {
+        slotSrc.Push(NONE);
+        slotVer.Push(0);
+        slotBlock.Push(0);
+        uses.Push(0);
+    }
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) CountUse(ref uses, f.FirstValue, op.Ref);
+                else if (op.Kind == OK_TARGET) {
+                    for (u32 a = 0; a < op.NArgs; a++) CountUse(ref uses, f.FirstValue, m.Arg(op.Args + a));
+                }
+            }
+        }
+    }
+    bool changed = false;
+    foreach (var b in order.AsSlice()) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        u32 np = g.PFirst.Get((b + 1) as usize) - g.PFirst.Get(b as usize);
+        u32 ver = NONE;
+        if (np == 1) {
+            u32 p = g.PList.Get(g.PFirst.Get(b as usize) as usize);
+            if (p != b) {
+                ver = exitVer.Get(p as usize);
+                // the edge into b decides p's condition
+                EBlock pb = m.Block(f.FirstBlock + p);
+                EInst term = m.Inst(pb.FirstInst + pb.NInsts - 1);
+                if (term.Op == COP_CONDBR2 && m.Op(term.FirstOp).Kind == OK_VALUE) {
+                    u32 yes = m.Op(term.FirstOp + 1).Ref - f.FirstBlock;
+                    u32 no = m.Op(term.FirstOp + 2).Ref - f.FirstBlock;
+                    if (yes != no) {
+                        u32 cv = m.Op(term.FirstOp).Ref;
+                        u16 op = 0;
+                        u32 a = 0;
+                        u32 bb = 0;
+                        EVal val = m.Val(cv);
+                        bool form = false;
+                        if (val.Inst != 0) form = CmpForm(m, c, m.Inst(val.Inst), ref op, ref a, ref bb);
+                        factBlock.Push(b);
+                        factOp.Push(op);
+                        factA.Push(a);
+                        factB.Push(bb);
+                        factCond.Push(c.Num(cv));
+                        factHolds.Push(b == yes);
+                        if (!form) factOp.Set(factOp.Len() - 1, 0);
+                    }
+                }
+            }
+        }
+        if (ver == NONE) {
+            versions++;
+            ver = versions;
+        }
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (MayWrite(inst.Op)) {
+                versions++;
+                ver = versions;
+                if (inst.Op == COP_STORE && inst.NOps == 2) {
+                    EOp sv = m.Op(inst.FirstOp);
+                    EOp sa = m.Op(inst.FirstOp + 1);
+                    if (sv.Kind == OK_VALUE && sa.Kind == OK_VALUE) MemPut(ref c, mask, inst.Ty, c.Num(sa.Ref), ver, sv.Ref, b);
+                } else if (inst.Op == COP_COPY && inst.NOps == 3) {
+                    // a whole local filled from src: until the next write, its fields are src's
+                    EOp dst = m.Op(inst.FirstOp);
+                    EOp src = m.Op(inst.FirstOp + 1);
+                    if (dst.Kind == OK_VALUE && src.Kind == OK_VALUE) {
+                        EVal dv = m.Val(dst.Ref);
+                        u32 k = dst.Ref - f.FirstValue;
+                        if (dv.Inst != 0 && k < nv && m.Inst(dv.Inst).Op == OP_SLOT && WholeSize(m, inst.FirstOp + 2, m.Ty(m.Inst(dv.Inst).Ty).Size as u64)) {
+                            slotSrc.Set(k as usize, src.Ref);
+                            slotVer.Set(k as usize, ver);
+                            slotBlock.Set(k as usize, b);
+                        }
+                    }
+                }
+                continue;
+            }
+            if (inst.Op == COP_FIELDADDR && inst.NOps == 1 && inst.Result != 0 && i + 1 < blk.FirstInst + blk.NInsts) {
+                // a field of a local just copied from src, read right here: read src's
+                EOp bop = m.Op(inst.FirstOp);
+                EInst next = m.Inst(i + 1);
+                if (bop.Kind == OK_VALUE && next.Op == COP_LOAD && m.Op(next.FirstOp).Kind == OK_VALUE && m.Op(next.FirstOp).Ref == inst.Result) {
+                    u32 k = bop.Ref - f.FirstValue;
+                    if (k < nv && slotSrc.Get(k as usize) != NONE && slotVer.Get(k as usize) == ver && dom.Has(b, slotBlock.Get(k as usize)) && uses.Get((inst.Result - f.FirstValue) as usize) == 1) {
+                        bop.Ref = slotSrc.Get(k as usize);
+                        m.Ops.Set(inst.FirstOp as usize, bop);
+                        changed = true;
+                    }
+                }
+            }
+            if (inst.Op == COP_CONDBR2) {
+                // decided by a dominating branch?
+                EOp cop = m.Op(inst.FirstOp);
+                if (cop.Kind != OK_VALUE) continue;
+                u32 cn = c.Num(cop.Ref);
+                u16 op = 0;
+                u32 a = 0;
+                u32 bb = 0;
+                bool form = false;
+                EVal val = m.Val(cop.Ref);
+                if (val.Inst != 0) form = CmpForm(m, c, m.Inst(val.Inst), ref op, ref a, ref bb);
+                u32 decided = 0;        // 1 true, 2 false
+                for (usize k = 0; k < factBlock.Len() && decided == 0; k++) {
+                    if (!dom.Has(b, factBlock.Get(k))) continue;
+                    bool holds = factHolds.Get(k);
+                    if (factCond.Get(k) == cn) {
+                        decided = 2;
+                        if (holds) decided = 1;
+                    } else if (form && factOp.Get(k) != 0) {
+                        u16 fo = factOp.Get(k);
+                        u32 fa = factA.Get(k);
+                        u32 fb = factB.Get(k);
+                        if (fo == op && fa == a && fb == bb) {
+                            decided = 2;
+                            if (holds) decided = 1;
+                        } else {
+                            Negate(ref fo, ref fa, ref fb);
+                            if (fo == op && fa == a && fb == bb) {
+                                decided = 1;
+                                if (holds) decided = 2;
+                            }
+                        }
+                    }
+                }
+                if (decided != 0) {
+                    EInst br = inst;
+                    br.Op = COP_BRANCH;
+                    if (decided == 1) br.FirstOp = inst.FirstOp + 1;
+                    else br.FirstOp = inst.FirstOp + 2;
+                    br.NOps = 1;
+                    m.Insts.Set(i as usize, br);
+                    changed = true;
+                }
+                continue;
+            }
+            if (inst.Result == 0) continue;
+            u32 r = inst.Result - f.FirstValue;
+            if (inst.Op == COP_LOAD && inst.NOps == 1) {
+                EOp la = m.Op(inst.FirstOp);
+                if (la.Kind != OK_VALUE) continue;
+                u32 an = c.Num(la.Ref);
+                u32 found = MemGet(c, mask, inst.Ty, an, ver, b, dom);
+                if (found != NONE) {
+                    c.Vn.Set(r as usize, c.Num(found) - f.FirstValue);
+                    replaced.Set(r as usize, true);
+                    changed = true;
+                } else {
+                    MemPut(ref c, mask, inst.Ty, an, ver, inst.Result, b);
+                }
+                continue;
+            }
+            if (!Numbered(inst.Op)) continue;
+            u64 h = HashInst(m, c, inst);
+            u32 at = (h as u32) & mask;
+            u32 hit = NONE;
+            while (c.Table.Get(at as usize) != 0) {
+                u32 j = c.Table.Get(at as usize) - 1;
+                if (dom.Has(b, c.TableBlock.Get(at as usize)) && SameInst(m, c, m.Inst(j), inst)) {
+                    hit = m.Inst(j).Result;
+                    break;
+                }
+                at = (at + 1) & mask;
+            }
+            if (hit != NONE) {
+                c.Vn.Set(r as usize, hit - f.FirstValue);
+                if (!KeptInPlace(inst.Op)) {
+                    replaced.Set(r as usize, true);
+                    changed = true;
+                    // a check that cannot fail (the same one already passed) becomes plain
+                    // arithmetic, so the unused copy can go
+                    if ((inst.Op >= 8 && inst.Op <= 13) || inst.Op == 18 || inst.Op == 19) {
+                        EInst plain = inst;
+                        plain.Op = 5;
+                        if (inst.NOps == 1) plain.Op = 17;
+                        m.Insts.Set(i as usize, plain);
+                    }
+                }
+            } else {
+                c.Table.Set(at as usize, i + 1);
+                c.TableBlock.Set(at as usize, b);
+            }
+        }
+        exitVer.Set(b as usize, ver);
+    }
+    if (!changed) return false;
+    // uses of replaced values move to the value they equal
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) {
+                    u32 k = op.Ref - f.FirstValue;
+                    if (k < nv && replaced.Get(k as usize)) {
+                        op.Ref = Final(c, replaced, op.Ref);
+                        m.Ops.Set(o as usize, op);
+                    }
+                } else if (op.Kind == OK_TARGET) {
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        u32 v = m.Arg(op.Args + a);
+                        u32 k = v - f.FirstValue;
+                        if (k < nv && replaced.Get(k as usize)) m.Args.Set((op.Args + a) as usize, Final(c, replaced, v));
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// What replaced value v becomes: follow the numbers while they are replaced too.
+u32 Final(in Cse c, in List<bool> replaced, u32 v) {
+    u32 x = v;
+    u32 guard = 0;
+    while (guard < 64) {
+        u32 k = x - c.FirstValue;
+        if (k >= replaced.Len() as u32 || !replaced.Get(k as usize)) return x;
+        u32 n = c.Vn.Get(k as usize) + c.FirstValue;
+        if (n == x) return x;
+        x = n;
+        guard++;
+    }
+    return x;
+}
+
+void MemPut(ref Cse c, u32 mask, u32 ty, u32 addr, u32 ver, u32 value, u32 b) {
+    u32 at = (HashMem(ty, addr, ver) as u32) & mask;
+    u32 probes = 0;
+    while (c.MemTable.Get(at as usize) != 0) {
+        at = (at + 1) & mask;
+        probes++;
+        if (probes > mask) return;      // full: forget it
+    }
+    c.MemTy.Push(ty);
+    c.MemAddr.Push(addr);
+    c.MemVer.Push(ver);
+    c.MemVal.Push(value);
+    c.MemBlock.Push(b);
+    c.MemTable.Set(at as usize, c.MemTy.Len() as u32);
+}
+
+u32 MemGet(in Cse c, u32 mask, u32 ty, u32 addr, u32 ver, u32 b, in BlockSets dom) {
+    u32 at = (HashMem(ty, addr, ver) as u32) & mask;
+    while (c.MemTable.Get(at as usize) != 0) {
+        usize e = (c.MemTable.Get(at as usize) - 1) as usize;
+        if (c.MemTy.Get(e) == ty && c.MemAddr.Get(e) == addr && c.MemVer.Get(e) == ver && dom.Has(b, c.MemBlock.Get(e))) return c.MemVal.Get(e);
+        at = (at + 1) & mask;
+    }
+    return NONE;
+}
+
+void CountUse(ref List<u32> uses, u32 first, u32 v) {
+    u32 k = v - first;
+    if (k < uses.Len() as u32) uses.Set(k as usize, uses.Get(k as usize) + 1);
+}
+
+// Is operand o (a copy's size) the number n, written or as a `const`?
+bool WholeSize(in Module m, u32 o, u64 n) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) return op.Int == n;
+    if (op.Kind != OK_VALUE) return false;
+    EVal v = m.Val(op.Ref);
+    if (v.Inst == 0) return false;
+    EInst d = m.Inst(v.Inst);
+    return d.Op == 1 && d.Imm == n;
+}
+
+u32 PopCount(u64 x) {
+    u32 n = 0;
+    u64 y = x;
+    while (y != 0) {
+        y = y & (y - 1);
+        n++;
+    }
+    return n;
+}

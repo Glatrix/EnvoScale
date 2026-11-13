@@ -169,14 +169,15 @@ struct string {
 
     usize Len() => this.Count;
 
+    // Both check for room inline and call Reserve only to grow, so they inline.
     void Append(ref this, str s) {
-        this.Reserve(s.Len);
+        if (s.Len > this.Cap - this.Count) this.Reserve(s.Len);
         unsafe { string.CopyBytes(&this.Data[this.Count], s.Ptr, s.Len); }
         this.Count += s.Len;
     }
 
     void AppendByte(ref this, u8 b) {
-        this.Reserve(1);
+        if (this.Count == this.Cap) this.Reserve(1);
         unsafe { this.Data[this.Count] = b; }
         this.Count++;
     }

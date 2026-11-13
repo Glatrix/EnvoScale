@@ -592,9 +592,11 @@ struct Reader {
         this.Punct(":");
         EBlock blk = m.Block(b);
         blk.NParams = nparams;
+        // the entry block has no parameters of its own: the function's come first among
+        // its values, as lowering and the binary form have them
         if (entry) {
-            blk.FirstParam = m.Func(this.Func).FirstValue;
-            blk.NParams = m.Func(this.Func).NParams;
+            blk.FirstParam = 0;
+            blk.NParams = 0;
         }
         blk.FirstInst = m.Insts.Len() as u32;
         m.Blocks.Set(b as usize, blk);

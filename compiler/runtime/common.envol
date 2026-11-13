@@ -226,6 +226,11 @@ void __rt_panic(str msg) {
     __os_exit(101);
 }
 
+// `panic("text")`: the text's bytes and length, so the caller's cold path builds no str.
+void __rt_panic_lit(*u8 p, usize n) {
+    unsafe { __rt_panic(str_from(p, n)); }
+}
+
 // A run-time check failed; reason as in eir.md [eir.panic.1].
 void __rt_trap(i64 reason) {
     str msg = "unreachable code reached";

@@ -308,9 +308,33 @@ public struct Asm {
     // op r, imm32 (sign-extended): ext is the ModRM digit (0 add, 5 sub, 7 cmp, 4 and, 1 or)
     public void AluImm(ref this, u8 ext, u8 r, i32 imm) {
         this.Rex(true, 0, r, false);
+        this.AluImmBody(ext, r, imm);
+    }
+
+    // The same on the low 32 bits (the upper half becomes zero; CF and OF are the 32-bit
+    // carry and overflow).
+    public void AluImm32(ref this, u8 ext, u8 r, i32 imm) {
+        this.Rex(false, 0, r, false);
+        this.AluImmBody(ext, r, imm);
+    }
+
+    void AluImmBody(ref this, u8 ext, u8 r, i32 imm) {
+        if (imm >= -128 && imm <= 127) {
+            this.B(0x83);
+            this.ModRR(ext, r);
+            this.B(imm as u8);
+            return;
+        }
         this.B(0x81);
         this.ModRR(ext, r);
         this.U32(imm as u32);
+    }
+
+    // op dst, src on the low 32 bits
+    public void Alu32(ref this, u8 op, u8 dst, u8 src) {
+        this.Rex(false, src, dst, false);
+        this.B(op);
+        this.ModRR(src, dst);
     }
 
     // imul dst, src (64-bit, sets OF on signed overflow)

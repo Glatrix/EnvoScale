@@ -12,7 +12,9 @@ use envoc.util;
 use envoc.eir;
 
 const u32 INLINE_MAX = 16;          // a single-block callee's instructions, the `ret` included
-const u32 INLINE_MULTI_MAX = 12;    // a callee with more blocks: the instructions of all of them
+const u32 INLINE_MULTI_MAX = 16;    // a callee with more blocks: the instructions of all of them
+// (constants and field addresses are not counted: they become immediates and addressing)
+const u32 INLINE_COLD_MAX = 8;      // and of its blocks that panic, counted apart
 const u16 OP_ZERO = 48;
 const u16 OP_RET = 58;
 
@@ -23,14 +25,18 @@ bool Inlinable(in Module m, u32 f, u32 c) {
     if (cf.Extern || cf.NBlocks == 0) return false;
     if (cf.NBlocks == 1) {
         EBlock blk = m.Block(cf.FirstBlock);
-        if (blk.NInsts > INLINE_MAX) return false;
+        if (Cost(m, blk) > INLINE_MAX) return false;
         return m.Inst(blk.FirstInst + blk.NInsts - 1).Op == OP_RET;
     }
     u32 n = 0;
+    u32 cold = 0;
     for (u32 b = cf.FirstBlock; b < cf.FirstBlock + cf.NBlocks; b++) {
         EBlock blk = m.Block(b);
-        n += blk.NInsts;
-        if (n > INLINE_MULTI_MAX) return false;
+        // a block that panics runs at most once: it counts apart, so a bounds check
+        // does not keep a small function from being inlined
+        if (Panics(m, blk)) cold += blk.NInsts;
+        else n += Cost(m, blk);
+        if (n > INLINE_MULTI_MAX || cold > INLINE_COLD_MAX) return false;
         EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
         // a returned value becomes a branch argument, which must be a value
         if (term.Op == OP_RET && term.NOps == 1 && m.Op(term.FirstOp).Kind != OK_VALUE) return false;
@@ -41,6 +47,27 @@ bool Inlinable(in Module m, u32 f, u32 c) {
         }
     }
     return true;
+}
+
+// The instructions of block blk that cost code: all but constants and field addresses.
+u32 Cost(in Module m, in EBlock blk) {
+    u32 n = 0;
+    for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+        u16 op = m.Inst(i).Op;
+        if (op != OP_CONST && op != 44) n++;
+    }
+    return n;
+}
+
+// Does block blk call the runtime's panic?
+bool Panics(in Module m, in EBlock blk) {
+    for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+        EInst inst = m.Inst(i);
+        if (inst.Op != OP_CALL) continue;
+        Text name = m.Func(m.Op(inst.FirstOp).Ref).Name;
+        if (TextIs(name, "__rt_panic_lit") || TextIs(name, "__rt_panic")) return true;
+    }
+    return false;
 }
 
 // One inlined call: where its callee's values and blocks start in the caller.

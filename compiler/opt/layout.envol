@@ -1,0 +1,96 @@
+// -O2 block layout: the order the backend emits a function's blocks in. A block is
+// followed, where it can be, by the block it branches to (the true side of a condition
+// first), so the branch falls through instead of jumping; a loop's body then follows its
+// test. Blocks that only lead to a panic go last, out of the way of the code around
+// them. The entry block stays first. Blocks keep their contents; only their numbers and
+// the references to them change.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+// Does block blk end the program: a panic call, `panic` or `unreachable`?
+bool ColdBlock(in Module m, in EBlock blk) {
+    u16 last = m.Inst(blk.FirstInst + blk.NInsts - 1).Op;
+    if (last == 59 || last == 60) return true;
+    return Panics(m, blk);
+}
+
+// Lays out function fi's blocks.
+void LayoutFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nb = f.NBlocks;
+    if (nb < 3) return;
+    List<bool> cold = List<bool>.New();
+    List<bool> placed = List<bool>.New();
+    for (u32 b = 0; b < nb; b++) {
+        cold.Push(b != 0 && ColdBlock(m, m.Block(f.FirstBlock + b)));
+        placed.Push(false);
+    }
+    List<u32> order = List<u32>.New();
+    u32 cur = 0;
+    u32 scan = 0;       // where the search for the next chain's start resumes
+    bool coldPass = false;
+    while (order.Len() < nb as usize) {
+        if (cur == NONE) {
+            while (scan < nb && (placed.Get(scan as usize) || cold.Get(scan as usize) != coldPass)) scan++;
+            if (scan == nb) {
+                coldPass = true;
+                scan = 0;
+                continue;
+            }
+            cur = scan;
+        }
+        placed.Set(cur as usize, true);
+        order.Push(cur);
+        EBlock blk = m.Block(f.FirstBlock + cur);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        u32 next = NONE;
+        if (term.Op == 55 || term.Op == 56) {
+            for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps && next == NONE; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind != OK_TARGET) continue;
+                u32 t = op.Ref - f.FirstBlock;
+                if (!placed.Get(t as usize) && cold.Get(t as usize) == coldPass) next = t;
+            }
+        }
+        cur = next;
+    }
+    bool same = true;
+    for (u32 k = 0; k < nb; k++) {
+        if (order.Get(k as usize) != k) same = false;
+    }
+    if (same) return;
+    // block old b moves to newAt[b]
+    List<u32> newAt = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) newAt.Push(0);
+    for (u32 k = 0; k < nb; k++) newAt.Set(order.Get(k as usize) as usize, k);
+    List<EBlock> old = List<EBlock>.New();
+    for (u32 b = 0; b < nb; b++) old.Push(m.Block(f.FirstBlock + b));
+    for (u32 b = 0; b < nb; b++) {
+        u32 nbi = f.FirstBlock + newAt.Get(b as usize);
+        EBlock blk = old.Get(b as usize);
+        m.Blocks.Set(nbi as usize, blk);
+        for (u32 j = 0; j < blk.NParams; j++) {
+            EVal pv = m.Val(blk.FirstParam + j);
+            pv.Block = nbi;
+            m.Vals.Set((blk.FirstParam + j) as usize, pv);
+        }
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            inst.Block = nbi;
+            m.Insts.Set(i as usize, inst);
+            if (inst.Result != 0) {
+                EVal rv = m.Val(inst.Result);
+                rv.Block = nbi;
+                m.Vals.Set(inst.Result as usize, rv);
+            }
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind != OK_TARGET) continue;
+                op.Ref = f.FirstBlock + newAt.Get((op.Ref - f.FirstBlock) as usize);
+                m.Ops.Set(o as usize, op);
+            }
+        }
+    }
+}
