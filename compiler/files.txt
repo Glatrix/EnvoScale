@@ -49,6 +49,7 @@ eir/lower_views.envol
 opt/simplify.envol
 opt/inline.envol
 opt/mem2reg.envol
+opt/thread.envol
 backend/x86_64/asm.envol
 backend/x86_64/image.envol
 backend/x86_64/regalloc.envol

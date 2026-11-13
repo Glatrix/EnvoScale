@@ -27,6 +27,9 @@ const u64 SMALL_BYTES = 128;
 const u64 NOT_SMALL = 0xFFFFFFFFFFFFFFFF;
 // The largest frame: displacements from rbp are 32-bit.
 const u64 FRAME_MAX = 0x7FFF0000;
+const u32 NOLOC = 0xFFFFFFFF;       // Resolve: a value with no place of its own
+const u32 PHYS = 0xFFFFFF00;        // Resolve: a source that is a register, PHYS | r
+const u32 SLOT = 0x100;             // a place: SLOT + a value's index is its stack slot
 
 struct Gen {
     Asm A;
@@ -56,7 +59,8 @@ struct Gen {
     // below the frame pointer.
     i32 VOff(in this, u32 v) {
         u32 k = v - this.FirstValue;
-        if (k < this.NParams) return (16 + 8 * k) as i32;
+        if (k < this.NParams && !this.Opt) return (16 + 8 * k) as i32;
+        if (k < this.NParams && k >= NARGREGS) return (16 + 8 * (k - NARGREGS)) as i32;
         return 0 - (this.SaveArea + 8 * (k + 1)) as i32;
     }
 
@@ -395,16 +399,14 @@ struct Gen {
     // ------------------------------------------------------------------ branches
 
     // Moves branch target o's arguments into the target block's parameters (a parallel
-    // copy) and jumps there. At -O2 the moves are direct when no parameter's place is a
-    // later argument's, and a last jump to the block emitted next falls through.
+    // copy) and jumps there. At -O2 the copy is ordered so no place is overwritten before
+    // it is read (a cycle goes through r11), a value already where it belongs is not moved,
+    // and a last jump to the block emitted next falls through.
     void Jump(ref this, in Module m, u32 o, bool last) {
         EOp op = m.Op(o);
         EBlock target = m.Block(op.Ref);
-        if (this.Opt && this.Direct(m, op, target)) {
-            for (u32 i = 0; i < op.NArgs; i++) {
-                this.LoadV(RAX, m.Arg(op.Args + i));
-                this.StoreV(target.FirstParam + i, RAX);
-            }
+        if (this.Opt) {
+            this.ParallelMove(m, op, target);
         } else {
             for (u32 i = 0; i < op.NArgs; i++) {
                 this.LoadV(RAX, m.Arg(op.Args + i));
@@ -421,20 +423,98 @@ struct Gen {
         this.A.Jmp(this.BlockLabels.Get(op.Ref as usize));
     }
 
-    // Can branch op's arguments be moved one by one: does no parameter's place (its value,
-    // or its register) hold an argument still to be read?
-    bool Direct(in this, in Module m, in EOp op, in EBlock target) {
+    // -O2: where value v lives: its register, SLOT + its index for its stack slot, or
+    // NOLOC for a value recomputed where it is used (which nothing overwrites).
+    u32 Loc(in this, u32 v) {
+        usize k = (v - this.FirstValue) as usize;
+        if (this.RematKind.Get(k) != 0) return NOLOC;
+        u8 r = this.Regs.Get(k);
+        if (r != NOREG) return r as u32;
+        return SLOT + k as u32;
+    }
+
+    // -O2: branch op's arguments into target's parameters (unused parameters get nothing).
+    void ParallelMove(ref this, in Module m, in EOp op, in EBlock target) {
+        List<u32> dst = List<u32>.New();
+        List<u32> src = List<u32>.New();
         for (u32 i = 0; i < op.NArgs; i++) {
             u32 pv = target.FirstParam + i;
-            u8 pr = this.Regs.Get((pv - this.FirstValue) as usize);
-            for (u32 j = i + 1; j < op.NArgs; j++) {
-                u32 av = m.Arg(op.Args + j);
-                if (av == pv) return false;
-                usize ak = (av - this.FirstValue) as usize;
-                if (pr != NOREG && this.RematKind.Get(ak) == 0 && this.Regs.Get(ak) == pr) return false;
+            u32 av = m.Arg(op.Args + i);
+            if (av == pv || this.Uses.Get((pv - this.FirstValue) as usize) == 0) continue;
+            dst.Push(this.Loc(pv));
+            src.Push(av);
+        }
+        this.Resolve(dst, ref src);
+    }
+
+    // -O2: moves every src[j] (a value, or PHYS | a register) into place dst[j] (a register,
+    // or SLOT + a value's index) at once. A move goes once no source still to be read lives
+    // in its destination; when every move left waits on another (a cycle), one
+    // destination's contents go to r11 and its readers read r11 instead.
+    void Resolve(ref this, in List<u32> dst, ref List<u32> src) {
+        usize n = dst.Len();
+        List<bool> done = List<bool>.New();
+        usize left = n;
+        for (usize j = 0; j < n; j++) {
+            bool here = this.SrcLoc(src.Get(j)) == dst.Get(j);
+            done.Push(here);
+            if (here) left--;
+        }
+        while (left > 0) {
+            bool progress = false;
+            for (usize j = 0; j < n; j++) {
+                if (done.Get(j)) continue;
+                u32 dl = dst.Get(j);
+                bool blocked = false;
+                for (usize q = 0; q < n && !blocked; q++) {
+                    if (q != j && !done.Get(q) && this.SrcLoc(src.Get(q)) == dl) blocked = true;
+                }
+                if (blocked) continue;
+                this.Put(dl, src.Get(j));
+                done.Set(j, true);
+                left--;
+                progress = true;
+            }
+            if (!progress) {
+                usize j = 0;
+                while (done.Get(j)) j++;
+                u32 dl = dst.Get(j);
+                if (dl < SLOT) this.A.MovRR(R11, dl as u8);
+                else this.A.Load(R11, RBP, this.SlotOff(dl), 8, false);
+                for (usize q = 0; q < n; q++) {
+                    if (!done.Get(q) && this.SrcLoc(src.Get(q)) == dl) src.Set(q, PHYS | (R11 as u32));
+                }
             }
         }
-        return true;
+    }
+
+    u32 SrcLoc(in this, u32 s) {
+        if (s >= PHYS && s != NOLOC) return s & 0xFF;
+        return this.Loc(s);
+    }
+
+    i32 SlotOff(in this, u32 place) => this.VOff(this.FirstValue + place - SLOT);
+
+    // -O2: place dl = source s, by the shortest route.
+    void Put(ref this, u32 dl, u32 s) {
+        u8 rs = NOREG;
+        if (s >= PHYS && s != NOLOC) {
+            rs = (s & 0xFF) as u8;
+        } else {
+            u32 sl = this.Loc(s);
+            if (sl < SLOT) rs = sl as u8;
+        }
+        if (rs != NOREG) {
+            if (dl >= SLOT) this.A.Store(RBP, this.SlotOff(dl), rs, 8);
+            else if (dl != rs as u32) this.A.MovRR(dl as u8, rs);
+            return;
+        }
+        if (dl < SLOT) {
+            this.LoadV(dl as u8, s);
+            return;
+        }
+        this.LoadV(RAX, s);
+        this.A.Store(RBP, this.SlotOff(dl), RAX, 8);
     }
 
     // ------------------------------------------------------------------ instructions
@@ -644,10 +724,12 @@ struct Gen {
             return;
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_STORE) {
-            this.LoadOp(m, RAX, f);
+            u8 rv = RAX;
+            if (this.Opt) rv = this.InReg(m, f, RAX);
+            else this.LoadOp(m, RAX, f);
             i32 disp = 0;
             u8 rb = this.AddrOf(m, f + 1, RCX, ref disp);
-            this.A.Store(rb, disp, RAX, ty.Size);
+            this.A.Store(rb, disp, rv, ty.Size);
         } else if (sh == SH_FIELD) {
             u64 foff = m.FieldOffset(t, inst.Imm as u32);
             if (this.Opt) {
@@ -739,6 +821,16 @@ struct Gen {
                 this.A.Jcc(CC_E, u8Trap);
                 this.A.Bind(ok);
             }
+        } else if (sh == SH_BOUNDS && this.Opt) {
+            u8 ra = this.InReg(m, f, RAX);
+            if (signed) {
+                this.A.TestRR(ra, ra);
+                u32 b1 = this.TrapLabel(TRAP_BOUNDS);
+                this.A.Jcc(CC_L, b1);
+            }
+            this.CmpOp(m, ra, f + 1);
+            u32 b2 = this.TrapLabel(TRAP_BOUNDS);
+            this.A.Jcc(CC_AE, b2);
         } else if (sh == SH_BOUNDS) {
             this.LoadOp(m, RAX, f);
             this.LoadOp(m, RCX, f + 1);
@@ -750,6 +842,43 @@ struct Gen {
             this.A.Alu(ALU_CMP, RAX, RCX);
             u32 b2 = this.TrapLabel(TRAP_BOUNDS);
             this.A.Jcc(CC_AE, b2);
+        } else if ((sh == SH_CALL || sh == SH_CALLIND) && this.Opt) {
+            // the first NARGREGS arguments in registers, the rest on the stack
+            u32 first = 1;
+            u32 count = n - 1;
+            if (sh == SH_CALLIND) {
+                if (inst.Str.Len > 0) Bug("x64: calls with a foreign ABI are not supported by the -O0 backend");
+                first = 0;
+            }
+            u32 stackArgs = 0;
+            if (count > NARGREGS) stackArgs = count - NARGREGS;
+            i32 reserve = ((8 * stackArgs + 15) & ~15) as i32;
+            if (reserve > 0) this.A.AluImm(5, RSP, reserve);
+            for (u32 k = NARGREGS; k < count; k++) {
+                u8 ra = this.InReg(m, f + first + k, RAX);
+                this.A.Store(RSP, (8 * (k - NARGREGS)) as i32, ra, 8);
+            }
+            List<u32> dst = List<u32>.New();
+            List<u32> src = List<u32>.New();
+            for (u32 k = 0; k < count && k < NARGREGS; k++) {
+                EOp a = m.Op(f + first + k);
+                if (a.Kind != OK_VALUE) continue;
+                dst.Push(ArgReg(k) as u32);
+                src.Push(a.Ref);
+            }
+            this.Resolve(dst, ref src);
+            for (u32 k = 0; k < count && k < NARGREGS; k++) {
+                EOp a = m.Op(f + first + k);
+                if (a.Kind != OK_VALUE) this.LoadOp(m, ArgReg(k), f + first + k);
+            }
+            if (sh == SH_CALL) {
+                this.A.CallLabel(this.FuncLabels.Get(m.Op(f).Ref as usize));
+            } else {
+                this.LoadOp(m, RAX, f + n - 1);
+                this.A.CallR(RAX);
+            }
+            if (reserve > 0) this.A.AluImm(0, RSP, reserve);
+            if (inst.Result != 0) this.StoreV(inst.Result, RAX);
         } else if (sh == SH_CALL || sh == SH_CALLIND) {
             u32 first = 1;
             u32 count = n - 1;
@@ -1118,15 +1247,27 @@ struct Gen {
             this.A.Alu(ALU_XOR, RAX, RAX);
             this.ZeroBytes(RBP, (0 -% (save + valueArea + slotArea)) as i32, slotArea);
         } else if (slotArea > 0) {
+            bool keep = this.Opt && f.NParams > 0;
+            if (keep) this.A.MovRR(R11, RDI);
             this.A.LeaRM(RDI, RBP, (0 -% (save + valueArea + slotArea)) as i32);
             this.A.MovRI(RCX, slotArea);
             this.A.Alu(ALU_XOR, RAX, RAX);
             this.A.RepStosb();
+            if (keep) this.A.MovRR(RDI, R11);
         }
         if (this.Opt) {
-            for (u32 k = 0; k < f.NParams; k++) {
+            // the register arguments into their places, then the stack ones
+            List<u32> dst = List<u32>.New();
+            List<u32> src = List<u32>.New();
+            for (u32 k = 0; k < f.NParams && k < NARGREGS; k++) {
+                if (this.Uses.Get(k as usize) == 0) continue;
+                dst.Push(this.Loc(f.FirstValue + k));
+                src.Push(PHYS | (ArgReg(k) as u32));
+            }
+            this.Resolve(dst, ref src);
+            for (u32 k = NARGREGS; k < f.NParams; k++) {
                 u8 reg = this.Regs.Get(k as usize);
-                if (reg != NOREG) this.A.Load(reg, RBP, (16 + 8 * k) as i32, 8, false);
+                if (reg != NOREG) this.A.Load(reg, RBP, (16 + 8 * (k - NARGREGS)) as i32, 8, false);
             }
         }
         this.Fused = 0;
@@ -1355,12 +1496,14 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
     g.A.MovRR(RAX, RSP);
     g.A.AluImm(4, RSP, -16);
     g.A.AluImm(5, RSP, 16);
-    g.A.Store(RSP, 0, RAX, 8);
+    if (opt) g.A.MovRR(ArgReg(0), RAX);
+    else g.A.Store(RSP, 0, RAX, 8);
     u32 init = g.FuncLabels.Get(g.FuncNamed(m, "__rt_init") as usize);
     g.A.CallLabel(init);
     u32 main = g.FuncLabels.Get(g.FuncNamed(m, "__main") as usize);
     g.A.CallLabel(main);
-    g.A.Store(RSP, 0, RAX, 8);
+    if (opt) g.A.MovRR(ArgReg(0), RAX);
+    else g.A.Store(RSP, 0, RAX, 8);
     u32 exitFn = g.FuncLabels.Get(g.FuncNamed(m, "__rt_exit") as usize);
     g.A.CallLabel(exitFn);
     g.A.Ud2();
@@ -1372,8 +1515,12 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         if (l == 0) continue;
         g.A.Bind(l);
         g.A.AluImm(5, RSP, 16);
-        g.A.MovRI(RAX, r);
-        g.A.Store(RSP, 0, RAX, 8);
+        if (opt) {
+            g.A.MovRI(ArgReg(0), r);
+        } else {
+            g.A.MovRI(RAX, r);
+            g.A.Store(RSP, 0, RAX, 8);
+        }
         g.A.CallLabel(trap);
         g.A.Ud2();
     }

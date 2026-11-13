@@ -688,6 +688,8 @@ public void Optimize(ref Module m) {
     InlineSmall(ref m);
     PromoteLocals(ref m);
     for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
-        if (!m.Func(fi).Extern) SimplifyFunc(ref m, fi);
+        if (m.Func(fi).Extern) continue;
+        SimplifyFunc(ref m, fi);
+        if (ThreadFunc(ref m, fi)) SimplifyFunc(ref m, fi);
     }
 }

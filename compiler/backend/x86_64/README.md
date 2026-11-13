@@ -22,8 +22,14 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   operand from its register or as an immediate; loads and stores address a value's
   register or the frame directly.
 - **Compare and branch.** A compare used only by the `condbr` after it becomes `cmp` and
-  one `jcc`; a branch to the block emitted next falls through, and branch arguments move
-  directly unless a parameter's place holds an argument still to be read.
+  one `jcc`; a branch to the block emitted next falls through.
+- **Parallel moves.** Branch arguments, call arguments and incoming parameters are moved
+  as one parallel copy: a move goes once nothing still to be read lives in its
+  destination, a value already in place is not moved, and a cycle goes through r11.
+- **Arguments in registers.** Calls pass their first five arguments in rdi, rsi, r8, r9
+  and r10 (the caller-saved registers, which a call overwrites anyway) and the rest on
+  the stack; a parameter keeps the register it arrives in when its interval allows. The
+  `-O0` convention, all arguments on the stack, stays Stage 1's.
 - **Division by a constant.** Unsigned `/` and `%` by a constant are a shift and a mask
   for a power of two, else a multiply by the divisor's reciprocal and a few shifts
   (Granlund and Montgomery), instead of `div`.

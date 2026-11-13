@@ -1,0 +1,146 @@
+// -O2 jump threading. `a && b`, `a || b` and `!` in a condition lower to a block whose
+// only instruction branches on its parameter, and edges that pass it `false`, `true` or
+// the result of a compare. An edge whose argument is known where it leaves (a constant,
+// or the condition of the branch it leaves on) goes straight to the side that argument
+// picks; an unconditional branch into such a block gets a copy of the block's branch, so
+// the compare before it and the branch fuse in the backend. Simplification runs
+// afterwards and drops the blocks no edge reaches any more.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u32 NO_PARAM = 0xFFFFFFFF;
+
+// If block b only branches on one of its parameters, and that parameter (like every one
+// of b's parameters) is used nowhere else, the parameter's index; else NO_PARAM. (A
+// parameter used past b would lose its definition on a threaded path.)
+u32 BranchParam(in Module m, in EFunc f, u32 b, in List<u32> uses) {
+    if (b == f.FirstBlock) return NO_PARAM;
+    EBlock blk = m.Block(b);
+    if (blk.NInsts != 1) return NO_PARAM;
+    EInst term = m.Inst(blk.FirstInst);
+    if (term.Op != OP_CONDBR) return NO_PARAM;
+    EOp c = m.Op(term.FirstOp);
+    if (c.Kind != OK_VALUE || c.Ref < blk.FirstParam || c.Ref >= blk.FirstParam + blk.NParams) return NO_PARAM;
+    // uses inside b's branch: the condition and the branch arguments
+    for (u32 k = 0; k < blk.NParams; k++) {
+        u32 p = blk.FirstParam + k;
+        u32 own = 0;
+        if (c.Ref == p) own++;
+        for (u32 o = term.FirstOp + 1; o < term.FirstOp + term.NOps; o++) {
+            EOp t = m.Op(o);
+            for (u32 a = 0; a < t.NArgs; a++) {
+                if (m.Arg(t.Args + a) == p) own++;
+            }
+        }
+        if (uses.Get((p - f.FirstValue) as usize) != own) return NO_PARAM;
+    }
+    return c.Ref - blk.FirstParam;
+}
+
+// Is value v a `const`? Sets imm.
+bool ConstValue(in Module m, u32 v, ref u64 imm) {
+    EVal val = m.Val(v);
+    if (val.Inst == 0) return false;
+    EInst d = m.Inst(val.Inst);
+    if (d.Op != OP_CONST) return false;
+    imm = d.Imm;
+    return true;
+}
+
+// A target operand for b's target `to`, reached by an edge passing b the arguments at
+// edgeArgs: b's parameters in its arguments become the edge's.
+EOp Through(ref Module m, u32 edgeArgs, in EBlock b, u32 to) {
+    EOp t = m.Op(to);
+    u32 args = m.Args.Len() as u32;
+    for (u32 a = 0; a < t.NArgs; a++) {
+        u32 v = m.Arg(t.Args + a);
+        if (v >= b.FirstParam && v < b.FirstParam + b.NParams) v = m.Arg(edgeArgs + v - b.FirstParam);
+        m.Args.Push(v);
+    }
+    t.Args = args;
+    t.Pos = 0;
+    return t;
+}
+
+// Threads the edges of function fi; true if any changed.
+bool ThreadFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    List<u32> uses = List<u32>.New();
+    for (u32 k = 0; k < f.NValues; k++) uses.Push(0);
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) {
+                    usize k = (op.Ref - f.FirstValue) as usize;
+                    uses.Set(k, uses.Get(k) + 1);
+                } else if (op.Kind == OK_TARGET) {
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        usize k = (m.Arg(op.Args + a) - f.FirstValue) as usize;
+                        uses.Set(k, uses.Get(k) + 1);
+                    }
+                }
+            }
+        }
+    }
+    bool changed = false;
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        u32 ti = blk.FirstInst + blk.NInsts - 1;
+        EInst term = m.Inst(ti);
+        if (term.Op == OP_CONDBR) {
+            EOp c = m.Op(term.FirstOp);
+            for (u32 k = 1; k <= 2; k++) {
+                u32 o = term.FirstOp + k;
+                EOp e = m.Op(o);
+                if (e.Ref == b) continue;
+                u32 j = BranchParam(m, f, e.Ref, uses);
+                if (j == NO_PARAM) continue;
+                EBlock tb = m.Block(e.Ref);
+                u32 a = m.Arg(e.Args + j);
+                u64 cv = 0;
+                if (c.Kind == OK_VALUE && a == c.Ref) {
+                    if (k == 1) cv = 1;
+                } else if (!ConstValue(m, a, ref cv)) {
+                    continue;
+                }
+                u32 side = 2;
+                if (cv != 0) side = 1;
+                m.Ops.Set(o as usize, Through(ref m, e.Args, tb, m.Inst(tb.FirstInst).FirstOp + side));
+                changed = true;
+            }
+        } else if (term.Op == OP_BR) {
+            EOp e = m.Op(term.FirstOp);
+            if (e.Ref == b) continue;
+            u32 j = BranchParam(m, f, e.Ref, uses);
+            if (j == NO_PARAM) continue;
+            EBlock tb = m.Block(e.Ref);
+            EInst tt = m.Inst(tb.FirstInst);
+            u32 a = m.Arg(e.Args + j);
+            u64 cv = 0;
+            if (ConstValue(m, a, ref cv)) {
+                u32 side = 2;
+                if (cv != 0) side = 1;
+                m.Ops.Set(term.FirstOp as usize, Through(ref m, e.Args, tb, tt.FirstOp + side));
+            } else {
+                // br b(.., a, ..)  becomes  condbr a, <b's targets>
+                EOp yes = Through(ref m, e.Args, tb, tt.FirstOp + 1);
+                EOp no = Through(ref m, e.Args, tb, tt.FirstOp + 2);
+                u32 ops = m.Ops.Len() as u32;
+                m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = a, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+                m.Ops.Push(yes);
+                m.Ops.Push(no);
+                term.Op = OP_CONDBR;
+                term.FirstOp = ops;
+                term.NOps = 3;
+                m.Insts.Set(ti as usize, term);
+            }
+            changed = true;
+        }
+    }
+    return changed;
+}

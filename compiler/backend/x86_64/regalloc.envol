@@ -6,6 +6,10 @@
 // calls, so they go only to values whose interval holds no call or system call (and rsi
 // and rdi none of the copies and fills that use them). The code generator's scratch
 // registers are rax, rcx, rdx and r11.
+//
+// At -O2 calls pass their first NARGREGS arguments in rdi, rsi, r8, r9 and r10: the
+// registers every call overwrites anyway. A parameter that arrives in one keeps it when
+// it can.
 namespace envoc.x64;
 
 use envoc.util;
@@ -18,6 +22,22 @@ public const u8 R15 = 15;
 const u8 NOREG = 0xFF;
 const u32 NREGS = 10;       // allocatable: the callee-saved first, then the caller-saved
 const u32 NSAVED = 5;       // the callee-saved ones, which a function that uses them saves
+
+public const u32 NARGREGS = 5;
+
+// The register argument k arrives in.
+u8 ArgReg(u32 k) {
+    if (k == 0) return RDI;
+    if (k == 1) return RSI;
+    return R8 + (k - 2) as u8;
+}
+
+// ArgReg(k) as an allocation index (AllocReg's argument).
+u32 ArgRegIndex(u32 k) {
+    if (k == 0) return 6;
+    if (k == 1) return 5;
+    return 7 + k - 2;
+}
 
 u8 AllocReg(u32 i) {
     if (i == 0) return RBX;
@@ -212,8 +232,13 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 u32 hv = holder.Get(r as usize);
                 if (hv != 0 && end.Get((hv - 1) as usize) < cs) holder.Set(r as usize, 0);
             }
-            // a free caller-saved register it may have, else a free callee-saved one
+            // a parameter: the register it arrives in, if it may have it; else a free
+            // caller-saved register it may have, else a free callee-saved one
             u32 pick = NREGS;
+            if (cur < f.NParams && cur < NARGREGS) {
+                u32 a = ArgRegIndex(cur);
+                if ((forbid >> (a - NSAVED)) & 1 == 0 && holder.Get(a as usize) == 0) pick = a;
+            }
             for (u32 r = NSAVED; r < NREGS && pick == NREGS; r++) {
                 if ((forbid >> (r - NSAVED)) & 1 == 0 && holder.Get(r as usize) == 0) pick = r;
             }

@@ -14,13 +14,27 @@ in `tests/golden/opt/` use it.
 
 A call to a single-block function of at most 16 instructions that ends in `ret` is
 replaced by a copy of that function's instructions. The callee's parameters become the
-arguments, and the call's result becomes the returned value. The callee's slots move to
-the caller's entry block (EIR allows slots only there), and the copy starts by zeroing
-them, as a call would. One level only, in function order: a callee inlined into a caller
-that comes later is already its own inlined version.
+arguments, and the call's result becomes the returned value. A call to a function of more
+blocks and at most 12 instructions in all splits the caller's block: the callee's entry
+block ends the first part, its other blocks follow, and each `ret` becomes a branch to a
+new block that holds the rest of the caller's block and takes the call's result as its
+parameter. The callee's slots move to the caller's entry block (EIR allows slots only
+there), and the copy starts by zeroing them, as a call would. One level only, in function
+order: a callee inlined into a caller that comes later is already its own inlined version.
+Recursive callees stay calls.
 
 Most of these calls are accessors (`NodeAt`, `SymAt`, `Len`) and a call costs more than
 their body.
+
+## `thread.envol`: jump threading
+
+`a && b`, `a || b` and `!` in a condition lower to a block whose only instruction branches
+on its parameter. An edge into it whose argument is known where it leaves (a constant, or
+the condition of the branch it leaves on) goes straight to the side that argument picks,
+and an unconditional branch into it gets a copy of its branch, so the compare before it
+fuses with the branch in the backend. It runs after simplification, which then runs again
+on the functions it changed. A block whose parameters are used past its branch is left
+alone.
 
 ## `mem2reg.envol`: locals become values
 
