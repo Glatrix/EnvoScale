@@ -11,11 +11,11 @@ you; the default is 90 days after the report or when a fix ships, whichever is s
 
 ## Supported versions
 
-EnvoScale has not had a release. Until 1.0, only the `main` branch is supported, and
-every subsystem is **Experimental** unless [`STATUS.md`](../docs/status.md) says otherwise.
+EnvoL is before 1.0. Until then, only the `main` branch is supported, and
+every subsystem is **Experimental** unless [the status page](https://github.com/envoscale/EnvoScale/blob/main/project/status.md) says otherwise.
 
 From 1.0, commercial licensees get long-term-support releases and advance notice of
-security fixes, as their license agreement specifies (see [`LICENSING.md`](../docs/legal/licensing.md)).
+security fixes, as their license agreement specifies (see [licensing](https://github.com/envoscale/EnvoScale/blob/main/legal/licensing.md)).
 The public response process above applies to everyone.
 
 ## Cryptography audit status
@@ -44,7 +44,7 @@ drop support for library types to reach Envo-S1's runtime).
 - The repository has **zero third-party dependencies**; adding one is a charter violation.
 - The compiler is bootstrapped from assembly (`bootstrap/`). Before 1.0 the chain will
   start from an auditable hex seed, and CI will check that every stage reproduces
-  byte-identical binaries (see [`bootstrap/README.md`](https://github.com/envoscale/EnvoScaleAsm)).
+  byte-identical binaries (see [EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm)).
 - Until then, Stage 0 is assembled by NASM through an optional adapter
   (`adapters/bootstrap/nasm/`). This is the one outside tool in the trust chain, and it
   is temporary by design.

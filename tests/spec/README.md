@@ -1,6 +1,6 @@
 # Spec tests
 
-One folder per chapter of [`docs/spec`](../../docs/spec/README.md), plus `hello/` for the
+One folder per chapter of [`spec`](../../spec/README.md), plus `hello/` for the
 Hello World Gallery. Each test is a `.envol` file whose comments say what must happen:
 
 ```envo

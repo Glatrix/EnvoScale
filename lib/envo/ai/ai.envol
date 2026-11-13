@@ -1,7 +1,7 @@
 // envo.ai: tensors and automatic differentiation (M12). A Tensor is a dense row-major
 // array of f32 with a shape (a matrix: rows × cols, a vector: 1 × n). A Graph records
 // the operations of one forward pass, define-by-run, and Backward walks them in reverse,
-// accumulating each value's gradient. All of it is IEEE arithmetic in Envol, so training
+// accumulating each value's gradient. All of it is IEEE arithmetic in EnvoL, so training
 // gives the same numbers in every build and in the script runtime.
 namespace envo.ai;
 

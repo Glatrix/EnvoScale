@@ -1,4 +1,4 @@
-// The lexer (docs/spec/01-lexical.md, compiler/syntax/README.md). It reports the same
+// The lexer (spec/01-lexical.md, compiler/syntax/README.md). It reports the same
 // first error at the same position as envoc0 and envoc1, so the compilers can be compared
 // on every input (PLAN D17). Literal values are validated, not computed; the parser
 // converts the literals it needs.

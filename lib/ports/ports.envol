@@ -1,5 +1,5 @@
 // ports: the interfaces through which lib/ reaches the outside world (PLAN D22, D24;
-// docs/architecture/library.md). An adapter is a type that implements a port; the
+// EnvoScale/architecture/library.md). An adapter is a type that implements a port; the
 // reference adapters are in adapters/os/none, the native ones in adapters/os/windows and
 // adapters/os/linux. Each port's promises are checked by its conformance suite in
 // tests/conformance/, against every adapter.

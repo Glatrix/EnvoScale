@@ -138,7 +138,7 @@ jobs:
       - run: ./build.sh cross-run build/cross/aarch64-macos
 
   # A tag v<version> publishes the archive, once both hosts built the same bytes and the
-  # AArch64 tests passed. The notes are docs/releases/<tag>.md.
+  # AArch64 tests passed. The notes are .github/release-notes/<tag>.md.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [reproducible, aarch64-linux, aarch64-macos]
@@ -158,4 +158,4 @@ jobs:
         run: |
           v=${GITHUB_REF_NAME#v}
           [ -f "build/from-linux/dist/envoscale-$v.tar" ] || { echo "the tag $GITHUB_REF_NAME does not match ENVO_VERSION"; exit 1; }
-          gh release create "$GITHUB_REF_NAME" build/from-linux/dist/* --repo "$GITHUB_REPOSITORY" --title "EnvoScale $v" --notes-file "docs/releases/$GITHUB_REF_NAME.md"
+          gh release create "$GITHUB_REF_NAME" build/from-linux/dist/* --repo "$GITHUB_REPOSITORY" --title "EnvoL $v" --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"

@@ -3,7 +3,7 @@
 > **Status:** Experimental (M4). Written in Envo-S1. Tests: `lib/core/tests/`.
 
 Works without an allocator or an OS. Modules (`use core.text;` and so on;
-[`library.md`](../../docs/architecture/library.md)):
+[`library.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/library.md)):
 
 - `core.text`: `IndexOf`, `LastIndexOf`, `Contains`, `Count`, `StartsWith`, `EndsWith`,
   `Trim`, `SplitOnce`, `EqualsIgnoreCase`, `CharCount`, ASCII classes. Positions are byte

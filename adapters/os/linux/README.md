@@ -15,4 +15,4 @@ runtime's `open`, `read` and `write`. Threads and an io_uring/epoll executor com
 `os.linux.x11` is an X11 client over the server's Unix socket, without Xlib: setup with
 the Xauthority cookie, `CreateWindow`, `WM_PROTOCOLS`/`WM_DELETE_WINDOW`, `PutImage` in
 strips under the request size limit, and events through the keyboard map
-(`GetKeyboardMapping`). See [`docs/architecture/graphics.md`](../../../docs/architecture/graphics.md).
+(`GetKeyboardMapping`). See [`EnvoScale/architecture/graphics.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/graphics.md).

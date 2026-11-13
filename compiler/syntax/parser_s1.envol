@@ -1,4 +1,4 @@
-// The Envo-S1 grammar (docs/spec/envo-s1.md), following bootstrap/stage1/syntax/
+// The Envo-S1 grammar (spec/envo-s1.md), following bootstrap/stage1/syntax/
 // parser_s1.envol. parser.envol calls these where Envo-Core has no such construct and the
 // parser is not in --core mode, so Envo-Core programs parse exactly as in Core
 // ([s1.subset.2]).

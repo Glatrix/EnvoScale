@@ -1,4 +1,4 @@
-# `tests/lsp` — the language server
+# `tests/lsp`: the language server
 
 > **Status:** M5. Run by `build.ps1 test` / `build.sh test` ("envo lsp").
 

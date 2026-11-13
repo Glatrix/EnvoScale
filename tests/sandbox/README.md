@@ -1,4 +1,4 @@
-# `tests/sandbox` — script permissions
+# `tests/sandbox`: script permissions
 
 > **Status:** M6. Run by `build.ps1 test` / `build.sh test`.
 

@@ -4,4 +4,4 @@
 
 Support code in namespace `envoc.util`: string helpers, `StrMap<V>`, `ReadFile`, `Take`, and
 `Text`, a plain-data reference to text that outlives its holder.
-See [`docs/architecture/stage2.md`](../../docs/architecture/stage2.md).
+See [`EnvoScale/architecture/stage2.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/stage2.md).

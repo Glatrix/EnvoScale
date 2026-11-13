@@ -1,6 +1,6 @@
 // Linking EIR objects (PLAN D19). Every object of a program is that program's whole
 // module, lowered from the same files; it defines the functions of its own unit and
-// declares the others (`extern` with the Envol convention). The first object is the base:
+// declares the others (`extern` with the EnvoL convention). The first object is the base:
 // each of its declarations takes the body that another object defines. The result is the
 // module `envoc build` would make, so the executable is the same too.
 namespace envoc.eir;

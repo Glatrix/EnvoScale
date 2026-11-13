@@ -1,4 +1,4 @@
-# `tests/tls` — the TLS 1.3 client against a real server
+# `tests/tls`: the TLS 1.3 client against a real server
 
 > **Status:** M7. Run by `build.ps1 test` / `build.sh test` when `openssl` is
 > installed (it is on the CI runners); skipped, with a note, when it is not.

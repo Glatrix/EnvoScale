@@ -1,13 +1,12 @@
-<p align="center"><img src="docs/images/wordmark.svg" alt="EnvoScale" width="380"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/envoscale/.github/main/profile/assets/wordmark.svg" alt="EnvoScale" width="380"></p>
 
-<img src="docs/images/experimental.svg" alt="Experimental: this project is an experiment, built with heavy use of AI. While it is early, some functionality may not work as intended." width="100%">
+<img src="https://raw.githubusercontent.com/envoscale/.github/main/profile/assets/experimental.svg" alt="Experimental: this project is an experiment, built with heavy use of AI. While it is early, some functionality may not work as intended." width="100%">
 
-# Envol
+# EnvoL
 
 A programming language that compiles to small native programs for Windows, Linux, macOS
-and the browser, and comes with one tool, `envo`, that builds, runs, tests, formats and
-packages it. The compiler, the standard library and the tool are written in Envol, with no
-third-party code.
+and the browser. One tool, `envo`, builds, runs, tests, formats and packages it. The
+compiler, the standard library and the tool are written in EnvoL, with no third-party code.
 
 ```cs
 enum Shape {
@@ -30,39 +29,24 @@ foreach (var s in shapes.AsSlice()) total += Area(s);
 
 ## Install
 
-Download a [release](https://github.com/envoscale/EnvoScale/releases), unpack it, and run
-`bin/envo run hello.envol`. Or build from source, with nothing but a shell:
+Download a [release](https://github.com/envoscale/EnvoLang/releases), or build from source
+with only Git and a shell:
 
 ```bash
-git clone https://github.com/envoscale/EnvoScale
-cd EnvoScale
-./build.sh build                      # .\build.ps1 build on Windows without Git Bash
-build/envo/envo run examples/00-hello/main.envol
+git clone https://github.com/envoscale/EnvoLang
+cd EnvoLang
+./build.sh build                  # or .\build.ps1 build in PowerShell
+build/envo/envo examples/00-hello/main.envol
 ```
 
 ## Learn
 
-| | |
-|---|---|
-| [`examples/`](examples) | Small programs, one idea each |
-| [`docs/spec/`](docs/spec) | The language specification |
-| [`docs/`](docs) | How the compiler, the library and the tools are built |
-
-## The `envo` tool
-
-`envo run` (sandboxed scripts), `envo build` (native executables, any target from any host),
-`envo new`, `envo test`, `envo fmt`, `envo lsp` (any editor; [VS Code](adapters/editors/vscode)),
-`envo dbg`, `envo prof`, `envo fuzz`, `envo repl`, `envo explain`. Packages depend on each
-other by path, registry or git commit.
-
-## The ecosystem
-
-| | |
-|---|---|
-| [Envor](https://github.com/envoscale/Envor) | Rendering: 2D, fonts, 3D, themes |
-| [Envoui](https://github.com/envoscale/Envoui) | The UI framework |
-| [EnvoScaleWeb](https://github.com/envoscale/EnvoScaleWeb) | Websites, and this project's site |
-| [EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm) | The compiler, built from a few kilobytes of readable assembly |
+The documentation for EnvoL and every project around it is in
+[EnvoScale](https://github.com/envoscale/EnvoScale):
+[getting started](https://github.com/envoscale/EnvoScale/blob/main/getting-started.md),
+[a tour of the language](https://github.com/envoscale/EnvoScale/blob/main/envol/README.md),
+and [the `envo` commands](https://github.com/envoscale/EnvoScale/blob/main/envopm/README.md).
+Here: [`examples/`](examples) and the [specification](spec).
 
 ## This repository
 
@@ -70,15 +54,17 @@ other by path, registry or git commit.
 |---|---|
 | [`compiler/`](compiler) | `envoc`, the compiler |
 | [`lib/`](lib) | The standard library: `core`, `alloc`, `std`, and `envo.*` (crypto, TLS, HTTP, JSON, AI) |
-| [`adapters/`](adapters) | Everything that talks to an operating system or a driver |
-| [`tools/`](tools) | `envo` |
-| [`runtime/`](runtime) | The interpreter behind `envo run` |
+| [`tools/envo/`](tools/envo) | `envo` |
+| [`runtime/`](runtime) | The VM behind `envo run` |
+| [`adapters/`](adapters) | Everything that talks to an operating system, and the editor extension |
+| [`spec/`](spec) | The specification, read by `envo explain` and shipped with every release |
+| [`examples/`](examples) | Small programs, each run in CI against its output |
 | [`tests/`](tests) | The test suites; `./build.sh test` runs them all |
 
-The compiler compiles itself; the first compiler comes from
+The compiler compiles itself. The first compiler comes from
 [EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm), which builds it from assembly.
 
 ## License
 
-Free for noncommercial use under the PolyForm Noncommercial License 1.0.0; companies need a
-commercial license ([licensing](docs/legal/licensing.md)).
+Free for noncommercial use under the PolyForm Noncommercial License 1.0.0. Companies need a
+commercial license ([licensing](https://github.com/envoscale/EnvoScale/blob/main/legal/licensing.md)).

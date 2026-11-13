@@ -53,7 +53,7 @@ void SelfTest() {
     print("selftest: ok");
 }
 
-// `envoc embed <file>...`: prints an Envol file that holds each file's text as a string
+// `envoc embed <file>...`: prints an EnvoL file that holds each file's text as a string
 // constant (RUNTIME_0, RUNTIME_1, ...). driver/runtime*.envol are made this way from the
 // sources in runtime/, and the build checks that they are current.
 i32 CmdEmbed(usize argi) {

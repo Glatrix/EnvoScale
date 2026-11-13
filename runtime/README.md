@@ -4,7 +4,7 @@
 > (compiled into every program, M2–M3). The EIR VM is in [`vm/`](vm/README.md) (M6);
 > ARC and JIT tiering come later.
 
-Code that runs inside every Envol program or script, below the standard library:
+Code that runs inside every EnvoL program or script, below the standard library:
 
 | Part | Purpose | Milestone |
 |---|---|---|

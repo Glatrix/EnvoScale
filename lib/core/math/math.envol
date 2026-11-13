@@ -1,5 +1,5 @@
 // core.math: integer helpers, and float functions (RFC 0006). Integer arithmetic that can
-// overflow panics, as Envol's operators do; functions say when they cannot overflow.
+// overflow panics, as EnvoL's operators do; functions say when they cannot overflow.
 namespace core.math;
 
 public i64 Min(i64 a, i64 b) {

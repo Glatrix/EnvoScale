@@ -1,4 +1,4 @@
-// EIR v1 in memory (docs/spec/eir.md). Follows Stage 1's bootstrap/stage1/eir/ir.envol:
+// EIR v1 in memory (spec/eir.md). Follows Stage 1's bootstrap/stage1/eir/ir.envol:
 // a module is a set of flat lists addressed by index, so lowering can build one directly
 // and the text reader fills the same structures. Index 0 of every list is unused, so 0
 // means "none".
@@ -79,7 +79,7 @@ public struct EInit {
 public struct EFunc {
     Text Name;      // without `@`
     bool Extern;
-    Text Abi;       // empty for the Envol convention
+    Text Abi;       // empty for the EnvoL convention
     u32 Ret;
     u32 NParams;
     u32 FirstBlock;

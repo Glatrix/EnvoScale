@@ -6,4 +6,4 @@
 
 Semantic analysis: name resolution, type inference and checking, interface (trait)
 resolution, borrow and lifetime checking, and comptime evaluation. See
-[`docs/architecture/stage2.md`](../../docs/architecture/stage2.md).
+[`EnvoScale/architecture/stage2.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/stage2.md).

@@ -396,7 +396,7 @@ public struct Lower {
         }
     }
 
-    // Function f becomes a declaration: `extern` with the Envol convention.
+    // Function f becomes a declaration: `extern` with the EnvoL convention.
     void Declare(ref this, u32 f) {
         EFunc e = this.M.Func(f);
         e.Extern = true;

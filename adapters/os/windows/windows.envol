@@ -1444,7 +1444,7 @@ impl IClipboard for Clipboard {
 }
 
 // A Win32 window (PLAN D45). Its window procedure is DefWindowProcW itself, so no call
-// comes back into Envol code: events are read from the message queue, a closed window is
+// comes back into EnvoL code: events are read from the message queue, a closed window is
 // one that no longer exists, and a new size is seen by asking for it.
 public struct Window {
     i64 Hwnd;

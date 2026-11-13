@@ -1,4 +1,4 @@
-// Permissions for scripts (PLAN D34; docs/architecture/script-runtime.md). A script has
+// Permissions for scripts (PLAN D34; EnvoScale/architecture/script-runtime.md). A script has
 // its console and nothing else until `--allow` grants more:
 //
 //   read[:path]    read files and list folders (under path)

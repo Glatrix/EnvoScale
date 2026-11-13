@@ -70,9 +70,10 @@ public struct Asm {
     string Data;
     List<u64> Labels;   // per label: (in data << 63) | offset, or UNBOUND
     List<Fixup> Fixups;
+    bool Short;         // -O2: memory operands with no or an 8-bit displacement where they fit
 
     public static Asm New() {
-        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New() };
+        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New(), Short = false };
         a.Labels.Push(UNBOUND);     // label 0: none
         return a;
     }
@@ -187,6 +188,17 @@ public struct Asm {
 
     // ModRM (+ SIB) + disp32 for [base + disp].
     void ModMem(ref this, u8 reg, u8 rb, i32 disp) {
+        if (this.Short && disp == 0 && rb & 7 != RBP) {
+            this.B((reg & 7) << 3 | rb & 7);
+            if (rb & 7 == RSP) this.B(0x24);
+            return;
+        }
+        if (this.Short && disp >= -128 && disp <= 127) {
+            this.B(0x40 | (reg & 7) << 3 | rb & 7);
+            if (rb & 7 == RSP) this.B(0x24);
+            this.B((disp as u32 & 0xFF) as u8);
+            return;
+        }
         this.B(0x80 | (reg & 7) << 3 | rb & 7);
         if (rb & 7 == RSP) this.B(0x24);       // SIB: rb only
         this.U32(disp as u32);

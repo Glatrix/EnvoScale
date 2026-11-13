@@ -1,4 +1,4 @@
-// envo.eon: the reader and writer for EON, Envol Object Notation (docs/spec/eon.md). A
+// envo.eon: the reader and writer for EON, EnvoL Object Notation (spec/eon.md). A
 // document is read into a tree of Values; Write gives it back in canonical form (eon.md
 // section 5). Comments are not kept: a tool that must keep them edits the text.
 namespace envo.eon;

@@ -1,4 +1,4 @@
-# `runtime/vm` — the script runtime
+# `runtime/vm`: the script runtime
 
 > **Status:** Experimental (M6): an interpreter for EIR, behind `envo run`, scripts
 > (`envo file.envol`, `#!/usr/bin/env envo`) and the REPL. Compiled into `envo`.

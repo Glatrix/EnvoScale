@@ -5,8 +5,8 @@
 > flow-sensitive one (M3). Envo-Core has no borrow checking. Tests: `tests/spec/s1-own/`
 > (E0501–E0508) and `tests/spec/s1-run/drops.envol`.
 
-Envol has Rust's memory model with fewer things to write: every value has one owner,
-borrows are checked at compile time, and lifetimes are inferred.
+Every value has one owner, borrows are checked at compile time, and lifetimes are
+inferred.
 
 ## 5.1 Ownership and moves
 
@@ -36,15 +36,15 @@ or place that already exists, is an error (E0509): the temporary would be gone f
 
 ## 5.2 Parameter modes
 
-| Syntax | Meaning | Rust equivalent |
-|---|---|---|
-| `T x` | takes ownership (move), or copies a `Copy` type | `x: T` |
-| `in T x` | shared, read-only borrow | `x: &T` |
-| `ref T x` | exclusive, mutable borrow | `x: &mut T` |
-| `out T x` | output borrow; the callee must initialize it before returning | `&mut MaybeUninit<T>` (safe) |
-| `class` value | shared ownership (ARC) | `Rc` / `Arc` |
-| `weak T` | non-owning reference to a class instance | `Weak` |
-| `*T` | raw pointer, `unsafe` only | `*mut T` |
+| Syntax | Meaning |
+|---|---|
+| `T x` | takes ownership (move), or copies a `Copy` type |
+| `in T x` | shared, read-only borrow |
+| `ref T x` | exclusive, mutable borrow |
+| `out T x` | output borrow; the callee must initialize it before returning |
+| `class` value | shared ownership (ARC) |
+| `weak T` | non-owning reference to a class instance |
+| `*T` | raw pointer, `unsafe` only |
 
 **[own.mode.1]** At the call site, `in` arguments are borrowed implicitly; `ref` and
 `out` must be written (`Swap(ref a, ref b)`, `TryParse(s, out var n)`), so mutation is
@@ -90,10 +90,10 @@ field) implicitly takes a lifetime parameter, inferred at each use.
 **[own.life.3]** Explicit lifetimes name where a borrow comes from:
 `str Longest(in str a, in str b) from a, b`, and `ref` parameters can say what may be
 stored into them (`ref List<str> names from name`). See
-[RFC 0004](../rfcs/0004-lifetimes-and-views.md), [life.origin.1]–[life.infer.4].
+[RFC 0004](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0004-lifetimes-and-views.md), [life.origin.1]–[life.infer.4].
 
 **[own.view.1]** `T[]` is a shared, read-only view; `mut T[]` is an exclusive view that can
-be written through ([RFC 0004](../rfcs/0004-lifetimes-and-views.md), [view.1]–[view.6]).
+be written through ([RFC 0004](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0004-lifetimes-and-views.md), [view.1]–[view.6]).
 
 ## 5.5 Error messages
 
@@ -125,7 +125,7 @@ count reaches zero.
 **[own.class.2]** Fields of a class can be mutated through any handle. To keep this
 memory-safe, the compiler proves exclusive access where it can, and otherwise inserts a
 dynamic **exclusivity check**: overlapping mutable access to the same instance at
-runtime panics (Swift's model). Escape analysis removes most checks.
+runtime panics. Escape analysis removes most checks.
 
 **[own.class.3]** `weak T` holds a non-owning reference; reading it yields `T?`, which is
 `null` after the instance is dropped. Reference cycles must be broken with `weak`; the
@@ -161,6 +161,6 @@ stops checking what raw pointers point to. `envo audit unsafe` lists every block
 ## 5.10 Envo-Core
 
 **Core:** Envo-Core has no borrow checker, no classes and no drops. All Core types are
-`Copy`. Raw pointers are dereferenced inside `unsafe` blocks, as in full Envol, so Core
-code stays valid Envol; full Envol may still reject a Core program that breaks borrow
+`Copy`. Raw pointers are dereferenced inside `unsafe` blocks, as in full EnvoL, so Core
+code stays valid EnvoL; full EnvoL may still reject a Core program that breaks borrow
 rules Stage 0 does not check. Stage 1's own source is written to pass both.

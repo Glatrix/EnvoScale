@@ -1,4 +1,4 @@
-// The binary form of EIR (docs/spec/eir.md section 7): `.eirb` modules and `.eo` objects.
+// The binary form of EIR (spec/eir.md section 7): `.eirb` modules and `.eo` objects.
 // It stores the module's lists as they are, each function's values, blocks and operands
 // numbered from the function's first, so decoding gives back the same module: the same
 // types, globals and functions at the same indexes, and the same text when printed.

@@ -3,7 +3,7 @@
 // workspace. Format: docs/spec/eon.md.
 
 workspace {
-    name    = "envoscale"
+    name    = "envolang"
     version = "0.0.1"
     edition = "2027"
     license = "PolyForm-Noncommercial-1.0.0 OR LicenseRef-EnvoScale-Commercial"

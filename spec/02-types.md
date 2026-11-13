@@ -4,7 +4,7 @@
 > interfaces, M2) and Stage 2 (everything, M3) implement it.
 > Tests: none yet (M1 adds Core type tests under `tests/spec/02-types/`).
 
-Envol is statically typed with local type inference. Every value has exactly one type
+EnvoL is statically typed with local type inference. Every value has exactly one type
 known at compile time. There is no garbage collector, no implicit boxing, and no
 runtime type information unless a type opts in with `[Reflect]`.
 
@@ -24,8 +24,7 @@ runtime type information unless a type opts in with `[Reflect]`.
 | `void` | 0 bytes | the single value `()`; the type of statements and of functions that return nothing |
 | `never` | 0 bytes | no values; the type of `return`, `break`, `panic(…)` and functions that never return |
 
-**[type.prim.2] Familiar aliases.** For readers coming from C#, these predeclared aliases
-are exactly the same types:
+**[type.prim.2] Aliases.** These predeclared aliases are exactly the same types:
 
 | Alias | Type | | Alias | Type |
 |---|---|---|---|---|
@@ -40,7 +39,7 @@ library types from the prelude, not primitives.
 ## 2.2 Integer semantics
 
 **[type.int.1]** Integer arithmetic that overflows **panics**, in every build mode and
-in both AOT and script mode. Envol has no "overflow is fine in release" mode, so a program
+in both AOT and script mode. EnvoL has no "overflow is fine in release" mode, so a program
 behaves the same however it is built.
 
 **[type.int.2]** Wrapping arithmetic is explicit: `a +% b`, `a -% b`, `a *% b` and their
@@ -83,13 +82,13 @@ beginners hit, with error messages that suggest the cast.
 | Syntax | Name | Meaning |
 |---|---|---|
 | `T[N]` | fixed array | `N` values of `T` stored inline; `N` is a constant expression |
-| `T[]` | slice | sugar for `Span<T>`: a shared, read-only view of contiguous `T`s (pointer + length); made by slicing, `a[lo..hi]` ([RFC 0002](../rfcs/0002-slicing.md), [expr.slice.1]) |
-| `mut T[]` | writable slice | sugar for `SpanMut<T>`: an exclusive view whose elements can be assigned ([RFC 0004](../rfcs/0004-lifetimes-and-views.md), [view.1]) |
+| `T[]` | slice | sugar for `Span<T>`: a shared, read-only view of contiguous `T`s (pointer + length); made by slicing, `a[lo..hi]` ([RFC 0002](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0002-slicing.md), [expr.slice.1]) |
+| `mut T[]` | writable slice | sugar for `SpanMut<T>`: an exclusive view whose elements can be assigned ([RFC 0004](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0004-lifetimes-and-views.md), [view.1]) |
 | `(A, B)` / `(A a, B b)` | tuple | anonymous product type, optionally with element names |
 | `T?` | optional | sugar for `Option<T>`; `null` is `Option<T>.None` |
 | `*T` | raw pointer | address of a `T`; dereferencing requires `unsafe` |
 | `Result<T, E>` | result | `Ok(T)` or `Err(E)`; the standard error type |
-| `fn(A, B) -> R` | function | a closure or function; `mut fn` / `once fn` may change / use up their captures; generic as a parameter, a code + environment pair elsewhere; `extern "C" fn` is a C function pointer ([RFC 0003](../rfcs/0003-function-types.md)) |
+| `fn(A, B) -> R` | function | a closure or function; `mut fn` / `once fn` may change / use up their captures; generic as a parameter, a code + environment pair elsewhere; `extern "C" fn` is a C function pointer ([RFC 0003](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0003-function-types.md)) |
 
 **[type.array.1]** Indexing an array or slice checks the bounds and panics when out of
 range. The optimizer removes checks it can prove redundant (brief §4.3).
@@ -109,7 +108,7 @@ Declared with items (chapter 4):
 | `struct` | inline (stack or containing value) | moved; `Copy` if every field is `Copy` | value type |
 | `enum` | inline | moved; `Copy` if every payload is `Copy` | algebraic: variants may carry payloads |
 | `class` | heap, reference counted | the *handle* is copied and the count incremented | shared ownership; `weak` breaks cycles |
-| `interface` | — | — | a trait: a set of methods a type can implement |
+| `interface` | none | none | a trait: a set of methods a type can implement |
 
 **[type.copy.1]** A type is `Copy` when copying its bytes is a complete copy: all
 primitives (a `str` is a shared borrow, so copying it is fine), raw pointers, slices, fixed arrays and tuples of `Copy` types, and structs and enums whose fields are

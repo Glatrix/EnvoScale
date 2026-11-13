@@ -23,7 +23,7 @@ void Bug(str msg) => ToolFail(msg, EXIT_INTERNAL);
 const u8 REMAT_CONST = 1;      // const: the immediate
 const u8 REMAT_FRAME = 2;      // slot: rbp + the offset
 const u8 REMAT_LABEL = 3;      // addr: the label's address
-const u64 SMALL_BYTES = 128;
+const u64 SMALL_BYTES = 256;
 const u64 NOT_SMALL = 0xFFFFFFFFFFFFFFFF;
 // The largest frame: displacements from rbp are 32-bit.
 const u64 FRAME_MAX = 0x7FFF0000;
@@ -52,6 +52,8 @@ struct Gen {
     u32 NextBlock;          // the block emitted next (0 at the function's end): a jump there falls through
     u32 BlockEnd;           // one past the current block's last instruction
     u32 Fused;              // -O2: a compare left for the branch after it to do, or 0
+    u32 FoldedField;        // -O2: a field address left for the load or store after it, or 0
+    u32 FoldedInst;         // its instruction
 
     // ------------------------------------------------------------------ helpers
 
@@ -134,6 +136,15 @@ struct Gen {
     u8 AddrOf(ref this, in Module m, u32 o, u8 scratch, ref i32 disp) {
         disp = 0;
         EOp op = m.Op(o);
+        if (this.Opt && op.Kind == OK_VALUE && op.Ref == this.FoldedField && this.FoldedField != 0) {
+            // a field address folded into this access: [base + offset]
+            EInst fi = m.Inst(this.FoldedInst);
+            this.FoldedField = 0;
+            i32 inner = 0;
+            u8 rb = this.AddrOf(m, fi.FirstOp, scratch, ref inner);
+            disp = inner + m.FieldOffset(fi.Ty, fi.Imm as u32) as i32;
+            return rb;
+        }
         if (this.Opt && op.Kind == OK_VALUE) {
             usize k = (op.Ref - this.FirstValue) as usize;
             if (this.RematKind.Get(k) == REMAT_FRAME) {
@@ -364,6 +375,20 @@ struct Gen {
         EOp c = m.Op(next.FirstOp);
         if (c.Kind != OK_VALUE || c.Ref != inst.Result) return false;
         return this.Uses.Get((inst.Result - this.FirstValue) as usize) == 1;
+    }
+
+    // -O2: is field address inst (instruction i) used once, as the address of the load or
+    // store right after it? Then that access addresses [base + offset] itself.
+    bool FoldsIntoAccess(in this, in Module m, u32 i, in EInst inst) {
+        if (i + 1 >= this.BlockEnd || this.Uses.Get((inst.Result - this.FirstValue) as usize) != 1) return false;
+        EInst next = m.Inst(i + 1);
+        u8 sh = OpTable(next.Op).Shape;
+        u32 at = 0;
+        if (sh == SH_LOAD) at = next.FirstOp;
+        else if (sh == SH_STORE) at = next.FirstOp + 1;
+        else return false;
+        EOp a = m.Op(at);
+        return a.Kind == OK_VALUE && a.Ref == inst.Result;
     }
 
     // The label of the shared stub that panics with reason i.
@@ -732,6 +757,11 @@ struct Gen {
             this.A.Store(rb, disp, rv, ty.Size);
         } else if (sh == SH_FIELD) {
             u64 foff = m.FieldOffset(t, inst.Imm as u32);
+            if (this.Opt && foff < 0x40000000 && this.FoldsIntoAccess(m, i, inst)) {
+                this.FoldedField = inst.Result;
+                this.FoldedInst = i;
+                return;
+            }
             if (this.Opt) {
                 u8 d = this.DestReg(inst.Result);
                 u8 ra = this.RegOf(m, f);
@@ -1271,6 +1301,7 @@ struct Gen {
             }
         }
         this.Fused = 0;
+        this.FoldedField = 0;
         for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
             EBlock blk = m.Block(b);
             this.A.Bind(this.BlockLabels.Get(b as usize));
@@ -1304,6 +1335,10 @@ struct Gen {
     u64 SmallConst(in this, in Module m, u32 o) {
         if (!this.Opt) return NOT_SMALL;
         EOp op = m.Op(o);
+        if (op.Kind == OK_INT) {
+            if (op.Int > SMALL_BYTES) return NOT_SMALL;
+            return op.Int;
+        }
         if (op.Kind != OK_VALUE) return NOT_SMALL;
         usize k = (op.Ref - this.FirstValue) as usize;
         if (this.RematKind.Get(k) != REMAT_CONST || this.RematImm.Get(k) > SMALL_BYTES) return NOT_SMALL;
@@ -1465,8 +1500,9 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
         Imports = new WinImports { Dir = 0, Iat = 0 }, Opt = opt, Regs = List<u8>.New(),
         RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0,
-        Uses = List<u32>.New(), NextBlock = 0, BlockEnd = 0, Fused = 0
+        Uses = List<u32>.New(), NextBlock = 0, BlockEnd = 0, Fused = 0, FoldedField = 0, FoldedInst = 0
     };
+    g.A.Short = opt;
     for (usize i = 0; i < m.Funcs.Len(); i++) g.FuncLabels.Push(0);
     for (usize i = 0; i < m.Globals.Len(); i++) g.GlobalLabels.Push(0);
     for (usize i = 0; i < m.Blocks.Len(); i++) g.BlockLabels.Push(0);

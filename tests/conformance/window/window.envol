@@ -18,7 +18,7 @@ void Check(bool ok, str what) {
 void Run<W>(ref W w) where W : IWindow {
     Check(!w.IsOpen(), "not open before Open");
     Check(w.Poll().Is(EventKind.None), "no events before Open");
-    if (!w.Open("Envol conformance", 400, 300)) {
+    if (!w.Open("EnvoL conformance", 400, 300)) {
         Check(!w.IsOpen(), "not open when Open says no");
         Check(env.Var("ENVO_WINDOW_REQUIRED").IsNone(), "a window opens (ENVO_WINDOW_REQUIRED is set)");
         return;
@@ -34,7 +34,7 @@ void Run<W>(ref W w) where W : IWindow {
         frame.Push(255);
     }
     w.Present(frame.AsSlice(), 400, 300);
-    w.SetTitle("Envol conformance: titled");
+    w.SetTitle("EnvoL conformance: titled");
     // the events the system has: drained without waiting
     u32 n = 0;
     while (n < 10000 && !w.Poll().Is(EventKind.None)) n++;

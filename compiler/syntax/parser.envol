@@ -446,7 +446,7 @@ struct Parser {
         this.Expect(TK_LPAREN);
         while (this.Kind() != TK_RPAREN) {
             u16 k = this.Kind();
-            // parameter modes and receivers are full Envol
+            // parameter modes and receivers are full EnvoL
             if (k == TK_KW_IN || k == TK_KW_REF || k == TK_KW_OUT || k == TK_KW_THIS) this.ErrNotCore("", this.Pos);
             u32 ptype = this.ParseDeclType();
             u32 pname = this.Expect(TK_IDENT);
@@ -625,7 +625,7 @@ struct Parser {
         return t;
     }
 
-    // A Type in a declaration, where full Envol could continue with '?' or '<'.
+    // A Type in a declaration, where full EnvoL could continue with '?' or '<'.
     u32 ParseDeclType(ref this) {
         u32 t = this.ParseType();
         if (!this.Core) return t;      // Envo-S1 types already took `?` and `<…>`
@@ -1047,7 +1047,7 @@ struct Parser {
         }
         if (k == TK_FLOAT) this.ErrNotCore("floating-point literals", this.Pos);
         if (k == TK_LBRACKET) this.ErrNotCore("array literals", this.Pos);
-        // [core.syntax.5] a keyword only full Envol has
+        // [core.syntax.5] a keyword only full EnvoL has
         if (k >= TK_KW_FIRST && k <= TK_KW_LAST && TokClass(k) & TC_CORE_KW == 0) this.ErrNotCore("", this.Pos);
         this.ErrExpected("an expression");
         return 0;

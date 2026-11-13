@@ -1,24 +1,24 @@
 # Envo-S1
 
 > **Status:** Draft, accepted for M2 (2026-11-11). Implemented by Stage 1 (`envoc1`,
-> milestone M2, increments 2.3–2.13 in [`docs/PLAN.md`](../PLAN.md) §5). Tests:
+> milestone M2, increments 2.3–2.13 in [`docs/PLAN.md`](https://github.com/envoscale/EnvoScale/blob/main/project/plan.md) §5). Tests:
 > `tests/spec/s1-*` (from M2.4).
 
 Envo-S1 is the language `envoc1` accepts: **Envo-Core plus what a compiler needs to be
 written comfortably**, and nothing more (PLAN decision D12). Stage 2 (`compiler/`) is
-written in Envo-S1 until it compiles itself (M3); after that it may use all of Envol.
+written in Envo-S1 until it compiles itself (M3); after that it may use all of EnvoL.
 
 ## 1. The subset properties
 
-- **[s1.subset.1]** Every Envo-S1 program is a valid Envol program with the same meaning.
-  S1 only ever removes features from full Envol.
+- **[s1.subset.1]** Every Envo-S1 program is a valid EnvoL program with the same meaning.
+  S1 only ever removes features from full EnvoL.
 - **[s1.subset.2]** Every Envo-Core program is a valid Envo-S1 program with the same
   meaning, and `envoc1` reports the same diagnostics for it as `envoc0` (same code, file,
   line and column), except that S1 accepts what Core rejects as "not part of Envo-Core".
 - **[s1.subset.3]** `envoc1 --core` restricts the accepted language to Envo-Core and
   reports E0901–E0905 exactly as `envoc0` does. Differential tests (D14) run in this
   mode, and it checks that Stage 1's own source stays Core.
-- **[s1.subset.4]** A construct of full Envol that S1 leaves out is **E0950** "not part of
+- **[s1.subset.4]** A construct of full EnvoL that S1 leaves out is **E0950** "not part of
   Envo-S1: X", reported at the construct.
 
 ## 2. Lexical structure
@@ -39,8 +39,8 @@ Everything in Envo-Core (`envo-core.md` §3), plus:
 | `T?` | `Option<T>` from the prelude; `null` is `None` | [type.opt.1] |
 | `Result<T, E>` | from the prelude, with `Ok(v)` / `Err(e)` | chapter 2 §2.4 |
 | `string` | owned UTF-8 text from the prelude; converts to `str` (a shared borrow) where a `str` is expected | §8 |
-| `fn(…) -> R`, `mut fn`, `once fn` | closures and function values; not `extern "C" fn` | [RFC 0003](../rfcs/0003-function-types.md) |
-| `mut T[]` | writable view | [RFC 0004](../rfcs/0004-lifetimes-and-views.md) [view.1] |
+| `fn(…) -> R`, `mut fn`, `once fn` | closures and function values; not `extern "C" fn` | [RFC 0003](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0003-function-types.md) |
+| `mut T[]` | writable view | [RFC 0004](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0004-lifetimes-and-views.md) [view.1] |
 
 - **[s1.type.1]** S1 types are not all `Copy`: a type is `Copy` by [type.copy.1], and
   `string`, `List<T>`, function values and any type that implements `IDrop` or contains
@@ -111,10 +111,10 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   `None`); and the postfix `?`, which returns early with `Err(e)` from a function
   returning `Result<_, E>` or with `None` from one returning `U?` ([expr.q.1]).
 - **[s1.expr.4] Lambdas** with inferred captures and the `move` prefix
-  ([RFC 0003](../rfcs/0003-function-types.md)).
+  ([RFC 0003](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0003-function-types.md)).
 - **[s1.expr.5] Slicing** `a[lo..hi]`, `a[lo..]`, `a[..hi]`, `a[..]`, `a[lo..=hi]` on
   arrays, slices and `str`, giving `T[]`, `mut T[]` or `str`
-  ([RFC 0002](../rfcs/0002-slicing.md), [view.3]).
+  ([RFC 0002](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0002-slicing.md), [view.3]).
 - **[s1.expr.6] Method calls** `x.M(args)` with automatic borrowing of `x` for `in this`
   and `ref this` receivers (`ref this` needs `x` to be a mutable place, E0315), and
   static calls `T.M(args)`.
@@ -133,7 +133,7 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   is an `in` borrow of each element ([own.borrow.4]).
 - **[s1.expr.8]** Not in S1: interpolated strings, `?.`, `is` patterns, tuples and
   destructuring, `new()` without a type, object initializers for classes, `await`,
-  `yield`, `throw`/`try`/`catch` (not in Envol at all), operators on non-primitive
+  `yield`, `throw`/`try`/`catch` (not in EnvoL at all), operators on non-primitive
   types, bindings in a pattern with `|` (write one arm for each variant), ranges outside
   slicing and `foreach`, and `foreach` ranges without both bounds.
 
@@ -148,7 +148,7 @@ bracketed markers, tested by `tests/golden/s1-parser/` and `tests/spec/s1-syntax
 - **[s1.own.1]** Chapter 5 applies to S1 except classes (§5.6), threads (§5.7),
   allocators (§5.8) and `[NoAlloc]`: moves and use-after-move (E0501), moving out of a
   borrow (E0502), borrow conflicts (E0503), moving or dropping while borrowed (E0504),
-  lifetime elision and inference (E0506–E0508, [RFC 0004](../rfcs/0004-lifetimes-and-views.md)).
+  lifetime elision and inference (E0506–E0508, [RFC 0004](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0004-lifetimes-and-views.md)).
 - **[s1.own.2] Drops.** A type implements `IDrop` (§8) to run code when its value is
   dropped; locals drop in reverse declaration order at the end of their scope and fields
   after their struct's own `Drop` ([own.drop.1]). Values moved on some paths only are

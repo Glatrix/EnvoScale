@@ -1,8 +1,8 @@
 # `compiler/`
 
-`envoc`, the Envol compiler: about 24,000 lines of Envol that compile Envol, including
+`envoc`, the EnvoL compiler: about 24,000 lines of EnvoL that compile EnvoL, including
 themselves. The `envo` tool contains it; `envoc` on its own is what `build.sh` builds
-first. How it is built and tested: [docs/architecture/stage2.md](../docs/architecture/stage2.md).
+first. How it is built and tested: [EnvoScale/architecture/stage2.md](https://github.com/envoscale/EnvoScale/blob/main/architecture/stage2.md).
 
 ```
 source (.envol)

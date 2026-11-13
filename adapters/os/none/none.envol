@@ -1,5 +1,5 @@
 // os.none: the reference adapters, which need no operating system (PLAN D22-D24;
-// docs/architecture/ports-and-adapters.md). Each port's conformance suite is developed
+// EnvoScale/architecture/ports-and-adapters.md). Each port's conformance suite is developed
 // against them first, most library tests use them, and they are the fallback on a new
 // platform. They are deterministic: the same calls give the same results on every run.
 //

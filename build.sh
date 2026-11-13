@@ -44,7 +44,7 @@ host_suffix() {
     case "$(uname -s)" in
         Linux) printf '' ;;
         MINGW*|MSYS*|CYGWIN*) printf '.exe' ;;
-        *) fail "no seed compiler for $(uname -s) yet (supported: Linux, Windows); see docs/porting/CHECKLIST.md" ;;
+        *) fail "no seed compiler for $(uname -s) yet (supported: Linux, Windows); see https://github.com/envoscale/EnvoScale/blob/main/porting/CHECKLIST.md" ;;
     esac
 }
 
@@ -739,7 +739,7 @@ EOF_ERR
     SOURCE_DATE_EPOCH=1762905600 envo_do build --sbom pk/app
     sb="$erun/pk/app/build/app$(host_suffix).spdx.json"
     if [ "$rc" -eq 0 ] && [ -f "$sb" ] && grep -q '"spdxVersion": *"SPDX-2.3"' "$sb" && grep -q '"name": *"greet"' "$sb" && grep -q '2025-11-12T00:00:00Z' "$sb"; then pass; else bad 'envo build --sbom' "exit $rc: $(cat "$TMP/err")"; fi
-    # releases (docs/guides/offline-install.md): envo archive gives the same bytes on every
+    # releases (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md): envo archive gives the same bytes on every
     # OS (the digest is pinned in both scripts); envo sign and envo verify
     REL_TAR_SHA=b54a3aa9ab43038969bf16347b53b6940e813f9889ab3be0e0f29c6ef9b11ee1
     SOURCE_DATE_EPOCH=1762905600 envo_do archive pk/greet pk/greet.tar
@@ -872,13 +872,12 @@ do_check() {
     problems=0
     problem() { printf 'check: %s\n' "$*" >&2; problems=$((problems + 1)); }
 
-    for f in README.md LICENSE CONTRIBUTING.md build.sh build.ps1 docs/README.md docs/PLAN.md \
-             docs/status.md docs/principles.md docs/legal/licensing.md docs/legal/trademarks.md docs/legal/cla.md \
+    for f in README.md LICENSE CONTRIBUTING.md build.sh build.ps1 spec/README.md spec/errors.md \
              LICENSES/PolyForm-Noncommercial-1.0.0.md LICENSES/LicenseRef-EnvoScale-Commercial.md; do
         [ -f "$ROOT/$f" ] || problem "missing file: $f"
     done
 
-    # docs/principles.md: lib/** never imports adapters/**.
+    # The principles (project/principles.md in the docs): lib/** never imports adapters/**.
     hits=$(find "$ROOT/lib" -name '*.envol' -exec grep -n -E '^[[:space:]]*(use|using)[[:space:]]+adapters([^A-Za-z0-9_]|$)' /dev/null {} + 2>/dev/null || true)
     [ -z "$hits" ] || problem "lib imports an adapter: $hits"
 
@@ -893,7 +892,7 @@ do_compare() {
     [ "$#" -eq 2 ] || fail "usage: ./build.sh compare <dir-a> <dir-b>"
     differ=0
     files='envoc/envoc envoc/envoc.exe envo/envo envo/envo.exe'
-    # after `dist`, the release archive's digest (docs/guides/offline-install.md)
+    # after `dist`, the release archive's digest (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md)
     [ -f "$1/dist/SHA256SUMS" ] && files="$files dist/SHA256SUMS"
     for f in $files; do
         [ -f "$1/$f" ] || fail "missing $1/$f"
@@ -908,8 +907,8 @@ do_compare() {
 }
 
 # ------------------------------------------------------------------- dist
-# dist: the release archive (docs/guides/offline-install.md): build/dist/envoscale-<v>.tar
-# with bin/ (envo and envoc for both OSes), lib/, adapters/, docs/ and the licenses, packed
+# dist: the release archive (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md): build/dist/envoscale-<v>.tar
+# with bin/ (envo and envoc for both OSes), lib/, adapters/, spec/ and the licenses, packed
 # reproducibly by `envo archive`, and SHA256SUMS. Signing it is the release manager's step
 # (`envo sign`), with the project's key.
 # provenance <version> <sha256> <command>: an in-toto statement (SLSA provenance v1) of how
@@ -925,9 +924,9 @@ provenance() {
     printf '  "predicateType": "https://slsa.dev/provenance/v1",\n'
     printf '  "predicate": {\n'
     printf '    "buildDefinition": {\n'
-    printf '      "buildType": "https://github.com/envoscale/EnvoScale/blob/main/docs/guides/offline-install.md#provenance",\n'
+    printf '      "buildType": "https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md#provenance",\n'
     printf '      "externalParameters": {"command": "%s", "SOURCE_DATE_EPOCH": "0"},\n' "$3"
-    printf '      "resolvedDependencies": [{"uri": "git+https://github.com/envoscale/EnvoScale", "digest": {"gitCommit": "%s"}}]\n' "$commit"
+    printf '      "resolvedDependencies": [{"uri": "git+https://github.com/envoscale/EnvoLang", "digest": {"gitCommit": "%s"}}]\n' "$commit"
     printf '    },\n'
     printf '    "runDetails": {\n'
     printf '      "builder": {"id": "%s"},\n' "$builder"
@@ -947,7 +946,7 @@ do_dist() {
     rm -rf "$dist"
     mkdir -p "$dist/envoscale-$v/bin"
     cp "$ROOT/build/envo/envo" "$ROOT/build/envo/envo.exe" "$BUILD2/envoc" "$BUILD2/envoc.exe" "$dist/envoscale-$v/bin/"
-    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/docs" "$ROOT/LICENSES" "$dist/envoscale-$v/"
+    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/spec" "$ROOT/LICENSES" "$dist/envoscale-$v/"
     cp "$ROOT/LICENSE" "$ROOT/README.md" "$dist/envoscale-$v/"
     (cd "$dist" && SOURCE_DATE_EPOCH=0 "$ROOT/build/envo/envo$(host_suffix)" archive "envoscale-$v" "envoscale-$v.tar") || fail "envo archive failed"
     (cd "$dist" && printf '%s  %s\n' "$(sha256 "envoscale-$v.tar")" "envoscale-$v.tar" > SHA256SUMS)

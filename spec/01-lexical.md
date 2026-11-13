@@ -66,7 +66,7 @@ already contains block comments.
 
 ## 1.5 Token spacing flags
 
-Envol uses whitespace in two places in its grammar (`?` and line breaks; see chapter 3),
+EnvoL uses whitespace in two places in its grammar (`?` and line breaks; see chapter 3),
 so each token records how it was separated from the previous one.
 
 **[lex.flags.1]** A token has the **space-before** flag if it is the first token in the
@@ -131,8 +131,8 @@ can use them without breaking code.
 
 These are ordinary identifiers except in the positions chapter 3–4 give them meaning:
 `get`, `set`, `init`, `value`, `component`, `unchecked`, and `fn`, `mut`, `once`, `move`
-(function types and lambdas, [RFC 0003](../rfcs/0003-function-types.md) [fn.syn.1]; `mut` also
-before slice types, [RFC 0004](../rfcs/0004-lifetimes-and-views.md) [view.2]), and `from` (borrow origins, [life.from.1]).
+(function types and lambdas, [RFC 0003](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0003-function-types.md) [fn.syn.1]; `mut` also
+before slice types, [RFC 0004](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0004-lifetimes-and-views.md) [view.2]), and `from` (borrow origins, [life.from.1]).
 
 ### 1.6.3 Predeclared names
 
@@ -215,8 +215,8 @@ not closed on its line is **E0004**, reported at the opening quote.
 **[lex.str.2]** The literal's value is the UTF-8 text between the quotes with escapes
 replaced.
 
-**[lex.str.3]** `"""` always begins a **raw string literal** (multi-line, no escapes,
-C# 11 rules: the closing `"""` sets the indentation to remove). Raw strings are specified
+**[lex.str.3]** `"""` always begins a **raw string literal** (multi-line, no escapes;
+the closing `"""` sets the indentation to remove). Raw strings are specified
 in full when the Stage 2 lexer implements them (M3).
 
 **[lex.str.4]** `$"` begins an **interpolated string**: `$"Hello, {name}!"`. Inside it,
@@ -280,7 +280,7 @@ Tests: `tests/golden/lexer/punctuation.envol`, `tests/golden/lexer/munch.envol`.
 ## 1.9 Directives
 
 **[lex.dir.1]** `#` at the start of a line (after optional whitespace) begins a
-compile-time directive: `#if`, `#elif`, `#else`, `#endif`. Conditions are typed Envol
+compile-time directive: `#if`, `#elif`, `#else`, `#endif`. Conditions are typed EnvoL
 constant expressions (`#if target.os == "windows"`), not string macros. Directives are
 specified with conditional compilation (chapter 4, §4.9).
 
@@ -295,7 +295,7 @@ Tests: `tests/golden/lexer/empty.envol`.
 ## 1.11 Stage 0 behaviour (informative)
 
 Stage 0 lexes Envo-Core only, but reserves every keyword and lexes every operator above
-so that no Envo-Core program means something different in full Envol. It stops at the
+so that no Envo-Core program means something different in full EnvoL. It stops at the
 first lexical error. Its `lex` command prints one line per token:
 
 ```

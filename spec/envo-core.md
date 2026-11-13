@@ -3,27 +3,27 @@
 > **Status:** Draft; being implemented by Stage 0 (`envoc0`, milestone M1).
 > Lexical part implemented and tested; parser, checker and code generator next.
 
-Envo-Core is the small subset of Envol that the assembly compiler `envoc0` accepts. It
+Envo-Core is the small subset of EnvoL that the assembly compiler `envoc0` accepts. It
 exists for one reason: to write Stage 1 (`envoc1`) in something nicer than assembly
 while keeping Stage 0 small enough to audit (target: under ~15k lines of `.eas`).
 
 ## 1. The subset property
 
-**[core.subset.1]** Every program `envoc0` accepts is a syntactically valid Envol program,
-and where full Envol also accepts it, it means the same thing. Core only ever *removes*
+**[core.subset.1]** Every program `envoc0` accepts is a syntactically valid EnvoL program,
+and where full EnvoL also accepts it, it means the same thing. Core only ever *removes*
 features; it never adds syntax or changes meaning.
 
-**[core.subset.2]** Full Envol may reject some Core programs, because Stage 0 does not
+**[core.subset.2]** Full EnvoL may reject some Core programs, because Stage 0 does not
 check borrow rules (chapter 5). Stage 1's source is required to pass both compilers once
 Stage 2 exists; CI enforces this from M3.
 
 Consequences that shaped Core:
 
-- All Envol keywords are reserved in Core, even ones Core does not use.
-- Core's borrowed string type is `str`, not `string` (which is owned in Envol).
-- Raw pointer dereference needs `unsafe { }` in Core, as in Envol.
-- Character literals have type `char` in Envol; Core has no `char`, so it only allows
-  ASCII character literals where a `u8` is expected, which Envol also allows (§2.3).
+- All EnvoL keywords are reserved in Core, even ones Core does not use.
+- Core's borrowed string type is `str`, not `string` (which is owned in EnvoL).
+- Raw pointer dereference needs `unsafe { }` in Core, as in EnvoL.
+- Character literals have type `char` in EnvoL; Core has no `char`, so it only allows
+  ASCII character literals where a `u8` is expected, which EnvoL also allows (§2.3).
 
 ## 2. Lexical structure
 
@@ -47,7 +47,7 @@ Float literals lex normally and are rejected by the parser (E0905).
 | `str` | pointer + length, immutable UTF-8. String literals have this type |
 | `void` | return type only |
 | `T[N]` | fixed array, `N` an integer constant |
-| `T[]` | slice: pointer + length. Core has no slicing ([RFC 0002](../rfcs/0002-slicing.md) adds `a[lo..hi]` to full Envol and Envo-S1 only), so a Core program's slices are empty; use a pointer and a length |
+| `T[]` | slice: pointer + length. Core has no slicing ([RFC 0002](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0002-slicing.md) adds `a[lo..hi]` to full EnvoL and Envo-S1 only), so a Core program's slices are empty; use a pointer and a length |
 | `*T` | raw pointer; deref inside `unsafe` |
 | `struct` types | fields only |
 | `enum` types | fieldless; optional `: u8`/`u16`/`u32`/`u64`/`i…` representation (default `i32`) |
@@ -123,7 +123,7 @@ Semicolons: required after each statement except directly before `}` or at end o
 (§3.1).
 
 Integer overflow, division by zero, shifts by at least the bit width and out-of-range
-indexing panic (`panic: <reason>` on stderr, exit code 101), as in full Envol.
+indexing panic (`panic: <reason>` on stderr, exit code 101), as in full EnvoL.
 
 ### 5.1 Grammar (normative; implemented by `bootstrap/stage0/src/parser.eas`)
 
@@ -210,7 +210,7 @@ tuples and array literals, generic parameters on functions, default parameter va
 struct base lists, enum payloads, and local `const`, `static`, `struct` and `enum`.
 
 The AST is printed by `envoc0 parse <file>`; its format is described in
-[`tests/golden/README.md`](../../tests/golden/README.md).
+[`tests/golden/README.md`](../tests/golden/README.md).
 
 ### 5.2 Names and types (normative; implemented by `bootstrap/stage0/src/check.eas`)
 

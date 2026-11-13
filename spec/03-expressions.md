@@ -5,7 +5,7 @@
 
 ## 3.1 Statement termination
 
-Envol accepts C#-style semicolons and also lets line breaks end statements, so builder
+Statements end with a semicolon or a line break, so builder
 blocks read naturally (`Stack { NavBar(…) Hero(…) }` across lines).
 
 **[stmt.term.1]** A statement ends at `;`, at the `}` that closes its block, at end of
@@ -60,7 +60,7 @@ intermediate allocation.
 borrow if only read, by exclusive borrow if mutated, by move if the lambda escapes (or
 with the contextual `move` prefix: `move () => …`). Function types, closure kinds
 (`fn`, `mut fn`, `once fn`) and the full capture rules are in
-[RFC 0003](../rfcs/0003-function-types.md) ([fn.type.1]–[fn.lam.3]).
+[RFC 0003](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0003-function-types.md) ([fn.type.1]–[fn.lam.3]).
 
 ## 3.3 Postfix expressions
 
@@ -69,7 +69,7 @@ with the contextual `move` prefix: `move () => …`). Function types, closure ki
 | `f(a, b, name: c)` | call, with optional named arguments |
 | `f(ref x)`, `f(out var y)` | passing to `ref` / `out` parameters must be marked at the call site; `in` is implicit |
 | `a[i]` | index (bounds-checked) |
-| `a[lo..hi]` | slice: a view of part of an array, slice or `str` ([RFC 0002](../rfcs/0002-slicing.md), [expr.slice.1]–[expr.slice.5]) |
+| `a[lo..hi]` | slice: a view of part of an array, slice or `str` ([RFC 0002](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0002-slicing.md), [expr.slice.1]–[expr.slice.5]) |
 | `a.b` | member access; auto-borrows and auto-dereferences |
 | `e?` | propagation: on `Err(e)` / `None`, return it from the current function (converting the error with `IFrom`); otherwise unwrap |
 | `f(args) { … }` / `f { … }` | call with a **trailing block** (see §3.8) |
@@ -106,7 +106,7 @@ From highest to lowest:
 | 16 | `=>` (lambda) | right |
 
 **[expr.prec.1]** Bitwise operators bind tighter than comparisons, so `x & 1 == 0`
-means `(x & 1) == 0`. (This differs from C and C#, on purpose.)
+means `(x & 1) == 0`.
 
 **[expr.prec.2]** Comparisons do not chain: `a < b < c` is an error.
 
@@ -128,10 +128,10 @@ awaits `http.Get(url)`, propagates its error with `?`, then awaits `.Text()`.
 Calling an async function outside an `await`-covered expression is an error; to get a
 task without waiting for it, use `async { … }` or `spawn(…)`.
 
-*Rationale:* prefix `await` (C#) applied to a postfix chain needs parentheses at every
-step; postfix `.await` (Rust) is unfamiliar to C# users. Swift's rule, where one `await`
-marks a whole expression, keeps the C#-looking syntax and makes the example above mean
-what it reads as. (Decision D7 in `docs/PLAN.md`.)
+*Rationale:* a prefix `await` that applied only to its nearest call would need
+parentheses at every step of a chain, and a postfix `.await` reads backwards. One `await`
+marking a whole expression keeps the prefix form and makes the example above mean what it
+reads as. (Decision D7 in `docs/PLAN.md`.)
 
 ## 3.6 `match` and patterns
 
@@ -168,7 +168,7 @@ label: while (…) { … break label; }
 return e;  break;  continue;
 ```
 
-**[stmt.cond.1]** Conditions are parenthesized (as in C#) and must have type `bool`;
+**[stmt.cond.1]** Conditions are parenthesized and must have type `bool`;
 there is no truthiness.
 
 **[stmt.if.1]** `if` is also an expression when both branches are present and the
@@ -207,8 +207,8 @@ trailing block.
 - `unsafe { … }` allows raw pointer dereference, `&` address-of, calls to `unsafe`
   functions, inline `asm`, and unchecked intrinsics. `envo audit unsafe` lists every one.
 - `comptime { … }` and `const` expressions run at compile time on the EIR interpreter.
-- `asm x86_64 { … }` contains assembly in `.eas` instruction syntax, using Envol tokens
-  and Envol comments, with `{name}` operand bindings and a clobber list. Only valid
+- `asm x86_64 { … }` contains assembly in `.eas` instruction syntax, using EnvoL tokens
+  and EnvoL comments, with `{name}` operand bindings and a clobber list. Only valid
   inside `unsafe`.
 
 ## 3.10 Envo-Core

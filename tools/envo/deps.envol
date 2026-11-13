@@ -4,7 +4,7 @@
 //     dependencies {
 //         greet = { path = "../greet" }
 //         words = { version = "1.2.0", registry = "../registry" }
-//         envor = { git = "https://github.com/envoscale/Envor", rev = "<40-digit commit>" }
+//         envor = { git = "https://github.com/envoscale/EnvoR", rev = "<40-digit commit>" }
 //     }
 //
 // A git dependency is cloned once into build/deps/<name>-<commit>; the commit pins it, so

@@ -1,4 +1,4 @@
-// Library modules and the platform binding (PLAN D21, D23; docs/architecture/library.md).
+// Library modules and the platform binding (PLAN D21, D23; EnvoScale/architecture/library.md).
 //
 // With `--lib <root>`, a `use a.b` that no loaded file declares loads the module file
 // `<root>/lib/a/b/b.envol`, and the files it loads are scanned the same way, until nothing

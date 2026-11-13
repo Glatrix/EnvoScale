@@ -6,5 +6,5 @@ The modules of the standard library beyond `std`: [`crypto`](crypto), [`tls`](tl
 Each folder has a README, the source and a `tests/` folder.
 
 Rendering, UI and websites live in their own repositories:
-[Envor](https://github.com/envoscale/Envor), [Envoui](https://github.com/envoscale/Envoui),
-[EnvoScaleWeb](https://github.com/envoscale/EnvoScaleWeb).
+[EnvoR](https://github.com/envoscale/EnvoR), [EnvoUI](https://github.com/envoscale/EnvoUI),
+[EnvoWeb](https://github.com/envoscale/EnvoWeb).

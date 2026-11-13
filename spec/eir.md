@@ -1,6 +1,6 @@
-# EIR — Envol Intermediate Representation, version 1
+# EIR: EnvoL Intermediate Representation, version 1
 
-> **Status:** Specified by [RFC 0005](../rfcs/0005-eir-v1.md) (accepted 2026-11-11).
+> **Status:** Specified by [RFC 0005](https://github.com/envoscale/EnvoScale/blob/main/rfcs/0005-eir-v1.md) (accepted 2026-11-11).
 > Stage 1 implements the in-memory form, the text form and the verifier
 > (`envoc1 eir-check`, M2.6) and lowering and the x86-64 backend (M2.7). Stage 2 adds
 > the binary form and objects (§7, M3.7). Tests: `tests/golden/eir/` (round trips) and
@@ -67,10 +67,10 @@ from it. The script VM and `comptime` use the host's target.
 | `ptr` | an address; pointers are untyped | 8, 8 |
 | `$Name` | a named struct type declared in the module | from its fields |
 | `[N x T]` | an array of `N` values of `T` | `N × size(T)`, align(T) |
-| `void` | no value; only as a function result | — |
+| `void` | no value; only as a function result | none |
 
 **[eir.type.1]** `isize` and `usize` are lowered to `i64`/`u64` on 64-bit targets.
-Enums are lowered to their representation integer type; `char` to `u32`. Envol `str` and
+Enums are lowered to their representation integer type; `char` to `u32`. EnvoL `str` and
 slices are the struct `{ ptr, u64 }`, function values ([fn.abi.2]) `{ ptr, ptr }`.
 
 **[eir.type.2]** Scalar types are `bool`, the integer types, `f32`, `f64` and `ptr`. Only
@@ -81,7 +81,7 @@ type of slots, globals, `load`/`store` of scalars inside them (through `fieldadd
 **[eir.type.3]** A struct declaration lists field types:
 `type $Point = { i64, i64 }`. Fields are laid out in order at their natural alignment,
 and the struct is padded to its alignment; the front end has already reordered fields if
-Envol's layout rules ([type.layout.1]) allow it. `type $T = packed { … }` removes padding.
+EnvoL's layout rules ([type.layout.1]) allow it. `type $T = packed { … }` removes padding.
 
 ## 3. Text form
 
@@ -100,7 +100,7 @@ Inst       = [ ValueName "=" ] Opcode Operands
 Operand    = ValueName | Integer | Float | GlobalName | Type
 ```
 
-- **[eir.text.1]** Names: `@name` for functions and globals (Envol's mangled path, e.g.
+- **[eir.text.1]** Names: `@name` for functions and globals (EnvoL's mangled path, e.g.
   `@shapes.Area`), `%name` for SSA values and parameters, `^name` for blocks, `$Name` for
   struct types. The printer numbers values and blocks in order (`%0`, `%1`, `^bb0`, …),
   so printing is deterministic and golden tests are stable.
@@ -141,7 +141,7 @@ func @Add(%0: i32, %1: i32) -> i32 {
   instruction, so the frame size is known up front.
 - **[eir.ssa.5]** `extern` declares a function defined outside the module (the runtime,
   or a foreign function with `abi "C"`). Without an `abi` attribute a function uses the
-  Envol calling convention, which the backend chooses.
+  EnvoL calling convention, which the backend chooses.
 
 ## 5. Instructions
 
@@ -155,7 +155,7 @@ with the reason shown when their check fails ([eir.model.4]).
 | `const T k` | `T` | integer, `bool` (`0`/`1`) or float bit pattern |
 | `addr @g` | `ptr` | address of a global or function |
 | `slot $T` / `slot I` / `slot [N x T]` | `ptr` | a stack slot, zero-initialized, aligned for the type |
-| `slot.end %p` | — | the slot's storage is dead from here on |
+| `slot.end %p` | none | the slot's storage is dead from here on |
 
 ### 5.2 Integer arithmetic
 
@@ -192,22 +192,22 @@ quiet NaN, so results are identical everywhere.
 | Instruction | Result | Notes |
 |---|---|---|
 | `load T %p` | `T` | read a scalar |
-| `store T v, %p` | — | write a scalar |
+| `store T v, %p` | none | write a scalar |
 | `fieldaddr $S %p, k` | `ptr` | address of field `k` (a constant) of the struct at `%p` |
 | `elemaddr T %p, i` | `ptr` | `%p + i × size(T)`, `i` an integer; no bounds check |
 | `ptradd %p, n` | `ptr` | `%p + n` bytes, `n` an `i64` |
-| `copy %dst, %src, n` | — | copy `n` bytes (a constant or `u64` value); the regions may not overlap |
-| `zero %p, n` | — | set `n` bytes to zero |
-| `bounds I i, len` | — | may panic: `index out of bounds` unless `0 ≤ i < len` (as unsigned after a signed `i` is checked `≥ 0`) |
-| `bounds.range lo, hi, len` | — | `u64` operands; may panic: `index out of bounds` unless `lo ≤ hi ≤ len` (slicing, [expr.slice.2]) |
-| `bounds.utf8 %p, len, at` | — | may panic: `str slice is not on a character boundary` ([expr.slice.3]) |
+| `copy %dst, %src, n` | none | copy `n` bytes (a constant or `u64` value); the regions may not overlap |
+| `zero %p, n` | none | set `n` bytes to zero |
+| `bounds I i, len` | none | may panic: `index out of bounds` unless `0 ≤ i < len` (as unsigned after a signed `i` is checked `≥ 0`) |
+| `bounds.range lo, hi, len` | none | `u64` operands; may panic: `index out of bounds` unless `lo ≤ hi ≤ len` (slicing, [expr.slice.2]) |
+| `bounds.utf8 %p, len, at` | none | may panic: `str slice is not on a character boundary` ([expr.slice.3]) |
 
 ### 5.6 Calls and intrinsics
 
 | Instruction | Notes |
 |---|---|
 | `call @f(args)` | direct call; result type from `@f`'s declaration |
-| `call.ind T (args) %fp` | indirect call through a code pointer, result type `T`, with the callee's convention given by its declaration in `abi` form when not Envol (`call.ind abi "C" …`) |
+| `call.ind T (args) %fp` | indirect call through a code pointer, result type `T`, with the callee's convention given by its declaration in `abi` form when not EnvoL (`call.ind abi "C" …`) |
 | `intrinsic name(args)` | an operation of the runtime that every backend and the VM implement, listed below |
 
 v1 intrinsics, mirroring the Envo-Core built-ins (`envo-core.md` §6) and the Stage 0
@@ -300,7 +300,7 @@ on every run program.
 
 **[eir.bin.4] Objects.** An EIR object (`.eo`, PLAN D19) is a binary module of a whole
 program in which only one unit's functions (one file's, or the runtime's) have bodies;
-the others are `extern` declarations with the Envol convention. `envoc link` fills each
+the others are `extern` declarations with the EnvoL convention. `envoc link` fills each
 declaration with the body another object of the same program defines and generates code
 from the result.
 

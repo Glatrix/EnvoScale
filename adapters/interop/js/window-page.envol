@@ -17,7 +17,7 @@ str Name(EventKind k) {
 }
 
 var w = platform.Window();
-if (!w.Open("Envol in a page", 4, 3)) {
+if (!w.Open("EnvoL in a page", 4, 3)) {
     print("no canvas");
     exit(1);
 }

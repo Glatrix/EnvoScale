@@ -82,8 +82,8 @@ help: `out` is a keyword, so it cannot be a name; choose another
 | E0211 | `namespace` must come first in its file | [s1.item.1] (Envo-S1) |
 | E0212 | `X` is private to namespace `N` | [s1.item.2] (Envo-S1) |
 | E0213 | unknown namespace `N` | [s1.item.1] (Envo-S1) |
-| E0214 | no module `a.b`: the file `<lib>/lib/a/b/b.envol` does not exist | the `use` path; `envoc --lib` only ([`library.md`](../architecture/library.md), D21) |
-| E0215 | the standard platform cannot use the adapter `os.X` | the `use` path in a file under `lib/` ([`library.md`](../architecture/library.md), D23) |
+| E0214 | no module `a.b`: the file `<lib>/lib/a/b/b.envol` does not exist | the `use` path; `envoc --lib` only ([`library.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/library.md), D21) |
+| E0215 | the standard platform cannot use the adapter `os.X` | the `use` path in a file under `lib/` ([`library.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/library.md), D23) |
 
 ## Types (E0300–E0399)
 
@@ -130,7 +130,7 @@ help: `out` is a keyword, so it cannot be a name; choose another
 | E0343 | `M` takes `this`; call it on a value / `M` is static; call it on its type | [s1.expr.6] (Envo-S1) |
 | E0350 | generic instantiation too deep | [s1.type.2] (Envo-S1) |
 
-## Ownership (E0500–E0599) — reserved by the chapter 5 draft
+## Ownership (E0500–E0599): reserved by the chapter 5 draft
 
 | Code | Message |
 |---|---|

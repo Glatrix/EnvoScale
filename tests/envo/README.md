@@ -1,4 +1,4 @@
-# `tests/envo` — the `envo` tool's own tests
+# `tests/envo`: the `envo` tool's own tests
 
 > **Status:** M5. Run by `build.ps1 test` / `build.sh test` ("envo commands").
 

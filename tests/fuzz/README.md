@@ -1,4 +1,4 @@
-# `tests/fuzz` — fuzz targets
+# `tests/fuzz`: fuzz targets
 
 > **Status:** M13. Run by both bootstrap scripts (`test`, "fuzz targets") for a few
 > hundred runs each; run them longer by hand.

@@ -913,7 +913,7 @@ u64 DeniedWin(u64 k) {
 
 // ------------------------------------------------------------------ floats (RFC 0006)
 
-// Float arithmetic with Envol's own floats, so the script runtime computes what native
+// Float arithmetic with EnvoL's own floats, so the script runtime computes what native
 // code and WebAssembly do; every NaN it makes is the canonical one.
 f64 D(u64 bits) {
     u64 b = bits;

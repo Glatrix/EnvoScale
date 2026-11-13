@@ -3,7 +3,7 @@
 > **Status:** Experimental (M14.9). Tests: `test/` (`node --test`), in CI against the
 > `envo` the build makes. Not on the Marketplace yet.
 
-The Envol extension for Visual Studio Code, in plain JavaScript with **no npm
+The EnvoL extension for Visual Studio Code, in plain JavaScript with **no npm
 dependencies**: nothing to install, nothing to audit but these files.
 
 | File | What it does |
@@ -18,12 +18,12 @@ dependencies**: nothing to install, nothing to audit but these files.
 ## Install from this folder
 
 1. Build EnvoScale (`./build.sh build`, or `.\build.ps1 build`) and put
-   `build/envo` on `PATH`, or set **Envol: Path** (`envo.path`) to the program.
+   `build/envo` on `PATH`, or set **EnvoL: Path** (`envo.path`) to the program.
 2. Copy this folder to your VS Code extensions folder as `envoscale.envol-0.1.0`:
    `%USERPROFILE%\.vscode\extensions\` on Windows, `~/.vscode/extensions/` elsewhere.
 3. Restart VS Code and open a `.envol` file.
 
-"Envol: Restart the Language Server" restarts `envo lsp` after rebuilding it; the **Envol**
+"EnvoL: Restart the Language Server" restarts `envo lsp` after rebuilding it; the **EnvoL**
 output channel shows what the server says (and every message with `envo.trace` on).
 
 ## Tests

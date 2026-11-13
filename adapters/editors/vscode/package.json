@@ -3,11 +3,11 @@
   "displayName": "Envol",
   "description": "The Envol language: highlighting, diagnostics, completion, hover, go to definition, symbols and formatting through envo lsp.",
   "version": "0.1.0",
-  "publisher": "envoscale",
+  "publisher": "envolang",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
-    "url": "https://github.com/envoscale/EnvoScale"
+    "url": "https://github.com/envoscale/EnvoLang"
   },
   "engines": {
     "vscode": "^1.80.0"

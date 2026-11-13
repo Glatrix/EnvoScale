@@ -1,4 +1,4 @@
-// `envo fmt`: one canonical layout for Envol source, with comments kept (PLAN M5.6).
+// `envo fmt`: one canonical layout for EnvoL source, with comments kept (PLAN M5.6).
 //
 // The formatter works on the compiler's tokens and the text between them, so it never
 // changes what a program means; it checks that by lexing its output again. It keeps the

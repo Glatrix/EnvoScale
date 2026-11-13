@@ -1,7 +1,7 @@
 // envo.eon: reading the root manifest's shape, every kind of value, canonical writing,
 // a round trip, and errors with their positions.
 // os: none
-// expect: workspace envoscale 0.0.1 members 6 [compiler] [examples/*]
+// expect: workspace envolang 0.0.1 members 6 [compiler] [examples/*]
 // expect: targets native wasm
 // expect: kinds null bool int float str array block
 // expect: ints -5 255 18446744073709551615 -128 16 5 1000000
@@ -57,7 +57,7 @@ string manifest = string.New();
 manifest.Append("#eon 1\n");
 manifest.Append("// a comment\n");
 manifest.Append("workspace {\n");
-manifest.Append("    name    = \"envoscale\"\n");
+manifest.Append("    name    = \"envolang\"\n");
 manifest.Append("    version = \"0.0.1\"   /* a /* nested */ comment */\n");
 manifest.Append("    members = [\n");
 manifest.Append("        \"compiler\",\n");

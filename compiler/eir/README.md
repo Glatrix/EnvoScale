@@ -3,8 +3,8 @@
 > **Status:** EIR v1 in memory, the text reader and printer, the verifier, lowering
 > (M3.6), the binary form and linking (M3.7).
 
-EIR, the Envol IR: SSA-based, typed and versioned, with text (`.eir`) and binary (`.eirb`)
-forms and a verifier. Spec: `docs/spec/eir.md`.
+EIR, the EnvoL IR: SSA-based, typed and versioned, with text (`.eir`) and binary (`.eirb`)
+forms and a verifier. Spec: `spec/eir.md`.
 
 - `ir.envol`: the module, as flat lists addressed by index.
 - `read.envol`, `print.envol`, `verify.envol`: the text form and the verifier.

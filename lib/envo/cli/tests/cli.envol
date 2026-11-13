@@ -1,6 +1,6 @@
 // envo.cli: commands, flags (long, short, inline values, switches), defaults, errors,
 // generated help, tables and progress bars.
-// expect: greet name=Envol verbose arg=3
+// expect: greet name=EnvoL verbose arg=3
 // expect: default name=World
 // expect: unknown flag '--nope'
 // expect: unknown command 'dance'
@@ -39,7 +39,7 @@ app.CommandArg("greet", "times");
 app.Command("count", "count to a number");
 List<str> a1 = List<str>.New();
 a1.Push("greet");
-a1.Push("--name=Envol");
+a1.Push("--name=EnvoL");
 a1.Push("-v");
 a1.Push("3");
 cli.Parsed p = app.Parse(a1.AsSlice());

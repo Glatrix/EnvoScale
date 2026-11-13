@@ -715,7 +715,7 @@ function Invoke-Test {
     $sbText = ''
     if (Test-Path -LiteralPath $sb) { $sbText = [IO.File]::ReadAllText($sb) }
     if ($r.Code -eq 0 -and $sbText -match '"spdxVersion":\s*"SPDX-2.3"' -and $sbText -match '"name":\s*"greet"' -and $sbText.Contains('2025-11-12T00:00:00Z')) { Pass 'envo build --sbom' } else { Bad 'envo build --sbom' "exit $($r.Code): $($r.Err.Trim())" }
-    # releases (docs\guides\offline-install.md): envo archive gives the same bytes on every
+    # releases (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md): envo archive gives the same bytes on every
     # OS (the digest is pinned in both scripts); envo sign and envo verify
     $RelTarSha = 'b54a3aa9ab43038969bf16347b53b6940e813f9889ab3be0e0f29c6ef9b11ee1'
     $env:SOURCE_DATE_EPOCH = '1762905600'
@@ -865,13 +865,12 @@ function Invoke-Test {
 function Invoke-Check {
     $problems = New-Object System.Collections.Generic.List[string]
 
-    foreach ($f in @('README.md', 'LICENSE', 'CONTRIBUTING.md', 'build.sh', 'build.ps1', 'docs/README.md', 'docs/PLAN.md',
-                     'docs/status.md', 'docs/principles.md', 'docs/legal/licensing.md', 'docs/legal/trademarks.md', 'docs/legal/cla.md',
+    foreach ($f in @('README.md', 'LICENSE', 'CONTRIBUTING.md', 'build.sh', 'build.ps1', 'spec/README.md', 'spec/errors.md',
                      'LICENSES/PolyForm-Noncommercial-1.0.0.md', 'LICENSES/LicenseRef-EnvoScale-Commercial.md')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $f))) { $problems.Add("missing file: $f") }
     }
 
-    # docs/principles.md: lib/** never imports adapters/**.
+    # The principles (project/principles.md in the docs): lib/** never imports adapters/**.
     $lib = Join-Path $Root 'lib'
     foreach ($f in Get-ChildItem -LiteralPath $lib -Recurse -Filter '*.envol' -ErrorAction SilentlyContinue) {
         $hits = Select-String -LiteralPath $f.FullName -Pattern '^\s*(use|using)\s+adapters\b'
@@ -887,7 +886,7 @@ function Invoke-Check {
 }
 
 # ------------------------------------------------------------------- dist
-# dist: the release archive (docs/guides/offline-install.md); the same bytes as build.sh's.
+# dist: the release archive (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md); the same bytes as build.sh's.
 function Invoke-Dist {
     Invoke-Build
     $v = ([regex]::Match([IO.File]::ReadAllText((Join-Path $Root 'tools\envo\main.envol')), 'const str ENVO_VERSION = "([^"]*)"')).Groups[1].Value
@@ -896,7 +895,7 @@ function Invoke-Dist {
     $top = Join-Path $dist "envoscale-$v"
     New-Item -ItemType Directory -Force (Join-Path $top 'bin') | Out-Null
     foreach ($f in @('build\envo\envo', 'build\envo\envo.exe', 'build\envoc\envoc', 'build\envoc\envoc.exe')) { Copy-Item (Join-Path $Root $f) (Join-Path $top 'bin') }
-    foreach ($d in @('lib', 'adapters', 'docs', 'LICENSES')) { Copy-Item -Recurse (Join-Path $Root $d) (Join-Path $top $d) }
+    foreach ($d in @('lib', 'adapters', 'spec', 'LICENSES')) { Copy-Item -Recurse (Join-Path $Root $d) (Join-Path $top $d) }
     foreach ($f in @('LICENSE', 'README.md')) { Copy-Item (Join-Path $Root $f) $top }
     $env:SOURCE_DATE_EPOCH = '0'
     $r = Invoke-Tool (Join-Path $Root 'build\envo\envo.exe') @('archive', "envoscale-$v", "envoscale-$v.tar") $dist
@@ -922,9 +921,9 @@ function Invoke-Dist {
         '  "predicateType": "https://slsa.dev/provenance/v1",',
         '  "predicate": {',
         '    "buildDefinition": {',
-        '      "buildType": "https://github.com/envoscale/EnvoScale/blob/main/docs/guides/offline-install.md#provenance",',
+        '      "buildType": "https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md#provenance",',
         '      "externalParameters": {"command": "build.ps1 dist", "SOURCE_DATE_EPOCH": "0"},',
-        "      `"resolvedDependencies`": [{`"uri`": `"git+https://github.com/envoscale/EnvoScale`", `"digest`": {`"gitCommit`": `"$commit`"}}]",
+        "      `"resolvedDependencies`": [{`"uri`": `"git+https://github.com/envoscale/EnvoLang`", `"digest`": {`"gitCommit`": `"$commit`"}}]",
         '    },',
         '    "runDetails": {',
         "      `"builder`": {`"id`": `"$builder`"},",

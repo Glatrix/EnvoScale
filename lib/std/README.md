@@ -5,7 +5,7 @@
 > Envo-S1. Tests: `lib/std/tests/`.
 
 OS-level services built on ports, with no platform code
-([`library.md`](../../docs/architecture/library.md)):
+([`library.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/library.md)):
 
 - `std.io`: `Print`, `Write`, `Error`, `ReadAll`.
 - `std.fs`: `ReadText`, `WriteText`, `Exists`, `IsFile`, `IsDir`, `Delete`, `CreateDir`,

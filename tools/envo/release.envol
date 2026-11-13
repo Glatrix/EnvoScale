@@ -2,7 +2,7 @@
 // reproducible tar file (the same bytes for the same files, on every OS), `envo sign` signs
 // a file with an Ed25519 key, and `envo verify` checks a file against a signature and a
 // public key. A release is an archive, its SHA-256 and its signature; installing it needs
-// no network (docs/guides/offline-install.md).
+// no network (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md).
 use std.env;
 use std.fs;
 use std.path;

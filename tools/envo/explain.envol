@@ -1,6 +1,6 @@
 // `envo explain <code>`: a diagnostic code's entry in the registry
-// (docs/spec/errors.md): its message, where it is reported, the phase, and the text of
-// each rule it cites, found in docs/spec/.
+// (spec/errors.md): its message, where it is reported, the phase, and the text of
+// each rule it cites, found in spec/.
 use std.fs;
 use std.env;
 use std.path;
@@ -83,10 +83,10 @@ i32 CmdEnvoExplain(usize from) {
     string code = NormalCode(env.Arg(from));
     if (code.Len() == 0) EnvoFail("a diagnostic code looks like E0214", 2);
     string home = EnvoHome();
-    string specDir = path.Join(home.AsStr(), "docs/spec");
+    string specDir = path.Join(home.AsStr(), "spec");
     string reg = path.Join(specDir.AsStr(), "errors.md");
     Result<string, IoError> tr = fs.ReadText(reg.AsStr());
-    if (tr.IsErr()) EnvoFail("cannot read docs/spec/errors.md under the EnvoScale folder", 1);
+    if (tr.IsErr()) EnvoFail("cannot read spec/errors.md under the EnvoL folder", 1);
     string all = tr.Unwrap();
     str t = all.AsStr();
     string section = string.New();
@@ -143,6 +143,6 @@ i32 CmdEnvoExplain(usize from) {
     }
     write(2, "envo: error: no diagnostic ");
     write(2, code.AsStr());
-    write(2, "; the codes are listed in docs/spec/errors.md\n");
+    write(2, "; the codes are listed in spec/errors.md\n");
     return 1;
 }

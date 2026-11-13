@@ -12,7 +12,7 @@ print(ai.Load("tiny.gguf").Ask("Say hello").AsStr());
 
 `ai.Load` reads a GGUF model (llama, mistral, qwen2 or qwen3 architecture) and `Ask`
 answers in the model's chat format when its file names one (ChatML, Llama 3, `[INST]` or
-Zephyr; Qwen 3's thinking is turned off). No model ships with Envol: point it at one you
+Zephyr; Qwen 3's thinking is turned off). No model ships with EnvoL: point it at one you
 have the right to use.
 
 ## Full-control door
@@ -32,7 +32,7 @@ have the right to use.
 | `Hnsw` | approximate nearest neighbours (a hierarchical navigable small world graph): `New(dim, m, ef, seed)`, `Add`, `Nearest`, `SetEf`; deterministic for a seed |
 | `MatMulOn(dev, a, b)` | the matrix product on a device through `IGpu` (D61): Direct3D 12 compute on Windows, the CPU elsewhere |
 
-Training, tokenizing and inference are IEEE arithmetic in Envol, so a program gives the
+Training, tokenizing and inference are IEEE arithmetic in EnvoL, so a program gives the
 same numbers at -O0, at -O2, in the script runtime and in WebAssembly.
 
 ## How it is tested

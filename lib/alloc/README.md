@@ -2,7 +2,7 @@
 
 > **Status:** Experimental (M4). Written in Envo-S1. Tests: `lib/alloc/tests/`.
 
-Heap-backed types on top of `core` ([`library.md`](../../docs/architecture/library.md)):
+Heap-backed types on top of `core` ([`library.md`](https://github.com/envoscale/EnvoScale/blob/main/architecture/library.md)):
 
 - `alloc.map`: `Map<K, V>`, a hash table (open addressing, linear probing) for keys that
   implement `core.hash.IKey`: `Set`, `Get`/`GetOr` (copies), `View` (for values that are

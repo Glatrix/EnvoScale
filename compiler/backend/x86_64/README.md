@@ -26,6 +26,9 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **Parallel moves.** Branch arguments, call arguments and incoming parameters are moved
   as one parallel copy: a move goes once nothing still to be read lives in its
   destination, a value already in place is not moved, and a cycle goes through r11.
+- **Addressing.** A field address used only by the load or store right after it is not
+  computed: the access addresses `[base + offset]` itself. Memory operands use no
+  displacement or an 8-bit one where it fits, so most loads and stores are 3 or 4 bytes.
 - **Arguments in registers.** Calls pass their first five arguments in rdi, rsi, r8, r9
   and r10 (the caller-saved registers, which a call overwrites anyway) and the rest on
   the stack; a parameter keeps the register it arrives in when its interval allows. The
@@ -41,6 +44,6 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   rdi and r8-r10 go only to values whose interval holds no call or system call (and rsi
   and rdi no copy or fill), and need no saving. A value that gets no register keeps its
   stack slot. rax, rcx, rdx and r11 are the code generator's scratch.
-- **Small copies and zeroing.** `copy` and `zero` of a constant size up to 128 bytes,
+- **Small copies and zeroing.** `copy` and `zero` of a constant size up to 256 bytes,
   and the zeroing of a frame's slots, become 8/4/2/1-byte moves instead of
   `rep movsb`/`rep stosb`.
