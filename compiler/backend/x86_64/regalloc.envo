@@ -1,9 +1,11 @@
-// Register allocation at -O2 (PLAN D20): linear scan. Each SSA value gets one interval,
-// from its definition to its last use in the order of the function's blocks, widened to
-// every block where it is live, so loops are covered. Values then take one of the
-// callee-saved registers rbx, r12-r15 for their whole interval or stay in their stack
-// slot. The code generator uses rax, rcx, rdx, rsi, rdi and r8-r11 as scratch, so the
-// allocated registers survive every instruction, call and system call.
+// Register allocation at -O2 (PLAN D20, D79): linear scan. Each SSA value gets one
+// interval, from its definition to its last use in the order of the function's blocks,
+// widened to every block where it is live, so loops are covered. Values then take a
+// register for their whole interval or stay in their stack slot. The callee-saved
+// registers rbx and r12-r15 survive everything; rsi, rdi and r8-r10 are free between
+// calls, so they go only to values whose interval holds no call or system call (and rsi
+// and rdi none of the copies and fills that use them). The code generator's scratch
+// registers are rax, rcx, rdx and r11.
 namespace envoc.x64;
 
 use envoc.util;
@@ -14,11 +16,24 @@ public const u8 R13 = 13;
 public const u8 R14 = 14;
 public const u8 R15 = 15;
 const u8 NOREG = 0xFF;
-const u32 NREGS = 5;
+const u32 NREGS = 10;       // allocatable: the callee-saved first, then the caller-saved
+const u32 NSAVED = 5;       // the callee-saved ones, which a function that uses them saves
 
 u8 AllocReg(u32 i) {
     if (i == 0) return RBX;
-    return R12 + (i - 1) as u8;
+    if (i < NSAVED) return R12 + (i - 1) as u8;
+    if (i == 5) return RSI;
+    if (i == 6) return RDI;
+    return R8 + (i - 7) as u8;
+}
+
+// The caller-saved registers instruction inst overwrites (bit i - NSAVED for AllocReg(i)).
+u32 Clobbers(in EInst inst) {
+    u16 op = inst.Op;
+    if (op == 52 || op == 53 || op == 54) return 31;    // call, call.ind, intrinsic
+    if (op == 47) return 3;                             // copy: rsi, rdi
+    if (op == 48) return 2;                             // zero: rdi
+    return 0;
 }
 
 // A set of values (relative to the function's first) per block.
@@ -69,10 +84,13 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
     for (u32 k = 0; k < f.NParams; k++) start.Set(k as usize, 0);
     BitSets defs = BitSets.New(nb, nv);
     BitSets uses = BitSets.New(nb, nv);
+    List<u32> clob = List<u32>.New();      // per position: the caller-saved registers it overwrites
+    clob.Push(0);
     u32 pos = 1;
     for (u32 bi = 0; bi < nb; bi++) {
         EBlock blk = m.Block(f.FirstBlock + bi);
         bstart.Push(pos);
+        clob.Push(0);
         for (u32 k = 0; k < blk.NParams; k++) {
             u32 v = blk.FirstParam + k - f.FirstValue;
             defs.Add(bi, v);
@@ -84,6 +102,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         pos++;
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
+            clob.Push(Clobbers(inst));
             for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
                 EOp op = m.Op(o);
                 if (op.Kind == OK_VALUE) {
@@ -147,6 +166,18 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         }
     }
 
+    // per caller-saved register: how many positions up to p overwrite it
+    List<u32> prefix = List<u32>.New();      // (p + 1) * 5 + r
+    for (u32 r = 0; r < 5; r++) prefix.Push(0);
+    for (u32 q = 0; q < clob.Len() as u32; q++) {
+        u32 c = clob.Get(q as usize);
+        for (u32 r = 0; r < 5; r++) {
+            u32 n = prefix.Get((q * 5 + r) as usize);
+            if ((c >> r) & 1 != 0) n++;
+            prefix.Push(n);
+        }
+    }
+
     // linear scan, intervals in order of start (bucketed by position)
     List<u32> heads = List<u32>.New();     // per position: first value starting there, + 1
     List<u32> next = List<u32>.New();      // per value: the next value starting at the same position, + 1
@@ -169,20 +200,33 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             h = next.Get(cur as usize);
             u32 cs = start.Get(cur as usize);
             u32 ce = end.Get(cur as usize);
+            // the caller-saved registers overwritten after its definition, up to its last use
+            u32 forbid = 0;
+            u32 last = ce;
+            if (last >= clob.Len() as u32) last = clob.Len() as u32 - 1;
+            for (u32 r = 0; r < 5; r++) {
+                if (prefix.Get(((last + 1) * 5 + r) as usize) != prefix.Get(((cs + 1) * 5 + r) as usize)) forbid = forbid | (1 << r);
+            }
             // free the registers of intervals that ended
             for (u32 r = 0; r < NREGS; r++) {
                 u32 hv = holder.Get(r as usize);
                 if (hv != 0 && end.Get((hv - 1) as usize) < cs) holder.Set(r as usize, 0);
             }
+            // a free caller-saved register it may have, else a free callee-saved one
             u32 pick = NREGS;
-            for (u32 r = 0; r < NREGS && pick == NREGS; r++) {
+            for (u32 r = NSAVED; r < NREGS && pick == NREGS; r++) {
+                if ((forbid >> (r - NSAVED)) & 1 == 0 && holder.Get(r as usize) == 0) pick = r;
+            }
+            for (u32 r = 0; r < NSAVED && pick == NREGS; r++) {
                 if (holder.Get(r as usize) == 0) pick = r;
             }
             if (pick == NREGS) {
-                // all taken: evict the interval that ends last, if it ends after this one
-                u32 far = 0;
-                for (u32 r = 1; r < NREGS; r++) {
-                    if (end.Get((holder.Get(r as usize) - 1) as usize) > end.Get((holder.Get(far as usize) - 1) as usize)) far = r;
+                // all it may have are taken: evict the interval that ends last, if it ends
+                // after this one
+                u32 far = NREGS;
+                for (u32 r = 0; r < NREGS; r++) {
+                    if (r >= NSAVED && (forbid >> (r - NSAVED)) & 1 != 0) continue;
+                    if (far == NREGS || end.Get((holder.Get(r as usize) - 1) as usize) > end.Get((holder.Get(far as usize) - 1) as usize)) far = r;
                 }
                 u32 victim = holder.Get(far as usize) - 1;
                 if (end.Get(victim as usize) <= ce) continue;

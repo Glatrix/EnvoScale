@@ -684,7 +684,9 @@ void Rebuild(ref Module m, u32 fi, in Simplifier s) {
 
 // -O2's EIR passes over every function definition of m.
 public void Optimize(ref Module m) {
+    PromoteLocals(ref m);
     InlineSmall(ref m);
+    PromoteLocals(ref m);
     for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
         if (!m.Func(fi).Extern) SimplifyFunc(ref m, fi);
     }

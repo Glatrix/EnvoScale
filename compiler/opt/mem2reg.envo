@@ -1,0 +1,379 @@
+// -O2 promotion of locals to SSA values (PLAN D79). Lowering keeps every local in a slot
+// and reads and writes it with load and store; here a scalar slot whose address is used
+// only by loads and stores of its own type (and zero, and slot.end) becomes values
+// instead. Each block where the local is live on entry gets a parameter for it, a load
+// becomes the local's current value, a store or zero sets it, and every branch passes
+// the current value to its target. The local starts as 0, as a slot does. Simplification
+// afterwards turns the parameters that receive one value on every edge into that value.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 OP_SLOT_END = 4;
+const u16 OP_LOAD = 42;
+const u16 OP_STORE = 43;
+
+// Promotes the locals of every function definition of m.
+public void PromoteLocals(ref Module m) {
+    for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
+        if (!m.Func(fi).Extern) PromoteFunc(ref m, fi);
+    }
+}
+
+// The promoted slot whose address operand o is, or NONE.
+u32 SlotAt(in Module m, in List<u32> slotOf, in EFunc f, u32 o) {
+    EOp op = m.Op(o);
+    if (op.Kind != OK_VALUE) return NONE;
+    return slotOf.Get((op.Ref - f.FirstValue) as usize);
+}
+
+void PromoteFunc(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    u32 nb = f.NBlocks;
+    if (nb == 0) return;
+    // candidates: the scalar slots, in order
+    List<u32> slotOf = List<u32>.New();     // per value: its slot's index, or NONE
+    List<u32> slotVal = List<u32>.New();    // per slot: its value (relative)
+    List<u32> slotTy = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) slotOf.Push(NONE);
+    EBlock entry = m.Block(f.FirstBlock);
+    for (u32 i = entry.FirstInst; i < entry.FirstInst + entry.NInsts; i++) {
+        EInst inst = m.Inst(i);
+        if (inst.Op != OP_SLOT || !m.IsScalar(inst.Ty)) continue;
+        slotOf.Set((inst.Result - f.FirstValue) as usize, slotVal.Len() as u32);
+        slotVal.Push(inst.Result - f.FirstValue);
+        slotTy.Push(inst.Ty);
+    }
+    if (slotVal.Len() == 0) return;
+    // a slot stays in memory if its address is used any other way; give up if a branch
+    // targets the entry block (its locals' first values would need a parameter there)
+    List<bool> keep = List<bool>.New();
+    for (usize s = 0; s < slotVal.Len(); s++) keep.Push(false);
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + nb; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_TARGET) {
+                    if (op.Ref == f.FirstBlock) return;
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        u32 s = slotOf.Get((m.Arg(op.Args + a) - f.FirstValue) as usize);
+                        if (s != NONE) keep.Set(s as usize, true);
+                    }
+                    continue;
+                }
+                u32 s = SlotAt(m, slotOf, f, o);
+                if (s == NONE) continue;
+                bool ok = false;
+                u32 t = slotTy.Get(s as usize);
+                if (inst.Op == OP_LOAD && o == inst.FirstOp && inst.Ty == t) ok = true;
+                else if (inst.Op == OP_STORE && o == inst.FirstOp + 1 && inst.Ty == t) ok = true;
+                else if (inst.Op == OP_SLOT_END) ok = true;
+                else if (inst.Op == OP_ZERO && o == inst.FirstOp && ZeroesAll(m, f, inst, t)) ok = true;
+                if (!ok) keep.Set(s as usize, true);
+            }
+        }
+    }
+    // the promoted slots, renumbered 0..p-1
+    List<u32> prom = List<u32>.New();       // per promoted slot: its slot index
+    List<u32> promOf = List<u32>.New();     // per slot: its promoted index, or NONE
+    for (usize s = 0; s < slotVal.Len(); s++) {
+        if (keep.Get(s)) {
+            promOf.Push(NONE);
+        } else {
+            promOf.Push(prom.Len() as u32);
+            prom.Push(s as u32);
+        }
+    }
+    u32 p = prom.Len() as u32;
+    if (p == 0) return;
+    for (u32 k = 0; k < nv; k++) {
+        u32 s = slotOf.Get(k as usize);
+        if (s != NONE) slotOf.Set(k as usize, promOf.Get(s as usize));
+    }
+
+    // liveness of each local at block entries: read before written (ue), written (def)
+    List<bool> ue = List<bool>.New();
+    List<bool> def = List<bool>.New();
+    List<bool> liveIn = List<bool>.New();
+    for (u32 k = 0; k < nb * p; k++) {
+        ue.Push(false);
+        def.Push(false);
+        liveIn.Push(false);
+    }
+    for (u32 bi = 0; bi < nb; bi++) {
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op == OP_LOAD) {
+                u32 s = SlotAt(m, slotOf, f, inst.FirstOp);
+                if (s != NONE && !def.Get((bi * p + s) as usize)) ue.Set((bi * p + s) as usize, true);
+            } else if (inst.Op == OP_STORE) {
+                u32 s = SlotAt(m, slotOf, f, inst.FirstOp + 1);
+                if (s != NONE) def.Set((bi * p + s) as usize, true);
+            } else if (inst.Op == OP_ZERO) {
+                u32 s = SlotAt(m, slotOf, f, inst.FirstOp);
+                if (s != NONE) def.Set((bi * p + s) as usize, true);
+            }
+        }
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        u32 bi = nb;
+        while (bi > 0) {
+            bi--;
+            EBlock blk = m.Block(f.FirstBlock + bi);
+            EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+            for (u32 s = 0; s < p; s++) {
+                usize at = (bi * p + s) as usize;
+                if (liveIn.Get(at)) continue;
+                bool live = ue.Get(at);
+                if (!live && !def.Get(at)) {
+                    for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps && !live; o++) {
+                        EOp op = m.Op(o);
+                        if (op.Kind == OK_TARGET && liveIn.Get(((op.Ref - f.FirstBlock) * p + s) as usize)) live = true;
+                    }
+                }
+                if (live) {
+                    liveIn.Set(at, true);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // extended ids: the function's values, then each block's new parameters, then one
+    // zero constant per local
+    u32 ext = nv;
+    List<u32> paramId = List<u32>.New();
+    List<u32> extSlot = List<u32>.New();    // per extended id from nv: its promoted local
+    for (u32 bi = 0; bi < nb; bi++) {
+        for (u32 s = 0; s < p; s++) {
+            if (bi > 0 && liveIn.Get((bi * p + s) as usize)) {
+                paramId.Push(ext);
+                extSlot.Push(s);
+                ext++;
+            } else {
+                paramId.Push(NONE);
+            }
+        }
+    }
+    List<u32> zeroId = List<u32>.New();
+    for (u32 s = 0; s < p; s++) {
+        zeroId.Push(ext);
+        extSlot.Push(s);
+        ext++;
+    }
+    // each load's value, and each local's value at the end of each block
+    List<u32> alias = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) alias.Push(NONE);
+    List<u32> endCur = List<u32>.New();
+    List<u32> cur = List<u32>.New();
+    for (u32 s = 0; s < p; s++) cur.Push(NONE);
+    for (u32 bi = 0; bi < nb; bi++) {
+        for (u32 s = 0; s < p; s++) {
+            if (bi == 0) cur.Set(s as usize, zeroId.Get(s as usize));
+            else cur.Set(s as usize, paramId.Get((bi * p + s) as usize));
+        }
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op == OP_LOAD) {
+                u32 s = SlotAt(m, slotOf, f, inst.FirstOp);
+                if (s != NONE) {
+                    u32 c = cur.Get(s as usize);
+                    if (c == NONE) c = zeroId.Get(s as usize);
+                    alias.Set((inst.Result - f.FirstValue) as usize, c);
+                }
+            } else if (inst.Op == OP_STORE) {
+                u32 s = SlotAt(m, slotOf, f, inst.FirstOp + 1);
+                if (s != NONE) cur.Set(s as usize, m.Op(inst.FirstOp).Ref - f.FirstValue);
+            } else if (inst.Op == OP_ZERO) {
+                u32 s = SlotAt(m, slotOf, f, inst.FirstOp);
+                if (s != NONE) cur.Set(s as usize, zeroId.Get(s as usize));
+            }
+        }
+        for (u32 s = 0; s < p; s++) {
+            u32 c = cur.Get(s as usize);
+            if (c == NONE) c = zeroId.Get(s as usize);
+            endCur.Push(c);
+        }
+    }
+
+    // new numbering, in the order the body is emitted
+    List<u32> newId = List<u32>.New();
+    for (u32 k = 0; k < ext; k++) newId.Push(NONE);
+    u32 next = 0;
+    for (u32 k = 0; k < f.NParams; k++) {
+        newId.Set(k as usize, next);
+        next++;
+    }
+    for (u32 bi = 0; bi < nb; bi++) {
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        for (u32 j = 0; j < blk.NParams; j++) {
+            newId.Set((blk.FirstParam + j - f.FirstValue) as usize, next);
+            next++;
+        }
+        for (u32 s = 0; s < p; s++) {
+            u32 id = paramId.Get((bi * p + s) as usize);
+            if (id != NONE) {
+                newId.Set(id as usize, next);
+                next++;
+            }
+        }
+        bool zeros = bi != 0;
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (!zeros && inst.Op != OP_SLOT) {
+                for (u32 s = 0; s < p; s++) {
+                    newId.Set(zeroId.Get(s as usize) as usize, next);
+                    next++;
+                }
+                zeros = true;
+            }
+            if (Promoted(m, slotOf, f, inst)) continue;
+            if (inst.Result != 0) {
+                newId.Set((inst.Result - f.FirstValue) as usize, next);
+                next++;
+            }
+        }
+    }
+
+    // the new body at the end of the module's lists
+    u32 v0 = m.Vals.Len() as u32;
+    u32 b0 = m.Blocks.Len() as u32;
+    for (u32 k = 0; k < next; k++) m.Vals.Push(new EVal { Type = 0, Block = 0, Inst = 0, Pos = 0 });
+    for (u32 k = 0; k < ext; k++) {
+        u32 n = newId.Get(k as usize);
+        if (n == NONE) continue;
+        u32 t = 0;
+        if (k < nv) t = m.Val(f.FirstValue + k).Type;
+        else t = slotTy.Get(prom.Get(extSlot.Get((k - nv) as usize) as usize) as usize);
+        EVal val = m.Val(v0 + n);
+        val.Type = t;
+        if (k < f.NParams) val.Block = b0;
+        m.Vals.Set((v0 + n) as usize, val);
+    }
+    for (u32 bi = 0; bi < nb; bi++) {
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        u32 nb2 = b0 + bi;
+        u32 first = m.Insts.Len() as u32;
+        u32 fp = 0;
+        u32 np = 0;
+        for (u32 j = 0; j < blk.NParams; j++) {
+            u32 v = v0 + newId.Get((blk.FirstParam + j - f.FirstValue) as usize);
+            if (np == 0) fp = v;
+            np++;
+            SetBlockOf(ref m, v, nb2);
+        }
+        for (u32 s = 0; s < p; s++) {
+            u32 id = paramId.Get((bi * p + s) as usize);
+            if (id == NONE) continue;
+            u32 v = v0 + newId.Get(id as usize);
+            if (np == 0) fp = v;
+            np++;
+            SetBlockOf(ref m, v, nb2);
+        }
+        bool zeros = bi != 0;
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (!zeros && inst.Op != OP_SLOT) {
+                for (u32 s = 0; s < p; s++) {
+                    u32 v = v0 + newId.Get(zeroId.Get(s as usize) as usize);
+                    m.Insts.Push(new EInst {
+                        Op = OP_CONST, Ty = slotTy.Get(prom.Get(s as usize) as usize), Ty2 = 0, Result = v, FirstOp = m.Ops.Len() as u32, NOps = 0,
+                        Block = nb2, Imm = 0, Str = TextOf(""), Pos = 0, Src = inst.Src
+                    });
+                    DefineAt(ref m, v, nb2);
+                }
+                zeros = true;
+            }
+            if (Promoted(m, slotOf, f, inst)) continue;
+            u32 firstOp = m.Ops.Len() as u32;
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                op.Pos = 0;
+                if (op.Kind == OK_VALUE) {
+                    op.Ref = v0 + newId.Get(Resolve(alias, op.Ref - f.FirstValue, nv) as usize);
+                } else if (op.Kind == OK_TARGET) {
+                    u32 tb = op.Ref - f.FirstBlock;
+                    u32 args = m.Args.Len() as u32;
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        u32 av = m.Arg(op.Args + a) - f.FirstValue;
+                        m.Args.Push(v0 + newId.Get(Resolve(alias, av, nv) as usize));
+                    }
+                    u32 added = 0;
+                    for (u32 s = 0; s < p; s++) {
+                        if (paramId.Get((tb * p + s) as usize) == NONE) continue;
+                        u32 c = endCur.Get((bi * p + s) as usize);
+                        m.Args.Push(v0 + newId.Get(Resolve(alias, c, nv) as usize));
+                        added++;
+                    }
+                    op.Ref = b0 + tb;
+                    op.Args = args;
+                    op.NArgs = op.NArgs + added;
+                }
+                m.Ops.Push(op);
+            }
+            inst.FirstOp = firstOp;
+            inst.Block = nb2;
+            inst.Pos = 0;
+            if (inst.Result != 0) inst.Result = v0 + newId.Get((inst.Result - f.FirstValue) as usize);
+            m.Insts.Push(inst);
+            if (inst.Result != 0) DefineAt(ref m, inst.Result, nb2);
+        }
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = np, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+    }
+    EFunc nf = m.Func(fi);
+    nf.FirstValue = v0;
+    nf.NValues = next;
+    nf.FirstBlock = b0;
+    m.Funcs.Set(fi as usize, nf);
+}
+
+// Does zero instruction inst clear the whole of a local of type t?
+bool ZeroesAll(in Module m, in EFunc f, in EInst inst, u32 t) {
+    EOp size = m.Op(inst.FirstOp + 1);
+    if (size.Kind == OK_INT) return size.Int == m.Ty(t).Size as u64;
+    if (size.Kind != OK_VALUE) return false;
+    EVal sv = m.Val(size.Ref);
+    if (sv.Inst == 0) return false;
+    EInst def = m.Inst(sv.Inst);
+    return def.Op == OP_CONST && def.Result == size.Ref && def.Imm == m.Ty(t).Size as u64;
+}
+
+// Is inst a slot, load, store, zero or slot.end of a promoted local? (It goes.)
+bool Promoted(in Module m, in List<u32> slotOf, in EFunc f, in EInst inst) {
+    if (inst.Op == OP_SLOT) return slotOf.Get((inst.Result - f.FirstValue) as usize) != NONE;
+    if (inst.Op == OP_LOAD || inst.Op == OP_ZERO || inst.Op == OP_SLOT_END) return SlotAt(m, slotOf, f, inst.FirstOp) != NONE;
+    if (inst.Op == OP_STORE) return SlotAt(m, slotOf, f, inst.FirstOp + 1) != NONE;
+    return false;
+}
+
+// What extended id v stands for once loads of locals are replaced by the locals' values.
+u32 Resolve(in List<u32> alias, u32 v, u32 nv) {
+    u32 x = v;
+    u32 guard = 0;
+    while (x < nv && alias.Get(x as usize) != NONE && guard < nv) {
+        x = alias.Get(x as usize);
+        guard++;
+    }
+    return x;
+}
+
+void SetBlockOf(ref Module m, u32 v, u32 b) {
+    EVal val = m.Val(v);
+    val.Block = b;
+    m.Vals.Set(v as usize, val);
+}
+
+void DefineAt(ref Module m, u32 v, u32 b) {
+    EVal val = m.Val(v);
+    val.Block = b;
+    val.Inst = m.Insts.Len() as u32 - 1;
+    m.Vals.Set(v as usize, val);
+}

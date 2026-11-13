@@ -30,7 +30,8 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M12 | AI | **Done** (Experimental): `envo.ai` tensors, autograd and optimizers; BPE, SentencePiece and WordPiece tokenizers; GGUF loading (11 tensor types); local inference for the Llama family; a text encoder (nomic-bert), exact and HNSW vector search; a matrix product on the GPU through `IGpu` (12.1–12.7) |
 | M13 | Ecosystem | **Done** (Experimental): `envo prof`, `envo fuzz` (coverage-guided), `envo dbg` (source-level), package dependencies with a lock, signed archives and a registry adapter, and the hex seed: Stage 0 built from commented hex with the OS alone, byte-identical to NASM (13.1–13.6) |
 | M14 | The application platform | **Done** (Experimental): a heap that frees, key codes and a clipboard port, processes with pipes, `envo query` and completion, hover, definition, symbols and formatting in `envo lsp`, `envo.edit`, application components in `envo.ui`, Linux windows over X11, the browser host, a VS Code extension (14.1–14.10). Open: a font for pages (#168, owner) |
-| M15 | Envo Studio, the IDE | **Next** (PLAN §6): its own repository, built on M14 |
+| M15 | Envo Studio, the IDE | **In progress** (PLAN §6): the shell (15.1) in its own repository, EnvoScaleStudio; files and the editor are next |
+| M16 | Performance | **In progress** (PLAN D79): against the compiler ported to Rust (EnvoScaleRust). Locals promoted to SSA values, and the x86-64 backend computing in registers with ten of them: the lex and parse benchmark is 32% and 26% faster; Rust is still about 5x faster on Windows |
 
 ### M0 Definition of Done
 

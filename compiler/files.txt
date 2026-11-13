@@ -48,6 +48,7 @@ eir/lower_enums.envo
 eir/lower_views.envo
 opt/simplify.envo
 opt/inline.envo
+opt/mem2reg.envo
 backend/x86_64/asm.envo
 backend/x86_64/image.envo
 backend/x86_64/regalloc.envo

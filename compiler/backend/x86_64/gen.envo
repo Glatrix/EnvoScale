@@ -45,6 +45,10 @@ struct Gen {
     List<u64> RematImm;
     List<bool> Saved;       // the callee-saved registers the function uses (AllocReg order)
     u32 SaveArea;           // their bytes, just below the saved rbp
+    List<u32> Uses;         // -O2: per value of the function, how many operands use it
+    u32 NextBlock;          // the block emitted next (0 at the function's end): a jump there falls through
+    u32 BlockEnd;           // one past the current block's last instruction
+    u32 Fused;              // -O2: a compare left for the branch after it to do, or 0
 
     // ------------------------------------------------------------------ helpers
 
@@ -101,6 +105,148 @@ struct Gen {
         else this.A.MovRI(r, op.Int);
     }
 
+    // -O2: is operand o a constant that fits a sign-extended 32-bit immediate? Sets imm.
+    bool SmallImm(in this, in Module m, u32 o, ref i32 imm) {
+        if (!this.Opt) return false;
+        EOp op = m.Op(o);
+        u64 v = 0;
+        if (op.Kind == OK_INT) {
+            v = op.Int;
+        } else if (op.Kind == OK_VALUE) {
+            usize k = (op.Ref - this.FirstValue) as usize;
+            if (this.RematKind.Get(k) != REMAT_CONST) return false;
+            v = this.RematImm.Get(k);
+        } else {
+            return false;
+        }
+        i64 s = v as i64;
+        if (s < -2147483648 || s > 2147483647) return false;
+        imm = s as i32;
+        return true;
+    }
+
+    // -O2: where operand o (an address) can be read from without a move: its register, or
+    // rbp for a slot; else it is loaded into scratch. Sets disp.
+    u8 AddrOf(ref this, in Module m, u32 o, u8 scratch, ref i32 disp) {
+        disp = 0;
+        EOp op = m.Op(o);
+        if (this.Opt && op.Kind == OK_VALUE) {
+            usize k = (op.Ref - this.FirstValue) as usize;
+            if (this.RematKind.Get(k) == REMAT_FRAME) {
+                disp = this.RematImm.Get(k) as i32;
+                return RBP;
+            }
+            if (this.RematKind.Get(k) == 0) {
+                u8 reg = this.Regs.Get(k);
+                if (reg != NOREG) return reg;
+            }
+        }
+        this.LoadOp(m, scratch, o);
+        return scratch;
+    }
+
+    // cmp ra, operand o: an immediate where it fits, its register where it has one.
+    void CmpOp(ref this, in Module m, u8 ra, u32 o) {
+        i32 imm = 0;
+        if (this.SmallImm(m, o, ref imm)) {
+            this.A.AluImm(7, ra, imm);
+            return;
+        }
+        u8 rb = this.RegOf(m, o);
+        if (rb == NOREG) {
+            this.LoadOp(m, RCX, o);
+            rb = RCX;
+        }
+        this.A.Alu(ALU_CMP, ra, rb);
+    }
+
+    // -O2: the register operand o's value lives in, or NOREG.
+    u8 RegOf(in this, in Module m, u32 o) {
+        if (!this.Opt) return NOREG;
+        EOp op = m.Op(o);
+        if (op.Kind != OK_VALUE) return NOREG;
+        usize k = (op.Ref - this.FirstValue) as usize;
+        if (this.RematKind.Get(k) != 0) return NOREG;
+        return this.Regs.Get(k);
+    }
+
+    // -O2: the register to compute value v in: its own, else rax (then stored).
+    u8 DestReg(in this, u32 v) {
+        if (!this.Opt) return RAX;
+        usize k = (v - this.FirstValue) as usize;
+        if (this.RematKind.Get(k) != 0) return RAX;
+        u8 r = this.Regs.Get(k);
+        if (r == NOREG) return RAX;
+        return r;
+    }
+
+    // Operand o in a register: its own, or loaded into scratch.
+    u8 InReg(ref this, in Module m, u32 o, u8 scratch) {
+        u8 r = this.RegOf(m, o);
+        if (r != NOREG) return r;
+        this.LoadOp(m, scratch, o);
+        return scratch;
+    }
+
+    // -O2: add, sub, and, or, xor and wrapping mul computed in the result's register, with
+    // the second operand from its register or as an immediate.
+    void FastAlu(ref this, in Module m, in EInst inst, u16 op, u32 size, bool signed) {
+        u32 f = inst.FirstOp;
+        u8 d = this.DestReg(inst.Result);
+        i32 imm = 0;
+        bool isImm = op != 7 && this.SmallImm(m, f + 1, ref imm);
+        u8 rb = NOREG;
+        if (!isImm) {
+            rb = this.RegOf(m, f + 1);
+            if (rb == d) d = RAX;
+            if (rb == NOREG) {
+                this.LoadOp(m, RCX, f + 1);
+                rb = RCX;
+            }
+        }
+        this.LoadOp(m, d, f);
+        u8 ext = 0;
+        u8 code = ALU_ADD;
+        if (op == 6 || op == 9) {
+            ext = 5;
+            code = ALU_SUB;
+        } else if (op == 14) {
+            ext = 4;
+            code = ALU_AND;
+        } else if (op == 15) {
+            ext = 1;
+            code = ALU_OR;
+        } else if (op == 16) {
+            ext = 6;
+            code = ALU_XOR;
+        }
+        if (op == 7) this.A.ImulRR(d, rb);
+        else if (isImm) this.A.AluImm(ext, d, imm);
+        else this.A.Alu(code, d, rb);
+        if (op == 8 || op == 9) {
+            if (size == 8) {
+                u32 ovTrap = this.TrapLabel(TRAP_OVERFLOW);
+                if (signed) this.A.Jcc(CC_O, ovTrap);
+                else this.A.Jcc(CC_B, ovTrap);
+            } else {
+                this.CheckNormal(m, d, inst.Ty);
+            }
+        } else if (inst.Ty != ET_BOOL) {
+            this.A.Extend(d, size, signed);
+        }
+        this.StoreV(inst.Result, d);
+    }
+
+    // -O2: is compare i used only by the conditional branch right after it?
+    bool FusesWithBranch(in this, in Module m, u32 i, in EInst inst) {
+        if (!this.Opt || i + 1 >= this.BlockEnd) return false;
+        EInst next = m.Inst(i + 1);
+        if (next.Op != 56) return false;
+        EOp c = m.Op(next.FirstOp);
+        if (c.Kind != OK_VALUE || c.Ref != inst.Result) return false;
+        return this.Uses.Get((inst.Result - this.FirstValue) as usize) == 1;
+    }
+
     // The label of the shared stub that panics with reason i.
     u32 TrapLabel(ref this, u64 reason) {
         u32 l = this.Traps.Get(reason as usize);
@@ -134,21 +280,46 @@ struct Gen {
     // ------------------------------------------------------------------ branches
 
     // Moves branch target o's arguments into the target block's parameters (a parallel
-    // copy through the stack) and jumps there.
-    void Jump(ref this, in Module m, u32 o) {
+    // copy) and jumps there. At -O2 the moves are direct when no parameter's place is a
+    // later argument's, and a last jump to the block emitted next falls through.
+    void Jump(ref this, in Module m, u32 o, bool last) {
         EOp op = m.Op(o);
         EBlock target = m.Block(op.Ref);
-        for (u32 i = 0; i < op.NArgs; i++) {
-            this.LoadV(RAX, m.Arg(op.Args + i));
-            this.A.Push(RAX);
+        if (this.Opt && this.Direct(m, op, target)) {
+            for (u32 i = 0; i < op.NArgs; i++) {
+                this.LoadV(RAX, m.Arg(op.Args + i));
+                this.StoreV(target.FirstParam + i, RAX);
+            }
+        } else {
+            for (u32 i = 0; i < op.NArgs; i++) {
+                this.LoadV(RAX, m.Arg(op.Args + i));
+                this.A.Push(RAX);
+            }
+            u32 i = op.NArgs;
+            while (i > 0) {
+                i--;
+                this.A.Pop(RAX);
+                this.StoreV(target.FirstParam + i, RAX);
+            }
         }
-        u32 i = op.NArgs;
-        while (i > 0) {
-            i--;
-            this.A.Pop(RAX);
-            this.StoreV(target.FirstParam + i, RAX);
-        }
+        if (this.Opt && last && op.Ref == this.NextBlock) return;
         this.A.Jmp(this.BlockLabels.Get(op.Ref as usize));
+    }
+
+    // Can branch op's arguments be moved one by one: does no parameter's place (its value,
+    // or its register) hold an argument still to be read?
+    bool Direct(in this, in Module m, in EOp op, in EBlock target) {
+        for (u32 i = 0; i < op.NArgs; i++) {
+            u32 pv = target.FirstParam + i;
+            u8 pr = this.Regs.Get((pv - this.FirstValue) as usize);
+            for (u32 j = i + 1; j < op.NArgs; j++) {
+                u32 av = m.Arg(op.Args + j);
+                if (av == pv) return false;
+                usize ak = (av - this.FirstValue) as usize;
+                if (pr != NOREG && this.RematKind.Get(ak) == 0 && this.Regs.Get(ak) == pr) return false;
+            }
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------ instructions
@@ -191,10 +362,22 @@ struct Gen {
             else this.A.MovRI(RCX, 0x80000000);
             this.A.Alu(ALU_XOR, RAX, RCX);
             this.StoreV(inst.Result, RAX);
+        } else if (sh == SH_BIN && this.Opt && (op == 5 || op == 6 || op == 7 || op == 8 || op == 9 || op == 14 || op == 15 || op == 16)) {
+            this.FastAlu(m, inst, op, ty.Size, signed);
         } else if (sh == SH_BIN) {
             this.LoadOp(m, RAX, f);
-            this.LoadOp(m, RCX, f + 1);
-            if (op == 5 || op == 8) this.A.Alu(ALU_ADD, RAX, RCX);
+            i32 imm = 0;
+            u8 ext = 0xFF;
+            if (op == 5 || op == 8) ext = 0;
+            else if (op == 6 || op == 9) ext = 5;
+            else if (op == 14) ext = 4;
+            else if (op == 15) ext = 1;
+            else if (op == 16) ext = 6;
+            if (ext != 0xFF && this.SmallImm(m, f + 1, ref imm)) this.A.AluImm(ext, RAX, imm);
+            else this.LoadOp(m, RCX, f + 1);
+            if (ext != 0xFF && this.SmallImm(m, f + 1, ref imm)) {
+                // done above, with the immediate
+            } else if (op == 5 || op == 8) this.A.Alu(ALU_ADD, RAX, RCX);
             else if (op == 6 || op == 9) this.A.Alu(ALU_SUB, RAX, RCX);
             else if (op == 7) this.A.ImulRR(RAX, RCX);
             else if (op == 10) {
@@ -282,20 +465,18 @@ struct Gen {
             }
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_CMP) {
-            this.LoadOp(m, RAX, f);
-            this.LoadOp(m, RCX, f + 1);
-            this.A.Alu(ALU_CMP, RAX, RCX);
-            u8 cc = CC_E;
-            if (op == 21) cc = CC_NE;
-            if (op == 22) cc = CC_B;
-            if (op == 23) cc = CC_BE;
-            if (op == 24) cc = CC_A;
-            if (op == 25) cc = CC_AE;
-            if (signed && op == 22) cc = CC_L;
-            if (signed && op == 23) cc = CC_LE;
-            if (signed && op == 24) cc = CC_G;
-            if (signed && op == 25) cc = CC_GE;
-            this.A.SetCC(cc, RAX);
+            if (this.FusesWithBranch(m, i, inst)) {
+                this.Fused = inst.Result;
+                return;
+            }
+            if (this.Opt) {
+                this.CmpOp(m, this.InReg(m, f, RAX), f + 1);
+            } else {
+                this.LoadOp(m, RAX, f);
+                this.LoadOp(m, RCX, f + 1);
+                this.A.Alu(ALU_CMP, RAX, RCX);
+            }
+            this.A.SetCC(CmpCC(op, signed), RAX);
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_SELECT) {
             u32 done = this.A.NewLabel();
@@ -306,6 +487,21 @@ struct Gen {
             this.LoadOp(m, RAX, f + 2);
             this.A.Bind(done);
             this.StoreV(inst.Result, RAX);
+        } else if (sh == SH_CONV && this.Opt && (op == 32 || op == 33 || op == 34 || op == 41 || op == 39 || op == 40)) {
+            u8 d = this.DestReg(inst.Result);
+            this.LoadOp(m, d, f);
+            ETy to = m.Ty(inst.Ty2);
+            bool toSigned = m.IsSigned(inst.Ty2);
+            if (op == 32 || op == 41) {
+                this.A.Extend(d, to.Size, toSigned);
+            } else if (op == 33) {
+                this.A.Extend(d, ty.Size, false);
+                this.A.Extend(d, to.Size, toSigned);
+            } else if (op == 34) {
+                this.A.Extend(d, ty.Size, true);
+                this.A.Extend(d, to.Size, toSigned);
+            }
+            this.StoreV(inst.Result, d);
         } else if (sh == SH_CONV) {
             this.LoadOp(m, RAX, f);
             ETy to = m.Ty(inst.Ty2);
@@ -323,24 +519,55 @@ struct Gen {
             }
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_LOAD) {
-            this.LoadOp(m, RCX, f);
-            this.A.Load(RAX, RCX, 0, ty.Size, signed);
+            i32 disp = 0;
+            u8 rb = this.AddrOf(m, f, RCX, ref disp);
+            u8 d = this.DestReg(inst.Result);
+            this.A.Load(d, rb, disp, ty.Size, signed);
+            this.StoreV(inst.Result, d);
+            return;
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_STORE) {
             this.LoadOp(m, RAX, f);
-            this.LoadOp(m, RCX, f + 1);
-            this.A.Store(RCX, 0, RAX, ty.Size);
+            i32 disp = 0;
+            u8 rb = this.AddrOf(m, f + 1, RCX, ref disp);
+            this.A.Store(rb, disp, RAX, ty.Size);
         } else if (sh == SH_FIELD) {
+            u64 foff = m.FieldOffset(t, inst.Imm as u32);
+            if (this.Opt) {
+                u8 d = this.DestReg(inst.Result);
+                u8 ra = this.RegOf(m, f);
+                if (ra != NOREG && foff != 0) {
+                    this.A.LeaRM(d, ra, foff as i32);
+                } else {
+                    this.LoadOp(m, d, f);
+                    if (foff != 0) this.A.LeaRM(d, d, foff as i32);
+                }
+                this.StoreV(inst.Result, d);
+                return;
+            }
             this.LoadOp(m, RAX, f);
-            this.A.LeaRM(RAX, RAX, m.FieldOffset(t, inst.Imm as u32) as i32);
+            this.A.LeaRM(RAX, RAX, foff as i32);
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_ELEM) {
             this.LoadOp(m, RAX, f);
             this.LoadOp(m, RCX, f + 1);
-            this.A.MovRI(RDX, ty.Size as u64);
-            this.A.ImulRR(RCX, RDX);
+            if (!this.Opt || ty.Size != 1) {
+                this.A.MovRI(RDX, ty.Size as u64);
+                this.A.ImulRR(RCX, RDX);
+            }
             this.A.Alu(ALU_ADD, RAX, RCX);
             this.StoreV(inst.Result, RAX);
+        } else if (sh == SH_PTRADD && this.Opt) {
+            u8 d = this.DestReg(inst.Result);
+            u8 rb = this.RegOf(m, f + 1);
+            if (rb == d) d = RAX;
+            if (rb == NOREG) {
+                this.LoadOp(m, RCX, f + 1);
+                rb = RCX;
+            }
+            this.LoadOp(m, d, f);
+            this.A.Alu(ALU_ADD, d, rb);
+            this.StoreV(inst.Result, d);
         } else if (sh == SH_PTRADD) {
             this.LoadOp(m, RAX, f);
             this.LoadOp(m, RCX, f + 1);
@@ -430,15 +657,35 @@ struct Gen {
         } else if (sh == SH_INTRINSIC) {
             this.Intrinsic(m, inst);
         } else if (sh == SH_BR) {
-            this.Jump(m, f);
+            this.Jump(m, f, true);
         } else if (sh == SH_CONDBR) {
-            u32 other = this.A.NewLabel();
-            this.LoadOp(m, RAX, f);
-            this.A.TestRR(RAX, RAX);
-            this.A.Jcc(CC_E, other);
-            this.Jump(m, f + 1);
-            this.A.Bind(other);
-            this.Jump(m, f + 2);
+            // the condition: a fused compare's flags, or the value tested against zero
+            u8 ccTrue = CC_NE;
+            EOp c = m.Op(f);
+            if (this.Fused != 0 && c.Kind == OK_VALUE && c.Ref == this.Fused) {
+                EInst ci = m.Inst(i - 1);
+                this.CmpOp(m, this.InReg(m, ci.FirstOp, RAX), ci.FirstOp + 1);
+                ccTrue = CmpCC(ci.Op, m.IsSigned(ci.Ty));
+                this.Fused = 0;
+            } else {
+                this.LoadOp(m, RAX, f);
+                this.A.TestRR(RAX, RAX);
+            }
+            EOp yes = m.Op(f + 1);
+            EOp no = m.Op(f + 2);
+            if (this.Opt && no.NArgs == 0) {
+                this.A.Jcc(ccTrue ^ 1, this.BlockLabels.Get(no.Ref as usize));
+                this.Jump(m, f + 1, true);
+            } else if (this.Opt && yes.NArgs == 0) {
+                this.A.Jcc(ccTrue, this.BlockLabels.Get(yes.Ref as usize));
+                this.Jump(m, f + 2, true);
+            } else {
+                u32 other = this.A.NewLabel();
+                this.A.Jcc(ccTrue ^ 1, other);
+                this.Jump(m, f + 1, false);
+                this.A.Bind(other);
+                this.Jump(m, f + 2, true);
+            }
         } else if (sh == SH_SWITCH) {
             u32 k = 1;
             while (k + 1 < n) {
@@ -447,16 +694,16 @@ struct Gen {
                 this.A.MovRI(RCX, m.Op(f + k).Int);
                 this.A.Alu(ALU_CMP, RAX, RCX);
                 this.A.Jcc(CC_NE, next);
-                this.Jump(m, f + k + 1);
+                this.Jump(m, f + k + 1, false);
                 this.A.Bind(next);
                 k += 2;
             }
-            this.Jump(m, f + n - 1);
+            this.Jump(m, f + n - 1, true);
         } else if (sh == SH_RET) {
             if (n == 1) this.LoadOp(m, RAX, f);
             if (this.SaveArea > 0) {
                 this.A.LeaRM(RSP, RBP, 0 - this.SaveArea as i32);
-                u32 r = NREGS;
+                u32 r = NSAVED;
                 while (r > 0) {
                     r--;
                     if (this.Saved.Get(r as usize)) this.A.Pop(AllocReg(r));
@@ -744,7 +991,7 @@ struct Gen {
         if (save + frame > FRAME_MAX) ToolFail("a function's locals take more than 2 GiB of stack", EXIT_ERRORS);
         this.A.Push(RBP);
         this.A.MovRR(RBP, RSP);
-        for (u32 r = 0; r < this.Saved.Len() as u32; r++) {
+        for (u32 r = 0; r < this.Saved.Len() as u32 && r < NSAVED; r++) {
             if (this.Saved.Get(r as usize)) this.A.Push(AllocReg(r));
         }
         this.ReserveFrame(frame);
@@ -763,9 +1010,13 @@ struct Gen {
                 if (reg != NOREG) this.A.Load(reg, RBP, (16 + 8 * k) as i32, 8, false);
             }
         }
+        this.Fused = 0;
         for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
             EBlock blk = m.Block(b);
             this.A.Bind(this.BlockLabels.Get(b as usize));
+            this.NextBlock = 0;
+            if (b + 1 < f.FirstBlock + f.NBlocks) this.NextBlock = b + 1;
+            this.BlockEnd = blk.FirstInst + blk.NInsts;
             for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) this.Inst(m, i);
         }
     }
@@ -852,11 +1103,32 @@ struct Gen {
                 }
             }
         }
+        // how many operands use each value (a compare used once can fuse with its branch)
+        this.Uses = List<u32>.New();
+        for (u32 k = 0; k < f.NValues; k++) this.Uses.Push(0);
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                    EOp op = m.Op(o);
+                    if (op.Kind == OK_VALUE) {
+                        usize k = (op.Ref - f.FirstValue) as usize;
+                        this.Uses.Set(k, this.Uses.Get(k) + 1);
+                    } else if (op.Kind == OK_TARGET) {
+                        for (u32 a = 0; a < op.NArgs; a++) {
+                            usize k = (m.Arg(op.Args + a) - f.FirstValue) as usize;
+                            this.Uses.Set(k, this.Uses.Get(k) + 1);
+                        }
+                    }
+                }
+            }
+        }
         List<bool> saved = List<bool>.New();
         this.Regs = AllocateRegs(m, fi, this.RematKind, ref saved);
         this.Saved = saved;
         u32 n = 0;
-        for (u32 r = 0; r < this.Saved.Len() as u32; r++) {
+        for (u32 r = 0; r < this.Saved.Len() as u32 && r < NSAVED; r++) {
             if (this.Saved.Get(r as usize)) n++;
         }
         this.SaveArea = 8 * n;
@@ -898,6 +1170,21 @@ struct Gen {
     }
 }
 
+// The condition code of integer compare op: true when the compare holds.
+u8 CmpCC(u16 op, bool signed) {
+    u8 cc = CC_E;
+    if (op == 21) cc = CC_NE;
+    if (op == 22) cc = CC_B;
+    if (op == 23) cc = CC_BE;
+    if (op == 24) cc = CC_A;
+    if (op == 25) cc = CC_AE;
+    if (signed && op == 22) cc = CC_L;
+    if (signed && op == 23) cc = CC_LE;
+    if (signed && op == 24) cc = CC_G;
+    if (signed && op == 25) cc = CC_GE;
+    return cc;
+}
+
 // Generates module m (verified and laid out) for target into a complete executable image.
 // v in hexadecimal, 16 digits.
 void AppendHex(ref string b, u64 v) {
@@ -917,7 +1204,8 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         A = Asm.New(), Target = target, FuncLabels = List<u32>.New(), GlobalLabels = List<u32>.New(),
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
         Imports = new WinImports { Dir = 0, Iat = 0 }, Opt = opt, Regs = List<u8>.New(),
-        RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0
+        RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0,
+        Uses = List<u32>.New(), NextBlock = 0, BlockEnd = 0, Fused = 0
     };
     for (usize i = 0; i < m.Funcs.Len(); i++) g.FuncLabels.Push(0);
     for (usize i = 0; i < m.Globals.Len(); i++) g.GlobalLabels.Push(0);
