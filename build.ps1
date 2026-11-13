@@ -675,9 +675,9 @@ function Invoke-Test {
         $adir = Join-Path $envoRun 'pk\appg'
         foreach ($d in @($gdir, $adir)) { if (Test-Path -LiteralPath $d) { Remove-Item -Recurse -Force $d } }
         Copy-Item -Recurse (Join-Path $envoRun 'pk\greet') $gdir
-        & git -C $gdir init -q | Out-Null
-        & git -C $gdir add -A 2>$null | Out-Null
-        & git -C $gdir -c user.name=t -c user.email=t@t commit -q -m greet | Out-Null
+        & git -C $gdir -c core.autocrlf=false init -q | Out-Null
+        & git -C $gdir -c core.autocrlf=false -c core.safecrlf=false add -A | Out-Null
+        & git -C $gdir -c core.autocrlf=false -c user.name=t -c user.email=t@t commit -q -m greet | Out-Null
         $grev = (& git -C $gdir rev-parse HEAD).Trim()
         New-Item -ItemType Directory -Force $adir | Out-Null
         $gurl = $gdir.Replace('\', '/')
