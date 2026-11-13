@@ -157,5 +157,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v=${GITHUB_REF_NAME#v}
-          [ -f "build/from-linux/dist/envoscale-$v.tar" ] || { echo "the tag $GITHUB_REF_NAME does not match ENVO_VERSION"; exit 1; }
+          [ -f "build/from-linux/dist/envol-$v.tar" ] || { echo "the tag $GITHUB_REF_NAME does not match ENVO_VERSION"; exit 1; }
           gh release create "$GITHUB_REF_NAME" build/from-linux/dist/* --repo "$GITHUB_REPOSITORY" --title "EnvoL $v" --notes-file ".github/release-notes/$GITHUB_REF_NAME.md"

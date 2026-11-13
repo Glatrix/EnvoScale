@@ -23,11 +23,11 @@ $BuildA = Join-Path $Root 'build\envoc-seeded'
 $Build2 = Join-Path $Root 'build\envoc'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
-$SeedTag = 'seed-1'
-$SeedSha = '46eaa09c84230fa654ba5e6b7534e57b745931d49686ad7fdde65f836a2f3290'
+$SeedTag = 'seed-2'
+$SeedSha = '29c9bbc8b3ae01cc5a260d8d414bf4ba5fece4c7819e3d1b520ccd7aadc07f15'
 $SeedUrl = "https://github.com/envoscale/EnvoScaleAsm/releases/download/$SeedTag/envoc-x86_64-windows.exe"
 $SeedAsmRepo = 'https://github.com/envoscale/EnvoScaleAsm'
-$SeedAsmRef = '9222580cac7a83fc6ec168e973823cabe82f941f'
+$SeedAsmRef = '92f346f49b60b122c28bcf316588567e3247b1ad'
 
 function Say([string]$msg) { Write-Host $msg }
 function Fail([string]$msg) { [Console]::Error.WriteLine("error: $msg"); exit 1 }
@@ -892,18 +892,18 @@ function Invoke-Dist {
     $v = ([regex]::Match([IO.File]::ReadAllText((Join-Path $Root 'tools\envo\main.envol')), 'const str ENVO_VERSION = "([^"]*)"')).Groups[1].Value
     $dist = Join-Path $Root 'build\dist'
     if (Test-Path -LiteralPath $dist) { Remove-Item -Recurse -Force $dist }
-    $top = Join-Path $dist "envoscale-$v"
+    $top = Join-Path $dist "envol-$v"
     New-Item -ItemType Directory -Force (Join-Path $top 'bin') | Out-Null
     foreach ($f in @('build\envo\envo', 'build\envo\envo.exe', 'build\envoc\envoc', 'build\envoc\envoc.exe')) { Copy-Item (Join-Path $Root $f) (Join-Path $top 'bin') }
     foreach ($d in @('lib', 'adapters', 'spec')) { Copy-Item -Recurse (Join-Path $Root $d) (Join-Path $top $d) }
     foreach ($f in @('LICENSE', 'NOTICE', 'README.md')) { Copy-Item (Join-Path $Root $f) $top }
     $env:SOURCE_DATE_EPOCH = '0'
-    $r = Invoke-Tool (Join-Path $Root 'build\envo\envo.exe') @('archive', "envoscale-$v", "envoscale-$v.tar") $dist
+    $r = Invoke-Tool (Join-Path $Root 'build\envo\envo.exe') @('archive', "envol-$v", "envol-$v.tar") $dist
     Remove-Item Env:SOURCE_DATE_EPOCH
     if ($r.Code -ne 0) { Fail "envo archive failed: $($r.Err.Trim())" }
-    $tar = Join-Path $dist "envoscale-$v.tar"
+    $tar = Join-Path $dist "envol-$v.tar"
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tar).Hash.ToLowerInvariant()
-    [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS'), "$hash  envoscale-$v.tar`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS'), "$hash  envol-$v.tar`n", (New-Object System.Text.UTF8Encoding($false)))
     # an in-toto statement (SLSA provenance v1) of how the archive was built, as build.sh's
     $commit = $env:GITHUB_SHA
     if (-not $commit) { $commit = (& git -C $Root rev-parse HEAD 2>$null); if (-not $commit) { $commit = 'unknown' } }
@@ -917,7 +917,7 @@ function Invoke-Dist {
     $prov = @(
         '{',
         '  "_type": "https://in-toto.io/Statement/v1",',
-        "  `"subject`": [{`"name`": `"envoscale-$v.tar`", `"digest`": {`"sha256`": `"$hash`"}}],",
+        "  `"subject`": [{`"name`": `"envol-$v.tar`", `"digest`": {`"sha256`": `"$hash`"}}],",
         '  "predicateType": "https://slsa.dev/provenance/v1",',
         '  "predicate": {',
         '    "buildDefinition": {',
@@ -934,8 +934,8 @@ function Invoke-Dist {
         '  }',
         '}'
     ) -join "`n"
-    [IO.File]::WriteAllText((Join-Path $dist "envoscale-$v.provenance.json"), "$prov`n", (New-Object System.Text.UTF8Encoding($false)))
-    Say "dist      build\dist\envoscale-$v.tar"
+    [IO.File]::WriteAllText((Join-Path $dist "envol-$v.provenance.json"), "$prov`n", (New-Object System.Text.UTF8Encoding($false)))
+    Say "dist      build\dist\envol-$v.tar"
     Say "          sha256 $hash"
 }
 

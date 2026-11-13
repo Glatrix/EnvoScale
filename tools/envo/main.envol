@@ -12,7 +12,7 @@ use envo.eon;
 use ports.{IoError};
 use envoc.diag;
 
-const str ENVO_VERSION = "0.5.0";
+const str ENVO_VERSION = "0.6.0";
 const u32 TGT_LINUX = 1;
 const u32 TGT_WINDOWS = 2;
 const u32 TGT_A64 = 4;          // aarch64-linux (M10)
@@ -422,7 +422,7 @@ str command = env.Arg(1);
 if (Eq(command, "version") || Eq(command, "--version")) {
     write(1, "envo ");
     write(1, ENVO_VERSION);
-    write(1, " (EnvoScale, Envo-S1; ");
+    write(1, " (EnvoL, Envo-S1; ");
     write(1, HostTarget());
     print(")");
     return 0;

@@ -23,12 +23,12 @@ STAGE2="$ROOT/compiler"
 BUILDA="$ROOT/build/envoc-seeded"
 BUILD2="$ROOT/build/envoc"
 
-SEED_TAG=seed-1
-SEED_SHA_LINUX=4dc77e88ca305fc25dea2065e23b9184545ddedaf50ea866af20d44b091d2e8b
-SEED_SHA_WINDOWS=46eaa09c84230fa654ba5e6b7534e57b745931d49686ad7fdde65f836a2f3290
+SEED_TAG=seed-2
+SEED_SHA_LINUX=9b35f0cd9fdcf122ec166e468dcffcc991674686626df877ea45e5d9c122d475
+SEED_SHA_WINDOWS=29c9bbc8b3ae01cc5a260d8d414bf4ba5fece4c7819e3d1b520ccd7aadc07f15
 SEED_URL="https://github.com/envoscale/EnvoScaleAsm/releases/download/$SEED_TAG"
 SEED_ASM_REPO=https://github.com/envoscale/EnvoScaleAsm
-SEED_ASM_REF=9222580cac7a83fc6ec168e973823cabe82f941f
+SEED_ASM_REF=92f346f49b60b122c28bcf316588567e3247b1ad
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -907,7 +907,7 @@ do_compare() {
 }
 
 # ------------------------------------------------------------------- dist
-# dist: the release archive (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md): build/dist/envoscale-<v>.tar
+# dist: the release archive (https://github.com/envoscale/EnvoScale/blob/main/guides/offline-install.md): build/dist/envol-<v>.tar
 # with bin/ (envo and envoc for both OSes), lib/, adapters/, spec/, LICENSE and NOTICE, packed
 # reproducibly by `envo archive`, and SHA256SUMS. Signing it is the release manager's step
 # (`envo sign`), with the project's key.
@@ -920,7 +920,7 @@ provenance() {
     [ -n "${GITHUB_RUN_ID:-}" ] && builder="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
     printf '{\n'
     printf '  "_type": "https://in-toto.io/Statement/v1",\n'
-    printf '  "subject": [{"name": "envoscale-%s.tar", "digest": {"sha256": "%s"}}],\n' "$1" "$2"
+    printf '  "subject": [{"name": "envol-%s.tar", "digest": {"sha256": "%s"}}],\n' "$1" "$2"
     printf '  "predicateType": "https://slsa.dev/provenance/v1",\n'
     printf '  "predicate": {\n'
     printf '    "buildDefinition": {\n'
@@ -944,15 +944,15 @@ do_dist() {
     v=$(sed -n 's/^const str ENVO_VERSION = "\(.*\)";.*/\1/p' "$ROOT/tools/envo/main.envol" | tr -d '\r')
     dist="$ROOT/build/dist"
     rm -rf "$dist"
-    mkdir -p "$dist/envoscale-$v/bin"
-    cp "$ROOT/build/envo/envo" "$ROOT/build/envo/envo.exe" "$BUILD2/envoc" "$BUILD2/envoc.exe" "$dist/envoscale-$v/bin/"
-    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/spec" "$dist/envoscale-$v/"
-    cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/README.md" "$dist/envoscale-$v/"
-    (cd "$dist" && SOURCE_DATE_EPOCH=0 "$ROOT/build/envo/envo$(host_suffix)" archive "envoscale-$v" "envoscale-$v.tar") || fail "envo archive failed"
-    (cd "$dist" && printf '%s  %s\n' "$(sha256 "envoscale-$v.tar")" "envoscale-$v.tar" > SHA256SUMS)
-    provenance "$v" "$(sha256 "$dist/envoscale-$v.tar")" "build.sh dist" > "$dist/envoscale-$v.provenance.json"
-    say "dist      build/dist/envoscale-$v.tar"
-    say "          sha256 $(sha256 "$dist/envoscale-$v.tar")"
+    mkdir -p "$dist/envol-$v/bin"
+    cp "$ROOT/build/envo/envo" "$ROOT/build/envo/envo.exe" "$BUILD2/envoc" "$BUILD2/envoc.exe" "$dist/envol-$v/bin/"
+    cp -r "$ROOT/lib" "$ROOT/adapters" "$ROOT/spec" "$dist/envol-$v/"
+    cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/README.md" "$dist/envol-$v/"
+    (cd "$dist" && SOURCE_DATE_EPOCH=0 "$ROOT/build/envo/envo$(host_suffix)" archive "envol-$v" "envol-$v.tar") || fail "envo archive failed"
+    (cd "$dist" && printf '%s  %s\n' "$(sha256 "envol-$v.tar")" "envol-$v.tar" > SHA256SUMS)
+    provenance "$v" "$(sha256 "$dist/envol-$v.tar")" "build.sh dist" > "$dist/envol-$v.provenance.json"
+    say "dist      build/dist/envol-$v.tar"
+    say "          sha256 $(sha256 "$dist/envol-$v.tar")"
 }
 
 # ------------------------------------------------------------------- cross
