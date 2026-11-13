@@ -24,6 +24,11 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **Compare and branch.** A compare used only by the `condbr` after it becomes `cmp` and
   one `jcc`; a branch to the block emitted next falls through, and branch arguments move
   directly unless a parameter's place holds an argument still to be read.
+- **Division by a constant.** Unsigned `/` and `%` by a constant are a shift and a mask
+  for a power of two, else a multiply by the divisor's reciprocal and a few shifts
+  (Granlund and Montgomery), instead of `div`.
+- **Jump tables.** A `switch` of at least 4 cases whose keys are dense jumps through a
+  table indexed by the key; a sparse one stays a chain of compares.
 - **Registers.** Linear scan over one interval per value (definition to last use,
   widened to every block where liveness says the value is live). rbx and r12-r15 are
   callee-saved and go to any value (a function pushes the ones it uses after rbp); rsi,

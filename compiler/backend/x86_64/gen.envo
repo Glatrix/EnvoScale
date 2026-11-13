@@ -237,6 +237,121 @@ struct Gen {
         this.StoreV(inst.Result, d);
     }
 
+    // -O2: unsigned x / d or x % d for a constant d > 1, without a division: a shift and a
+    // mask for a power of two, else a multiply by d's reciprocal (Granlund and Montgomery:
+    // l = ceil(log2 d), m = floor(2^64 (2^l - d) / d) + 1, q = (t + ((x - t) >> 1)) >> (l - 1)
+    // with t = the high half of m * x). x is in rax and the divisor in rcx; leaves the
+    // result in rax. False (nothing emitted) if the divisor is not such a constant.
+    bool UnsignedDivConst(ref this, in Module m, in EInst inst, u16 op) {
+        if (!this.Opt) return false;
+        EOp dop = m.Op(inst.FirstOp + 1);
+        u64 d = 0;
+        if (dop.Kind == OK_INT) {
+            d = dop.Int;
+        } else if (dop.Kind == OK_VALUE) {
+            usize k = (dop.Ref - this.FirstValue) as usize;
+            if (this.RematKind.Get(k) != REMAT_CONST) return false;
+            d = this.RematImm.Get(k);
+        } else {
+            return false;
+        }
+        if (d < 2 || d > 0x8000000000000000) return false;
+        u8 l = 0;
+        while (l < 63 && ((1 as u64) << l as u64) < d) l++;
+        if (d & (d - 1) == 0) {
+            if (op == 12) {
+                this.A.ShiftImm(5, RAX, l);
+            } else {
+                this.A.MovRI(RCX, d - 1);
+                this.A.Alu(ALU_AND, RAX, RCX);
+            }
+            return true;
+        }
+        // m: 2^64 (2^l - d) / d by long division; the high half 2^l - d is below d
+        u64 rem = ((1 as u64) << l as u64) -% d;
+        u64 q = 0;
+        for (u32 i = 0; i < 64; i++) {
+            bool carry = rem >> 63 != 0;
+            rem = rem << 1;
+            q = q << 1;
+            if (carry || rem >= d) {
+                rem = rem -% d;
+                q = q | 1;
+            }
+        }
+        u64 magic = q +% 1;
+        this.A.MovRR(RCX, RAX);             // x
+        this.A.MovRI(RAX, magic);
+        this.A.Group3(4, RCX);              // mul rcx: t in rdx
+        this.A.MovRR(RAX, RCX);
+        this.A.Alu(ALU_SUB, RAX, RDX);
+        this.A.ShiftImm(5, RAX, 1);
+        this.A.Alu(ALU_ADD, RAX, RDX);
+        if (l > 1) this.A.ShiftImm(5, RAX, l - 1);
+        if (op == 13) {
+            // x - q * d
+            this.A.MovRI(RDX, d);
+            this.A.ImulRR(RAX, RDX);
+            this.A.Alu(ALU_SUB, RCX, RAX);
+            this.A.MovRR(RAX, RCX);
+        }
+        return true;
+    }
+
+    // -O2: a switch with at least 4 cases whose keys are dense becomes an indexed jump
+    // through a table of the cases' stubs (each moves its target's arguments and jumps).
+    // False (nothing emitted) for a sparse switch, which stays a chain of compares.
+    bool JumpTable(ref this, in Module m, in EInst inst) {
+        u32 f = inst.FirstOp;
+        u32 n = inst.NOps;
+        u32 count = (n - 2) / 2;
+        if (count < 4) return false;
+        u64 lo = m.Op(f + 1).Int;
+        u64 hi = lo;
+        for (u32 k = 1; k + 1 < n; k += 2) {
+            u64 key = m.Op(f + k).Int;
+            if ((key as i64) < (lo as i64)) lo = key;
+            if ((key as i64) > (hi as i64)) hi = key;
+        }
+        u64 range = hi -% lo;
+        if (range > 4096 || range > 3 * count as u64 + 8) return false;
+        u32 table = this.A.NewLabel();
+        u32 fallback = this.A.NewLabel();
+        List<u32> stubs = List<u32>.New();      // per case
+        for (u32 c = 0; c < count; c++) stubs.Push(this.A.NewLabel());
+        this.LoadOp(m, RAX, f);
+        if (lo != 0) {
+            this.A.MovRI(RCX, lo);
+            this.A.Alu(ALU_SUB, RAX, RCX);
+        }
+        this.A.MovRI(RCX, range);
+        this.A.Alu(ALU_CMP, RAX, RCX);
+        this.A.Jcc(CC_A, fallback);
+        this.A.LeaLabel(R11, table);
+        this.A.ShiftImm(4, RAX, 3);
+        this.A.Alu(ALU_ADD, R11, RAX);
+        this.A.Load(RAX, R11, 0, 8, false);
+        this.A.JmpR(RAX);
+        for (u32 c = 0; c < count; c++) {
+            this.A.Bind(stubs.Get(c as usize));
+            this.Jump(m, f + 2 + 2 * c, false);
+        }
+        this.A.Bind(fallback);
+        this.Jump(m, f + n - 1, true);
+        // the table: for each key from lo to hi, its case's stub (the first case with that
+        // key, as the compare chain would take), else the default's
+        this.A.DataAlign(8);
+        this.A.BindData(table);
+        for (u64 key = 0; key <= range; key++) {
+            u32 target = fallback;
+            for (u32 c = count; c > 0; c--) {
+                if (m.Op(f + 2 * c - 1).Int -% lo == key) target = stubs.Get((c - 1) as usize);
+            }
+            this.A.DataAddr(target);
+        }
+        return true;
+    }
+
     // -O2: is compare i used only by the conditional branch right after it?
     bool FusesWithBranch(in this, in Module m, u32 i, in EInst inst) {
         if (!this.Opt || i + 1 >= this.BlockEnd) return false;
@@ -383,6 +498,8 @@ struct Gen {
             else if (op == 10) {
                 if (ty.Size == 8 && !signed) this.A.Group3(4, RCX);     // mul rcx: CF/OF if the high half is set
                 else this.A.ImulRR(RAX, RCX);
+            } else if ((op == 12 || op == 13) && !signed && this.UnsignedDivConst(m, inst, op)) {
+                // done: a multiply by the divisor's reciprocal, or a shift
             } else if (op == 12 || op == 13) {
                 this.A.TestRR(RCX, RCX);
                 u32 divTrap = this.TrapLabel(TRAP_DIVISION);
@@ -686,6 +803,8 @@ struct Gen {
                 this.A.Bind(other);
                 this.Jump(m, f + 2, true);
             }
+        } else if (sh == SH_SWITCH && this.Opt && this.JumpTable(m, inst)) {
+            // done: an indexed jump through a table
         } else if (sh == SH_SWITCH) {
             u32 k = 1;
             while (k + 1 < n) {

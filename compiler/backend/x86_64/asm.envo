@@ -301,6 +301,14 @@ public struct Asm {
     }
 
     // test a, b (64-bit)
+    // shl/shr/sar r, imm (ext 4, 5, 7)
+    public void ShiftImm(ref this, u8 ext, u8 r, u8 n) {
+        this.Rex(true, 0, r, false);
+        this.B(0xC1);
+        this.ModRR(ext, r);
+        this.B(n);
+    }
+
     public void TestRR(ref this, u8 x, u8 y) {
         this.Rex(true, y, x, false);
         this.B(0x85);
@@ -370,6 +378,13 @@ public struct Asm {
         this.Rex(false, 0, r, false);
         this.B(0xFF);
         this.ModMem(2, r, 0);
+    }
+
+    // jmp r
+    public void JmpR(ref this, u8 r) {
+        this.Rex(false, 0, r, false);
+        this.B(0xFF);
+        this.ModRR(4, r);
     }
 
     // call r
