@@ -1,2 +1,0 @@
-// Gallery: Systems. Runs from M3 (Stage 2 with inline asm). Exits with code 0.
-[NoAlloc] extern "C" int main() { unsafe { asm x86_64 { /* … */ } } return 0; }

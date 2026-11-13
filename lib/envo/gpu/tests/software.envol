@@ -11,7 +11,7 @@
 // expect: f70bcb0acb894311c4df937ddd2dc9bb1ae27bb4b1e3c0e8f57b4106d7c97fcf
 use ports.{IGpu, Vertex};
 use envo.gpu;
-use envo.gfx;
+use envo.crypto.sha2;
 use alloc.text;
 
 void Pixel(str label, u8[] f, u32 w, u32 x, u32 y) {
@@ -66,5 +66,10 @@ dev.Triangles(s.AsSlice());
 List<u8> two = dev.End();
 write(1, "repeat differs in ");
 print(text.Uint(gpu.Differing(one.AsSlice(), two.AsSlice(), 0) as u64).AsStr());
-gfx.Canvas c = gfx.Canvas.FromRgba(64, 48, one.AsSlice());
-print(c.Hash().AsStr());
+sha2.Sha256 h = sha2.Sha256.New();
+h.Update(one.AsSlice());
+u8[32] d;
+h.Finish(d[0..32]);
+string hex = string.New();
+for (usize i = 0; i < 32; i++) hex.Append(text.Hex(d[i] as u64, 2).AsStr());
+print(hex.AsStr());

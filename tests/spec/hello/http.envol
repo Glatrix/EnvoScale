@@ -1,3 +1,0 @@
-// Gallery: HTTP API. Runs from M7 (envo.http).
-use envo.http;
-serve(8080) { get("/") => "Hello, World!" }

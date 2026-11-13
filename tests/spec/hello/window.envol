@@ -1,3 +1,0 @@
-// Gallery: Window. Runs from M8 (envo.ui, desktop renderer).
-use envo.ui;
-window("Hello") { Text("Hello, World!") }

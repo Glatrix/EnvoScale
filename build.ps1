@@ -591,27 +591,10 @@ function Invoke-Test {
     # without the library; CI runs the run and library tests on an arm64 machine
     # (build.sh cross, cross-run)
     $a64Out = Join-Path $Root 'build\hello-a64'
-    $r = Invoke-Tool $envoc @('build', (Join-Path $Root 'tests\spec\hello\console.envol'), '--lib', $Root, '-o', $a64Out, '--target', 'aarch64-linux') $Root
+    $r = Invoke-Tool $envoc @('build', (Join-Path $Root 'examples\00-hello\main.envol'), '--lib', $Root, '-o', $a64Out, '--target', 'aarch64-linux') $Root
     $a64Head = ''
     if (Test-Path -LiteralPath $a64Out) { $a64Bytes = [IO.File]::ReadAllBytes($a64Out); $a64Head = '{0:x2}{1:x2}{2:x2}{3:x2}' -f $a64Bytes[16], $a64Bytes[17], $a64Bytes[18], $a64Bytes[19] }
     if ($r.Code -eq 0 -and $a64Head -eq '0300b700') { Pass 'aarch64-linux build' } else { Bad 'aarch64-linux build' "exit $($r.Code): $($r.Err.Trim())" }
-    # The website, written in Envol (website\README.md): it builds, and its pages are there.
-    # Keep in step with build.sh.
-    Say 'website: website/site.envol builds the site, with the sandbox (envoc.wasm)'
-    $cfiles = @(Get-Content (Join-Path $Root 'compiler\files.txt') | Where-Object { $_ -and -not $_.StartsWith('#') })
-    $r = Invoke-Tool $envoc (@('build', '-O2', '--target', 'wasm32-web') + $cfiles + @('-o', (Join-Path $Root 'build\envoc.wasm'))) (Join-Path $Root 'compiler')
-    if ($r.Code -ne 0) { Bad 'envoc.wasm build' $r.Err.Trim() }
-    $siteTool = Join-Path $Root 'build\site-tool.exe'
-    $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, (Join-Path $Root 'website\site.envol'), '-o', $siteTool) $Root
-    if ($r.Code -ne 0) { Bad 'website build' $r.Err.Trim() }
-    else {
-        $siteDir = Join-Path $Root 'build\site'
-        if (Test-Path -LiteralPath $siteDir) { Remove-Item -Recurse -Force $siteDir }
-        $r = Invoke-Tool $siteTool @('build', 'build/site') $Root
-        $eir = Join-Path $siteDir 'docs\spec\eir.html'
-        $ok = $r.Code -eq 0 -and (Test-Path -LiteralPath $eir) -and ([IO.File]::ReadAllText($eir).Contains('aria-current="page"')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'lumen.css')).Contains('--accent:')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'index.html')).Contains('<h1>')) -and ([IO.File]::ReadAllText((Join-Path $siteDir 'sandbox\index.html')).Contains('id="run"')) -and ((Get-FileHash (Join-Path $Root 'build\envoc.wasm')).Hash -eq (Get-FileHash (Join-Path $siteDir 'sandbox\envoc.wasm')).Hash)
-        if ($ok) { Pass 'website pages' } else { Bad 'website pages' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
-    }
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     Say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg, packages'
     $envoRun = Join-Path $Root 'build\run-envo'
@@ -878,27 +861,12 @@ function Invoke-Check {
         foreach ($h in $hits) { $problems.Add("lib imports an adapter: $($f.FullName.Substring($Root.Length + 1)):$($h.LineNumber)") }
     }
 
-    # No Hello World Gallery program may grow past its line count.
-    $gallery = Join-Path $Root 'tests\spec\hello'
-    $entries = 0
-    foreach ($line in Get-Content -LiteralPath (Join-Path $gallery 'limits.txt') -Encoding UTF8) {
-        $t = $line.Trim()
-        if ($t -eq '' -or $t.StartsWith('#')) { continue }
-        $parts = $t -split '\s+'
-        $file = Join-Path $gallery $parts[0]
-        $limit = [int]$parts[1]
-        $entries++
-        if (-not (Test-Path -LiteralPath $file)) { $problems.Add("gallery: $($parts[0]) is missing"); continue }
-        $code = @(Get-Content -LiteralPath $file -Encoding UTF8 | Where-Object { $_.Trim() -ne '' -and -not $_.Trim().StartsWith('//') }).Count
-        if ($code -gt $limit) { $problems.Add("gallery: $($parts[0]) has $code code lines, limit is $limit") }
-    }
-    if ($entries -ne 11) { $problems.Add("gallery: limits.txt lists $entries programs, expected 11") }
 
     if ($problems.Count -gt 0) {
         foreach ($p in $problems) { [Console]::Error.WriteLine("check: $p") }
         Fail "$($problems.Count) problem(s)"
     }
-    Say "check: ok ($entries gallery programs, no lib->adapters imports)"
+    Say "check: ok (no lib->adapters imports)"
 }
 
 # ------------------------------------------------------------------- dist

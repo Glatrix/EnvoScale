@@ -1,3 +1,0 @@
-// Gallery: 3D. Runs from M11 (envo.render3d): a spinning cube in sunlight, in a window.
-use envo.render3d;
-render3d.Show(render3d.Scene.New().Cube().Spin().Sun(), "Hello");

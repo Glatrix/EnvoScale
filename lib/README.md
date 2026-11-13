@@ -12,7 +12,7 @@ picks for the target. More: [docs/architecture/library.md](../docs/architecture/
 | [`alloc/`](alloc) | `core` | `List`, `string`, `Map` and the allocators |
 | [`ports/`](ports) | `core` | Every port interface |
 | [`std/`](std) | the above | Files, paths, processes, environment, time, randomness, the clipboard |
-| [`envo/`](envo) | any of the above | Everything else: crypto, TLS, HTTP, JSON, UI, graphics, fonts, 3D, the web, AI |
+| [`envo/`](envo) | any of the above | Crypto, TLS, HTTP, JSON, EON, command lines, the GPU port's software device, AI |
 
 Each module folder has a README (what it is for, the simple way in, the full-control way
 in, and the ports it uses), its source and a `tests/` folder that `envo test` runs.

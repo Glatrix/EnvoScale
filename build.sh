@@ -628,24 +628,8 @@ EOF_ERR
     # AArch64 Linux (M10, PLAN D69): programs build as AArch64 ELF executables, with and
     # without the library; CI runs the run and library tests on an arm64 machine
     # (build.sh cross, cross-run)
-    run "$ROOT" build "$ROOT/tests/spec/hello/console.envol" --lib "$ROOT" -o "$TMP/hello-a64" --target aarch64-linux
+    run "$ROOT" build "$ROOT/examples/00-hello/main.envol" --lib "$ROOT" -o "$TMP/hello-a64" --target aarch64-linux
     if [ "$rc" -eq 0 ] && [ "$(od -A n -t x1 -j 16 -N 4 "$TMP/hello-a64" | tr -d ' \n')" = "0300b700" ]; then pass; else bad 'aarch64-linux build' "exit $rc: $(cat "$TMP/err")"; fi
-    # The website, written in Envol (website/README.md): it builds, and its pages are there
-    say 'website: website/site.envol builds the site, with the sandbox (envoc.wasm)'
-    cfiles=$(grep -v '^#' "$ROOT/compiler/files.txt" | tr -d '\r' | grep -v '^$' | tr '\n' ' ')
-    # shellcheck disable=SC2086
-    run "$ROOT/compiler" build -O2 --target wasm32-web $cfiles -o "$ROOT/build/envoc.wasm"
-    if [ "$rc" -ne 0 ]; then bad 'envoc.wasm build' "$(cat "$TMP/err")"; fi
-    run "$ROOT" build -O2 --lib "$ROOT" "$ROOT/website/site.envol" -o "$ROOT/build/site-tool$(host_suffix)"
-    if [ "$rc" -ne 0 ]; then bad 'website build' "$(cat "$TMP/err")"; else
-        rm -rf "$ROOT/build/site"
-        set +e
-        (cd "$ROOT" && "$ROOT/build/site-tool$(host_suffix)" build build/site) > "$TMP/out" 2> "$TMP/err"
-        rc=$?
-        set -e
-        if [ "$rc" -eq 0 ] && grep -q 'aria-current="page"' "$ROOT/build/site/docs/spec/eir.html" && grep -q -- '--accent:' "$ROOT/build/site/lumen.css" && grep -q '<h1>' "$ROOT/build/site/index.html" && cmp -s "$ROOT/build/envoc.wasm" "$ROOT/build/site/sandbox/envoc.wasm" && grep -q 'id="run"' "$ROOT/build/site/sandbox/index.html"; then pass
-        else bad 'website pages' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
-    fi
     # envo's own commands: new, run, test, check, explain, version (tests/envo/README.md)
     say 'envo commands: new, run, test, check, explain, version, prof, fuzz, dbg, packages'
     erun="$ROOT/build/run-envo"
@@ -877,23 +861,9 @@ do_check() {
     hits=$(find "$ROOT/lib" -name '*.envol' -exec grep -n -E '^[[:space:]]*(use|using)[[:space:]]+adapters([^A-Za-z0-9_]|$)' /dev/null {} + 2>/dev/null || true)
     [ -z "$hits" ] || problem "lib imports an adapter: $hits"
 
-    # No Hello World Gallery program may grow past its line count.
-    gallery="$ROOT/tests/spec/hello"
-    entries=0
-    while IFS= read -r l || [ -n "$l" ]; do
-        l=$(printf '%s' "$l" | tr -d '\r')
-        case "$l" in ''|'#'*) continue ;; esac
-        file=${l%% *}
-        limit=${l##* }
-        entries=$((entries + 1))
-        if [ ! -f "$gallery/$file" ]; then problem "gallery: $file is missing"; continue; fi
-        count=$(tr -d '\r' < "$gallery/$file" | grep -c -v -e '^[[:space:]]*$' -e '^[[:space:]]*//' || true)
-        [ "$count" -le "$limit" ] || problem "gallery: $file has $count code lines, limit is $limit"
-    done < "$gallery/limits.txt"
-    [ "$entries" -eq 11 ] || problem "gallery: limits.txt lists $entries programs, expected 11"
 
     [ "$problems" -eq 0 ] || fail "$problems problem(s)"
-    say "check: ok ($entries gallery programs, no lib->adapters imports)"
+    say "check: ok (no lib->adapters imports)"
 }
 
 # ------------------------------------------------------------------- compare

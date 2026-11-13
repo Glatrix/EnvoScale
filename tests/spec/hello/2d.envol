@@ -1,3 +1,0 @@
-// Gallery: 2D. Runs from M8 (envo.gfx).
-use envo.gfx;
-window("Hi") { canvas(c => c.Circle(100, 100, 50, Lumen.Accent)) }
