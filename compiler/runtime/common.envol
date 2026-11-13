@@ -22,6 +22,7 @@ const usize __RT_CHUNK_MAX = 256;
 const usize __RT_META_BYTES = 4256;            // (19 + 2 * 256) * 8, rounded up to 16
 const usize __RT_MAGIC = 0x454E564F00000000;   // "ENVO" in a block header's high half
 const usize __RT_FREE_BIT = 0x100;
+const usize __RT_DIRECT_BIT = 0x200;         // a large block in its own mapping, room to grow after it
 
 // The entry point calls __rt_init with the initial stack pointer, then __main, then
 // __rt_exit with its result.
@@ -163,6 +164,19 @@ void __rt_heap_chunk(usize lo, usize hi) {
                 }
             }
         }
+        if (b == 0 && k == __RT_LARGE) {
+            // its own mapping, with __OS_RESERVE times the room reserved after it: untouched
+            // pages cost nothing, and `realloc` grows the block there without copying
+            usize reserve = room * __OS_RESERVE;
+            *u8 q = __os_pages(reserve + 32);
+            if (q as usize == 0) __rt_trap(3);
+            __rt_heap_chunk(q as usize, q as usize + reserve + 32);
+            *usize r = q as *usize;
+            r[0] = reserve;
+            r[2] = __RT_MAGIC | k | __RT_DIRECT_BIT;
+            r[3] = room;
+            return &q[32];
+        }
         if (b == 0) {
             *u8 q = __rt_bump(room + 16);
             *usize h = q as *usize;
@@ -172,7 +186,7 @@ void __rt_heap_chunk(usize lo, usize hi) {
         }
         // a block given back before: mark it in use and clear what the caller gets
         *usize h = (b - 16) as *usize;
-        h[0] = __RT_MAGIC | k;
+        h[0] = __RT_MAGIC | k | (h[0] & __RT_DIRECT_BIT);
         *usize w = b as *usize;
         usize words = n / 8;
         for (usize i = 0; i < words; i++) w[i] = 0;
@@ -195,13 +209,49 @@ void __rt_free(*u8 p) {
         if (!inside) return;
         *usize h = (a - 16) as *usize;
         usize w = h[0];
-        if (w & ~0x1FF != __RT_MAGIC || w & __RT_FREE_BIT != 0) return;
+        if (w & ~0x3FF != __RT_MAGIC || w & __RT_FREE_BIT != 0) return;
         usize k = w & 0xFF;
         if (k > __RT_LARGE) return;
         h[0] = w | __RT_FREE_BIT;
         *usize link = a as *usize;
         link[0] = m[k];
         m[k] = a;
+    }
+}
+
+// `realloc` (Envo-S1): p's block with room for n bytes, keeping its first old bytes, the
+// rest zeroed; p itself when it is a large block with that much reserved after it, else
+// a new block (and p is given back).
+*u8 __rt_realloc(*u8 p, usize old, usize n) {
+    unsafe {
+        usize a = p as usize;
+        if (a == 0) return __rt_alloc(n);
+        *usize h = (a - 16) as *usize;
+        usize w = h[0];
+        if (w & ~0x3FF == __RT_MAGIC && w & __RT_DIRECT_BIT != 0 && w & __RT_FREE_BIT == 0) {
+            *usize r = (a - 32) as *usize;
+            usize want = (n + 15) & ~15;
+            if (want <= r[0]) {
+                if (want > h[1]) h[1] = want;
+                return p;
+            }
+        }
+        *u8 q = __rt_alloc(n);
+        usize keep = old;
+        if (keep > n) keep = n;
+        usize i = 0;
+        while (i + 8 <= keep) {
+            *u64 d = &q[i] as *u64;
+            *u64 s = &p[i] as *u64;
+            d[0] = s[0];
+            i += 8;
+        }
+        while (i < keep) {
+            q[i] = p[i];
+            i++;
+        }
+        __rt_free(p);
+        return q;
     }
 }
 

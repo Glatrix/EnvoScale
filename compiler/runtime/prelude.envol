@@ -129,13 +129,8 @@ struct List<T> {
     void Grow(ref this) {
         usize cap = this.Cap * 2;
         if (cap == 0) cap = 4;
-        unsafe {
-            *T fresh = alloc(cap * sizeof(T)) as *T;
-            // the items move: their bytes, all at once
-            string.CopyBytes(fresh as *u8, this.Data as *u8, this.Count * sizeof(T));
-            free(this.Data as *u8);
-            this.Data = fresh;
-        }
+        // the items move with their bytes (in place, for a large list, when it can)
+        unsafe { this.Data = realloc(this.Data as *u8, this.Count * sizeof(T), cap * sizeof(T)) as *T; }
         this.Cap = cap;
     }
 }
@@ -203,12 +198,7 @@ struct string {
         usize cap = this.Cap * 2;
         if (cap < this.Count + n) cap = this.Count + n;
         if (cap < 16) cap = 16;
-        unsafe {
-            *u8 fresh = alloc(cap);
-            string.CopyBytes(fresh, this.Data, this.Count);
-            free(this.Data);
-            this.Data = fresh;
-        }
+        unsafe { this.Data = realloc(this.Data, this.Count, cap); }
         this.Cap = cap;
     }
 

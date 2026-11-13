@@ -45,6 +45,10 @@ void __os_close(i32 fd) {
 }
 
 // Zeroed memory (new pages are), or null.
+// How many times a large block's room the heap reserves to grow into: none, since memory
+// grown here is memory taken.
+const usize __OS_RESERVE = 1;
+
 *u8 __os_pages(usize n) {
     i64 r = __hostcall(0, n as i64, 0, 0, 0);
     unsafe {

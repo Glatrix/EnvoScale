@@ -1,0 +1,53 @@
+// `realloc` keeps a block's first bytes and zeroes the rest (a large block grows in place
+// where the platform reserves room after it; WebAssembly does not). Lists and strings
+// grow through it: two of each growing in turns, past several reservations, keep every
+// item.
+// expect: small: kept, zeroed
+// expect: large: kept, zeroed
+// expect: lists: 3000000 3000000 sums ok
+// expect: strings: 4000000 4000000 ok
+unsafe {
+    *u8 a = alloc(10);
+    for (usize i = 0; i < 10; i++) a[i] = (i + 1) as u8;
+    *u8 b = realloc(a, 10, 100);
+    bool kept = true;
+    for (usize i = 0; i < 10; i++) {
+        if (b[i] != (i + 1) as u8) kept = false;
+    }
+    bool zero = true;
+    for (usize i = 10; i < 100; i++) {
+        if (b[i] != 0) zero = false;
+    }
+    if (kept && zero) print("small: kept, zeroed"); else print("small: wrong");
+    *u8 big = alloc(2000000);
+    big[0] = 1;
+    big[1999999] = 2;
+    *u8 bigger = realloc(big, 2000000, 4000000);
+    if (bigger[0] == 1 && bigger[1999999] == 2 && bigger[2000000] == 0 && bigger[3999999] == 0) print("large: kept, zeroed");
+    else print("large: wrong");
+}
+List<u64> x = List<u64>.New();
+List<u64> y = List<u64>.New();
+for (u64 i = 0; i < 3000000; i++) {
+    x.Push(i);
+    y.Push(i * 3);
+}
+u64 sx = 0;
+u64 sy = 0;
+for (usize i = 0; i < x.Len(); i++) sx += x.Get(i);
+for (usize i = 0; i < y.Len(); i++) sy += y.Get(i);
+if (sx == 4499998500000 && sy == 3 * sx) print("lists: 3000000 3000000 sums ok");
+else print("lists: wrong sums");
+string s = string.New();
+string t = string.New();
+for (usize i = 0; i < 4000000; i++) {
+    s.AppendByte((97 + i % 26) as u8);
+    t.AppendByte((65 + i % 26) as u8);
+}
+bool same = s.Len() == 4000000 && t.Len() == 4000000;
+str ss = s.AsStr();
+str ts = t.AsStr();
+for (usize i = 0; i < 4000000; i++) {
+    if (ss[i] != (97 + i % 26) as u8 || ts[i] != (65 + i % 26) as u8) same = false;
+}
+if (same) print("strings: 4000000 4000000 ok"); else print("strings: wrong");

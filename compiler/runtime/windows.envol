@@ -201,6 +201,10 @@ void __os_close(i32 fd) {
     __wincall(__W_CLOSEHANDLE, fd as i64, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
+// How many times a large block's room the heap reserves after it to grow into (mappings
+// are lazy: untouched pages cost nothing).
+const usize __OS_RESERVE = 4;
+
 *u8 __os_pages(usize n) {
     i64 p = __wincall(__W_VIRTUALALLOC, 0, n as i64, 0x3000, 4, 0, 0, 0, 0, 0, 0);   // commit | reserve, RW
     unsafe { return p as isize as *u8; }

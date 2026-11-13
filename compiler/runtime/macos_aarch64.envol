@@ -65,6 +65,10 @@ void __os_close(i32 fd) {
 }
 
 // Zeroed, page-aligned memory, or null.
+// How many times a large block's room the heap reserves after it to grow into (mappings
+// are lazy: untouched pages cost nothing).
+const usize __OS_RESERVE = 4;
+
 *u8 __os_pages(usize n) {
     i64 r = __syscall(197, 0, n as i64, 3, 0x1002, -1, 0);  // mmap: RW, private, anonymous
     unsafe {

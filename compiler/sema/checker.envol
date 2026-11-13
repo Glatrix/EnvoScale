@@ -592,6 +592,8 @@ public struct Checker {
             this.MarkLastPrelude();
             this.AddBuiltin("slice_from_mut", B_SLICE_FROM_MUT, 0, 2, T_PTR_U8, T_USIZE, 0);
             this.MarkLastPrelude();
+            this.AddBuiltin("realloc", B_REALLOC, T_PTR_U8, 3, T_PTR_U8, T_USIZE, T_USIZE);
+            this.MarkLastPrelude();
             // `Copy`, the automatic interface ([type.copy.1]); a program's own `Copy` hides it
             u32 s = this.SymNew(SK_IFACE, 0);
             Sym x = this.SymAt(s);

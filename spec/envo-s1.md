@@ -170,6 +170,7 @@ The Envo-Core built-ins (`envo-core.md` §6), plus:
 | `void free(*u8 p)` | release memory from `alloc`; only in `unsafe` (E0306). An implementation may keep never-freed arena semantics, so `free` may do nothing |
 | `T[] slice_from<T>(*T ptr, usize len)` | unsafe view from raw parts ([expr.slice.5]) |
 | `mut T[] slice_from_mut<T>(*T ptr, usize len)` | unsafe writable view ([view.6]) |
+| `*u8 realloc(*u8 p, usize old, usize n)` | memory for `n` bytes that starts with the first `old` bytes at `p` (`p` from `alloc` or `realloc`, or null), the rest zeroed; `p` may be given back. Only in `unsafe` (E0306) |
 
 `alloc` returns memory aligned to 16 bytes, zeroed, as in Core.
 
