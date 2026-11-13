@@ -1,0 +1,526 @@
+// `envo lsp`'s language features (PLAN D75, M14.4): completion, hover, go-to-definition,
+// document symbols and formatting, answered from the last good index of each open
+// document (`envo query`, compiler/sema/index.envol). The index comes from the last text
+// that checked without errors: while a document has errors, answers come from the index
+// of its last clean text, by name where positions no longer match.
+use std.fs;
+use std.path;
+use std.process;
+use core.text as ct;
+use alloc.text;
+use envo.json;
+use ports.{IoError};
+
+// An open document.
+struct Doc {
+    string Uri;
+    string Text;            // the latest text
+    bool Indexed;
+    json.Value Index;       // the last good index
+    string IndexedText;     // the text it was made from
+    i64 FileNo;             // this document's file in the index (its scratch copy)
+}
+
+isize DocNamed(in List<Doc> docs, str uri) {
+    for (usize i = 0; i < docs.Len(); i++) {
+        if (docs.AsSlice()[i].Uri.Equals(uri)) return i as isize;
+    }
+    return -1;
+}
+
+// Records the latest text of the document at uri.
+void SetDocText(ref List<Doc> docs, str uri, str t) {
+    isize k = DocNamed(docs, uri);
+    if (k < 0) {
+        docs.Push(new Doc { Uri = string.From(uri), Text = string.From(t), Indexed = false, Index = json.Value.Null(), IndexedText = string.New(), FileNo = -1 });
+        return;
+    }
+    mut Doc[] ds = docs.AsMutSlice();
+    ds[k as usize].Text = string.From(t);
+}
+
+// Indexes the program checked with args (`check` replaced by `query`) and keeps the
+// result for the document at uri, whose scratch copy is scratch and text t.
+void IndexDoc(ref List<Doc> docs, str self, in List<str> args, str work, str uri, str scratch, str t) {
+    string outFile = path.Join(work, "query.json");
+    string errFile = path.Join(work, "query.txt");
+    List<str> qargs = List<str>.New();
+    qargs.Push("query");
+    for (usize i = 1; i < args.Len(); i++) qargs.Push(args.AsSlice()[i]);
+    Result<i32, IoError> r = process.RunIn(self, qargs.AsSlice(), "", outFile.AsStr(), errFile.AsStr());
+    if (r.IsErr() || r.Unwrap() != 0) return;
+    Result<string, IoError> body = fs.ReadText(outFile.AsStr());
+    if (body.IsErr()) return;
+    Result<json.Value, json.JsonError> pr = json.Parse(body.Unwrap().AsStr());
+    if (pr.IsErr()) return;
+    json.Value index = pr.Unwrap();
+    i64 fileNo = -1;
+    json.Value[] files = index.Field("files");
+    if (files.Len == 1) {
+        json.Value[] all = files[0].Elements();
+        for (usize i = 0; i < all.Len; i++) {
+            if (SamePath(all[i].AsStr(), scratch)) fileNo = i as i64;
+        }
+    }
+    SetDocText(ref docs, uri, t);
+    isize k = DocNamed(docs, uri);
+    mut Doc[] ds = docs.AsMutSlice();
+    ds[k as usize].Indexed = true;
+    ds[k as usize].Index = index;
+    ds[k as usize].IndexedText = string.From(t);
+    ds[k as usize].FileNo = fileNo;
+}
+
+// ------------------------------------------------------------------ positions
+
+// The byte offset where 0-based line starts in t (t.Len past the end).
+usize LineStart(str t, usize line) {
+    usize at = 0;
+    for (usize l = 0; l < line && at < t.Len; l++) {
+        while (at < t.Len && t[at] != 10) at++;
+        if (at < t.Len) at++;
+    }
+    return at;
+}
+
+// The byte column of UTF-16 character ch in line of t.
+usize ByteCol(str t, usize line, usize ch) {
+    usize at = LineStart(t, line);
+    usize start = at;
+    usize units = 0;
+    while (at < t.Len && t[at] != 10 && units < ch) {
+        u8 b = t[at];
+        if (b >= 0xF0) units += 2;
+        else units++;
+        at++;
+        while (at < t.Len && t[at] & 0xC0 == 0x80) at++;
+    }
+    return at - start;
+}
+
+// The UTF-16 character of byte column col in line of t.
+usize Utf16Of(str t, usize line, usize col) {
+    usize at = LineStart(t, line);
+    usize stop = at + col;
+    usize units = 0;
+    while (at < t.Len && at < stop && t[at] != 10) {
+        u8 b = t[at];
+        if (b & 0xC0 != 0x80) {
+            if (b >= 0xF0) units += 2;
+            else units++;
+        }
+        at++;
+    }
+    return units;
+}
+
+bool IsWordByte(u8 c) => ct.IsAlnum(c) || c == '_';
+
+// The identifier around byte column col of line in t; ws and we get its columns.
+string WordAt(str t, usize line, usize col, ref usize ws, ref usize we) {
+    usize ls = LineStart(t, line);
+    usize le = ls;
+    while (le < t.Len && t[le] != 10 && t[le] != 13) le++;
+    usize at = ls + col;
+    if (at > le) at = le;
+    usize a = at;
+    while (a > ls && IsWordByte(t[a - 1])) a--;
+    usize b = at;
+    while (b < le && IsWordByte(t[b])) b++;
+    ws = a - ls;
+    we = b - ls;
+    return string.From(t[a..b]);
+}
+
+json.Value Range(usize line, usize c0, usize c1) {
+    json.Value r = json.Value.NewObject();
+    r.Set("start", Position(line, c0));
+    r.Set("end", Position(line, c1));
+    return r;
+}
+
+// ------------------------------------------------------------------ symbols
+
+i64 IntOf(in json.Value v, str key) => v.GetInt(key) ?? -1;
+
+// The symbol of the index with id, or None.
+json.Value? SymbolById(in json.Value index, i64 id) {
+    json.Value[] syms = index.Field("symbols");
+    if (syms.Len != 1) return None;
+    foreach (var s in syms[0].Elements()) {
+        if (IntOf(s, "id") == id) return Some(s.Clone());
+    }
+    return None;
+}
+
+// The id of the symbol named by the identifier at (line, col) of the document: from the
+// index's references when the text is the indexed one, else by name, the nearest local
+// of the enclosing function first.
+i64 SymbolAt(in Doc d, usize line, usize col) {
+    if (!d.Indexed) return -1;
+    usize ws = 0;
+    usize we = 0;
+    string word = WordAt(d.Text.AsStr(), line, col, ref ws, ref we);
+    if (word.Len() == 0) return -1;
+    if (d.Text.Equals(d.IndexedText.AsStr())) {
+        json.Value[] refs = d.Index.Field("refs");
+        if (refs.Len == 1) {
+            foreach (var r in refs[0].Elements()) {
+                json.Value[] f = r.Elements();
+                if (f.Len < 5 || f[0].AsInt() != d.FileNo || f[1].AsInt() != line as i64) continue;
+                i64 c0 = f[2].AsInt();
+                if (ws as i64 >= c0 && (ws as i64) < c0 + f[3].AsInt()) return f[4].AsInt();
+            }
+        }
+        // a declaration's own name
+        json.Value[] syms = d.Index.Field("symbols");
+        if (syms.Len == 1) {
+            foreach (var s in syms[0].Elements()) {
+                if (IntOf(s, "file") == d.FileNo && IntOf(s, "line") == line as i64 && IntOf(s, "col") == ws as i64) return IntOf(s, "id");
+            }
+        }
+    }
+    return SymbolNamed(d, word.AsStr(), line);
+}
+
+// The best symbol named word for line of the document: a local of the function around
+// line, then one of the document's file, then any.
+i64 SymbolNamed(in Doc d, str word, usize line) {
+    json.Value[] syms = d.Index.Field("symbols");
+    if (syms.Len != 1) return -1;
+    i64 around = EnclosingFn(d, line);
+    i64 best = -1;
+    i64 bestRank = 0;
+    foreach (var s in syms[0].Elements()) {
+        str? name = s.GetStr("name");
+        if (name.IsNone() || ct.Compare(name.Unwrap(), word) != 0) continue;
+        i64 rank = 1;
+        if (IntOf(s, "file") == d.FileNo) rank = 2;
+        if (around >= 0 && IntOf(s, "fn") == around) rank = 3;
+        if (rank > bestRank) {
+            best = IntOf(s, "id");
+            bestRank = rank;
+        }
+    }
+    return best;
+}
+
+// The function of the document's file whose lines hold line, or -1.
+i64 EnclosingFn(in Doc d, usize line) {
+    json.Value[] syms = d.Index.Field("symbols");
+    if (syms.Len != 1) return -1;
+    i64 best = -1;
+    i64 bestStart = -1;
+    foreach (var s in syms[0].Elements()) {
+        if (IntOf(s, "file") != d.FileNo || !s.Has("end")) continue;
+        i64 l0 = IntOf(s, "line");
+        if (l0 <= line as i64 && IntOf(s, "end") >= line as i64 && l0 > bestStart) {
+            best = IntOf(s, "id");
+            bestStart = l0;
+        }
+    }
+    return best;
+}
+
+// The location of symbol sym: its file's URI (the document's own for its scratch copy)
+// and range; None for the prelude, which has no file.
+json.Value? LocationOf(in Doc d, in json.Value sym) {
+    i64 file = IntOf(sym, "file");
+    json.Value[] files = d.Index.Field("files");
+    if (files.Len != 1 || file < 0 || file as usize >= files[0].Len()) return None;
+    str p = files[0].Elements()[file as usize].AsStr();
+    string uri = string.New();
+    string t = string.New();
+    if (file == d.FileNo) {
+        uri = string.From(d.Uri.AsStr());
+        t = string.From(d.IndexedText.AsStr());
+    } else {
+        if (ct.StartsWith(p, "<")) return None;
+        uri = PathToUri(p);
+        Result<string, IoError> rt = fs.ReadText(p);
+        if (rt.IsOk()) t = rt.Unwrap();
+    }
+    usize line = IntOf(sym, "line") as usize;
+    usize c0 = Utf16Of(t.AsStr(), line, IntOf(sym, "col") as usize);
+    usize c1 = Utf16Of(t.AsStr(), line, (IntOf(sym, "col") + IntOf(sym, "len")) as usize);
+    json.Value loc = json.Value.NewObject();
+    loc.Set("uri", json.Value.OfStr(uri.AsStr()));
+    loc.Set("range", Range(line, c0, c1));
+    return Some(loc);
+}
+
+// ------------------------------------------------------------------ requests
+
+// The document and position of a request's params, as (doc index, line, byte column).
+isize RequestDoc(in List<Doc> docs, in json.Value params, ref usize line, ref usize col) {
+    json.Value[] td = params.Field("textDocument");
+    json.Value[] pos = params.Field("position");
+    if (td.Len != 1 || td[0].GetStr("uri").IsNone()) return -1;
+    isize k = DocNamed(docs, td[0].GetStr("uri").Unwrap());
+    if (k < 0 || pos.Len != 1) return k;
+    line = (pos[0].GetInt("line") ?? 0) as usize;
+    usize ch = (pos[0].GetInt("character") ?? 0) as usize;
+    col = ByteCol(docs.AsSlice()[k as usize].Text.AsStr(), line, ch);
+    return k;
+}
+
+json.Value Definition(in List<Doc> docs, in json.Value params) {
+    usize line = 0;
+    usize col = 0;
+    isize k = RequestDoc(docs, params, ref line, ref col);
+    if (k < 0) return json.Value.Null();
+    return DefinitionIn(docs.AsSlice()[k as usize], line, col);
+}
+
+json.Value DefinitionIn(in Doc d, usize line, usize col) {
+    i64 id = SymbolAt(d, line, col);
+    if (id < 0) return json.Value.Null();
+    json.Value? sym = SymbolById(d.Index, id);
+    if (sym.IsNone()) return json.Value.Null();
+    json.Value? loc = LocationOf(d, sym.Unwrap());
+    if (loc.IsNone()) return json.Value.Null();
+    return loc.Unwrap();
+}
+
+json.Value Hover(in List<Doc> docs, in json.Value params) {
+    usize line = 0;
+    usize col = 0;
+    isize k = RequestDoc(docs, params, ref line, ref col);
+    if (k < 0) return json.Value.Null();
+    return HoverIn(docs.AsSlice()[k as usize], line, col);
+}
+
+json.Value HoverIn(in Doc d, usize line, usize col) {
+    i64 id = SymbolAt(d, line, col);
+    if (id < 0) return json.Value.Null();
+    json.Value? found = SymbolById(d.Index, id);
+    if (found.IsNone()) return json.Value.Null();
+    json.Value sym = found.Unwrap();
+    string md = string.From("```envo\n");
+    md.Append(sym.GetStr("detail") ?? "");
+    md.Append("\n```");
+    str? doc = sym.GetStr("doc");
+    if (doc.IsSome()) {
+        md.Append("\n\n");
+        md.Append(doc.Unwrap());
+    }
+    json.Value contents = json.Value.NewObject();
+    contents.Set("kind", json.Value.OfStr("markdown"));
+    contents.Set("value", json.Value.OfStr(md.AsStr()));
+    json.Value h = json.Value.NewObject();
+    h.Set("contents", contents);
+    return h;
+}
+
+i64 CompletionKind(str kind) {
+    if (ct.Compare(kind, "method") == 0) return 2;
+    if (ct.Compare(kind, "fn") == 0) return 3;
+    if (ct.Compare(kind, "field") == 0) return 5;
+    if (ct.Compare(kind, "local") == 0) return 6;
+    if (ct.Compare(kind, "interface") == 0) return 8;
+    if (ct.Compare(kind, "enum") == 0) return 13;
+    if (ct.Compare(kind, "const") == 0 || ct.Compare(kind, "static") == 0) return 21;
+    if (ct.Compare(kind, "struct") == 0) return 22;
+    return 1;
+}
+
+void AddItem(ref json.Value items, ref List<string> seen, in json.Value sym) {
+    str name = sym.GetStr("name") ?? "";
+    if (name.Len == 0) return;
+    foreach (var s in seen.AsSlice()) {
+        if (s.Equals(name)) return;
+    }
+    seen.Push(string.From(name));
+    json.Value it = json.Value.NewObject();
+    it.Set("label", json.Value.OfStr(name));
+    it.Set("kind", json.Value.OfInt(CompletionKind(sym.GetStr("kind") ?? "")));
+    it.Set("detail", json.Value.OfStr(sym.GetStr("detail") ?? ""));
+    str? doc = sym.GetStr("doc");
+    if (doc.IsSome()) it.Set("documentation", json.Value.OfStr(doc.Unwrap()));
+    items.Push(it);
+}
+
+// A type's name without its arguments or pointer: `List<str>` and `*List<str>` give `List`.
+string BaseType(str t) {
+    usize a = 0;
+    while (a < t.Len && t[a] == '*') a++;
+    usize b = a;
+    while (b < t.Len && t[b] != '<' && t[b] != '[' && t[b] != '?') b++;
+    return string.From(t[a..b]);
+}
+
+// The type in a value's detail ("Type name"): what comes before its last space.
+string TypeOfDetail(str detail) {
+    usize? sp = ct.LastIndexOf(detail, " ");
+    if (sp.IsNone()) return string.From(detail);
+    return string.From(detail[0..sp.Unwrap()]);
+}
+
+json.Value Completion(in List<Doc> docs, in json.Value params) {
+    usize line = 0;
+    usize col = 0;
+    isize k = RequestDoc(docs, params, ref line, ref col);
+    if (k < 0) return json.Value.NewArray();
+    return CompletionIn(docs.AsSlice()[k as usize], line, col);
+}
+
+json.Value CompletionIn(in Doc d, usize line, usize col) {
+    json.Value items = json.Value.NewArray();
+    if (!d.Indexed) return items;
+    json.Value[] symList = d.Index.Field("symbols");
+    if (symList.Len != 1) return items;
+    json.Value[] syms = symList[0].Elements();
+    str t = d.Text.AsStr();
+    usize ws = 0;
+    usize we = 0;
+    string word = WordAt(t, line, col, ref ws, ref we);
+    usize ls = LineStart(t, line);
+    List<string> seen = List<string>.New();
+    // after `x.`: x's members, or a namespace's public items
+    if (ws > 0 && t[ls + ws - 1] == '.') {
+        usize rs = 0;
+        usize re = 0;
+        string recv = WordAt(t, line, ws - 1, ref rs, ref re);
+        if (recv.Len() == 0) return items;
+        // a namespace (its last part): its public items
+        foreach (var s in syms) {
+            str ns = s.GetStr("ns") ?? "";
+            str last = ns;
+            usize? dot = ct.LastIndexOf(ns, ".");
+            if (dot.IsSome()) last = ns[dot.Unwrap() + 1..ns.Len];
+            if (ct.Compare(last, recv.AsStr()) == 0 && s.GetStr("container").IsSome() && (s.GetStr("container") ?? "").Len == 0) {
+                bool pub = false;
+                json.Value[] pf = s.Field("public");
+                if (pf.Len == 1) pub = pf[0].AsBool();
+                str kind = s.GetStr("kind") ?? "";
+                if (pub && ct.Compare(kind, "local") != 0) AddItem(ref items, ref seen, s);
+            }
+        }
+        if (items.Len() > 0) return items;
+        // a variable: the members of its type
+        i64 id = SymbolNamed(d, recv.AsStr(), line);
+        if (id < 0) return items;
+        json.Value? rv = SymbolById(d.Index, id);
+        if (rv.IsNone()) return items;
+        json.Value rsym = rv.Unwrap();
+        string ty = TypeOfDetail(rsym.GetStr("detail") ?? "");
+        string base0 = BaseType(ty.AsStr());
+        foreach (var s in syms) {
+            string c = BaseType(s.GetStr("container") ?? "");
+            if (c.Len() > 0 && c.Equals(base0.AsStr())) AddItem(ref items, ref seen, s);
+        }
+        return items;
+    }
+    // otherwise: the locals of the function around, then the program's items, keywords
+    i64 around = EnclosingFn(d, line);
+    foreach (var s in syms) {
+        if (IntOf(s, "file") == d.FileNo && IntOf(s, "fn") == around && around >= 0 && IntOf(s, "line") <= line as i64) AddItem(ref items, ref seen, s);
+    }
+    i64 user = d.Index.GetInt("user") ?? 0;
+    foreach (var s in syms) {
+        str kind = s.GetStr("kind") ?? "";
+        if (ct.Compare(kind, "local") == 0 || ct.Compare(kind, "field") == 0 || ct.Compare(kind, "method") == 0) continue;
+        if (IntOf(s, "file") >= 0 && IntOf(s, "file") < user) AddItem(ref items, ref seen, s);
+    }
+    str kws = "if else while for foreach return break continue struct enum interface impl namespace use var const static new match true false null unsafe in ref fn where public";
+    usize at = 0;
+    while (at < kws.Len) {
+        usize e = at;
+        while (e < kws.Len && kws[e] != ' ') e++;
+        json.Value it = json.Value.NewObject();
+        it.Set("label", json.Value.OfStr(kws[at..e]));
+        it.Set("kind", json.Value.OfInt(14));
+        items.Push(it);
+        at = e + 1;
+    }
+    return items;
+}
+
+i64 SymbolKindOf(str kind) {
+    if (ct.Compare(kind, "method") == 0) return 6;
+    if (ct.Compare(kind, "field") == 0) return 8;
+    if (ct.Compare(kind, "enum") == 0) return 10;
+    if (ct.Compare(kind, "interface") == 0) return 11;
+    if (ct.Compare(kind, "fn") == 0) return 12;
+    if (ct.Compare(kind, "const") == 0 || ct.Compare(kind, "static") == 0) return 14;
+    if (ct.Compare(kind, "struct") == 0) return 23;
+    return 13;
+}
+
+json.Value DocumentSymbols(in List<Doc> docs, in json.Value params) {
+    json.Value out0 = json.Value.NewArray();
+    json.Value[] td = params.Field("textDocument");
+    if (td.Len != 1 || td[0].GetStr("uri").IsNone()) return out0;
+    isize k = DocNamed(docs, td[0].GetStr("uri").Unwrap());
+    if (k < 0) return out0;
+    return SymbolsIn(docs.AsSlice()[k as usize]);
+}
+
+json.Value SymbolsIn(in Doc d) {
+    json.Value out0 = json.Value.NewArray();
+    if (!d.Indexed) return out0;
+    json.Value[] syms = d.Index.Field("symbols");
+    if (syms.Len != 1) return out0;
+    str t = d.IndexedText.AsStr();
+    foreach (var s in syms[0].Elements()) {
+        if (IntOf(s, "file") != d.FileNo) continue;
+        str kind = s.GetStr("kind") ?? "";
+        if (ct.Compare(kind, "local") == 0) continue;
+        usize line = IntOf(s, "line") as usize;
+        usize c0 = Utf16Of(t, line, IntOf(s, "col") as usize);
+        usize c1 = Utf16Of(t, line, (IntOf(s, "col") + IntOf(s, "len")) as usize);
+        json.Value e = json.Value.NewObject();
+        e.Set("name", json.Value.OfStr(s.GetStr("name") ?? ""));
+        e.Set("detail", json.Value.OfStr(s.GetStr("detail") ?? ""));
+        e.Set("kind", json.Value.OfInt(SymbolKindOf(kind)));
+        usize endLine = line;
+        if (s.Has("end")) endLine = IntOf(s, "end") as usize;
+        json.Value full = json.Value.NewObject();
+        full.Set("start", Position(line, 0));
+        full.Set("end", Position(endLine, 0));
+        e.Set("range", full);
+        e.Set("selectionRange", Range(line, c0, c1));
+        out0.Push(e);
+    }
+    return out0;
+}
+
+// The whole document laid out by `envo fmt`, as one edit; no edits if it cannot be.
+json.Value Formatting(in List<Doc> docs, str self, str tag, in json.Value params) {
+    json.Value edits = json.Value.NewArray();
+    json.Value[] td = params.Field("textDocument");
+    if (td.Len != 1 || td[0].GetStr("uri").IsNone()) return edits;
+    str uri = td[0].GetStr("uri").Unwrap();
+    isize k = DocNamed(docs, uri);
+    if (k < 0) return edits;
+    string file = UriToPath(uri);
+    if (file.Len() == 0) return edits;
+    string work = path.Join(path.Parent(file.AsStr()), "build/envo-lsp");
+    work = path.Join(work.AsStr(), tag);
+    if (fs.CreateDirAll(work.AsStr()).IsErr()) return edits;
+    string scratch = path.Join(work.AsStr(), "format.envol");
+    str t = docs.AsSlice()[k as usize].Text.AsStr();
+    if (fs.WriteText(scratch.AsStr(), t).IsErr()) return edits;
+    string laid = path.Join(work.AsStr(), "format.txt");
+    List<str> args = List<str>.New();
+    args.Push("fmt");
+    args.Push("--stdout");
+    args.Push(scratch.AsStr());
+    Result<i32, IoError> r = process.RunIn(self, args.AsSlice(), "", laid.AsStr(), "");
+    if (r.IsErr() || r.Unwrap() != 0) return edits;
+    Result<string, IoError> nt = fs.ReadText(laid.AsStr());
+    if (nt.IsErr()) return edits;
+    // replace everything: from the start to past the last line
+    usize lines = 0;
+    for (usize i = 0; i < t.Len; i++) {
+        if (t[i] == 10) lines++;
+    }
+    json.Value range = json.Value.NewObject();
+    range.Set("start", Position(0, 0));
+    range.Set("end", Position(lines + 1, 0));
+    json.Value e = json.Value.NewObject();
+    e.Set("range", range);
+    e.Set("newText", json.Value.OfStr(nt.Unwrap().AsStr()));
+    edits.Push(e);
+    return edits;
+}

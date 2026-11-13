@@ -120,7 +120,7 @@ do_build() {
     done < "$ROOT/tools/envo/files.txt"
     while IFS= read -r f || [ -n "$f" ]; do
         f=$(printf '%s' "$f" | tr -d '\r')
-        [ -n "$f" ] && [ "$f" != driver/main.envo ] && set -- "$@" "compiler/$f"
+        [ -n "$f" ] && [ "$f" != driver/main.envol ] && set -- "$@" "compiler/$f"
     done < "$STAGE2/files.txt"
     for unit in "x86_64-linux:envo" "x86_64-windows:envo.exe"; do
         target=${unit%%:*}
@@ -208,21 +208,21 @@ do_test() {
 
     say ''
     say 'smoke tests'
-    run "$ROOT" lex 'no such file.envo'
-    if [ "$rc" -eq 1 ] && grep -q "^envoc: error: cannot open 'no such file.envo'" "$TMP/err"; then pass; else bad 'missing file' "exit $rc"; fi
+    run "$ROOT" lex 'no such file.envol'
+    if [ "$rc" -eq 1 ] && grep -q "^envoc: error: cannot open 'no such file.envol'" "$TMP/err"; then pass; else bad 'missing file' "exit $rc"; fi
     # Paths are UTF-8 on every OS: a name with a space, a Latin, a CJK and a non-BMP character.
-    uname=$(printf 'u\303\274nicode \346\227\245\360\237\230\200.envo')
+    uname=$(printf 'u\303\274nicode \346\227\245\360\237\230\200.envol')
     printf 'print("hi")\n' > "$TMP/$uname"
     run "$TMP" lex "$uname"
     if [ "$rc" -eq 0 ] && head -n 1 "$TMP/out" | grep -q '^1:1 n ident print'; then pass; else bad 'unicode path' "exit $rc: $(cat "$TMP/err")"; fi
     # Cross-compilation: this host builds the other OS's executable (it can only check the header).
     printf 'print("hi")
-' > "$TMP/cross.envo"
+' > "$TMP/cross.envol"
     case "$EXE" in
         *.exe) other=x86_64-linux; magic='7f454c46' ;;
         *) other=x86_64-windows; magic='4d5a' ;;
     esac
-    run "$TMP" build cross.envo -o cross-out --target "$other"
+    run "$TMP" build cross.envol -o cross-out --target "$other"
     got=$(od -A n -t x1 -N 4 "$TMP/cross-out" 2>/dev/null | tr -d ' \n')
     case "$got" in "$magic"*) pass ;; *) bad "cross build ($other)" "exit $rc, header $got" ;; esac
 
@@ -234,9 +234,9 @@ do_test() {
         run_suites="core-run s1-run s2-run"
         for suite in $run_suites; do
         say "run tests ($compiler): tests/spec/$suite"
-        for f in "$ROOT"/tests/spec/$suite/*.envo; do
-            base=$(basename "$f" .envo)
-            name="$compiler spec/$suite/$base.envo"
+        for f in "$ROOT"/tests/spec/$suite/*.envol; do
+            base=$(basename "$f" .envol)
+            name="$compiler spec/$suite/$base.envol"
             sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
             want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
             panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
@@ -280,8 +280,8 @@ do_test() {
         done
         done
 
-        # Multi-file programs: one folder per test. main.envo is the entry file and holds
-        # the annotations; the other .envo files follow in name order. Either
+        # Multi-file programs: one folder per test. main.envol is the entry file and holds
+        # the annotations; the other .envol files follow in name order. Either
         # `// expect-error: E#### @ <file>:L:C` (envoc check) or `// expect:` lines (build, run).
         # Envo-S1 programs of several files (tests/spec/s1-multi) under Stages 1 and 2 only.
         multi_suites="core-multi s1-multi"
@@ -291,12 +291,12 @@ do_test() {
             d=${d%/}
             base=$(basename "$d")
             name="$compiler spec/$msuite/$base"
-            set -- main.envo
-            for f in "$d"/*.envo; do
+            set -- main.envol
+            for f in "$d"/*.envol; do
                 f=$(basename "$f")
-                [ "$f" = main.envo ] || set -- "$@" "$f"
+                [ "$f" = main.envol ] || set -- "$@" "$f"
             done
-            line=$(grep -m1 '^// expect-error: ' "$d/main.envo" | tr -d '\r' || true)
+            line=$(grep -m1 '^// expect-error: ' "$d/main.envol" | tr -d '\r' || true)
             if [ -n "$line" ]; then
                 code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
                 want="${line##* @ }: error[$code]"
@@ -305,7 +305,7 @@ do_test() {
                 else bad "$name" "expected exit 1 with '$want'; got exit $rc: $(tr -d '\r' < "$TMP/err")"; fi
                 continue
             fi
-            sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envol" | tr -d '\r' > "$TMP/expected"
             program="$rundir/$msuite-$base"
             case "$EXE" in *.exe) program="$program.exe" ;; esac
             run "$d" build "$@" -o "$program"
@@ -339,21 +339,21 @@ do_test() {
 
     EXE=$envoc2
 
-    # The runtime and prelude compiled into every program (compiler/driver/runtime*.envo)
+    # The runtime and prelude compiled into every program (compiler/driver/runtime*.envol)
     # must be generated from the current sources in compiler/runtime.
-    say 'embedded runtime: compiler/driver/runtime*.envo'
-    run "$ROOT" embed compiler/runtime/common.envo compiler/runtime/linux.envo compiler/runtime/windows.envo compiler/runtime/prelude.envo
-    tr -d '\r' < "$ROOT/compiler/driver/runtime.envo" > "$TMP/expected"
+    say 'embedded runtime: compiler/driver/runtime*.envol'
+    run "$ROOT" embed compiler/runtime/common.envol compiler/runtime/linux.envol compiler/runtime/windows.envol compiler/runtime/prelude.envol
+    tr -d '\r' < "$ROOT/compiler/driver/runtime.envol" > "$TMP/expected"
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
     if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
-    else bad 'embedded runtime' "compiler/driver/runtime.envo is stale: regenerate it with envoc embed compiler/runtime/common.envo compiler/runtime/linux.envo compiler/runtime/windows.envo compiler/runtime/prelude.envo"; fi
+    else bad 'embedded runtime' "compiler/driver/runtime.envol is stale: regenerate it with envoc embed compiler/runtime/common.envol compiler/runtime/linux.envol compiler/runtime/windows.envol compiler/runtime/prelude.envol"; fi
     for unit in wasm:WASM:wasm linux_aarch64:A64:a64 macos_aarch64:MACOS:macos; do
         rsrc=${unit%%:*}; rest=${unit#*:}; rname=${rest%%:*}; rout=${rest#*:}
-        run "$ROOT" embed "compiler/runtime/$rsrc.envo"
-        tr -d '\r' < "$ROOT/compiler/driver/runtime_$rout.envo" > "$TMP/expected"
+        run "$ROOT" embed "compiler/runtime/$rsrc.envol"
+        tr -d '\r' < "$ROOT/compiler/driver/runtime_$rout.envol" > "$TMP/expected"
         tr -d '\r' < "$TMP/out" | sed "s/^const str RUNTIME_0 = /const str RUNTIME_$rname = /" > "$TMP/actual"
         if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected" "$TMP/actual"; then pass
-        else bad "embedded runtime ($rsrc)" "compiler/driver/runtime_$rout.envo is stale: regenerate it with envoc embed compiler/runtime/$rsrc.envo, renaming RUNTIME_0 to RUNTIME_$rname"; fi
+        else bad "embedded runtime ($rsrc)" "compiler/driver/runtime_$rout.envol is stale: regenerate it with envoc embed compiler/runtime/$rsrc.envol, renaming RUNTIME_0 to RUNTIME_$rname"; fi
     done
 
     say ''
@@ -376,12 +376,12 @@ do_test() {
         if [ "$mode" = --core ]; then set -- --core; else set --; fi
         say "golden tests ($mode): tests/golden/$sdir"
         dir="$ROOT/tests/golden/$sdir"
-        for f in "$dir"/*.envo; do
+        for f in "$dir"/*.envol; do
             base=$(basename "$f")
             name="$mode golden/$sdir/$base"
             run "$dir" "$@" "$cmd" "$base"
             if [ "$rc" -ne 0 ]; then bad "$name" "exit $rc: $(tr -d '\r' < "$TMP/err")"; continue; fi
-            tr -d '\r' < "${f%.envo}$ext" > "$TMP/expected"
+            tr -d '\r' < "${f%.envol}$ext" > "$TMP/expected"
             tr -d '\r' < "$TMP/out" > "$TMP/actual"
             if cmp -s "$TMP/expected" "$TMP/actual"; then pass
             else bad "$name" 'output differs:'; diff "$TMP/expected" "$TMP/actual" | head -n 10 || true; fi
@@ -396,7 +396,7 @@ do_test() {
         if [ "$mode" = --core ]; then set -- --core; else set --; fi
         say "spec tests ($mode): tests/spec/$sdir"
         dir="$ROOT/tests/spec/$sdir"
-        for f in "$dir"/*.envo; do
+        for f in "$dir"/*.envol; do
             base=$(basename "$f")
             line=$(LC_ALL=C grep -a -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
             code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9][0-9][0-9][0-9]\).*|\1|')
@@ -483,7 +483,7 @@ do_test() {
     vmdir="$ROOT/build/run-vm"
     mkdir -p "$vmdir"
     for suite in core-run s1-run s2-run; do
-        for f in "$ROOT"/tests/spec/$suite/*.envo; do
+        for f in "$ROOT"/tests/spec/$suite/*.envol; do
             name="vm spec/$suite/$(basename "$f")"
             sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$TMP/expected"
             want_code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
@@ -504,13 +504,13 @@ do_test() {
     for msuite in core-multi s1-multi; do
         for d in "$ROOT"/tests/spec/$msuite/*/; do
             d=${d%/}
-            grep -q '^// expect-error: ' "$d/main.envo" && continue
-            set -- main.envo
-            for f in "$d"/*.envo; do
+            grep -q '^// expect-error: ' "$d/main.envol" && continue
+            set -- main.envol
+            for f in "$d"/*.envol; do
                 f=$(basename "$f")
-                [ "$f" = main.envo ] || set -- "$@" "$f"
+                [ "$f" = main.envol ] || set -- "$@" "$f"
             done
-            sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envo" | tr -d '\r' > "$TMP/expected"
+            sed -n 's|^// expect: \(.*\)$|\1|p' "$d/main.envol" | tr -d '\r' > "$TMP/expected"
             set +e
             (cd "$d" && "$envo" run -A "$@") > "$TMP/out" 2> "$TMP/err"
             rc=$?
@@ -527,8 +527,8 @@ do_test() {
     boxdir="$ROOT/build/run-sandbox"
     rm -rf "$boxdir"
     mkdir -p "$boxdir"
-    cp "$ROOT"/tests/sandbox/*.envo "$boxdir"/
-    for f in "$boxdir"/*.envo; do
+    cp "$ROOT"/tests/sandbox/*.envol "$boxdir"/
+    for f in "$boxdir"/*.envol; do
         base=$(basename "$f")
         set -- run
         while IFS= read -r a; do
@@ -560,10 +560,10 @@ EOF_ERR
     # executable file starting with `#!/usr/bin/env envo`, found on PATH
     if [ -z "$(host_suffix)" ] && [ -x /usr/bin/env ]; then
         say 'script runtime: a #!/usr/bin/env envo script'
-        printf '#!/usr/bin/env envo\nuse std.env;\nList<str> all = env.Args();\nforeach (var a in all.AsSlice()) print(a);\n' > "$boxdir/args.envo"
-        chmod +x "$boxdir/args.envo"
+        printf '#!/usr/bin/env envo\nuse std.env;\nList<str> all = env.Args();\nforeach (var a in all.AsSlice()) print(a);\n' > "$boxdir/args.envol"
+        chmod +x "$boxdir/args.envol"
         set +e
-        (cd "$boxdir" && PATH="$ROOT/build/envo:$PATH" ./args.envo one 'two words') > "$TMP/out" 2> "$TMP/err"
+        (cd "$boxdir" && PATH="$ROOT/build/envo:$PATH" ./args.envol one 'two words') > "$TMP/out" 2> "$TMP/err"
         rc=$?
         set -e
         printf 'one\ntwo words\n' > "$TMP/expected"
@@ -572,7 +572,7 @@ EOF_ERR
     # The TLS 1.3 client against openssl s_server (tests/tls/README.md), where openssl is
     # installed
     if command -v openssl > /dev/null 2>&1; then
-        say 'tls: tests/tls/client.envo against openssl s_server'
+        say 'tls: tests/tls/client.envol against openssl s_server'
         tdir="$ROOT/build/run-tls"
         rm -rf "$tdir"
         mkdir -p "$tdir"
@@ -580,7 +580,7 @@ EOF_ERR
         (
             cd "$tdir"
             export MSYS_NO_PATHCONV=1
-            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ca.key -out ca.pem -days 30 -subj "/CN=Envo Test CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" &&
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout ca.key -out ca.pem -days 30 -subj "/CN=Envol Test CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" &&
             openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout other.key -out other.pem -days 30 -subj "/CN=Other CA" &&
             printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n' > leaf.ext &&
             openssl req -newkey rsa:2048 -nodes -keyout rsa.key -out rsa.csr -subj "/CN=localhost" &&
@@ -590,7 +590,7 @@ EOF_ERR
         ) > "$TMP/out" 2>&1 || tls_ok=0
         if [ "$tls_ok" -eq 0 ]; then bad 'tls certificates' "$(cat "$TMP/out")"; else
             EXE=$envoc2
-            run "$tdir" build --lib "$ROOT" "$ROOT/tests/tls/client.envo" -o "$tdir/client$(host_suffix)"
+            run "$tdir" build --lib "$ROOT" "$ROOT/tests/tls/client.envol" -o "$tdir/client$(host_suffix)"
             if [ "$rc" -ne 0 ]; then bad 'tls client build' "$(cat "$TMP/err")"; else
                 port=18443
                 for case in "rsa:TLS_AES_128_GCM_SHA256:ca.pem:HTTP/1.0 200 ok" "ec:TLS_CHACHA20_POLY1305_SHA256:ca.pem:HTTP/1.0 200 ok" "ec:TLS_AES_128_GCM_SHA256:other.pem:failed: the server's certificate is not trusted"; do
@@ -628,15 +628,15 @@ EOF_ERR
     # AArch64 Linux (M10, PLAN D69): programs build as AArch64 ELF executables, with and
     # without the library; CI runs the run and library tests on an arm64 machine
     # (build.sh cross, cross-run)
-    run "$ROOT" build "$ROOT/tests/spec/hello/console.envo" --lib "$ROOT" -o "$TMP/hello-a64" --target aarch64-linux
+    run "$ROOT" build "$ROOT/tests/spec/hello/console.envol" --lib "$ROOT" -o "$TMP/hello-a64" --target aarch64-linux
     if [ "$rc" -eq 0 ] && [ "$(od -A n -t x1 -j 16 -N 4 "$TMP/hello-a64" | tr -d ' \n')" = "0300b700" ]; then pass; else bad 'aarch64-linux build' "exit $rc: $(cat "$TMP/err")"; fi
-    # The website, written in Envo (website/README.md): it builds, and its pages are there
-    say 'website: website/site.envo builds the site, with the sandbox (envoc.wasm)'
+    # The website, written in Envol (website/README.md): it builds, and its pages are there
+    say 'website: website/site.envol builds the site, with the sandbox (envoc.wasm)'
     cfiles=$(grep -v '^#' "$ROOT/compiler/files.txt" | tr -d '\r' | grep -v '^$' | tr '\n' ' ')
     # shellcheck disable=SC2086
     run "$ROOT/compiler" build -O2 --target wasm32-web $cfiles -o "$ROOT/build/envoc.wasm"
     if [ "$rc" -ne 0 ]; then bad 'envoc.wasm build' "$(cat "$TMP/err")"; fi
-    run "$ROOT" build -O2 --lib "$ROOT" "$ROOT/website/site.envo" -o "$ROOT/build/site-tool$(host_suffix)"
+    run "$ROOT" build -O2 --lib "$ROOT" "$ROOT/website/site.envol" -o "$ROOT/build/site-tool$(host_suffix)"
     if [ "$rc" -ne 0 ]; then bad 'website build' "$(cat "$TMP/err")"; else
         rm -rf "$ROOT/build/site"
         set +e
@@ -665,9 +665,9 @@ EOF_ERR
     if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'Hello, demo!' ]; then pass; else bad 'envo run --native' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     envo_do test demo
     if [ "$rc" -eq 0 ] && grep -q '4 passed, 0 failed' "$TMP/out"; then pass; else bad 'envo test (package)' "exit $rc: $(cat "$TMP/out")"; fi
-    printf 'i32 x = ;\n' > "$erun/bad.envo"
-    envo_do check bad.envo
-    if [ "$rc" -eq 1 ] && grep -q -F 'bad.envo:1:9: error[E0101]' "$TMP/err" && grep -q -F '1 | i32 x = ;' "$TMP/err" && grep -q -F 'envo explain E0101' "$TMP/err"; then pass; else bad 'envo check' "exit $rc: $(cat "$TMP/err")"; fi
+    printf 'i32 x = ;\n' > "$erun/bad.envol"
+    envo_do check bad.envol
+    if [ "$rc" -eq 1 ] && grep -q -F 'bad.envol:1:9: error[E0101]' "$TMP/err" && grep -q -F '1 | i32 x = ;' "$TMP/err" && grep -q -F 'envo explain E0101' "$TMP/err"; then pass; else bad 'envo check' "exit $rc: $(cat "$TMP/err")"; fi
     envo_do explain E0004
     if [ "$rc" -eq 0 ] && grep -q -F 'E0004: unterminated string literal' "$TMP/out" && grep -q -F '[lex.str.1]' "$TMP/out"; then pass; else bad 'envo explain' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     envo_do explain E9999
@@ -675,15 +675,15 @@ EOF_ERR
     envo_do version
     if [ "$rc" -eq 0 ] && grep -q '^envo ' "$TMP/out"; then pass; else bad 'envo version' "exit $rc"; fi
     # envo prof: exact counts (tests/envo/prof); envo fuzz: finds a 4-byte magic input
-    cp "$ROOT/tests/envo/prof/hot.envo" "$ROOT/tests/envo/fuzz/magic.envo" "$erun/"
-    envo_do prof hot.envo
+    cp "$ROOT/tests/envo/prof/hot.envol" "$ROOT/tests/envo/fuzz/magic.envol" "$erun/"
+    envo_do prof hot.envol
     if [ "$rc" -eq 0 ] && [ "$(tr -d '\r' < "$TMP/out")" = 'ok' ] && grep -q -E '^ +177 +[0-9]+ +[0-9.]+  Fib$' "$TMP/err" && grep -q -E '^ +10 +[0-9]+ +[0-9.]+  Square$' "$TMP/err"; then pass; else bad 'envo prof' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
-    envo_do fuzz magic.envo --runs 50000 --seed 1
+    envo_do fuzz magic.envol --runs 50000 --seed 1
     if [ "$rc" -eq 1 ] && grep -q '^crash: ' "$TMP/out" && grep -q 'panic: found the magic input' "$TMP/err" && [ -f "$erun/build/fuzz/magic/crash" ]; then pass; else bad 'envo fuzz' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     # envo dbg: a scripted session (tests/envo/dbg) gives the expected transcript
-    cp "$ROOT/tests/envo/dbg/sum.envo" "$erun/"
+    cp "$ROOT/tests/envo/dbg/sum.envol" "$erun/"
     set +e
-    (cd "$erun" && "$envo" dbg sum.envo) < "$ROOT/tests/envo/dbg/session.txt" > "$TMP/out" 2> "$TMP/err"
+    (cd "$erun" && "$envo" dbg sum.envol) < "$ROOT/tests/envo/dbg/session.txt" > "$TMP/out" 2> "$TMP/err"
     rc=$?
     set -e
     tr -d '\r' < "$TMP/out" > "$TMP/actual"
@@ -722,7 +722,7 @@ EOF_ERR
     if [ "$rc" -eq 0 ] && [ -f "$sb" ] && grep -q '"spdxVersion": *"SPDX-2.3"' "$sb" && grep -q '"name": *"greet"' "$sb" && grep -q '2025-11-12T00:00:00Z' "$sb"; then pass; else bad 'envo build --sbom' "exit $rc: $(cat "$TMP/err")"; fi
     # releases (docs/guides/offline-install.md): envo archive gives the same bytes on every
     # OS (the digest is pinned in both scripts); envo sign and envo verify
-    REL_TAR_SHA=edfd900569a71a7c78d7ac53a36d0e885411c10e3591f9f66b07a76ceed1128b
+    REL_TAR_SHA=b54a3aa9ab43038969bf16347b53b6940e813f9889ab3be0e0f29c6ef9b11ee1
     SOURCE_DATE_EPOCH=1762905600 envo_do archive pk/greet pk/greet.tar
     if [ "$rc" -eq 0 ] && [ "$(sha256 "$erun/pk/greet.tar")" = "$REL_TAR_SHA" ]; then pass; else bad 'envo archive (reproducible)' "exit $rc: $(sha256 "$erun/pk/greet.tar") $(cat "$TMP/err")"; fi
     envo_do sign pk/greet.tar --key pk/publisher.key
@@ -737,8 +737,8 @@ EOF_ERR
     frun="$ROOT/build/run-fuzz"
     rm -rf "$frun"
     mkdir -p "$frun"
-    for t in "$ROOT"/tests/fuzz/*.envo; do
-        n=$(basename "$t" .envo)
+    for t in "$ROOT"/tests/fuzz/*.envol; do
+        n=$(basename "$t" .envol)
         cp -r "$ROOT/tests/fuzz/corpus/$n" "$frun/corpus-$n"
         set +e
         (cd "$frun" && "$envo" fuzz "$t" --runs 300 --seed 1 --corpus "corpus-$n" --max-len 1024) > "$TMP/out" 2> "$TMP/err"
@@ -755,11 +755,11 @@ EOF_ERR
     if [ "$rc" -eq 0 ] && [ "$hellos" -eq 1 ] && grep -q '> 42$' "$TMP/out" && grep -q -F 'error[E0203]' "$TMP/out"; then pass; else bad 'envo repl' "exit $rc: $(cat "$TMP/out" "$TMP/err")"; fi
     envo_do frobnicate
     if [ "$rc" -eq 2 ]; then pass; else bad 'envo (unknown command)' "exit $rc"; fi
-    # envo fmt: each tests/golden/fmt/name.envo formats to name.expected, which formats to
+    # envo fmt: each tests/golden/fmt/name.envol formats to name.expected, which formats to
     # itself; and the repository's own code is already in the canonical layout
     say 'envo fmt: tests/golden/fmt, and --check on the code'
-    for f in "$ROOT"/tests/golden/fmt/*.envo; do
-        expected="${f%.envo}.expected"
+    for f in "$ROOT"/tests/golden/fmt/*.envol; do
+        expected="${f%.envol}.expected"
         tr -d '\r' < "$expected" > "$TMP/expected"
         envo_do fmt --stdout "$f"
         tr -d '\r' < "$TMP/out" > "$TMP/actual"
@@ -781,8 +781,8 @@ EOF_ERR
     lspdir="$ROOT/build/run-lsp"
     mkdir -p "$lspdir"
     # Git Bash on Windows: the URI needs the Windows form of the path (C:/...)
-    if command -v cygpath > /dev/null 2>&1; then uri="file:///$(cygpath -m "$lspdir")/doc.envo"
-    else uri="file://$lspdir/doc.envo"; fi
+    if command -v cygpath > /dev/null 2>&1; then uri="file:///$(cygpath -m "$lspdir")/doc.envol"
+    else uri="file://$lspdir/doc.envol"; fi
     : > "$TMP/lsp-in"
     while IFS= read -r line || [ -n "$line" ]; do
         line=$(printf '%s' "$line" | tr -d '\r')
@@ -802,13 +802,13 @@ EOF_ERR
     # instead of the repository
     say 'spec tests: tests/spec/lib'
     dir="$ROOT/tests/spec/lib"
-    for f in "$dir"/*.envo; do
+    for f in "$dir"/*.envol; do
         base=$(basename "$f")
         line=$(grep -m1 '^// expect-error: ' "$f" | tr -d '\r' || true)
         code=$(printf '%s\n' "$line" | sed 's|^// expect-error: \(E[0-9]*\) @ .*|\1|')
         where=${line##* @ }
         case "$where" in
-            *.envo:*) want="$where: error[$code]" ;;
+            *.envol:*) want="$where: error[$code]" ;;
             *) want="$base:$where: error[$code]" ;;
         esac
         libroot="$ROOT"
@@ -860,7 +860,7 @@ do_check() {
     done
 
     # docs/principles.md: lib/** never imports adapters/**.
-    hits=$(find "$ROOT/lib" -name '*.envo' -exec grep -n -E '^[[:space:]]*(use|using)[[:space:]]+adapters([^A-Za-z0-9_]|$)' /dev/null {} + 2>/dev/null || true)
+    hits=$(find "$ROOT/lib" -name '*.envol' -exec grep -n -E '^[[:space:]]*(use|using)[[:space:]]+adapters([^A-Za-z0-9_]|$)' /dev/null {} + 2>/dev/null || true)
     [ -z "$hits" ] || problem "lib imports an adapter: $hits"
 
     # No Hello World Gallery program may grow past its line count.
@@ -937,7 +937,7 @@ provenance() {
 
 do_dist() {
     do_build
-    v=$(sed -n 's/^const str ENVO_VERSION = "\(.*\)";.*/\1/p' "$ROOT/tools/envo/main.envo" | tr -d '\r')
+    v=$(sed -n 's/^const str ENVO_VERSION = "\(.*\)";.*/\1/p' "$ROOT/tools/envo/main.envol" | tr -d '\r')
     dist="$ROOT/build/dist"
     rm -rf "$dist"
     mkdir -p "$dist/envoscale-$v/bin"
@@ -967,8 +967,8 @@ cross_target() {
     mkdir -p "$out"
     n=0
     for suite in core-run s1-run s2-run; do
-        for f in "$ROOT"/tests/spec/$suite/*.envo; do
-            base="$suite-$(basename "$f" .envo)"
+        for f in "$ROOT"/tests/spec/$suite/*.envol; do
+            base="$suite-$(basename "$f" .envol)"
             sed -n 's|^// expect: \(.*\)$|\1|p' "$f" | tr -d '\r' > "$out/$base.expected"
             code=$(sed -n 's|^// expect-exit: \([0-9]*\).*|\1|p' "$f" | head -n 1)
             panic=$(sed -n 's|^// expect-panic: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
@@ -983,12 +983,12 @@ cross_target() {
             n=$((n + 1))
         done
     done
-    for f in "$ROOT"/lib/*/tests/*.envo "$ROOT"/lib/*/*/tests/*.envo "$ROOT"/lib/*/*/*/tests/*.envo; do
+    for f in "$ROOT"/lib/*/tests/*.envol "$ROOT"/lib/*/*/tests/*.envol "$ROOT"/lib/*/*/*/tests/*.envol; do
         [ -f "$f" ] || continue
         os=$(sed -n 's|^// os: \(.*\)$|\1|p' "$f" | tr -d '\r' | head -n 1)
         [ "$target" = aarch64-macos ] && [ "$os" != none ] && continue
         rel=${f#"$ROOT"/lib/}
-        base="lib-$(printf '%s' "${rel%.envo}" | tr '/' '-')"
+        base="lib-$(printf '%s' "${rel%.envol}" | tr '/' '-')"
         sed -n -e 's|^// expect: \(.*\)$|\1|p' -e 's|^// expect:$||p' "$f" | tr -d '\r' > "$out/$base.expected"
         printf '0\n' > "$out/$base.exit"
         printf '' > "$out/$base.panic"

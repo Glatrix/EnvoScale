@@ -166,10 +166,10 @@ the typed constant expression `cond` is true: `#if target.os == "windows"`.
 ## 4.10 Attributes
 
 **[item.attr.1]** Attributes are written `[Name]` or `[Name(args)]` before an item,
-member, parameter or statement. They are ordinary Envo types resolved by name.
+member, parameter or statement. They are ordinary Envol types resolved by name.
 Built-in ones include `Inline`, `NoInline`, `Cold`, `Hot`, `Pure`, `NoAlloc`, `Layout`,
 `Align`, `Export`, `TargetFeature`, `Multiversion`, `Derive`, `Reflect`, `Test`,
-`Unstable`, `Shader`. `Derive` runs hygienic generators written in Envo.
+`Unstable`, `Shader`. `Derive` runs hygienic generators written in Envol.
 
 ## 4.11 Envo-Core
 

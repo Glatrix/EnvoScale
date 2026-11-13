@@ -1,0 +1,424 @@
+// core.math: integer helpers, and float functions (RFC 0006). Integer arithmetic that can
+// overflow panics, as Envol's operators do; functions say when they cannot overflow.
+namespace core.math;
+
+public i64 Min(i64 a, i64 b) {
+    if (a < b) return a;
+    return b;
+}
+
+public i64 Max(i64 a, i64 b) {
+    if (a > b) return a;
+    return b;
+}
+
+public i64 Clamp(i64 v, i64 lo, i64 hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+public u64 MinU(u64 a, u64 b) {
+    if (a < b) return a;
+    return b;
+}
+
+public u64 MaxU(u64 a, u64 b) {
+    if (a > b) return a;
+    return b;
+}
+
+public u64 ClampU(u64 v, u64 lo, u64 hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+// |v|, which fits in a u64 for every i64 (no overflow).
+public u64 Abs(i64 v) {
+    if (v >= 0) return v as u64;
+    return 0 -% (v as u64);
+}
+
+// base to the power exp; panics on overflow.
+public u64 Pow(u64 radix, u32 exp) {
+    u64 r = 1;
+    u64 b = radix;
+    u32 e = exp;
+    while (e > 0) {
+        if (e & 1 != 0) r = r * b;
+        e = e >> 1;
+        if (e > 0) b = b * b;
+    }
+    return r;
+}
+
+// a / b rounded up; b must not be 0.
+public u64 DivCeil(u64 a, u64 b) {
+    u64 q = a / b;
+    if (a % b != 0) q += 1;
+    return q;
+}
+
+public bool IsPowerOfTwo(u64 v) => v != 0 && v & (v - 1) == 0;
+
+// The smallest power of two >= v (1 for 0); panics past 2^63.
+public u64 NextPowerOfTwo(u64 v) {
+    u64 p = 1;
+    while (p < v) p = p * 2;
+    return p;
+}
+
+// floor(log2(v)); v must not be 0.
+public u32 Log2(u64 v) {
+    if (v == 0) panic("core.math: Log2 of 0");
+    u32 n = 0;
+    while (v > 1) {
+        v = v >> 1;
+        n++;
+    }
+    return n;
+}
+
+public u64 Gcd(u64 a, u64 b) {
+    while (b != 0) {
+        u64 t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
+// ------------------------------------------------------------------ floats (RFC 0006)
+
+// Written here from the definitions: range reduction, then Taylor series with exact
+// 1/n! coefficients over a small interval. Results are within a few units in the last
+// place for arguments of ordinary size; trigonometric functions lose accuracy for
+// |x| above about 1e9, where the reduction runs out of digits of pi.
+
+public const f64 PI = 3.141592653589793;
+public const f64 TAU = 6.283185307179586;
+public const f64 E = 2.718281828459045;
+public const f64 LN2 = 0.6931471805599453;
+public const f64 LN10 = 2.302585092994046;
+
+// pi/2 and ln 2 as a high part with zero low bits and the rest, for exact reduction
+const f64 HALF_PI_HI = 1.5707963267341256;
+const f64 HALF_PI_LO = 6.077100506506192e-11;
+const f64 LN2_HI = 0.6931471803691238;
+const f64 LN2_LO = 1.9082149292705877e-10;
+
+// The bits of x, and the float with bits b.
+public u64 Bits(f64 x) {
+    f64 v = x;
+    unsafe { return (&v as *u64)[0]; }
+}
+
+public f64 FromBits(u64 b) {
+    u64 v = b;
+    unsafe { return (&v as *f64)[0]; }
+}
+
+// The bits of an f32, and the f32 with bits b.
+public u32 F32Bits(f32 x) {
+    f32 v = x;
+    unsafe { return (&v as *u32)[0]; }
+}
+
+public f32 F32FromBits(u32 b) {
+    u32 v = b;
+    unsafe { return (&v as *f32)[0]; }
+}
+
+public f64 Infinity() => FromBits(0x7FF0000000000000);
+public f64 NaN() => FromBits(0x7FF8000000000000);
+public bool IsNaN(f64 x) => x != x;
+public bool IsInfinite(f64 x) => x == Infinity() || x == 0.0 - Infinity();
+public bool IsFinite(f64 x) => x == x && !IsInfinite(x);
+
+public f64 FAbs(f64 x) => FromBits(Bits(x) & 0x7FFFFFFFFFFFFFFF);
+
+public f64 FMin(f64 a, f64 b) {
+    if (a != a) return b;
+    if (b != b || a < b) return a;
+    return b;
+}
+
+public f64 FMax(f64 a, f64 b) {
+    if (a != a) return b;
+    if (b != b || a > b) return a;
+    return b;
+}
+
+public f64 FClamp(f64 v, f64 lo, f64 hi) => FMin(FMax(v, lo), hi);
+
+// Toward zero, down, up, and to the nearest whole number (halves away from zero).
+public f64 Trunc(f64 x) {
+    if (!(FAbs(x) < 4503599627370496.0)) return x;     // 2^52: already whole (or NaN, inf)
+    f64 t = (x as i64) as f64;
+    if (t == 0.0 && x < 0.0) return -0.0;
+    return t;
+}
+
+public f64 Floor(f64 x) {
+    f64 t = Trunc(x);
+    if (t > x) return t - 1.0;
+    return t;
+}
+
+public f64 Ceil(f64 x) {
+    f64 t = Trunc(x);
+    if (t < x) return t + 1.0;
+    return t;
+}
+
+public f64 Round(f64 x) {
+    f64 t = Trunc(x);
+    f64 d = x - t;
+    if (d >= 0.5) return t + 1.0;
+    if (d <= -0.5) return t - 1.0;
+    return t;
+}
+
+// The square root, correctly rounded: Newton's method from an estimate halving the
+// exponent, then the last place decided by the exact residual x - y*y (Dekker's product:
+// y split into halves whose products are exact).
+public f64 Sqrt(f64 x) {
+    if (x != x || x < 0.0) return NaN();
+    if (x == 0.0 || IsInfinite(x)) return x;
+    f64 v = x;
+    f64 back = 1.0;
+    if (v < 1e-300) {
+        v = v * 1.2676506002282294e30;      // 2^100: away from subnormal squares
+        back = 8.881784197001252e-16;       // 2^-50
+    } else if (v > 1e300) {
+        v = v * 7.888609052210118e-31;      // 2^-100: away from overflowing squares
+        back = 1125899906842624.0;          // 2^50
+    }
+    f64 y = FromBits((Bits(v) >> 1) + 0x1FF8000000000000);
+    for (i32 k = 0; k < 6; k++) y = 0.5 * (y + v / y);
+    for (i32 k = 0; k < 2; k++) {
+        f64 up = FromBits(Bits(y) + 1);
+        f64 down = FromBits(Bits(y) - 1);
+        f64 r = Residual(v, y);
+        // y is right when x lies between the squares of the midpoints to its neighbours:
+        // (y + u/2)^2 = y^2 + y u + u^2/4, (y - d/2)^2 = y^2 - y d + d^2/4
+        f64 u = up - y;
+        f64 d = y - down;
+        // (subtract first: u^2/4 is far below y u's last place)
+        if (r - y * u > u * u * 0.25) y = up;
+        else if ((0.0 - r) - y * d + d * d * 0.25 > 0.0) y = down;
+        else break;
+    }
+    return y * back;
+}
+
+// x - y*y, exactly enough to decide a square root's last place.
+f64 Residual(f64 x, f64 y) {
+    f64 c = 134217729.0 * y;        // 2^27 + 1: Veltkamp's split
+    f64 hi = c - (c - y);
+    f64 lo = y - hi;
+    f64 p = y * y;
+    f64 e = ((hi * hi - p) + 2.0 * hi * lo) + lo * lo;
+    return (x - p) - e;
+}
+
+// e^x.
+public f64 Exp(f64 x) {
+    if (x != x) return x;
+    if (x > 709.782712893384) return Infinity();
+    if (x < -745.1332191019412) return 0.0;
+    f64 k = Round(x / LN2);
+    f64 r = x - k * LN2_HI - k * LN2_LO;
+    // e^r for |r| <= ln2/2: the Taylor series to r^14
+    f64 term = 1.0;
+    f64 sum = 1.0;
+    for (i32 n = 1; n <= 14; n++) {
+        term = term * r / (n as f64);
+        sum = sum + term;
+    }
+    return Scale(sum, k as i64);
+}
+
+// x × 2^k, through the exponent bits (twice when k is beyond one step).
+f64 Scale(f64 x, i64 k) {
+    f64 r = x;
+    i64 e = k;
+    while (e > 1000) {
+        r = r * FromBits(((1000 + 1023) as u64) << 52);
+        e -= 1000;
+    }
+    while (e < -1000) {
+        r = r * FromBits(((1023 - 1000) as u64) << 52);
+        e += 1000;
+    }
+    return r * FromBits(((e + 1023) as u64) << 52);
+}
+
+// The natural logarithm.
+public f64 Ln(f64 x) {
+    if (x != x || x < 0.0) return NaN();
+    if (x == 0.0) return 0.0 - Infinity();
+    if (IsInfinite(x)) return x;
+    f64 v = x;
+    i64 e = 0;
+    if (v < 2.2250738585072014e-308) {
+        v = v * 18014398509481984.0;    // 2^54: subnormals
+        e = -54;
+    }
+    u64 b = Bits(v);
+    e += ((b >> 52) & 0x7FF) as i64 - 1023;
+    f64 m = FromBits((b & 0x000FFFFFFFFFFFFF) | 0x3FF0000000000000);    // [1, 2)
+    if (m > 1.4142135623730951) {
+        m = m * 0.5;
+        e++;
+    }
+    // ln m = 2 atanh(s), s = (m - 1) / (m + 1), |s| <= 0.172
+    f64 s = (m - 1.0) / (m + 1.0);
+    f64 s2 = s * s;
+    f64 term = s;
+    f64 sum = 0.0;
+    for (i32 n = 1; n <= 31; n += 2) {
+        sum = sum + term / (n as f64);
+        term = term * s2;
+    }
+    f64 ef = e as f64;
+    return ef * LN2_HI + (2.0 * sum + ef * LN2_LO);
+}
+
+public f64 Log2F(f64 x) => Ln(x) / LN2;
+public f64 Log10(f64 x) => Ln(x) / LN10;
+
+// x^y.
+public f64 PowF(f64 x, f64 y) {
+    if (y == 0.0 || x == 1.0) return 1.0;
+    if (x != x || y != y) return NaN();
+    if (x == 0.0) {
+        if (y > 0.0) return 0.0;
+        return Infinity();
+    }
+    if (x < 0.0) {
+        if (Trunc(y) != y) return NaN();
+        f64 r = Exp(y * Ln(0.0 - x));
+        // an odd power keeps the sign
+        if (FAbs(y) < 9007199254740992.0 && ((y as i64) & 1) == 1) return 0.0 - r;
+        return r;
+    }
+    // whole powers up to 64: exact multiplication
+    if (Trunc(y) == y && FAbs(y) <= 64.0) {
+        f64 r = 1.0;
+        f64 base0 = x;
+        i64 n = y as i64;
+        bool inv = n < 0;
+        if (inv) n = 0 - n;
+        while (n > 0) {
+            if (n & 1 == 1) r = r * base0;
+            base0 = base0 * base0;
+            n = n >> 1;
+        }
+        if (inv) return 1.0 / r;
+        return r;
+    }
+    return Exp(y * Ln(x));
+}
+
+// sin r and cos r for |r| <= pi/4: Taylor series to r^19 and r^20.
+f64 SinSmall(f64 r) {
+    f64 r2 = r * r;
+    f64 term = r;
+    f64 sum = r;
+    for (i32 n = 3; n <= 19; n += 2) {
+        term = 0.0 - term * r2 / ((n - 1) as f64 * n as f64);
+        sum = sum + term;
+    }
+    return sum;
+}
+
+f64 CosSmall(f64 r) {
+    f64 r2 = r * r;
+    f64 term = 1.0;
+    f64 sum = 1.0;
+    for (i32 n = 2; n <= 20; n += 2) {
+        term = 0.0 - term * r2 / ((n - 1) as f64 * n as f64);
+        sum = sum + term;
+    }
+    return sum;
+}
+
+// x reduced by multiples of pi/2: the remainder r and the quadrant (0-3).
+f64 Reduce(f64 x, ref i64 quadrant) {
+    f64 k = Round(x / (PI / 2.0));
+    quadrant = ((k as i64) % 4 + 4) % 4;
+    return x - k * HALF_PI_HI - k * HALF_PI_LO;
+}
+
+public f64 Sin(f64 x) {
+    if (!IsFinite(x)) return NaN();
+    i64 q = 0;
+    f64 r = Reduce(x, ref q);
+    if (q == 0) return SinSmall(r);
+    if (q == 1) return CosSmall(r);
+    if (q == 2) return 0.0 - SinSmall(r);
+    return 0.0 - CosSmall(r);
+}
+
+public f64 Cos(f64 x) {
+    if (!IsFinite(x)) return NaN();
+    i64 q = 0;
+    f64 r = Reduce(x, ref q);
+    if (q == 0) return CosSmall(r);
+    if (q == 1) return 0.0 - SinSmall(r);
+    if (q == 2) return 0.0 - CosSmall(r);
+    return SinSmall(r);
+}
+
+public f64 Tan(f64 x) => Sin(x) / Cos(x);
+
+// The arc tangent, in (-pi/2, pi/2).
+public f64 Atan(f64 x) {
+    if (x != x) return x;
+    if (x < 0.0) return 0.0 - Atan(0.0 - x);
+    if (x > 1.0) return PI / 2.0 - Atan(1.0 / x);
+    // atan x = pi/6 + atan((x sqrt3 - 1) / (sqrt3 + x)) above tan(pi/12): the new argument
+    // is within ±tan(pi/12), where the series converges fast
+    if (x > 0.2679491924311227) {
+        f64 r3 = 1.7320508075688772;
+        return PI / 6.0 + AtanSeries((x * r3 - 1.0) / (r3 + x));
+    }
+    return AtanSeries(x);
+}
+
+// atan t for |t| <= 0.27: t - t^3/3 + t^5/5 - … to t^33.
+f64 AtanSeries(f64 t) {
+    f64 t2 = t * t;
+    f64 term = t;
+    f64 sum = 0.0;
+    for (i32 n = 1; n <= 33; n += 2) {
+        sum = sum + term / (n as f64);
+        term = 0.0 - term * t2;
+    }
+    return sum;
+}
+
+// The angle of the point (x, y), in (-pi, pi].
+public f64 Atan2(f64 y, f64 x) {
+    if (x != x || y != y) return NaN();
+    if (x > 0.0) return Atan(y / x);
+    if (x < 0.0) {
+        if (y >= 0.0) return Atan(y / x) + PI;
+        return Atan(y / x) - PI;
+    }
+    if (y > 0.0) return PI / 2.0;
+    if (y < 0.0) return 0.0 - PI / 2.0;
+    return 0.0;
+}
+
+public f64 Asin(f64 x) {
+    if (x != x || x > 1.0 || x < -1.0) return NaN();
+    return Atan2(x, Sqrt(1.0 - x * x));
+}
+
+public f64 Acos(f64 x) {
+    if (x != x || x > 1.0 || x < -1.0) return NaN();
+    return Atan2(Sqrt(1.0 - x * x), x);
+}

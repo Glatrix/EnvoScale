@@ -31,7 +31,7 @@ jobs:
       - run: xvfb-run -a ./build.sh test
       # ...and a window must really open there (the suite also passes where Open says no)
       - run: |
-          out=$(ENVO_WINDOW_REQUIRED=1 xvfb-run -a build/envo/envo run --native tests/conformance/window/window.envo)
+          out=$(ENVO_WINDOW_REQUIRED=1 xvfb-run -a build/envo/envo run --native tests/conformance/window/window.envol)
           echo "$out"
           [ "$out" = "window: done" ]
       # The X11 clipboard both ways with another program

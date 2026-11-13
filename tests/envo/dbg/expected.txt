@@ -1,17 +1,17 @@
 envo dbg: stopped before the first line; `help` lists the commands
-sum.envo:12  str name = "sum";
-(dbg) sum.envo:13  i64 got = Sum(4);
-(dbg) sum.envo:5  i64 total = 0;
-(dbg) sum.envo:6  for (i64 i = 1; i <= n; i++) {
-(dbg) sum.envo:7  total += i;
+sum.envol:12  str name = "sum";
+(dbg) sum.envol:13  i64 got = Sum(4);
+(dbg) sum.envol:5  i64 total = 0;
+(dbg) sum.envol:6  for (i64 i = 1; i <= n; i++) {
+(dbg) sum.envol:7  total += i;
 (dbg) total = 0
 (dbg) n = 4
-(dbg)   Sum at sum.envo:7
-  (top level) at sum.envo:13
-(dbg) sum.envo:14  bool done = got == 10;
+(dbg)   Sum at sum.envol:7
+  (top level) at sum.envol:13
+(dbg) sum.envol:14  bool done = got == 10;
 (dbg) got = 10
-(dbg) breakpoint 1 at sum.envo:15
-(dbg) sum.envo:15  print(text.Int(got).AsStr());
+(dbg) breakpoint 1 at sum.envol:15
+(dbg) sum.envol:15  print(text.Int(got).AsStr());
 (dbg) done = true
 (dbg) name = "sum"
 (dbg)      12  str name = "sum";

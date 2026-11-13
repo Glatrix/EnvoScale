@@ -1,6 +1,6 @@
 # `compiler/diag`
 
-> **Status:** Started in M3.1. `report.envo` holds source files, positions and error output.
+> **Status:** Started in M3.1. `report.envol` holds source files, positions and error output.
 
 Diagnostics: stable error codes (`docs/spec/errors.md`), source snippets, fix suggestions,
 and `envo explain EXXXX`.

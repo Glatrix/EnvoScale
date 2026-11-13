@@ -40,9 +40,9 @@ One logical change per commit, with a message that says what changed and why. Up
 
 | Kind | Where | How |
 |---|---|---|
-| Language | `tests/spec/` | `.envo` files with `// expect: <output>` or `// expect-error: E0042 @ line:col` |
+| Language | `tests/spec/` | `.envol` files with `// expect: <output>` or `// expect-error: E0042 @ line:col` |
 | Compiler output | `tests/golden/` | an input file and its expected output side by side |
-| Library | `lib/**/tests/` | Envo programs run by `envo test` |
+| Library | `lib/**/tests/` | Envol programs run by `envo test` |
 | Ports | `tests/conformance/` | one suite per port, run against every adapter |
 | Tools | `tests/envo/`, `tests/lsp/` | the `envo` commands and the language server |
 

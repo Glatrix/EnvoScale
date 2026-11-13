@@ -4,7 +4,7 @@
 > interfaces, M2) and Stage 2 (everything, M3) implement it.
 > Tests: none yet (M1 adds Core type tests under `tests/spec/02-types/`).
 
-Envo is statically typed with local type inference. Every value has exactly one type
+Envol is statically typed with local type inference. Every value has exactly one type
 known at compile time. There is no garbage collector, no implicit boxing, and no
 runtime type information unless a type opts in with `[Reflect]`.
 
@@ -40,7 +40,7 @@ library types from the prelude, not primitives.
 ## 2.2 Integer semantics
 
 **[type.int.1]** Integer arithmetic that overflows **panics**, in every build mode and
-in both AOT and script mode. Envo has no "overflow is fine in release" mode, so a program
+in both AOT and script mode. Envol has no "overflow is fine in release" mode, so a program
 behaves the same however it is built.
 
 **[type.int.2]** Wrapping arithmetic is explicit: `a +% b`, `a -% b`, `a *% b` and their

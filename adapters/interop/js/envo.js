@@ -1,6 +1,6 @@
-// envo.js: the host for Envo programs built with `envoc build --target wasm32-web`
+// envo.js: the host for Envol programs built with `envoc build --target wasm32-web`
 // (PLAN D49). It gives the program its one import, envo.host(k, a, b, c, d), whose
-// functions are listed in compiler/runtime/wasm.envo, and runs it.
+// functions are listed in compiler/runtime/wasm.envol, and runs it.
 //
 // Node.js:  node envo.js program.wasm [arguments…]
 // Browser:  const r = await EnvoWeb.run(bytes, { args, stdout, stderr, canvas });

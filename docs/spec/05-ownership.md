@@ -3,9 +3,9 @@
 > **Status:** Draft. Stage 1 implements moves, drops and a basic borrow checker (M2.10,
 > [`architecture/stage1.md`](https://github.com/envoscale/EnvoScaleAsm/blob/main/docs/stage1.md), "Ownership"); Stage 2 the full
 > flow-sensitive one (M3). Envo-Core has no borrow checking. Tests: `tests/spec/s1-own/`
-> (E0501–E0508) and `tests/spec/s1-run/drops.envo`.
+> (E0501–E0508) and `tests/spec/s1-run/drops.envol`.
 
-Envo has Rust's memory model with fewer things to write: every value has one owner,
+Envol has Rust's memory model with fewer things to write: every value has one owner,
 borrows are checked at compile time, and lifetimes are inferred.
 
 ## 5.1 Ownership and moves
@@ -103,7 +103,7 @@ used, and suggest a fix.
 
 ```text
 error[E0501]: `names` was used after it was moved
-  --> app.envo:7:11
+  --> app.envol:7:11
    |
  5 |     var team = new Team(names);
    |                         ----- `names` was moved into `Team` here
@@ -161,6 +161,6 @@ stops checking what raw pointers point to. `envo audit unsafe` lists every block
 ## 5.10 Envo-Core
 
 **Core:** Envo-Core has no borrow checker, no classes and no drops. All Core types are
-`Copy`. Raw pointers are dereferenced inside `unsafe` blocks, as in full Envo, so Core
-code stays valid Envo; full Envo may still reject a Core program that breaks borrow
+`Copy`. Raw pointers are dereferenced inside `unsafe` blocks, as in full Envol, so Core
+code stays valid Envol; full Envol may still reject a Core program that breaks borrow
 rules Stage 0 does not check. Stage 1's own source is written to pass both.

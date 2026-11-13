@@ -1,0 +1,1133 @@
+// The WebAssembly backend (PLAN D48): EIR to a wasm32 module. Memory keeps the front
+// end's layout (pointers are 8 bytes in memory, addresses below 4 GiB), so EIR needs no
+// change. Every SSA value is an i64 local, kept canonical (sign- or zero-extended) as
+// the x86-64 backend keeps it, so the same checks give the same panics. A function's
+// blocks become one loop around a br_table on a block number: any control flow
+// (including EIR's irreducible) maps to it directly. Stack slots live on a shadow stack
+// in memory; function pointers are indices into the module's table. The program reaches
+// its host through one import, `envo.host(k, a, b, c, d)` (D49; runtime/wasm.envol and
+// adapters/interop/js/envo.js).
+namespace envoc.wasm;
+
+use envoc.util;
+use envoc.diag;
+use envoc.eir;
+
+const u64 TRAP_OVERFLOW = 0;
+const u64 TRAP_BOUNDS = 1;
+const u64 TRAP_DIVISION = 2;
+const u64 TRAP_SHIFT = 4;
+const u64 TRAP_UNREACHABLE = 5;
+const u64 TRAP_UTF8 = 6;
+
+const u64 DATA_BASE = 1024;             // below it: address 0 (null) and a little room
+const u64 STACK_SIZE = 0x100000;        // 1 MiB of shadow stack, under the data's end
+
+// wasm value types and section ids
+const u8 I32 = 0x7F;
+const u8 I64 = 0x7E;
+
+void Bug(str msg) => ToolFail(msg, EXIT_INTERNAL);
+
+// ------------------------------------------------------------------ encoding
+
+void Leb(ref List<u8> b, u64 v) {
+    u64 x = v;
+    while (true) {
+        u8 byte = (x & 0x7F) as u8;
+        x = x >> 7;
+        if (x == 0) {
+            b.Push(byte);
+            return;
+        }
+        b.Push(byte | 0x80);
+    }
+}
+
+void Sleb(ref List<u8> b, i64 v) {
+    i64 x = v;
+    while (true) {
+        u8 byte = (x & 0x7F) as u8;
+        x = x >> 7;
+        bool done = (x == 0 && byte & 0x40 == 0) || (x == -1 && byte & 0x40 != 0);
+        if (done) {
+            b.Push(byte);
+            return;
+        }
+        b.Push(byte | 0x80);
+    }
+}
+
+void Bytes(ref List<u8> b, u8[] s) {
+    for (usize i = 0; i < s.Len; i++) b.Push(s[i]);
+}
+
+void Name(ref List<u8> b, str s) {
+    Leb(ref b, s.Len as u64);
+    for (usize i = 0; i < s.Len; i++) b.Push(s[i]);
+}
+
+// A section: its id, size and contents.
+void Section(ref List<u8> dest, u8 id, in List<u8> body) {
+    dest.Push(id);
+    Leb(ref dest, body.Len() as u64);
+    Bytes(ref dest, body.AsSlice());
+}
+
+// ------------------------------------------------------------------ the generator
+
+struct Gen {
+    List<u8> Code;          // the function being generated
+    List<u64> FuncType;     // per EIR function: its wasm type index
+    List<u64> TypeKeys;     // (params << 1) | result, by type index
+    List<u64> GlobalAddr;   // per global: its address
+    List<u64> SlotOff;      // per value of the function: a slot's offset from the frame
+    u32 FirstValue;
+    u32 NValues;
+    u32 FirstBlock;
+    u32 NBlocks;
+    u32 Trap;               // __rt_trap's function index
+    u32 LocalPc;
+    u32 LocalT0;
+    u32 LocalT1;
+    u32 LocalFp;
+    u64 Frame;
+    u64 StackLimit;
+
+    void Op(ref this, u8 b) => this.Code.Push(b);
+    void U(ref this, u64 v) => Leb(ref this.Code, v);
+    void I64C(ref this, u64 v) {
+        this.Code.Push(0x42);
+        Sleb(ref this.Code, v as i64);
+    }
+    void I32C(ref this, i64 v) {
+        this.Code.Push(0x41);
+        Sleb(ref this.Code, v);
+    }
+    void Get(ref this, u32 local) {
+        this.Code.Push(0x20);
+        Leb(ref this.Code, local as u64);
+    }
+    void Set(ref this, u32 local) {
+        this.Code.Push(0x21);
+        Leb(ref this.Code, local as u64);
+    }
+    // A memory instruction with no alignment promise and offset 0.
+    void Mem(ref this, u8 op) {
+        this.Code.Push(op);
+        this.Code.Push(0);
+        this.Code.Push(0);
+    }
+
+    // The wasm type index for a function of n i64 parameters and maybe an i64 result.
+    u64 TypeOf(ref this, u32 n, bool result) {
+        u64 key = (n as u64) << 1;
+        if (result) key = key | 1;
+        u64[] keys = this.TypeKeys.AsSlice();
+        for (usize i = 0; i < keys.Len; i++) {
+            if (keys[i] == key) return i as u64;
+        }
+        this.TypeKeys.Push(key);
+        return (this.TypeKeys.Len() - 1) as u64;
+    }
+
+    u32 Local(in this, u32 v) => v - this.FirstValue;
+
+    void LoadOp(ref this, in Module m, u32 o) {
+        EOp op = m.Op(o);
+        if (op.Kind == OK_VALUE) this.Get(this.Local(op.Ref));
+        else this.I64C(op.Int);
+    }
+
+    void SetV(ref this, u32 v) => this.Set(this.Local(v));
+
+    // The i64 on the stack, made canonical for type t (size bytes, signed or not).
+    void Norm(ref this, u32 size, bool signed) {
+        if (size >= 8 || size == 0) return;
+        if (signed) {
+            if (size == 1) this.Op(0xC2);
+            else if (size == 2) this.Op(0xC3);
+            else this.Op(0xC4);
+            return;
+        }
+        u64 mask = 0xFF;
+        if (size == 2) mask = 0xFFFF;
+        if (size == 4) mask = 0xFFFFFFFF;
+        this.I64C(mask);
+        this.Op(0x83);
+    }
+
+    // Panics with reason if the i32 on the stack is non-zero.
+    void TrapIf(ref this, u64 reason) {
+        this.Op(0x04);
+        this.Op(0x40);
+        this.I64C(reason);
+        this.Op(0x10);
+        this.U(this.Trap as u64);
+        this.Op(0x00);
+        this.Op(0x0B);
+    }
+
+    // Panics with overflow unless local t0 survives re-normalization to (size, signed).
+    void CheckNormal(ref this, u32 size, bool signed) {
+        this.Get(this.LocalT0);
+        this.Get(this.LocalT0);
+        this.Norm(size, signed);
+        this.Op(0x52);              // i64.ne
+        this.TrapIf(TRAP_OVERFLOW);
+    }
+
+    // Moves branch target o's arguments into its block's parameters (through the stack,
+    // a parallel copy) and jumps to it: depth is how many structures enclose the code
+    // inside the block's region.
+    void Jump(ref this, in Module m, u32 o, u32 depth) {
+        EOp op = m.Op(o);
+        EBlock target = m.Block(op.Ref);
+        for (u32 i = 0; i < op.NArgs; i++) this.Get(this.Local(m.Arg(op.Args + i)));
+        u32 i = op.NArgs;
+        while (i > 0) {
+            i--;
+            this.Set(this.Local(target.FirstParam + i));
+        }
+        this.I32C((op.Ref - this.FirstBlock) as i64);
+        this.Set(this.LocalPc);
+        this.Op(0x0C);
+        this.U(depth as u64);
+    }
+
+    // Leaves the function: frees its frame.
+    void Leave(ref this) {
+        if (this.Frame == 0) return;
+        this.Get(this.LocalFp);
+        this.I32C(this.Frame as i64);
+        this.Op(0x6A);
+        this.Op(0x24);
+        this.U(0);                  // global.set $sp
+    }
+
+    void Inst(ref this, in Module m, u32 i, u32 loopDepth) {
+        EInst inst = m.Inst(i);
+        OpInfo info = OpTable(inst.Op);
+        u16 op = inst.Op;
+        u8 sh = info.Shape;
+        u32 f = inst.FirstOp;
+        u32 n = inst.NOps;
+        u32 t = inst.Ty;
+        ETy ty = m.Ty(t);
+        bool signed = m.IsSigned(t);
+        if ((sh == SH_BIN || sh == SH_CMP) && m.IsFloat(t) || (sh == SH_CONV && op >= 35 && op <= 38)) {
+            this.FloatInst(m, inst);
+        } else if (sh == SH_UN && op == 31) {
+            // fneg: flip the sign bit
+            this.LoadOp(m, f);
+            if (ty.Size == 8) this.I64C(0x8000000000000000);
+            else this.I64C(0x80000000);
+            this.Op(0x85);
+            this.SetV(inst.Result);
+        } else if (sh == SH_CONST) {
+            this.I64C(inst.Imm);
+            this.SetV(inst.Result);
+        } else if (sh == SH_ADDR) {
+            EOp rf = m.Op(f);
+            if (rf.Int == NAME_FUNC) this.I64C(rf.Ref as u64);
+            else this.I64C(this.GlobalAddr.Get(rf.Ref as usize));
+            this.SetV(inst.Result);
+        } else if (sh == SH_SLOT) {
+            this.Get(this.LocalFp);
+            this.I32C(this.SlotOff.Get(this.Local(inst.Result) as usize) as i64);
+            this.Op(0x6A);
+            this.Op(0xAD);          // i64.extend_i32_u
+            this.SetV(inst.Result);
+        } else if (sh == SH_UNARY_V) {
+            // slot.end: slots are never shared
+        } else if (sh == SH_BIN) {
+            this.Bin(m, inst);
+        } else if (sh == SH_UN) {
+            this.LoadOp(m, f);
+            this.Set(this.LocalT0);
+            if (op == 11) {
+                if (signed) {
+                    if (ty.Size == 8) {
+                        this.Get(this.LocalT0);
+                        this.I64C(0x8000000000000000);
+                        this.Op(0x51);
+                        this.TrapIf(TRAP_OVERFLOW);
+                        this.I64C(0);
+                        this.Get(this.LocalT0);
+                        this.Op(0x7D);
+                        this.Set(this.LocalT0);
+                    } else {
+                        this.I64C(0);
+                        this.Get(this.LocalT0);
+                        this.Op(0x7D);
+                        this.Set(this.LocalT0);
+                        this.CheckNormal(ty.Size, true);
+                    }
+                } else {
+                    this.Get(this.LocalT0);
+                    this.I64C(0);
+                    this.Op(0x52);
+                    this.TrapIf(TRAP_OVERFLOW);
+                }
+                this.Get(this.LocalT0);
+            } else if (op == 17) {
+                this.Get(this.LocalT0);
+                if (t == ET_BOOL) {
+                    this.I64C(1);
+                    this.Op(0x85);
+                } else {
+                    this.I64C(0xFFFFFFFFFFFFFFFF);
+                    this.Op(0x85);
+                    this.Norm(ty.Size, signed);
+                }
+            } else {
+                Bug("wasm: floating-point instructions are not supported yet");
+            }
+            this.SetV(inst.Result);
+        } else if (sh == SH_CMP) {
+            this.LoadOp(m, f);
+            this.LoadOp(m, f + 1);
+            u8 code = 0x51;
+            if (op == 21) code = 0x52;
+            if (op == 22) code = 0x54;
+            if (op == 23) code = 0x58;
+            if (op == 24) code = 0x56;
+            if (op == 25) code = 0x5A;
+            if (signed && op == 22) code = 0x53;
+            if (signed && op == 23) code = 0x57;
+            if (signed && op == 24) code = 0x55;
+            if (signed && op == 25) code = 0x59;
+            this.Op(code);
+            this.Op(0xAD);
+            this.SetV(inst.Result);
+        } else if (sh == SH_SELECT) {
+            this.LoadOp(m, f + 1);
+            this.LoadOp(m, f + 2);
+            this.LoadOp(m, f);
+            this.Op(0xA7);
+            this.Op(0x1B);
+            this.SetV(inst.Result);
+        } else if (sh == SH_CONV) {
+            this.LoadOp(m, f);
+            ETy to = m.Ty(inst.Ty2);
+            bool toSigned = m.IsSigned(inst.Ty2);
+            if (op == 32 || op == 41) {
+                this.Norm(to.Size, toSigned);
+            } else if (op == 33) {
+                this.Norm(ty.Size, false);
+                this.Norm(to.Size, toSigned);
+            } else if (op == 34) {
+                this.Norm(ty.Size, true);
+                this.Norm(to.Size, toSigned);
+            } else if (op != 39 && op != 40) {
+                Bug("wasm: floating-point conversions are not supported yet");
+            }
+            this.SetV(inst.Result);
+        } else if (sh == SH_LOAD) {
+            this.LoadOp(m, f);
+            this.Op(0xA7);
+            if (ty.Size == 8) this.Mem(0x29);
+            else if (ty.Size == 4) {
+                if (signed) this.Mem(0x34);
+                else this.Mem(0x35);
+            } else if (ty.Size == 2) {
+                if (signed) this.Mem(0x32);
+                else this.Mem(0x33);
+            } else {
+                if (signed) this.Mem(0x30);
+                else this.Mem(0x31);
+            }
+            this.SetV(inst.Result);
+        } else if (sh == SH_STORE) {
+            this.LoadOp(m, f + 1);
+            this.Op(0xA7);
+            this.LoadOp(m, f);
+            if (ty.Size == 8) this.Mem(0x37);
+            else if (ty.Size == 4) this.Mem(0x3E);
+            else if (ty.Size == 2) this.Mem(0x3D);
+            else this.Mem(0x3C);
+        } else if (sh == SH_FIELD) {
+            this.LoadOp(m, f);
+            this.I64C(m.FieldOffset(t, inst.Imm as u32));
+            this.Op(0x7C);
+            this.SetV(inst.Result);
+        } else if (sh == SH_ELEM) {
+            this.LoadOp(m, f);
+            this.LoadOp(m, f + 1);
+            this.I64C(ty.Size as u64);
+            this.Op(0x7E);
+            this.Op(0x7C);
+            this.SetV(inst.Result);
+        } else if (sh == SH_PTRADD) {
+            this.LoadOp(m, f);
+            this.LoadOp(m, f + 1);
+            this.Op(0x7C);
+            this.SetV(inst.Result);
+        } else if (sh == SH_VALUES) {
+            if (op == 47) {
+                // memory.copy dst, src, n
+                this.LoadOp(m, f);
+                this.Op(0xA7);
+                this.LoadOp(m, f + 1);
+                this.Op(0xA7);
+                this.LoadOp(m, f + 2);
+                this.Op(0xA7);
+                this.Op(0xFC);
+                this.U(10);
+                this.Op(0);
+                this.Op(0);
+            } else if (op == 48) {
+                // memory.fill p, 0, n
+                this.LoadOp(m, f);
+                this.Op(0xA7);
+                this.I32C(0);
+                this.LoadOp(m, f + 1);
+                this.Op(0xA7);
+                this.Op(0xFC);
+                this.U(11);
+                this.Op(0);
+            } else if (op == 50) {
+                this.LoadOp(m, f);
+                this.LoadOp(m, f + 1);
+                this.Op(0x56);          // lo > hi
+                this.TrapIf(TRAP_BOUNDS);
+                this.LoadOp(m, f + 1);
+                this.LoadOp(m, f + 2);
+                this.Op(0x56);          // hi > len
+                this.TrapIf(TRAP_BOUNDS);
+            } else {
+                // bounds.utf8 p, len, at: at is 0, len, or not a continuation byte
+                this.LoadOp(m, f + 2);
+                this.Op(0x50);
+                this.LoadOp(m, f + 2);
+                this.LoadOp(m, f + 1);
+                this.Op(0x51);
+                this.Op(0x72);          // i32.or
+                this.Op(0x45);          // neither: look at the byte
+                this.Op(0x04);
+                this.Op(0x40);
+                this.LoadOp(m, f);
+                this.LoadOp(m, f + 2);
+                this.Op(0x7C);
+                this.Op(0xA7);
+                this.Mem(0x31);
+                this.I64C(0xC0);
+                this.Op(0x83);
+                this.I64C(0x80);
+                this.Op(0x51);
+                this.TrapIf(TRAP_UTF8);
+                this.Op(0x0B);
+            }
+        } else if (sh == SH_BOUNDS) {
+            if (signed) {
+                this.LoadOp(m, f);
+                this.I64C(0);
+                this.Op(0x53);
+                this.TrapIf(TRAP_BOUNDS);
+            }
+            this.LoadOp(m, f);
+            this.LoadOp(m, f + 1);
+            this.Op(0x5A);              // i >= len, unsigned
+            this.TrapIf(TRAP_BOUNDS);
+        } else if (sh == SH_CALL) {
+            u32 callee = m.Op(f).Ref;
+            for (u32 k = 1; k < n; k++) this.LoadOp(m, f + k);
+            this.Op(0x10);
+            this.U(callee as u64);
+            if (m.Func(callee).Ret != ET_VOID) {
+                if (inst.Result != 0) this.SetV(inst.Result);
+                else this.Op(0x1A);
+            }
+        } else if (sh == SH_CALLIND) {
+            if (inst.Str.Len > 0) Bug("wasm: calls with a foreign ABI are not supported");
+            for (u32 k = 0; k + 1 < n; k++) this.LoadOp(m, f + k);
+            this.LoadOp(m, f + n - 1);
+            this.Op(0xA7);
+            bool result = t != ET_VOID;
+            u64 type = this.TypeOf(n - 1, result);
+            this.Op(0x11);
+            this.U(type);
+            this.Op(0);
+            if (result) {
+                if (inst.Result != 0) this.SetV(inst.Result);
+                else this.Op(0x1A);
+            }
+        } else if (sh == SH_INTRINSIC) {
+            if (!TextIs(inst.Str, "hostcall")) Bug("wasm: only the hostcall target intrinsic reaches this backend");
+            for (u32 k = 0; k < n; k++) this.LoadOp(m, f + k);
+            this.Op(0x10);
+            this.U(0);
+            if (inst.Result != 0) this.SetV(inst.Result);
+            else this.Op(0x1A);
+        } else if (sh == SH_BR) {
+            this.Jump(m, f, loopDepth);
+        } else if (sh == SH_CONDBR) {
+            this.LoadOp(m, f);
+            this.Op(0xA7);
+            this.Op(0x04);
+            this.Op(0x40);
+            this.Jump(m, f + 1, loopDepth + 1);
+            this.Op(0x0B);
+            this.Jump(m, f + 2, loopDepth);
+        } else if (sh == SH_SWITCH) {
+            u32 k = 1;
+            while (k + 1 < n) {
+                this.LoadOp(m, f);
+                this.I64C(m.Op(f + k).Int);
+                this.Op(0x51);
+                this.Op(0x04);
+                this.Op(0x40);
+                this.Jump(m, f + k + 1, loopDepth + 1);
+                this.Op(0x0B);
+                k += 2;
+            }
+            this.Jump(m, f + n - 1, loopDepth);
+        } else if (sh == SH_RET) {
+            if (n == 1) this.LoadOp(m, f);
+            this.Leave();
+            this.Op(0x0F);
+        } else if (sh == SH_PANIC) {
+            this.I64C(inst.Imm);
+            this.Op(0x10);
+            this.U(this.Trap as u64);
+            this.Op(0x00);
+        } else {
+            this.I64C(TRAP_UNREACHABLE);
+            this.Op(0x10);
+            this.U(this.Trap as u64);
+            this.Op(0x00);
+        }
+    }
+
+    // ------------------------------------------------------------------ floats (RFC 0006)
+
+    // The float in operand o, from its i64 local's bits.
+    void FloatOp(ref this, in Module m, u32 o, bool dbl) {
+        this.LoadOp(m, o);
+        if (dbl) {
+            this.Op(0xBF);          // f64.reinterpret_i64
+        } else {
+            this.Op(0xA7);          // i32.wrap_i64
+            this.Op(0xBE);          // f32.reinterpret_i32
+        }
+    }
+
+    // The float on the stack as i64 bits in local t0, a NaN made canonical, then pushed.
+    void FloatOut(ref this, bool dbl) {
+        if (dbl) {
+            this.Op(0xBD);          // i64.reinterpret_f64
+        } else {
+            this.Op(0xBC);          // i32.reinterpret_f32
+            this.Op(0xAD);
+        }
+        this.Set(this.LocalT0);
+        if (dbl) this.I64C(0x7FF8000000000000);
+        else this.I64C(0x7FC00000);
+        this.Get(this.LocalT0);
+        for (u32 k = 0; k < 2; k++) {
+            this.Get(this.LocalT0);
+            if (dbl) {
+                this.Op(0xBF);
+            } else {
+                this.Op(0xA7);
+                this.Op(0xBE);
+            }
+        }
+        if (dbl) this.Op(0x62);     // x != x: NaN
+        else this.Op(0x5C);
+        this.Op(0x1B);              // select
+    }
+
+    void FloatInst(ref this, in Module m, EInst inst) {
+        u16 op = inst.Op;
+        u32 f = inst.FirstOp;
+        ETy ty = m.Ty(inst.Ty);
+        bool dbl = ty.Size == 8;
+        if (op >= 27 && op <= 30) {
+            this.FloatOp(m, f, dbl);
+            this.FloatOp(m, f + 1, dbl);
+            u8 code = 0x92 + (op - 27) as u8;
+            if (dbl) code = 0xA0 + (op - 27) as u8;
+            this.Op(code);
+            this.FloatOut(dbl);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (op >= 20 && op <= 25) {
+            this.FloatOp(m, f, dbl);
+            this.FloatOp(m, f + 1, dbl);
+            // eq ne lt gt le ge, as EIR's order eq ne lt le gt ge
+            u8 k = 0;
+            if (op == 21) k = 1;
+            if (op == 22) k = 2;
+            if (op == 23) k = 4;
+            if (op == 24) k = 3;
+            if (op == 25) k = 5;
+            if (dbl) this.Op(0x61 + k);
+            else this.Op(0x5B + k);
+            this.Op(0xAD);
+            this.SetV(inst.Result);
+            return;
+        }
+        ETy to = m.Ty(inst.Ty2);
+        if (op == 37 || op == 38) {
+            this.FloatOp(m, f, op == 38);
+            if (op == 37) this.Op(0xBB);    // f64.promote_f32
+            else this.Op(0xB6);             // f32.demote_f64
+            this.FloatOut(op == 37);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (op == 35) {
+            bool toDbl = to.Size == 8;
+            this.LoadOp(m, f);
+            bool unsigned = ty.Size == 8 && !m.IsSigned(inst.Ty);
+            if (toDbl) {
+                if (unsigned) this.Op(0xBA);
+                else this.Op(0xB9);
+                this.Op(0xBD);
+            } else {
+                if (unsigned) this.Op(0xB5);
+                else this.Op(0xB4);
+                this.Op(0xBC);
+                this.Op(0xAD);
+            }
+            this.SetV(inst.Result);
+            return;
+        }
+        // ftoi: saturating, NaN to 0 (the non-trapping truncations)
+        bool toSigned = m.IsSigned(inst.Ty2);
+        this.FloatOp(m, f, dbl);
+        this.Op(0xFC);
+        u64 sat = 6;                // i64.trunc_sat_f64_s
+        if (!dbl) sat = 4;          // i64.trunc_sat_f32_s
+        if (to.Size == 8 && !toSigned) sat++;
+        this.U(sat);
+        if (to.Size < 8 || !toSigned) {
+            if (to.Size < 8) {
+                u64 hi = 0;
+                u64 lo = 0;
+                if (toSigned) {
+                    hi = (1 << (to.Size as u64 * 8 - 1)) - 1;
+                    lo = 0 -% (1 << (to.Size as u64 * 8 - 1));
+                } else {
+                    hi = (1 << (to.Size as u64 * 8)) - 1;
+                }
+                this.Set(this.LocalT0);
+                // min(t0, hi), then max(that, lo), signed
+                this.I64C(hi);
+                this.Get(this.LocalT0);
+                this.Get(this.LocalT0);
+                this.I64C(hi);
+                this.Op(0x55);      // i64.gt_s
+                this.Op(0x1B);
+                this.Set(this.LocalT0);
+                this.I64C(lo);
+                this.Get(this.LocalT0);
+                this.Get(this.LocalT0);
+                this.I64C(lo);
+                this.Op(0x53);      // i64.lt_s
+                this.Op(0x1B);
+                this.Norm(to.Size, toSigned);
+            }
+        }
+        this.SetV(inst.Result);
+    }
+
+    // Two-operand integer instructions, with their checks.
+    void Bin(ref this, in Module m, EInst inst) {
+        u16 op = inst.Op;
+        u32 f = inst.FirstOp;
+        u32 t = inst.Ty;
+        ETy ty = m.Ty(t);
+        bool signed = m.IsSigned(t);
+        bool wide = ty.Size == 8;
+        this.LoadOp(m, f);
+        this.Set(this.LocalT0);
+        this.LoadOp(m, f + 1);
+        this.Set(this.LocalT1);
+        if (op == 12 || op == 13) {
+            this.Get(this.LocalT1);
+            this.Op(0x50);
+            this.TrapIf(TRAP_DIVISION);
+            if (signed && wide) {
+                // MIN / -1 overflows
+                this.Get(this.LocalT1);
+                this.I64C(0xFFFFFFFFFFFFFFFF);
+                this.Op(0x51);
+                this.Get(this.LocalT0);
+                this.I64C(0x8000000000000000);
+                this.Op(0x51);
+                this.Op(0x71);
+                this.TrapIf(TRAP_OVERFLOW);
+            }
+            this.Get(this.LocalT0);
+            this.Get(this.LocalT1);
+            if (op == 12) {
+                if (signed) this.Op(0x7F);
+                else this.Op(0x80);
+                this.Set(this.LocalT0);
+                if (!wide) this.CheckNormal(ty.Size, signed);
+            } else {
+                if (signed) this.Op(0x81);
+                else this.Op(0x82);
+                this.Set(this.LocalT0);
+            }
+            this.Get(this.LocalT0);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (op == OP_SHL || op == OP_SHR) {
+            if (signed) {
+                this.Get(this.LocalT1);
+                this.I64C(0);
+                this.Op(0x53);
+                this.TrapIf(TRAP_SHIFT);
+            }
+            this.Get(this.LocalT1);
+            this.I64C((ty.Size * 8) as u64);
+            this.Op(0x5A);
+            this.TrapIf(TRAP_SHIFT);
+            this.Get(this.LocalT0);
+            this.Get(this.LocalT1);
+            if (op == OP_SHL) this.Op(0x86);
+            else if (signed) this.Op(0x87);
+            else this.Op(0x88);
+            this.Norm(ty.Size, signed);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (op == 10 && wide) {
+            this.MulChecked64(signed);
+            this.Get(this.LocalT0);
+            this.Get(this.LocalT1);
+            this.Op(0x7E);
+            this.SetV(inst.Result);
+            return;
+        }
+        // the 64-bit result in t2... reuse t0 for it after the checks that need a and b
+        this.Get(this.LocalT0);
+        this.Get(this.LocalT1);
+        if (op == 5 || op == 8) this.Op(0x7C);
+        else if (op == 6 || op == 9) this.Op(0x7D);
+        else if (op == 7 || op == 10) this.Op(0x7E);
+        else if (op == 14) this.Op(0x83);
+        else if (op == 15) this.Op(0x84);
+        else if (op == 16) this.Op(0x85);
+        else Bug("wasm: floating-point instructions are not supported yet");
+        if ((op == 8 || op == 9) && wide) {
+            // r = a op b, in the value's local for now
+            this.SetV(inst.Result);
+            u32 r = this.Local(inst.Result);
+            if (op == 8) {
+                if (signed) {
+                    // ((r ^ a) & (r ^ b)) < 0
+                    this.Get(r);
+                    this.Get(this.LocalT0);
+                    this.Op(0x85);
+                    this.Get(r);
+                    this.Get(this.LocalT1);
+                    this.Op(0x85);
+                    this.Op(0x83);
+                    this.I64C(0);
+                    this.Op(0x53);
+                } else {
+                    this.Get(r);
+                    this.Get(this.LocalT0);
+                    this.Op(0x54);      // r < a, unsigned
+                }
+            } else {
+                if (signed) {
+                    // ((a ^ b) & (a ^ r)) < 0
+                    this.Get(this.LocalT0);
+                    this.Get(this.LocalT1);
+                    this.Op(0x85);
+                    this.Get(this.LocalT0);
+                    this.Get(r);
+                    this.Op(0x85);
+                    this.Op(0x83);
+                    this.I64C(0);
+                    this.Op(0x53);
+                } else {
+                    this.Get(this.LocalT0);
+                    this.Get(this.LocalT1);
+                    this.Op(0x54);      // a < b, unsigned
+                }
+            }
+            this.TrapIf(TRAP_OVERFLOW);
+            return;
+        }
+        if (op == 8 || op == 9 || op == 10) {
+            // narrow: the exact result fits in 64 bits; it must survive re-normalization
+            this.Set(this.LocalT0);
+            this.CheckNormal(ty.Size, signed);
+            this.Get(this.LocalT0);
+            this.SetV(inst.Result);
+            return;
+        }
+        if (t != ET_BOOL) this.Norm(ty.Size, signed);
+        this.SetV(inst.Result);
+    }
+
+    // Panics unless t0 * t1 fits in 64 bits.
+    void MulChecked64(ref this, bool signed) {
+        // a == 0: never overflows; otherwise (a * b) / a must be b, and for signed,
+        // a == -1 with b == MIN overflows (and MIN / -1 itself would trap)
+        this.Get(this.LocalT0);
+        this.I64C(0);
+        this.Op(0x52);
+        this.Op(0x04);
+        this.Op(0x40);
+        if (signed) {
+            this.Get(this.LocalT0);
+            this.I64C(0xFFFFFFFFFFFFFFFF);
+            this.Op(0x51);
+            this.Op(0x04);
+            this.Op(0x40);
+            this.Get(this.LocalT1);
+            this.I64C(0x8000000000000000);
+            this.Op(0x51);
+            this.TrapIf(TRAP_OVERFLOW);
+            this.Op(0x05);              // else
+            this.Get(this.LocalT0);
+            this.Get(this.LocalT1);
+            this.Op(0x7E);
+            this.Get(this.LocalT0);
+            this.Op(0x7F);
+            this.Get(this.LocalT1);
+            this.Op(0x52);
+            this.TrapIf(TRAP_OVERFLOW);
+            this.Op(0x0B);
+        } else {
+            this.Get(this.LocalT0);
+            this.Get(this.LocalT1);
+            this.Op(0x7E);
+            this.Get(this.LocalT0);
+            this.Op(0x80);
+            this.Get(this.LocalT1);
+            this.Op(0x52);
+            this.TrapIf(TRAP_OVERFLOW);
+        }
+        this.Op(0x0B);
+    }
+
+    // Function fi's body (locals and code), appended to bodies.
+    void Func(ref this, in Module m, u32 fi, ref List<u8> bodies) {
+        EFunc f = m.Func(fi);
+        this.Code = List<u8>.New();
+        if (f.Extern) {
+            // declared, defined elsewhere: calling it is a bug the verifier lets through
+            Leb(ref this.Code, 0);
+            this.Op(0x00);
+            this.Op(0x0B);
+            Leb(ref bodies, this.Code.Len() as u64);
+            Bytes(ref bodies, this.Code.AsSlice());
+            return;
+        }
+        this.FirstValue = f.FirstValue;
+        this.NValues = f.NValues;
+        this.FirstBlock = f.FirstBlock;
+        this.NBlocks = f.NBlocks;
+        u32 extra = f.NValues - f.NParams;
+        this.LocalPc = f.NValues;
+        this.LocalT0 = f.NValues + 1;
+        this.LocalT1 = f.NValues + 2;
+        this.LocalFp = f.NValues + 3;
+        // the frame: the entry block's slots, each aligned for its type
+        this.SlotOff = List<u64>.New();
+        for (u32 k = 0; k < f.NValues; k++) this.SlotOff.Push(0);
+        u64 frame = 0;
+        EBlock entry = m.Block(f.FirstBlock);
+        for (u32 i = entry.FirstInst; i < entry.FirstInst + entry.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op != OP_SLOT) break;
+            ETy st = m.Ty(inst.Ty);
+            u64 align = st.Align as u64;
+            if (align < 8) align = 8;
+            frame = (frame + align - 1) & ~(align - 1);
+            this.SlotOff.Set(this.Local(inst.Result) as usize, frame);
+            frame = frame + st.Size as u64;
+        }
+        frame = (frame + 15) & ~15;
+        this.Frame = frame;
+        // locals: the values that are not parameters, then pc (i32), t0, t1 (i64), fp (i32)
+        Leb(ref this.Code, 4);
+        Leb(ref this.Code, extra as u64);
+        this.Op(I64);
+        Leb(ref this.Code, 1);
+        this.Op(I32);
+        Leb(ref this.Code, 2);
+        this.Op(I64);
+        Leb(ref this.Code, 1);
+        this.Op(I32);
+        if (frame > 0) {
+            // fp = sp - frame; a stack that would run into the data panics; sp = fp; zero it
+            this.Op(0x23);
+            this.U(0);
+            this.I32C(frame as i64);
+            this.Op(0x6B);
+            this.Set(this.LocalFp);
+            this.Get(this.LocalFp);
+            this.I32C(this.StackLimit as i64);
+            this.Op(0x49);          // i32.lt_u
+            this.Op(0x04);
+            this.Op(0x40);
+            this.I64C(TRAP_UNREACHABLE);
+            this.Op(0x10);
+            this.U(this.Trap as u64);
+            this.Op(0x00);
+            this.Op(0x0B);
+            this.Get(this.LocalFp);
+            this.Op(0x24);
+            this.U(0);
+            this.Get(this.LocalFp);
+            this.I32C(0);
+            this.I32C(frame as i64);
+            this.Op(0xFC);
+            this.U(11);
+            this.Op(0);
+        }
+        // loop { block … block { br_table } code of block 0 } code of block 1 … }
+        u32 nb = f.NBlocks;
+        this.Op(0x03);
+        this.Op(0x40);
+        for (u32 k = 0; k < nb; k++) {
+            this.Op(0x02);
+            this.Op(0x40);
+        }
+        this.Get(this.LocalPc);
+        this.Op(0x0E);
+        this.U(nb as u64);
+        for (u32 k = 0; k < nb; k++) this.U(k as u64);
+        this.U(0);
+        for (u32 k = 0; k < nb; k++) {
+            this.Op(0x0B);
+            EBlock blk = m.Block(f.FirstBlock + k);
+            u32 loopDepth = nb - 1 - k;
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) this.Inst(m, i, loopDepth);
+        }
+        this.Op(0x0B);              // the loop
+        this.Op(0x00);
+        this.Op(0x0B);              // the function
+        Leb(ref bodies, this.Code.Len() as u64);
+        Bytes(ref bodies, this.Code.AsSlice());
+    }
+
+    // The bytes of initializer i for type t, appended to data (the memory image from
+    // DATA_BASE).
+    void Init(ref this, in Module m, u32 i, u32 t, ref List<u8> data) {
+        EInit init = m.Init(i);
+        ETy ty = m.Ty(t);
+        usize start = data.Len();
+        if (init.Kind == EI_BYTES) {
+            str b = TextStr(init.Bytes);
+            for (usize k = 0; k < b.Len; k++) data.Push(b[k]);
+        } else if (init.Kind == EI_INT) {
+            for (u32 k = 0; k < ty.Size; k++) data.Push((init.Int >> (8 * k) as u64 & 0xFF) as u8);
+        } else if (init.Kind == EI_ADDR) {
+            u64 named = m.Names.Get(TextStr(init.Bytes)) ?? 0;
+            u64 idx = named & 0xFFFFFFFF;
+            u64 v = idx;
+            if (named >> 32 != NAME_FUNC) v = this.GlobalAddr.Get(idx as usize);
+            for (u32 k = 0; k < 8; k++) data.Push((v >> (8 * k) as u64 & 0xFF) as u8);
+        } else if (init.Kind == EI_LIST) {
+            u32 e = init.First;
+            u32 k = 0;
+            while (e != 0) {
+                u32 et = ty.Elem;
+                u64 at = k as u64 * m.Ty(ty.Elem).Size as u64;
+                if (ty.Kind == EK_STRUCT) {
+                    et = m.Field(ty.Fields + k);
+                    at = m.FieldOffset(t, k);
+                }
+                while (data.Len() < start + at as usize) data.Push(0);
+                this.Init(m, e, et, ref data);
+                e = m.Init(e).Next;
+                k++;
+            }
+        }
+        while (data.Len() < start + ty.Size as usize) data.Push(0);
+    }
+}
+
+u32 FuncNamed(in Module m, str name) {
+    u64? named = m.Names.Get(name);
+    if (named.IsNone() || named.Unwrap() >> 32 != NAME_FUNC) {
+        string b = string.From("wasm: the runtime has no function ");
+        b.Append(name);
+        Bug(b);
+    }
+    return (named.Unwrap() & 0xFFFFFFFF) as u32;
+}
+
+// Module m (verified and laid out) as a WebAssembly binary module.
+public string GenWasm(in Module m) {
+    Gen g = new Gen {
+        Code = List<u8>.New(), FuncType = List<u64>.New(), TypeKeys = List<u64>.New(), GlobalAddr = List<u64>.New(),
+        SlotOff = List<u64>.New(), FirstValue = 0, NValues = 0, FirstBlock = 0, NBlocks = 0, Trap = 0,
+        LocalPc = 0, LocalT0 = 0, LocalT1 = 0, LocalFp = 0, Frame = 0, StackLimit = 0,
+    };
+    u32 nf = m.Funcs.Len() as u32;
+    g.Trap = FuncNamed(m, "__rt_trap");
+    // type 0: the host import, (i64 x 5) -> i64; type 1: _start, () -> ()
+    g.TypeKeys.Push((5 << 1) | 1);
+    g.TypeKeys.Push(0);
+    g.FuncType.Push(0);
+    for (u32 i = 1; i < nf; i++) {
+        EFunc f = m.Func(i);
+        g.FuncType.Push(g.TypeOf(f.NParams, f.Ret != ET_VOID));
+    }
+    // the globals' addresses, the data image, then the stack above it
+    List<u8> data = List<u8>.New();
+    g.GlobalAddr.Push(0);
+    u64 at = DATA_BASE;
+    for (u32 i = 1; i < m.Globals.Len() as u32; i++) {
+        ETy gt = m.Ty(m.Global(i).Type);
+        u64 align = gt.Align as u64;
+        if (align < 8) align = 8;
+        at = (at + align - 1) & ~(align - 1);
+        g.GlobalAddr.Push(at);
+        at = at + gt.Size as u64;
+    }
+    for (u32 i = 1; i < m.Globals.Len() as u32; i++) {
+        EGlobal gl = m.Global(i);
+        u64 addr = g.GlobalAddr.Get(i as usize);
+        while (DATA_BASE + (data.Len() as u64) < addr) data.Push(0);
+        g.Init(m, gl.Init, gl.Type, ref data);
+    }
+    u64 dataEnd = (DATA_BASE + data.Len() as u64 + 15) & ~15;
+    g.StackLimit = dataEnd + 64;
+    u64 stackTop = dataEnd + STACK_SIZE;
+    u64 pages = (stackTop + 0xFFFF) / 0x10000 + 1;
+    // the code
+    List<u8> bodies = List<u8>.New();
+    Leb(ref bodies, nf as u64);             // the EIR functions (1…), then _start
+    for (u32 i = 1; i < nf; i++) g.Func(m, i, ref bodies);
+    {
+        // _start: __rt_init(0); __rt_exit(__main())
+        List<u8> s = List<u8>.New();
+        s.Push(0);
+        s.Push(0x42);
+        s.Push(0);
+        s.Push(0x10);
+        Leb(ref s, FuncNamed(m, "__rt_init") as u64);
+        u32 main = FuncNamed(m, "__main");
+        s.Push(0x10);
+        Leb(ref s, main as u64);
+        if (m.Func(main).Ret == ET_VOID) {
+            s.Push(0x42);
+            s.Push(0);
+        }
+        s.Push(0x10);
+        Leb(ref s, FuncNamed(m, "__rt_exit") as u64);
+        s.Push(0x0B);
+        Leb(ref bodies, s.Len() as u64);
+        Bytes(ref bodies, s.AsSlice());
+    }
+    // the module
+    List<u8> mod = List<u8>.New();
+    mod.Push(0);
+    mod.Push(0x61);
+    mod.Push(0x73);
+    mod.Push(0x6D);
+    mod.Push(1);
+    mod.Push(0);
+    mod.Push(0);
+    mod.Push(0);
+    List<u8> types = List<u8>.New();
+    Leb(ref types, g.TypeKeys.Len() as u64);
+    u64[] keys = g.TypeKeys.AsSlice();
+    for (usize i = 0; i < keys.Len; i++) {
+        types.Push(0x60);
+        u64 np = keys[i] >> 1;
+        Leb(ref types, np);
+        for (u64 k = 0; k < np; k++) types.Push(I64);
+        if (keys[i] & 1 != 0) {
+            types.Push(1);
+            types.Push(I64);
+        } else {
+            types.Push(0);
+        }
+    }
+    Section(ref mod, 1, types);
+    List<u8> imports = List<u8>.New();
+    Leb(ref imports, 1);
+    Name(ref imports, "envo");
+    Name(ref imports, "host");
+    imports.Push(0);
+    Leb(ref imports, 0);
+    Section(ref mod, 2, imports);
+    List<u8> funcs = List<u8>.New();
+    Leb(ref funcs, nf as u64);
+    for (u32 i = 1; i < nf; i++) Leb(ref funcs, g.FuncType.Get(i as usize));
+    Leb(ref funcs, 1);
+    Section(ref mod, 3, funcs);
+    List<u8> table = List<u8>.New();
+    Leb(ref table, 1);
+    table.Push(0x70);
+    table.Push(0);
+    Leb(ref table, nf as u64);
+    Section(ref mod, 4, table);
+    List<u8> memory = List<u8>.New();
+    Leb(ref memory, 1);
+    memory.Push(0);
+    Leb(ref memory, pages);
+    Section(ref mod, 5, memory);
+    List<u8> globals = List<u8>.New();
+    Leb(ref globals, 1);
+    globals.Push(I32);
+    globals.Push(1);
+    globals.Push(0x41);
+    Sleb(ref globals, stackTop as i64);
+    globals.Push(0x0B);
+    Section(ref mod, 6, globals);
+    List<u8> exports = List<u8>.New();
+    Leb(ref exports, 2);
+    Name(ref exports, "memory");
+    exports.Push(2);
+    Leb(ref exports, 0);
+    Name(ref exports, "_start");
+    exports.Push(0);
+    Leb(ref exports, nf as u64);
+    Section(ref mod, 7, exports);
+    List<u8> elems = List<u8>.New();
+    Leb(ref elems, 1);
+    elems.Push(0);
+    elems.Push(0x41);
+    Sleb(ref elems, 1);
+    elems.Push(0x0B);
+    Leb(ref elems, (nf - 1) as u64);
+    for (u32 i = 1; i < nf; i++) Leb(ref elems, i as u64);
+    Section(ref mod, 9, elems);
+    Section(ref mod, 10, bodies);
+    List<u8> dataSec = List<u8>.New();
+    Leb(ref dataSec, 1);
+    dataSec.Push(0);
+    dataSec.Push(0x41);
+    Sleb(ref dataSec, DATA_BASE as i64);
+    dataSec.Push(0x0B);
+    Leb(ref dataSec, data.Len() as u64);
+    Bytes(ref dataSec, data.AsSlice());
+    Section(ref mod, 11, dataSec);
+    // names, for the host's stack traces
+    List<u8> names = List<u8>.New();
+    Name(ref names, "name");
+    List<u8> fnames = List<u8>.New();
+    Leb(ref fnames, nf as u64 + 1);
+    Leb(ref fnames, 0);
+    Name(ref fnames, "envo.host");
+    for (u32 i = 1; i < nf; i++) {
+        Leb(ref fnames, i as u64);
+        Name(ref fnames, TextStr(m.Func(i).Name));
+    }
+    Leb(ref fnames, nf as u64);
+    Name(ref fnames, "_start");
+    names.Push(1);
+    Leb(ref names, fnames.Len() as u64);
+    Bytes(ref names, fnames.AsSlice());
+    Section(ref mod, 0, names);
+    string s = string.New();
+    u8[] ob = mod.AsSlice();
+    for (usize i = 0; i < ob.Len; i++) s.AppendByte(ob[i]);
+    return s;
+}

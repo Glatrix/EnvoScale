@@ -5,7 +5,7 @@
 
 ## 3.1 Statement termination
 
-Envo accepts C#-style semicolons and also lets line breaks end statements, so builder
+Envol accepts C#-style semicolons and also lets line breaks end statements, so builder
 blocks read naturally (`Stack { NavBar(…) Hero(…) }` across lines).
 
 **[stmt.term.1]** A statement ends at `;`, at the `}` that closes its block, at end of
@@ -207,8 +207,8 @@ trailing block.
 - `unsafe { … }` allows raw pointer dereference, `&` address-of, calls to `unsafe`
   functions, inline `asm`, and unchecked intrinsics. `envo audit unsafe` lists every one.
 - `comptime { … }` and `const` expressions run at compile time on the EIR interpreter.
-- `asm x86_64 { … }` contains assembly in `.eas` instruction syntax, using Envo tokens
-  and Envo comments, with `{name}` operand bindings and a clobber list. Only valid
+- `asm x86_64 { … }` contains assembly in `.eas` instruction syntax, using Envol tokens
+  and Envol comments, with `{name}` operand bindings and a clobber list. Only valid
   inside `unsafe`.
 
 ## 3.10 Envo-Core

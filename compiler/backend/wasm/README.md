@@ -17,7 +17,7 @@ module.
 - **Calls:** direct calls are `call`; function pointers are indices into the module's
   table, called with `call_indirect`.
 - **The host:** the program reaches it through one import, `envo.host(k, a, b, c, d)` (D49),
-  which the runtime's OS layer (`compiler/runtime/wasm.envo`) and the `os.wasm` adapters
+  which the runtime's OS layer (`compiler/runtime/wasm.envol`) and the `os.wasm` adapters
   call through `__hostcall`. The host is `adapters/interop/js/envo.js`.
 - **Names:** a `name` section carries every function's name, for the host's stack traces.
 

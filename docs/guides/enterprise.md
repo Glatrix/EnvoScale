@@ -64,5 +64,5 @@ kernel; on Windows, only system DLLs.
 
 Lumen, the design language of `envo.ui` and the website, meets WCAG 2.2 AA contrast in
 its light and dark schemes: 4.5:1 for every text color on every surface, 3:1 for control
-edges. `lib/envo/lumen/tests/contrast.envo` checks every pair on every change. Focus is
+edges. `lib/envo/lumen/tests/contrast.envol` checks every pair on every change. Focus is
 always visible (a focus ring in the accent color).

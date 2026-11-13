@@ -1,0 +1,3 @@
+// Types are checked across files: Twice wants an i32.
+// expect-error: E0301 @ calc.envol:3:23
+var x = Twice(2);

@@ -1,0 +1,780 @@
+// The Envo-S1 grammar (docs/spec/envo-s1.md), following bootstrap/stage1/syntax/
+// parser_s1.envol. parser.envol calls these where Envo-Core has no such construct and the
+// parser is not in --core mode, so Envo-Core programs parse exactly as in Core
+// ([s1.subset.2]).
+namespace envoc.syntax;
+
+use envoc.util;
+
+impl Parser {
+    // Is the current token the identifier `word` (a contextual keyword)?
+    bool IsWord(in this, str word) => this.Kind() == TK_IDENT && Same(this.TokText(this.Pos), word);
+
+    // Consumes one `>` closing a generic argument list. `>>`, `>=` and `>>=` give up their
+    // first `>` and stay as the rest ([lex.punct.2]). Returns false if there is no `>`.
+    bool AcceptGt(ref this) {
+        u16 k = this.Kind();
+        if (k == TK_GT) {
+            this.Advance();
+            return true;
+        }
+        u16 rest = TK_EOF;
+        if (k == TK_SHR) rest = TK_GT;
+        else if (k == TK_GT_EQ) rest = TK_EQ;
+        else if (k == TK_SHR_EQ) rest = TK_GT_EQ;
+        else return false;
+        usize at = this.Pos;
+        Token t = this.Toks.Get(at);
+        this.Undo.Push(new Split { Index = at, Was = t });
+        t.Kind = rest;
+        t.Start = t.Start + 1;
+        t.Len = t.Len - 1;
+        t.Flags = 0;        // joint with the `>` just taken
+        this.Toks.Set(at, t);
+        return true;
+    }
+
+    // ------------------------------------------------------------------ types
+
+    // '<' Type ( ',' Type )* '>' after a type name; 0 if this is not an argument list.
+    u32 TryTypeArgs(ref this) {
+        Mark m = this.Save();
+        this.Advance();
+        NodeList args = NoNodes();
+        while (true) {
+            u32 t = this.TryType();
+            if (t == 0) {
+                this.Restore(m);
+                return 0;
+            }
+            this.Add(ref args, t);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        if (!this.AcceptGt()) {
+            this.Restore(m);
+            return 0;
+        }
+        return args.Head;
+    }
+
+    // Envo-S1 types ([s1.type.*]): Core's, plus qualified and generic names, T?, fn types
+    // and mut T[]. Returns 0 (and no error) if no type starts here.
+    u32 TryTypeS1(ref this) {
+        // `mut fn(...)`, `once fn(...)`, `mut T[]`
+        if (this.IsWord("mut") || this.IsWord("once")) {
+            bool once = this.IsWord("once");
+            Mark m = this.Save();
+            this.Advance();
+            if (this.IsWord("fn") && this.KindAt(1) == TK_LPAREN) {
+                u32 t = this.TryFnType();
+                if (t != 0) {
+                    if (once) this.AddFlags(t, NF_ONCE);
+                    else this.AddFlags(t, NF_MUT);
+                    return t;
+                }
+            } else if (!once) {
+                u32 inner = this.TryTypeS1();
+                if (inner != 0 && this.At(inner).Kind == NK_TSLICE) {
+                    this.AddFlags(inner, NF_MUT);
+                    return inner;
+                }
+            }
+            this.Restore(m);
+            return 0;
+        }
+        if (this.IsWord("fn") && this.KindAt(1) == TK_LPAREN) return this.TryFnType();
+        usize stars = 0;
+        usize firstStar = this.Pos;
+        while (this.Kind() == TK_STAR) {
+            this.Advance();
+            stars++;
+            if (stars > MAX_DEPTH) return 0;
+        }
+        if (this.Kind() != TK_IDENT) return 0;
+        // Qualified name: a.b.T; the node's token is the last name, F the qualifiers.
+        NodeList quals = NoNodes();
+        u32 nameTok = this.Advance();
+        while (this.Kind() == TK_DOT && this.KindAt(1) == TK_IDENT) {
+            u32 q = this.Make(NK_NAME, nameTok);
+            this.Add(ref quals, q);
+            this.Advance();
+            nameTok = this.Advance();
+        }
+        u32 type = this.Make(NK_TNAME, nameTok);
+        this.SetF(type, quals.Head);
+        if (this.Kind() == TK_LT) {
+            u32 args = this.TryTypeArgs();
+            if (args == 0) return 0;
+            this.SetE(type, args);
+        }
+        usize suffixes = 0;
+        while (true) {
+            u16 k = this.Kind();
+            if (k == TK_QUESTION && !this.SpaceBefore(this.Pos)) {
+                u32 q = this.Advance();
+                u32 opt = this.Make(NK_TOPT, q);
+                this.SetA(opt, type);
+                type = opt;
+                continue;
+            }
+            if (k != TK_LBRACKET) break;
+            u16 k1 = this.KindAt(1);
+            if (k1 == TK_RBRACKET) {
+                suffixes++;
+                if (suffixes > MAX_DEPTH) return 0;
+                u32 open = this.Advance();
+                this.Advance();
+                u32 slice = this.Make(NK_TSLICE, open);
+                this.SetA(slice, type);
+                type = slice;
+                continue;
+            }
+            u16 sizeKind = NK_INT;
+            if (k1 == TK_IDENT) sizeKind = NK_NAME;
+            else if (k1 != TK_INT) break;
+            if (this.KindAt(2) != TK_RBRACKET) break;
+            suffixes++;
+            if (suffixes > MAX_DEPTH) return 0;
+            u32 open = this.Advance();
+            u32 sizeTok = this.Advance();
+            u32 size = this.Make(sizeKind, sizeTok);
+            this.Advance();
+            u32 array = this.Make(NK_TARRAY, open);
+            this.SetA(array, type);
+            this.SetB(array, size);
+            type = array;
+        }
+        while (stars > 0) {
+            stars--;
+            u32 ptr = this.Make(NK_TPTR, (firstStar + stars) as u32);
+            this.SetA(ptr, type);
+            type = ptr;
+        }
+        return type;
+    }
+
+    // fn '(' ( [in|ref] Type ( ',' ... )* )? ')' ( '->' Type )?   ([fn.syn.*])
+    u32 TryFnType(ref this) {
+        Mark m = this.Save();
+        u32 fnTok = this.Advance();
+        this.Advance();     // (
+        NodeList params = NoNodes();
+        while (this.Kind() != TK_RPAREN) {
+            u32 mode = 0;
+            if (this.Kind() == TK_KW_IN) mode = NF_IN;
+            else if (this.Kind() == TK_KW_REF) mode = NF_REF;
+            if (mode != 0) this.Advance();
+            u32 t = this.TryTypeS1();
+            if (t == 0) {
+                this.Restore(m);
+                return 0;
+            }
+            this.AddFlags(t, mode);
+            this.Add(ref params, t);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        if (!this.Accept(TK_RPAREN)) {
+            this.Restore(m);
+            return 0;
+        }
+        u32 result = 0;
+        if (this.Accept(TK_ARROW)) {
+            result = this.TryTypeS1();
+            if (result == 0) {
+                this.Restore(m);
+                return 0;
+            }
+        }
+        u32 t = this.Make(NK_TFN, fnTok);
+        this.SetA(t, params.Head);
+        this.SetB(t, result);
+        return t;
+    }
+
+    // ------------------------------------------------------------------ items
+
+    // '<' IDENT ( ',' IDENT )* '>'  (generic parameters of a declaration)
+    u32 ParseTypeParams(ref this) {
+        NodeList params = NoNodes();
+        this.Expect(TK_LT);
+        while (true) {
+            if (this.Kind() == TK_KW_CONST) this.ErrNotCore("const generics", this.Pos);
+            u32 name = this.Expect(TK_IDENT);
+            u32 tp = this.Make(NK_TPARAM, name);
+            this.Add(ref params, tp);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        if (!this.AcceptGt()) this.ErrExpectedKind(TK_GT);
+        return params.Head;
+    }
+
+    // 'where' IDENT ':' Type ( ',' Type )* ( ',' IDENT ':' ... )*
+    u32 ParseWhere(ref this) {
+        NodeList clauses = NoNodes();
+        this.Advance();
+        while (true) {
+            u32 name = this.Expect(TK_IDENT);
+            u32 w = this.Make(NK_WHERE, name);
+            this.Expect(TK_COLON);
+            NodeList bounds = NoNodes();
+            while (true) {
+                u32 b = this.ParseType();
+                this.Add(ref bounds, b);
+                if (this.Kind() != TK_COMMA) break;
+                // `, U :` starts the next clause
+                if (this.KindAt(1) == TK_IDENT && this.KindAt(2) == TK_COLON) break;
+                this.Advance();
+            }
+            this.SetA(w, bounds.Head);
+            this.Add(ref clauses, w);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        return clauses.Head;
+    }
+
+    // 'from' origin ( ',' origin )*    origin = IDENT | 'this'  ([life.from.*])
+    u32 ParseOrigins(ref this) {
+        NodeList origins = NoNodes();
+        this.Advance();
+        while (true) {
+            if (this.Kind() == TK_KW_THIS) {
+                u32 tok = this.Advance();
+                u32 o = this.Make(NK_THIS, tok);
+                this.Add(ref origins, o);
+            } else {
+                u32 tok = this.Expect(TK_IDENT);
+                u32 o = this.Make(NK_NAME, tok);
+                this.Add(ref origins, o);
+            }
+            if (this.Kind() != TK_COMMA) break;
+            // stop before the next parameter (`, Type name`): origins are single names
+            u16 k2 = this.KindAt(2);
+            if (k2 != TK_COMMA && k2 != TK_RPAREN && k2 != TK_LBRACE && k2 != TK_FAT_ARROW &&
+                k2 != TK_KW_WHERE && k2 != TK_SEMI) break;
+            this.Advance();
+        }
+        return origins.Head;
+    }
+
+    // One Envo-S1 parameter: [in|ref] Type IDENT [from ...], or a receiver [in|ref] this.
+    u32 ParseParamS1(ref this) {
+        u32 mode = 0;
+        u16 k = this.Kind();
+        if (k == TK_KW_OUT) this.ErrNotCore("", this.Pos);
+        if (k == TK_KW_IN) mode = NF_IN;
+        if (k == TK_KW_REF) mode = NF_REF;
+        if (mode != 0) this.Advance();
+        if (this.Kind() == TK_KW_THIS) {
+            u32 tok = this.Advance();
+            u32 recv = this.Make(NK_PARAM, tok);
+            this.SetFlags(recv, mode);
+            return recv;
+        }
+        u32 type = this.ParseType();
+        u32 name = this.Expect(TK_IDENT);
+        u32 param = this.Make(NK_PARAM, name);
+        this.SetA(param, type);
+        this.SetFlags(param, mode);
+        if (this.IsWord("from")) {
+            u32 origins = this.ParseOrigins();
+            this.SetE(param, origins);
+        }
+        if (this.Kind() == TK_EQ) this.ErrNotCore("default parameter values", this.Pos);
+        return param;
+    }
+
+    // The rest of an Envo-S1 function after its name: generics, parameters, origins,
+    // where, body. `fn` already has its return type in A. A body may be missing (`;`) only
+    // in an interface.
+    void ParseFunctionRest(ref this, u32 fn, bool inInterface) {
+        if (this.Kind() == TK_LT) {
+            u32 tps = this.ParseTypeParams();
+            this.SetE(fn, tps);
+        }
+        this.Expect(TK_LPAREN);
+        NodeList params = NoNodes();
+        while (this.Kind() != TK_RPAREN) {
+            u32 param = this.ParseParamS1();
+            this.Add(ref params, param);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        this.Expect(TK_RPAREN);
+        if (this.IsWord("from")) {
+            u32 origins = this.ParseOrigins();
+            this.SetG(fn, origins);
+        }
+        if (this.Kind() == TK_KW_WHERE) {
+            u32 clauses = this.ParseWhere();
+            this.SetF(fn, clauses);
+        }
+        u32 body = 0;
+        if (this.Kind() == TK_LBRACE) {
+            body = this.ParseBlock();
+        } else if (this.Kind() == TK_FAT_ARROW) {
+            this.Advance();
+            body = this.ParseExpr();
+            this.EndStmt();
+        } else if (inInterface && this.Kind() == TK_SEMI) {
+            this.Advance();
+        } else {
+            this.ErrExpected("`{` or `=>`");
+        }
+        this.SetB(fn, params.Head);
+        this.SetC(fn, body);
+    }
+
+    // Member modifiers in a struct, interface or impl body: public, private, internal, static.
+    u32 ParseModifiers(ref this) {
+        u32 flags = 0;
+        while (true) {
+            u16 k = this.Kind();
+            if (k == TK_KW_PUBLIC) flags = flags | NF_PUBLIC;
+            else if (k == TK_KW_INTERNAL) flags = flags | NF_INTERNAL;
+            else if (k == TK_KW_STATIC) flags = flags | NF_STATIC;
+            else if (k != TK_KW_PRIVATE) break;
+            this.Advance();
+        }
+        return flags;
+    }
+
+    // A method: [modifiers] Type IDENT ... (the modifiers are already consumed).
+    u32 ParseMethod(ref this, u32 flags, bool inInterface) {
+        u32 type = this.ParseType();
+        u32 name = this.Expect(TK_IDENT);
+        u32 fn = this.Make(NK_FN, name);
+        this.SetA(fn, type);
+        this.SetFlags(fn, flags);
+        this.ParseFunctionRest(fn, inInterface);
+        return fn;
+    }
+
+    // The members of an Envo-S1 struct body after '{': fields go to A, methods to G.
+    void ParseStructBody(ref this, u32 st) {
+        NodeList fields = NoNodes();
+        NodeList methods = NoNodes();
+        while (this.Kind() != TK_RBRACE) {
+            if (this.Kind() == TK_EOF) this.ErrExpectedKind(TK_RBRACE);
+            u32 flags = this.ParseModifiers();
+            Mark m = this.Save();
+            this.ParseType();
+            this.Expect(TK_IDENT);
+            u16 k = this.Kind();
+            if (k == TK_LPAREN || k == TK_LT) {
+                this.Restore(m);
+                u32 method = this.ParseMethod(flags, false);
+                this.Add(ref methods, method);
+                continue;
+            }
+            this.Restore(m);
+            u32 type = this.ParseType();
+            u32 name = this.Expect(TK_IDENT);
+            u32 field = this.Make(NK_FIELD, name);
+            this.SetA(field, type);
+            this.SetFlags(field, flags);
+            k = this.Kind();
+            if (k == TK_LBRACE || k == TK_FAT_ARROW) this.ErrNotCore("properties", this.Pos);
+            if (k == TK_EQ) this.ErrNotCore("field initializers", this.Pos);
+            this.EndStmt();
+            this.Add(ref fields, field);
+        }
+        this.Advance();
+        this.SetA(st, fields.Head);
+        this.SetG(st, methods.Head);
+    }
+
+    // ':' Type ( ',' Type )*  (the interfaces a struct implements)
+    u32 ParseBases(ref this) {
+        NodeList bases = NoNodes();
+        this.Advance();
+        while (true) {
+            u32 b = this.ParseType();
+            this.Add(ref bases, b);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        return bases.Head;
+    }
+
+    // An enum payload: '(' Type IDENT ( ',' Type IDENT )* ')'  ([item.enum.1])
+    u32 ParsePayload(ref this) {
+        NodeList fields = NoNodes();
+        this.Advance();
+        while (this.Kind() != TK_RPAREN) {
+            u32 type = this.ParseType();
+            u32 name = this.Expect(TK_IDENT);
+            u32 f = this.Make(NK_PARAM, name);
+            this.SetA(f, type);
+            this.Add(ref fields, f);
+            if (!this.Accept(TK_COMMA)) break;
+        }
+        this.Expect(TK_RPAREN);
+        return fields.Head;
+    }
+
+    // namespace a.b.c ;
+    u32 ParseNamespace(ref this) {
+        u32 tok = this.Advance();
+        u32 ns = this.Make(NK_NAMESPACE, tok);
+        u32 path = this.ParsePath();
+        this.SetA(ns, path);
+        this.EndStmt();
+        return ns;
+    }
+
+    // IDENT ( '.' IDENT )*, as a list of names.
+    u32 ParsePath(ref this) {
+        NodeList path = NoNodes();
+        while (true) {
+            u32 tok = this.Expect(TK_IDENT);
+            u32 n = this.Make(NK_NAME, tok);
+            this.Add(ref path, n);
+            if (this.Kind() != TK_DOT || this.KindAt(1) != TK_IDENT) break;
+            this.Advance();
+        }
+        return path.Head;
+    }
+
+    // use a.b;  use a.b.{X, Y};  use a.b as c;   ([item.use.1])
+    u32 ParseUse(ref this) {
+        u32 tok = this.Advance();
+        u32 u = this.Make(NK_USE, tok);
+        u32 path = this.ParsePath();
+        this.SetA(u, path);
+        if (this.Kind() == TK_DOT && this.KindAt(1) == TK_LBRACE) {
+            this.Advance();
+            this.Advance();
+            NodeList names = NoNodes();
+            while (this.Kind() != TK_RBRACE) {
+                u32 nt = this.Expect(TK_IDENT);
+                u32 n = this.Make(NK_NAME, nt);
+                this.Add(ref names, n);
+                if (!this.Accept(TK_COMMA)) break;
+            }
+            this.Expect(TK_RBRACE);
+            this.SetB(u, names.Head);
+        } else if (this.Accept(TK_KW_AS)) {
+            u32 at = this.Expect(TK_IDENT);
+            u32 alias = this.Make(NK_NAME, at);
+            this.SetC(u, alias);
+        }
+        this.EndStmt();
+        return u;
+    }
+
+    // interface IName<T> { methods }
+    u32 ParseInterface(ref this) {
+        this.Advance();
+        u32 name = this.Expect(TK_IDENT);
+        u32 it = this.Make(NK_INTERFACE, name);
+        if (this.Kind() == TK_LT) {
+            u32 tps = this.ParseTypeParams();
+            this.SetE(it, tps);
+        }
+        this.Expect(TK_LBRACE);
+        NodeList methods = NoNodes();
+        while (this.Kind() != TK_RBRACE) {
+            if (this.Kind() == TK_EOF) this.ErrExpectedKind(TK_RBRACE);
+            u32 flags = this.ParseModifiers();
+            u32 method = this.ParseMethod(flags, true);
+            this.Add(ref methods, method);
+        }
+        this.Advance();
+        this.SetA(it, methods.Head);
+        return it;
+    }
+
+    // impl<T> I for Type { methods }   or   impl<T> Type { methods }
+    u32 ParseImpl(ref this) {
+        u32 tok = this.Advance();
+        u32 im = this.Make(NK_IMPL, tok);
+        if (this.Kind() == TK_LT) {
+            u32 tps = this.ParseTypeParams();
+            this.SetE(im, tps);
+        }
+        u32 first = this.ParseType();
+        if (this.Accept(TK_KW_FOR)) {
+            this.SetB(im, first);
+            u32 target = this.ParseType();
+            this.SetA(im, target);
+        } else {
+            this.SetA(im, first);
+        }
+        this.Expect(TK_LBRACE);
+        NodeList methods = NoNodes();
+        while (this.Kind() != TK_RBRACE) {
+            if (this.Kind() == TK_EOF) this.ErrExpectedKind(TK_RBRACE);
+            u32 flags = this.ParseModifiers();
+            u32 method = this.ParseMethod(flags, false);
+            this.Add(ref methods, method);
+        }
+        this.Advance();
+        this.SetC(im, methods.Head);
+        return im;
+    }
+
+    // ------------------------------------------------------------------ statements
+
+    // foreach '(' 'var' IDENT 'in' Expr ')' Statement   ([s1.stmt.1])
+    u32 ParseForeach(ref this) {
+        u32 tok = this.Advance();
+        this.Expect(TK_LPAREN);
+        this.Expect(TK_KW_VAR);
+        u32 nt = this.Expect(TK_IDENT);
+        u32 name = this.Make(NK_NAME, nt);
+        this.Expect(TK_KW_IN);
+        u32 seq = this.ParseExpr();
+        this.Expect(TK_RPAREN);
+        u32 body = this.ParseStatement();
+        u32 n = this.Make(NK_FOREACH, tok);
+        this.SetA(n, name);
+        this.SetB(n, seq);
+        this.SetC(n, body);
+        return n;
+    }
+
+    // A pattern ([s1.expr.1]): literals, names, qualified variants, `null`, `_`, and payload
+    // patterns `Name(p, ...)`. Parsed as a prefix expression with `_` allowed and lambdas
+    // off, so Core patterns build the same nodes as in Core.
+    u32 ParsePattern(ref this) {
+        bool saved = this.InPattern;
+        this.InPattern = true;
+        u32 pat = 0;
+        if (this.Kind() == TK_KW_UNDERSCORE) {
+            u32 tok = this.Advance();
+            pat = this.Make(NK_WILD, tok);
+        } else {
+            pat = this.ParsePrefix();
+        }
+        this.InPattern = saved;
+        return pat;
+    }
+
+    // ------------------------------------------------------------------ expressions
+
+    // Expr = Cond;  Cond = Range ( '?' Expr ':' Cond )?;  Range = Coalesce ( ('..'|'..=') Coalesce? )?
+    // Coalesce = Binary(1) ( '??' Coalesce )?    (chapter 3, section 3.4, levels 13-15)
+    u32 ParseCond(ref this) {
+        u32 c = this.ParseRange();
+        if (this.Kind() == TK_QUESTION && this.SpaceBefore(this.Pos)) {
+            u32 tok = this.Advance();
+            u32 a = this.ParseExpr();
+            this.Expect(TK_COLON);
+            u32 b = this.ParseCond();
+            u32 n = this.Make(NK_COND, tok);
+            this.SetA(n, c);
+            this.SetB(n, a);
+            this.SetC(n, b);
+            return n;
+        }
+        return c;
+    }
+
+    // Can the current token start an expression? (for the optional upper bound of a range)
+    bool StartsExpr(in this) {
+        u16 k = this.Kind();
+        return !(k == TK_RBRACKET || k == TK_RPAREN || k == TK_COMMA || k == TK_SEMI || k == TK_RBRACE ||
+            k == TK_LBRACE || k == TK_EOF || k == TK_COLON || k == TK_FAT_ARROW);
+    }
+
+    u32 ParseRange(ref this) {
+        u32 lo = this.ParseCoalesce();
+        u16 k = this.Kind();
+        if (k == TK_DOT_DOT || k == TK_DOT_DOT_EQ) return this.ParseRangeRest(lo);
+        return lo;
+    }
+
+    // The `..` / `..=` and upper bound of a range whose lower bound (or 0) is parsed.
+    u32 ParseRangeRest(ref this, u32 lo) {
+        u16 k = this.Kind();
+        u32 tok = this.Advance();
+        u32 hi = 0;
+        if (this.StartsExpr()) hi = this.ParseCoalesce();
+        else if (k == TK_DOT_DOT_EQ) this.ErrExpected("an expression");     // `..=` needs a bound
+        u32 n = this.Make(NK_RANGE, tok);
+        this.SetOp(n, k);
+        this.SetA(n, lo);
+        this.SetB(n, hi);
+        return n;
+    }
+
+    u32 ParseCoalesce(ref this) {
+        u32 l = this.ParseBinary(1);
+        if (this.Kind() == TK_QQ) {
+            u32 tok = this.Advance();
+            u32 r = this.ParseCoalesce();
+            u32 n = this.Make(NK_BINARY, tok);
+            this.SetOp(n, TK_QQ);
+            this.SetA(n, l);
+            this.SetB(n, r);
+            return n;
+        }
+        return l;
+    }
+
+    // Is a lambda starting at the current token? `x =>`, `(…) =>`, `move …`
+    bool AtLambda(in this) {
+        if (this.InPattern) return false;
+        usize skip = 0;
+        if (this.IsWord("move") && (this.KindAt(1) == TK_IDENT || this.KindAt(1) == TK_LPAREN)) skip = 1;
+        u16 k = this.KindAt(skip);
+        if (k == TK_IDENT) return this.KindAt(skip + 1) == TK_FAT_ARROW;
+        if (k != TK_LPAREN) return false;
+        // find the matching ')' and look for '=>' after it
+        usize depth = 0;
+        usize i = skip;
+        while (true) {
+            u16 t = this.KindAt(i);
+            if (t == TK_EOF) return false;
+            if (t == TK_LPAREN) depth++;
+            if (t == TK_RPAREN) {
+                depth--;
+                if (depth == 0) return this.KindAt(i + 1) == TK_FAT_ARROW;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    // Lambda = [move] ( IDENT | '(' [LambdaParam ( ',' LambdaParam )*] ')' ) '=>' ( Expr | Block )
+    // LambdaParam = [in|ref] [Type] IDENT     ([fn.syn.*], [fn.lam.*])
+    u32 ParseLambda(ref this) {
+        u32 flags = 0;
+        if (this.IsWord("move")) {
+            this.Advance();
+            flags = NF_MOVE;
+        }
+        NodeList params = NoNodes();
+        if (this.Kind() == TK_IDENT) {
+            u32 tok = this.Advance();
+            u32 param = this.Make(NK_PARAM, tok);
+            this.Add(ref params, param);
+        } else {
+            this.Expect(TK_LPAREN);
+            while (this.Kind() != TK_RPAREN) {
+                u32 mode = 0;
+                if (this.Kind() == TK_KW_IN) mode = NF_IN;
+                else if (this.Kind() == TK_KW_REF) mode = NF_REF;
+                if (mode != 0) this.Advance();
+                u32 type = 0;
+                u16 after = this.KindAt(1);
+                if (!(this.Kind() == TK_IDENT && (after == TK_COMMA || after == TK_RPAREN))) type = this.ParseType();
+                u32 name = this.Expect(TK_IDENT);
+                u32 param = this.Make(NK_PARAM, name);
+                this.SetA(param, type);
+                this.SetFlags(param, mode);
+                this.Add(ref params, param);
+                if (!this.Accept(TK_COMMA)) break;
+            }
+            this.Expect(TK_RPAREN);
+        }
+        u32 tok = this.Expect(TK_FAT_ARROW);
+        u32 body = 0;
+        if (this.Kind() == TK_LBRACE) body = this.ParseBlock();
+        else body = this.ParseExpr();
+        u32 n = this.Make(NK_LAMBDA, tok);
+        this.SetA(n, params.Head);
+        this.SetB(n, body);
+        this.SetFlags(n, flags);
+        return n;
+    }
+
+    // match Expr '{' ( Pattern ( '|' Pattern )* [ 'if' Expr ] '=>' Expr ( ',' | newline ) )* '}'
+    // The expression form ([expr.match.1]); flagged NF_EXPR.
+    u32 ParseMatchExpr(ref this) {
+        NodeList arms = NoNodes();
+        u32 tok = this.Advance();
+        u32 subject = this.ParseExpr();
+        u32 m = this.Make(NK_MATCH, tok);
+        this.SetA(m, subject);
+        this.SetFlags(m, NF_EXPR);
+        this.Expect(TK_LBRACE);
+        while (true) {
+            u16 k = this.Kind();
+            if (k == TK_RBRACE) break;
+            if (k == TK_EOF) this.ErrExpectedKind(TK_RBRACE);
+            NodeList patterns = NoNodes();
+            while (true) {
+                u32 pat = this.ParsePattern();
+                this.Add(ref patterns, pat);
+                if (!this.Accept(TK_PIPE)) break;
+            }
+            u32 guard = 0;
+            if (this.Accept(TK_KW_IF)) guard = this.ParseExpr();
+            u32 arrow = this.Expect(TK_FAT_ARROW);
+            u32 body = 0;
+            if (this.Kind() == TK_LBRACE) body = this.ParseBlock();
+            else body = this.ParseExpr();
+            u32 arm = this.Make(NK_ARM, arrow);
+            this.SetA(arm, patterns.Head);
+            this.SetB(arm, body);
+            this.SetE(arm, guard);
+            this.Add(ref arms, arm);
+            if (this.Accept(TK_COMMA)) continue;
+            if (this.Kind() == TK_RBRACE) continue;
+            if (this.Toks.Get(this.Pos).Flags & TF_NEWLINE_BEFORE != 0) continue;
+            this.ErrExpected("`,` or `}`");
+        }
+        this.Advance();
+        this.SetB(m, arms.Head);
+        return m;
+    }
+
+    // Explicit generic arguments in an expression: Name<T, U>( … ) or Name<T>.Member. Only
+    // taken when the `>` is followed by `(` or `.`, so `a < b` stays a comparison.
+    u32 TryExprTypeArgs(ref this) {
+        Mark m = this.Save();
+        u32 args = this.TryTypeArgs();
+        if (args == 0) return 0;
+        if (this.Kind() == TK_LPAREN || this.Kind() == TK_DOT) return args;
+        this.Restore(m);
+        return 0;
+    }
+
+    // The Envo-S1 primaries: null, this, match expressions, lambdas, `..hi` ranges, and `_`
+    // inside patterns. 0 means "not one of these" (the Core primaries come next).
+    u32 ParsePrimaryS1(ref this) {
+        u16 k = this.Kind();
+        if (k == TK_KW_NULL) {
+            u32 tok = this.Advance();
+            return this.Make(NK_NULL, tok);
+        }
+        if (k == TK_KW_THIS) {
+            u32 tok = this.Advance();
+            return this.Make(NK_THIS, tok);
+        }
+        if (k == TK_KW_MATCH) return this.ParseMatchExpr();
+        if (k == TK_DOT_DOT || k == TK_DOT_DOT_EQ) return this.ParseRangeRest(0);
+        if (k == TK_KW_UNDERSCORE && this.InPattern) {
+            u32 tok = this.Advance();
+            return this.Make(NK_WILD, tok);
+        }
+        if ((k == TK_IDENT || k == TK_LPAREN) && this.AtLambda()) return this.ParseLambda();
+        return 0;
+    }
+
+    // One top-level item or statement in Envo-S1.
+    u32 ParseToplevelS1(ref this) {
+        u32 flags = 0;
+        u16 k = this.Kind();
+        bool visibility = k == TK_KW_PUBLIC || k == TK_KW_PRIVATE || k == TK_KW_INTERNAL;
+        if (visibility) {
+            if (k == TK_KW_PUBLIC) flags = NF_PUBLIC;
+            if (k == TK_KW_INTERNAL) flags = NF_INTERNAL;
+            this.Advance();
+            k = this.Kind();
+        }
+        u32 item = 0;
+        if (k == TK_KW_STRUCT) item = this.ParseStruct();
+        else if (k == TK_KW_ENUM) item = this.ParseEnum();
+        else if (k == TK_KW_CONST) item = this.ParseBinding(NK_CONST);
+        else if (k == TK_KW_STATIC) item = this.ParseBinding(NK_STATIC);
+        else if (k == TK_KW_INTERFACE) item = this.ParseInterface();
+        else if (k == TK_KW_IMPL && !visibility) item = this.ParseImpl();
+        else if (k == TK_KW_NAMESPACE && !visibility) item = this.ParseNamespace();
+        else if (k == TK_KW_USE && !visibility) item = this.ParseUse();
+        else if (this.IsFnStart()) item = this.ParseFunction();
+        else if (visibility) this.ErrExpected("a function, `struct`, `enum`, `interface`, `const` or `static`");
+        else return this.ParseStatement();
+        this.AddFlags(item, flags);
+        return item;
+    }
+}

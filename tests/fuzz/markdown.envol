@@ -1,0 +1,10 @@
+// Fuzz target (tools/fuzz): markdown on the bytes of the file named by the first argument.
+// A panic is a bug. Run: envo fuzz tests/fuzz/markdown.envol --corpus <a copy of corpus/markdown>
+use std.env;
+use std.fs;
+use envo.markdown;
+var r = fs.ReadText(env.Arg(1));
+if (r.IsErr()) return;
+string data = r.Unwrap();
+str d = data.AsStr();
+string h = markdown.ToHtml(d);

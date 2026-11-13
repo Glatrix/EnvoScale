@@ -1,4 +1,4 @@
-# Builds "Envo Test" — a tiny TrueType font drawn here, for envo.font's tests. Glyphs:
+# Builds "Envol Test" — a tiny TrueType font drawn here, for envo.font's tests. Glyphs:
 # 0 .notdef (empty), 1 space, 2 'l' (a bar), 3 'O' (a ring of quadratic curves),
 # 4 'A' (a triangle with a triangular hole), 5 'i' (composite: two 'l' parts, the second
 # scaled-free and offset). unitsPerEm 1000. Prints the font as hex.

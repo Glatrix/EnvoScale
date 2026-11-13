@@ -13,34 +13,34 @@ the formatter and LSP) keeps them attached to the following token.
 **[lex.src.1]** A source file is a sequence of bytes that must be valid UTF-8 (RFC 3629):
 no overlong encodings, no encoded surrogates (U+D800–U+DFFF), nothing above U+10FFFF.
 Otherwise the file is rejected with **E0001** at the first invalid byte.
-Tests: `tests/spec/01-lexical/e0001_invalid_utf8.bin.envo`, `e0001_surrogate.bin.envo`.
+Tests: `tests/spec/01-lexical/e0001_invalid_utf8.bin.envol`, `e0001_surrogate.bin.envol`.
 
 **[lex.src.2]** A UTF-8 byte order mark (EF BB BF) at the very start of the file is
 ignored. It is not part of the first line for column counting.
-Tests: `tests/golden/lexer/bom.envo`.
+Tests: `tests/golden/lexer/bom.envol`.
 
-**[lex.src.3]** Source files use the extension `.envo`. EON files (`.envon`) use the same
+**[lex.src.3]** Source files use the extension `.envol`. EON files (`.envon`) use the same
 lexical rules (see `eon.md`).
 
 **[lex.src.4] Positions.** Lines are numbered from 1 and end at LF (U+000A). A CR
 (U+000D) is whitespace and never ends a line by itself, so CRLF files have the same line
 numbers as LF files. Columns are numbered from 1 and count Unicode scalar values from
 the start of the line. Every diagnostic and tool reports positions this way.
-Tests: `tests/golden/lexer/strings.envo` (columns after multi-byte characters).
+Tests: `tests/golden/lexer/strings.envol` (columns after multi-byte characters).
 
 ## 1.2 Shebang
 
 **[lex.shebang.1]** If the file (after any BOM) begins with `#!`, everything up to but
 not including the first LF is ignored. This lets a script start with
 `#!/usr/bin/env envo`. `#!` anywhere else is not special.
-Tests: `tests/golden/lexer/shebang.envo`.
+Tests: `tests/golden/lexer/shebang.envol`.
 
 ## 1.3 Whitespace
 
 **[lex.ws.1]** Whitespace is exactly: space (U+0020), horizontal tab (U+0009), line
 feed (U+000A) and carriage return (U+000D). Any other control character outside a
 comment or literal is an **unexpected character (E0002)**.
-Tests: `tests/spec/01-lexical/e0002_form_feed.bin.envo`.
+Tests: `tests/spec/01-lexical/e0002_form_feed.bin.envol`.
 
 *Rationale:* a closed set keeps files unambiguous across editors; invisible Unicode
 spaces cannot change how code tokenizes.
@@ -59,14 +59,14 @@ documentation tools.
 **[lex.comment.2]** `/*` starts a block comment that ends at the matching `*/`. Block
 comments **nest**: `/* a /* b */ c */` is one comment. An unclosed block comment is
 **E0003**, reported at its opening `/*`.
-Tests: `tests/golden/lexer/comments.envo`, `tests/spec/01-lexical/e0003_unterminated_block_comment.envo`.
+Tests: `tests/golden/lexer/comments.envol`, `tests/spec/01-lexical/e0003_unterminated_block_comment.envol`.
 
 *Rationale:* nesting makes "comment out this region" always work, even when the region
 already contains block comments.
 
 ## 1.5 Token spacing flags
 
-Envo uses whitespace in two places in its grammar (`?` and line breaks; see chapter 3),
+Envol uses whitespace in two places in its grammar (`?` and line breaks; see chapter 3),
 so each token records how it was separated from the previous one.
 
 **[lex.flags.1]** A token has the **space-before** flag if it is the first token in the
@@ -78,7 +78,7 @@ inside a block comment). newline-before implies space-before.
 
 **[lex.flags.3]** A token with neither flag is **joint** with the previous token.
 
-Tests: `tests/golden/lexer/flags.envo`. The token dump prints `n` (newline-before),
+Tests: `tests/golden/lexer/flags.envol`. The token dump prints `n` (newline-before),
 `s` (space-before only) or `j` (joint).
 
 ## 1.6 Identifiers and keywords
@@ -103,7 +103,7 @@ This lets code use names that later editions reserve. `@_` is not valid (E0002),
 **[lex.ident.4]** A lone `_` is the **discard** token (used in patterns and to ignore
 values). Identifiers may start with `_` (`_unused`).
 
-Tests: `tests/golden/lexer/idents.envo`, `tests/golden/lexer/keywords.envo`.
+Tests: `tests/golden/lexer/idents.envol`, `tests/golden/lexer/keywords.envol`.
 
 **Core:** identifiers are ASCII only: `[A-Za-z_][A-Za-z0-9_]*`. A non-ASCII character
 outside a literal or comment is **E0904**.
@@ -169,7 +169,7 @@ the literal has an invalid suffix: **E0008**, reported at the suffix (`10u7`, `0
 **[lex.int.4]** The lexer does not check range; a literal that does not fit its type is
 a type error (chapter 2).
 
-Tests: `tests/golden/lexer/numbers.envo`, `tests/spec/01-lexical/e0007_*.envo`, `e0008_*.envo`.
+Tests: `tests/golden/lexer/numbers.envol`, `tests/spec/01-lexical/e0007_*.envol`, `e0008_*.envol`.
 
 ### 1.7.2 Floating-point literals
 
@@ -189,7 +189,7 @@ method call.
 **[lex.float.3]** An exponent with no digits (`1e`, `1e+`) is **E0007**. An integer suffix
 on a float (`1.5i32`) or a float suffix on a non-decimal literal (`0b1f32`) is **E0008**.
 
-Tests: `tests/golden/lexer/numbers.envo`.
+Tests: `tests/golden/lexer/numbers.envol`.
 
 ### 1.7.3 Character literals
 
@@ -201,7 +201,7 @@ CharLiteral = "'" ( ~( "'" | '\' | LF | CR ) | Escape ) "'"
 directly or as an escape. `''` and `'ab'` are **E0009**. A literal not closed on the same
 line is **E0005**, reported at the opening quote.
 
-Tests: `tests/golden/lexer/strings.envo`, `tests/spec/01-lexical/e0005_*.envo`, `e0009_*.envo`.
+Tests: `tests/golden/lexer/strings.envol`, `tests/spec/01-lexical/e0005_*.envol`, `e0009_*.envol`.
 
 ### 1.7.4 String literals
 
@@ -226,7 +226,7 @@ in chapter 3 (§3.2.4).
 
 **Core:** raw strings are **E0902** and interpolated strings are **E0901**.
 
-Tests: `tests/golden/lexer/strings.envo`, `tests/spec/01-lexical/e0004_*.envo`.
+Tests: `tests/golden/lexer/strings.envol`, `tests/spec/01-lexical/e0004_*.envol`.
 
 ### 1.7.5 Escapes and control characters
 
@@ -247,7 +247,7 @@ scalar value (≤ 10FFFF and not D800–DFFF). Otherwise **E0010**.
 **[lex.esc.3]** Control characters U+0000–U+001F (except tab) and U+007F may not appear
 raw inside character or string literals: **E0011**. Write them as escapes.
 
-Tests: `tests/golden/lexer/strings.envo`, `tests/spec/01-lexical/e0006_*.envo`, `e0010_*.envo`, `e0011_*.envo`.
+Tests: `tests/golden/lexer/strings.envol`, `tests/spec/01-lexical/e0006_*.envol`, `e0010_*.envol`, `e0011_*.envol`.
 
 ### 1.7.6 Boolean and null literals
 
@@ -275,12 +275,12 @@ current token is `>>`, `>=` or `>>=`, it consumes only the first `>` and leaves 
 must begin a directive (§1.9) or the shebang. Any other character that starts no token
 is **E0002**.
 
-Tests: `tests/golden/lexer/punctuation.envo`, `tests/golden/lexer/munch.envo`.
+Tests: `tests/golden/lexer/punctuation.envol`, `tests/golden/lexer/munch.envol`.
 
 ## 1.9 Directives
 
 **[lex.dir.1]** `#` at the start of a line (after optional whitespace) begins a
-compile-time directive: `#if`, `#elif`, `#else`, `#endif`. Conditions are typed Envo
+compile-time directive: `#if`, `#elif`, `#else`, `#endif`. Conditions are typed Envol
 constant expressions (`#if target.os == "windows"`), not string macros. Directives are
 specified with conditional compilation (chapter 4, §4.9).
 
@@ -290,12 +290,12 @@ specified with conditional compilation (chapter 4, §4.9).
 
 **[lex.eof.1]** The token sequence always ends with one **end-of-file** token, positioned
 just past the last byte. An empty file produces only that token at 1:1.
-Tests: `tests/golden/lexer/empty.envo`.
+Tests: `tests/golden/lexer/empty.envol`.
 
 ## 1.11 Stage 0 behaviour (informative)
 
 Stage 0 lexes Envo-Core only, but reserves every keyword and lexes every operator above
-so that no Envo-Core program means something different in full Envo. It stops at the
+so that no Envo-Core program means something different in full Envol. It stops at the
 first lexical error. Its `lex` command prints one line per token:
 
 ```

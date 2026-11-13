@@ -6,19 +6,19 @@
 
 Envo-S1 is the language `envoc1` accepts: **Envo-Core plus what a compiler needs to be
 written comfortably**, and nothing more (PLAN decision D12). Stage 2 (`compiler/`) is
-written in Envo-S1 until it compiles itself (M3); after that it may use all of Envo.
+written in Envo-S1 until it compiles itself (M3); after that it may use all of Envol.
 
 ## 1. The subset properties
 
-- **[s1.subset.1]** Every Envo-S1 program is a valid Envo program with the same meaning.
-  S1 only ever removes features from full Envo.
+- **[s1.subset.1]** Every Envo-S1 program is a valid Envol program with the same meaning.
+  S1 only ever removes features from full Envol.
 - **[s1.subset.2]** Every Envo-Core program is a valid Envo-S1 program with the same
   meaning, and `envoc1` reports the same diagnostics for it as `envoc0` (same code, file,
   line and column), except that S1 accepts what Core rejects as "not part of Envo-Core".
 - **[s1.subset.3]** `envoc1 --core` restricts the accepted language to Envo-Core and
   reports E0901–E0905 exactly as `envoc0` does. Differential tests (D14) run in this
   mode, and it checks that Stage 1's own source stays Core.
-- **[s1.subset.4]** A construct of full Envo that S1 leaves out is **E0950** "not part of
+- **[s1.subset.4]** A construct of full Envol that S1 leaves out is **E0950** "not part of
   Envo-S1: X", reported at the construct.
 
 ## 2. Lexical structure
@@ -133,7 +133,7 @@ Everything in Envo-Core (`envo-core.md` §5), plus:
   is an `in` borrow of each element ([own.borrow.4]).
 - **[s1.expr.8]** Not in S1: interpolated strings, `?.`, `is` patterns, tuples and
   destructuring, `new()` without a type, object initializers for classes, `await`,
-  `yield`, `throw`/`try`/`catch` (not in Envo at all), operators on non-primitive
+  `yield`, `throw`/`try`/`catch` (not in Envol at all), operators on non-primitive
   types, bindings in a pattern with `|` (write one arm for each variant), ranges outside
   slicing and `foreach`, and `foreach` ranges without both bounds.
 
@@ -204,7 +204,7 @@ including several files as one program, plus:
 | Command | Meaning |
 |---|---|
 | `envoc1 version` | print the version |
-| `envoc1 eir <file.envo>...` | print the program's EIR text ([eir.text.1]) |
+| `envoc1 eir <file.envol>...` | print the program's EIR text ([eir.text.1]) |
 | `envoc1 eir-check <file.eir>` | parse and verify an EIR text file, and print it back |
 | `--core` | before the command's files: accept only Envo-Core ([s1.subset.3]) |
 

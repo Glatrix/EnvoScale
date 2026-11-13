@@ -10,7 +10,7 @@ verifier runs after them, and every pass is deterministic.
 `envoc eir-check <file.eir> -O2` runs them on EIR text and prints the result; the goldens
 in `tests/golden/opt/` use it.
 
-## `inline.envo`: inlining
+## `inline.envol`: inlining
 
 A call to a single-block function of at most 16 instructions that ends in `ret` is
 replaced by a copy of that function's instructions. The callee's parameters become the
@@ -22,7 +22,7 @@ that comes later is already its own inlined version.
 Most of these calls are accessors (`NodeAt`, `SymAt`, `Len`) and a call costs more than
 their body.
 
-## `mem2reg.envo`: locals become values
+## `mem2reg.envol`: locals become values
 
 Lowering keeps every local in a slot and reads and writes it with `load` and `store`. A
 scalar slot whose address is used only by loads and stores of its own type (and `zero`
@@ -32,7 +32,7 @@ and every branch passes the current value along. The local starts as 0, as a slo
 The pass runs before inlining and again after it (inlined copies bring their own slots);
 simplification then removes the parameters that receive one value on every edge.
 
-## `simplify.envo`: folding, copy propagation, dead code, CFG
+## `simplify.envol`: folding, copy propagation, dead code, CFG
 
 Per function, repeated until nothing changes (at most 8 rounds):
 

@@ -5,7 +5,7 @@
 TrueType fonts: the tables a renderer needs (`head`, `hhea`, `maxp`, `cmap` formats 4
 and 12, `hmtx`, `loca`, `glyf` with simple and composite glyphs) and an anti-aliased
 rasterizer. Curves are flattened in fixed point (1/256 pixel), and coverage is measured
-exactly across each pixel on four sub-rows with the non-zero winding rule. Envo bundles
+exactly across each pixel on four sub-rows with the non-zero winding rule. Envol bundles
 no fonts: `System` finds the system's own.
 
 A font file is untrusted input. Every read is bounds-checked, composite glyphs nest at

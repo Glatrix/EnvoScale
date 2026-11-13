@@ -1,0 +1,102 @@
+// Packages (PLAN D27): a folder with an envo.envon manifest whose `package` block names
+// it. Its sources are the .envol files in the folder and below, outside tests/ and
+// build/ folders and outside folders that are packages of their own; main.envol, if it
+// is there, holds the program's top-level statements and comes first. Its tests are the
+// .envol files under tests/: each is a program, built with the sources except main.envol.
+use std.fs;
+use std.path;
+use core.text as ct;
+use alloc.text;
+use envo.eon;
+use ports.{IoError};
+
+struct Package {
+    string Dir;
+    string Name;
+    List<string> Sources;   // main.envol first, then the rest in byte order
+    List<string> Tests;
+    bool HasMain;
+}
+
+bool IsPackageDir(str dir) {
+    string m = path.Join(dir, "envo.envon");
+    return fs.IsFile(m.AsStr());
+}
+
+// The .envol files under dir, in byte order; tests/ folders are skipped unless wantTests,
+// and then only the files under a tests/ folder are kept.
+void Walk(str dir, ref List<string> found, bool wantTests, bool inTests) {
+    Result<List<string>, IoError> r = fs.ListDir(dir);
+    if (r.IsErr()) return;
+    List<string> names = r.Unwrap();
+    foreach (var n in names.AsSlice()) {
+        str name = n.AsStr();
+        if (name.Len == 0 || name[0] == '.') continue;
+        string full = path.Join(dir, name);
+        if (fs.IsDir(full.AsStr())) {
+            if (ct.Compare(name, "build") == 0) continue;
+            if (IsPackageDir(full.AsStr())) continue;
+            bool tests = ct.Compare(name, "tests") == 0;
+            if (tests && !wantTests) continue;
+            Walk(full.AsStr(), ref found, wantTests, inTests || tests);
+        } else if (ct.EndsWith(name, ".envol") && inTests == wantTests) {
+            found.Push(full);
+        }
+    }
+}
+
+// The manifest at file, or exits with its error.
+eon.Value LoadManifest(str file) {
+    Result<eon.Value, eon.ParseError> r = eon.Load(file);
+    match r {
+        Ok(doc) => { return doc; }
+        Err(e) => {
+            string msg = string.From(file);
+            msg.AppendByte(':');
+            msg.Append(e.Describe().AsStr());
+            EnvoFail(msg.AsStr(), 1);
+        }
+    }
+    return eon.Value.NewBlock();
+}
+
+// Reads the package in dir, or exits with an error.
+Package ReadPackage(str dir) {
+    string manifest = path.Join(dir, "envo.envon");
+    if (!fs.IsFile(manifest.AsStr())) {
+        string msg = string.From("no envo.envon in `");
+        msg.Append(dir);
+        msg.Append("`: not a package (or give .envol files)");
+        EnvoFail(msg.AsStr(), 1);
+    }
+    eon.Value doc = LoadManifest(manifest.AsStr());
+    eon.Value[] block = doc.Field("package");
+    if (block.Len == 0 || !block[0].IsBlock()) {
+        string msg = string.From(manifest.AsStr());
+        msg.Append(": no `package` block");
+        if (doc.Has("workspace")) msg.Append(" (it is a workspace: give a member's folder)");
+        EnvoFail(msg.AsStr(), 1);
+    }
+    str? name = block[0].GetStr("name");
+    if (name.IsNone()) {
+        string msg = string.From(manifest.AsStr());
+        msg.Append(": the `package` block needs `name = \"...\"`");
+        EnvoFail(msg.AsStr(), 1);
+    }
+    Package p = new Package {
+        Dir = string.From(dir), Name = string.From(name.Unwrap()), Sources = List<string>.New(),
+        Tests = List<string>.New(), HasMain = false,
+    };
+    List<string> all = List<string>.New();
+    Walk(dir, ref all, false, false);
+    string mainFile = path.Join(dir, "main.envol");
+    if (fs.IsFile(mainFile.AsStr())) {
+        p.HasMain = true;
+        p.Sources.Push(string.From(mainFile.AsStr()));
+    }
+    foreach (var f in all.AsSlice()) {
+        if (ct.Compare(f.AsStr(), mainFile.AsStr()) != 0) p.Sources.Push(string.From(f.AsStr()));
+    }
+    Walk(dir, ref p.Tests, true, false);
+    return p;
+}

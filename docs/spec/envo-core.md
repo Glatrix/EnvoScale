@@ -3,27 +3,27 @@
 > **Status:** Draft; being implemented by Stage 0 (`envoc0`, milestone M1).
 > Lexical part implemented and tested; parser, checker and code generator next.
 
-Envo-Core is the small subset of Envo that the assembly compiler `envoc0` accepts. It
+Envo-Core is the small subset of Envol that the assembly compiler `envoc0` accepts. It
 exists for one reason: to write Stage 1 (`envoc1`) in something nicer than assembly
 while keeping Stage 0 small enough to audit (target: under ~15k lines of `.eas`).
 
 ## 1. The subset property
 
-**[core.subset.1]** Every program `envoc0` accepts is a syntactically valid Envo program,
-and where full Envo also accepts it, it means the same thing. Core only ever *removes*
+**[core.subset.1]** Every program `envoc0` accepts is a syntactically valid Envol program,
+and where full Envol also accepts it, it means the same thing. Core only ever *removes*
 features; it never adds syntax or changes meaning.
 
-**[core.subset.2]** Full Envo may reject some Core programs, because Stage 0 does not
+**[core.subset.2]** Full Envol may reject some Core programs, because Stage 0 does not
 check borrow rules (chapter 5). Stage 1's source is required to pass both compilers once
 Stage 2 exists; CI enforces this from M3.
 
 Consequences that shaped Core:
 
-- All Envo keywords are reserved in Core, even ones Core does not use.
-- Core's borrowed string type is `str`, not `string` (which is owned in Envo).
-- Raw pointer dereference needs `unsafe { }` in Core, as in Envo.
-- Character literals have type `char` in Envo; Core has no `char`, so it only allows
-  ASCII character literals where a `u8` is expected, which Envo also allows (§2.3).
+- All Envol keywords are reserved in Core, even ones Core does not use.
+- Core's borrowed string type is `str`, not `string` (which is owned in Envol).
+- Raw pointer dereference needs `unsafe { }` in Core, as in Envol.
+- Character literals have type `char` in Envol; Core has no `char`, so it only allows
+  ASCII character literals where a `u8` is expected, which Envol also allows (§2.3).
 
 ## 2. Lexical structure
 
@@ -47,7 +47,7 @@ Float literals lex normally and are rejected by the parser (E0905).
 | `str` | pointer + length, immutable UTF-8. String literals have this type |
 | `void` | return type only |
 | `T[N]` | fixed array, `N` an integer constant |
-| `T[]` | slice: pointer + length. Core has no slicing ([RFC 0002](../rfcs/0002-slicing.md) adds `a[lo..hi]` to full Envo and Envo-S1 only), so a Core program's slices are empty; use a pointer and a length |
+| `T[]` | slice: pointer + length. Core has no slicing ([RFC 0002](../rfcs/0002-slicing.md) adds `a[lo..hi]` to full Envol and Envo-S1 only), so a Core program's slices are empty; use a pointer and a length |
 | `*T` | raw pointer; deref inside `unsafe` |
 | `struct` types | fields only |
 | `enum` types | fieldless; optional `: u8`/`u16`/`u32`/`u64`/`i…` representation (default `i32`) |
@@ -123,7 +123,7 @@ Semicolons: required after each statement except directly before `}` or at end o
 (§3.1).
 
 Integer overflow, division by zero, shifts by at least the bit width and out-of-range
-indexing panic (`panic: <reason>` on stderr, exit code 101), as in full Envo.
+indexing panic (`panic: <reason>` on stderr, exit code 101), as in full Envol.
 
 ### 5.1 Grammar (normative; implemented by `bootstrap/stage0/src/parser.eas`)
 
@@ -200,7 +200,7 @@ because those chains form left-deep trees that later passes walk recursively. In
 practice a single expression can hold roughly 250 chained binary operators. (A Stage 0
 limit, so no input can overflow its stack.)
 
-**[core.syntax.5]** Full-Envo syntax that Core leaves out is **E0905**, naming the
+**[core.syntax.5]** Full-Envol syntax that Core leaves out is **E0905**, naming the
 construct, wherever the parser can recognise it: any reserved keyword outside the Core
 set (`class`, `foreach`, `null`, `this`, `in`, `ref`, …; the Core set is
 `_ alignof as break const continue else enum false for if match new private public
@@ -348,10 +348,10 @@ porting Stage 0 is a matter of one platform file.
 ## 7. Command line
 
 ```
-envoc0 lex <file.envo>                              print the token stream (implemented)
-envoc0 parse <file.envo>                            print the syntax tree (implemented)
-envoc0 check <file.envo>...                         check names and types; print the typed tree (implemented)
-envoc0 build <file.envo>... -o <out>                compile to an executable (implemented)
+envoc0 lex <file.envol>                              print the token stream (implemented)
+envoc0 parse <file.envol>                            print the syntax tree (implemented)
+envoc0 check <file.envol>...                         check names and types; print the typed tree (implemented)
+envoc0 build <file.envol>... -o <out>                compile to an executable (implemented)
         [--target x86_64-windows | x86_64-linux]    default: the OS envoc0 runs on
 envoc0 version | help
 ```

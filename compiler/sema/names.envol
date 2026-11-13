@@ -1,0 +1,250 @@
+// Envo-S1 namespaces, `use` and visibility ([s1.item.1], [s1.item.2]). Follows Stage 1's
+// bootstrap/stage1/check/names.envol. A file may start with `namespace a.b;`; its items are
+// then `a.b.X` in program scope. An unqualified name is looked up in the file's namespace
+// and the ones around it, then in what the file imports, then in the root namespace. A
+// private item (the default) is visible only inside its own namespace.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.syntax;
+
+impl Checker {
+    // The namespace of source file f (empty for the root).
+    Text FileNamespace(in this, u32 f) {
+        if (f as usize >= this.FileNs.Len()) return TextOf("");
+        return this.FileNs.Get(f as usize);
+    }
+
+    // The dotted path a list of name nodes spells.
+    Text PathText(ref this, u32 first) {
+        string b = string.New();
+        u32 p = first;
+        while (p != 0) {
+            if (p != first) b.AppendByte('.');
+            b.Append(this.TokText(this.NTok(p)));
+            p = this.NNext(p);
+        }
+        return this.Keep(b);
+    }
+
+    Text JoinName(ref this, Text ns, Text name) {
+        if (ns.Len == 0) return name;
+        string b = string.From(TextStr(ns));
+        b.AppendByte('.');
+        b.Append(TextStr(name));
+        return this.Keep(b);
+    }
+
+    bool IsNamespace(in this, str path) => this.NsSet.Has(path);
+
+    // Pass 0: each file's namespace (E0211 unless it comes first), the namespaces that
+    // exist (with every prefix), and the files' `use` lines (E0213 for an unknown one).
+    void CollectNamespaces(ref this, u32 first) {
+        usize files = this.Texts.Len();
+        List<u8> seen = List<u8>.New();     // per file: an item came before
+        for (usize i = 0; i < files; i++) {
+            this.FileNs.Push(TextOf(""));
+            seen.Push(0);
+        }
+        u32 n = first;
+        while (n != 0) {
+            u32 f = this.TokFile(this.NTok(n));
+            if (this.NKind(n) == NK_NAMESPACE) {
+                if (seen.Get(f as usize) != 0) this.Fail(this.NTok(n), E_NAMESPACE_FIRST, "`namespace` must come first in its file");
+                Text path = this.PathText(this.NodeAt(n).A);
+                this.FileNs.Set(f as usize, path);
+                // the namespace and each prefix
+                str p = TextStr(path);
+                for (usize i = 0; i <= p.Len; i++) {
+                    if (i == p.Len || p[i] == '.') this.NsSet.Put(p[0..i], 1);
+                }
+            }
+            seen.Set(f as usize, 1);
+            n = this.NNext(n);
+        }
+        // `use` lines name namespaces that exist
+        n = first;
+        while (n != 0) {
+            if (this.NKind(n) == NK_USE) {
+                this.Uses.Push(n);
+                Text path = this.PathText(this.NodeAt(n).A);
+                if (!this.IsNamespace(TextStr(path))) {
+                    string b = string.From("unknown namespace `");
+                    b.Append(TextStr(path));
+                    b.AppendByte('`');
+                    this.Fail(this.NTok(this.NodeAt(n).A), E_UNKNOWN_NAMESPACE, b);
+                }
+            }
+            n = this.NNext(n);
+        }
+    }
+
+    // May code in file f use item symbol s? ([s1.item.2])
+    bool VisibleFrom(in this, u32 s, u32 f) {
+        Sym sym = this.SymAt(s);
+        if (sym.Flags & (SF_PUBLIC | SF_PRELUDE) != 0) return true;
+        if (sym.Kind == SK_TYPE || sym.Kind == SK_BUILTIN) return true;
+        return Same(TextStr(sym.Ns), TextStr(this.FileNamespace(f)));
+    }
+
+    // The item key names, if code in file f may use it: 0 if there is none, E0212 if it is
+    // private to another namespace.
+    u32 FindVisible(in this, Text key, u32 f, u32 tok) {
+        u32 s = this.GFind(TextStr(key));
+        if (s == 0) return 0;
+        if (!this.VisibleFrom(s, f)) {
+            string b = string.From("`");
+            b.Append(TextStr(key));
+            b.Append("` is private to namespace `");
+            b.Append(TextStr(this.SymAt(s).Ns));
+            b.Append("`; mark it `public` or `internal` to use it here");
+            this.Fail(tok, E_PRIVATE, b);
+        }
+        return s;
+    }
+
+    // An unqualified name in file f: its namespace and those around it, its imports, the
+    // root.
+    u32 FindInScope(ref this, Text name, u32 f, u32 tok) {
+        Text ns = this.FileNamespace(f);
+        while (ns.Len > 0) {
+            Text key = this.JoinName(ns, name);
+            u32 s = this.GFind(TextStr(key));
+            if (s != 0) return s;
+            str nss = TextStr(ns);
+            usize cut = nss.Len;
+            while (cut > 0 && nss[cut - 1] != '.') cut--;
+            if (cut == 0) ns = TextOf("");
+            else ns = TextOf(nss[0..cut - 1]);
+        }
+        // `use a.b;` imports every name of a.b; `use a.b.{X, Y};` imports X and Y
+        usize uses = this.Uses.Len();
+        for (usize i = 0; i < uses; i++) {
+            u32 u = this.Uses.Get(i);
+            Node un = this.NodeAt(u);
+            if (un.C == 0 && this.TokFile(un.Tok) == f) {
+                Text path = this.PathText(un.A);
+                if (un.B == 0) {
+                    Text key = this.JoinName(path, name);
+                    u32 s = this.FindVisible(key, f, tok);
+                    if (s != 0) return s;
+                } else {
+                    u32 m = un.B;
+                    while (m != 0) {
+                        if (Same(this.TokText(this.NTok(m)), TextStr(name))) {
+                            Text key = this.JoinName(path, name);
+                            u32 s = this.FindVisible(key, f, this.NTok(m));
+                            if (s == 0) this.FailName(this.NTok(m), E_UNKNOWN_NAME, "unknown name `", this.NTok(m), "`");
+                            return s;
+                        }
+                        m = this.NNext(m);
+                    }
+                }
+            }
+        }
+        u32 s = this.GFind(TextStr(name));
+        if (s != 0 && !this.VisibleFrom(s, f)) return 0;
+        return s;
+    }
+
+    // The namespace a name chain spells in file f (an alias from `use a.b as c`, a
+    // namespace, or a namespace inside one), or empty.
+    Text NsPathOf(ref this, u32 n, u32 f) {
+        Node node = this.NodeAt(n);
+        if (node.Kind == NK_NAME) {
+            Text t = this.TokName(node.Tok);
+            Text alias = this.AliasPath(t, f);
+            if (alias.Len > 0) return alias;
+            if (this.IsNamespace(TextStr(t))) return t;
+            return TextOf("");
+        }
+        if (node.Kind != NK_MEMBER) return TextOf("");
+        Text inner = this.NsPathOf(node.A, f);
+        if (inner.Len == 0) return TextOf("");
+        Text whole = this.JoinName(inner, this.TokName(node.Tok));
+        if (this.IsNamespace(TextStr(whole))) return whole;
+        return TextOf("");
+    }
+
+    // `ns.X` in an expression, met while checking: when the chain does not start with a
+    // local, member node n becomes the name X with its item fixed (TokSym), so the rest of
+    // the checker and lowering see a plain name.
+    void TryQualified(ref this, u32 n) {
+        if (this.NsSet.Len() == 0) return;
+        if (this.NKind(n) != NK_MEMBER) return;
+        Node node = this.NodeAt(n);
+        u32 root = node.A;
+        while (this.NKind(root) == NK_MEMBER) root = this.NodeAt(root).A;
+        if (this.NKind(root) != NK_NAME || this.LocalFind(this.NTok(root)) != 0) return;
+        u32 f = this.TokFile(node.Tok);
+        Text ns = this.NsPathOf(node.A, f);
+        if (ns.Len == 0) return;
+        Text key = this.JoinName(ns, this.TokName(node.Tok));
+        if (this.IsNamespace(TextStr(key))) return;     // a namespace inside one: the outer member goes on
+        u32 s = this.FindVisible(key, f, node.Tok);
+        if (s == 0) this.FailName(node.Tok, E_UNKNOWN_NAME, "unknown name `", node.Tok, "`");
+        Node changed = this.NodeAt(n);
+        changed.Kind = NK_NAME;
+        changed.A = 0;
+        this.PutNode(n, changed);
+        this.TokSym.Put(Decimal(node.Tok as u64), s);
+    }
+
+    // The item the name at token tok stands for after TryQualified, or 0.
+    u32 FixedSym(in this, u32 tok) {
+        if (this.TokSym.Len() == 0) return 0;
+        return this.TokSym.Get(Decimal(tok as u64)) ?? 0;
+    }
+
+    // `a.b.T` in a type: the qualifiers (an alias first, if any) and the name.
+    u32 QualifiedType(ref this, u32 quals, u32 tok) {
+        u32 f = this.TokFile(tok);
+        string b = string.New();
+        u32 q = quals;
+        while (q != 0) {
+            Text t = this.TokName(this.NTok(q));
+            if (q == quals) {
+                Text alias = this.AliasPath(t, f);
+                if (alias.Len > 0) t = alias;
+            }
+            if (q != quals) b.AppendByte('.');
+            b.Append(TextStr(t));
+            q = this.NNext(q);
+        }
+        Text ns = this.Keep(b);
+        if (!this.IsNamespace(TextStr(ns))) {
+            string m = string.From("unknown namespace `");
+            m.Append(TextStr(ns));
+            m.AppendByte('`');
+            this.Fail(this.NTok(quals), E_UNKNOWN_NAMESPACE, m);
+        }
+        Text key = this.JoinName(ns, this.TokName(tok));
+        u32 s = this.FindVisible(key, f, tok);
+        if (s == 0) this.FailName(tok, E_UNKNOWN_TYPE, "unknown type `", tok, "`");
+        return s;
+    }
+
+    // The namespace name stands for in file f: `use … as name`, or `use a.b;` whose last
+    // segment is name ([item.use.1]; Stage 1 knows only the first). Empty if neither.
+    Text AliasPath(ref this, Text name, u32 f) {
+        for (usize i = 0; i < this.Uses.Len(); i++) {
+            u32 u = this.Uses.Get(i);
+            Node un = this.NodeAt(u);
+            if (un.C != 0 && this.TokFile(un.Tok) == f && Same(this.TokText(this.NTok(un.C)), TextStr(name))) return this.PathText(un.A);
+        }
+        for (usize i = 0; i < this.Uses.Len(); i++) {
+            u32 u = this.Uses.Get(i);
+            Node un = this.NodeAt(u);
+            if (un.C != 0 || un.B != 0 || this.TokFile(un.Tok) != f) continue;
+            // the last name of the path
+            u32 last = un.A;
+            while (this.NNext(last) != 0) last = this.NNext(last);
+            if (last == un.A) continue;     // `use a;`: a already names itself
+            if (Same(this.TokText(this.NTok(last)), TextStr(name))) {
+                Text path = this.PathText(un.A);
+                if (this.IsNamespace(TextStr(path))) return path;
+            }
+        }
+        return TextOf("");
+    }
+}

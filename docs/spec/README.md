@@ -1,4 +1,4 @@
-# The Envo Language Specification
+# The Envol Language Specification
 
 > **Status:** Draft. Chapter 1 is **normative** (Stage 0 implements it and tests it).
 > Chapters 2–5 are drafts that become normative as Stage 0–2 implement them.
@@ -19,8 +19,8 @@
 |---|---|---|
 | [`envo-core.md`](envo-core.md) | **Envo-Core**, the subset compiled by Stage 0 | Implemented by Stage 0 (M1) |
 | [`envo-s1.md`](envo-s1.md) | **Envo-S1**, the subset compiled by Stage 1 | Draft; being implemented (M2) |
-| [`eon.md`](eon.md) | **EON**, Envo Object Notation (`.envon`) | Draft |
-| [`eir.md`](eir.md) | **EIR**, the Envo intermediate representation | Version 1 specified ([RFC 0005](../rfcs/0005-eir-v1.md)); being implemented (M2) |
+| [`eon.md`](eon.md) | **EON**, Envol Object Notation (`.envon`) | Draft |
+| [`eir.md`](eir.md) | **EIR**, the Envol intermediate representation | Version 1 specified ([RFC 0005](../rfcs/0005-eir-v1.md)); being implemented (M2) |
 | [`errors.md`](errors.md) | Registry of diagnostic codes | Live |
 
 ## Conventions
@@ -38,4 +38,4 @@
 - **Editions.** Text applies to every edition unless it says otherwise. The first
   edition is `"2027"`.
 - **Envo-Core marks.** Paragraphs marked **Core:** describe how Envo-Core restricts the
-  rule. Every Envo-Core program is a syntactically valid Envo program.
+  rule. Every Envo-Core program is a syntactically valid Envol program.

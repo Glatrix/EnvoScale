@@ -2,8 +2,8 @@
 
 > **Status:** M6, done. Decisions D31–D36 in [`PLAN.md`](../PLAN.md).
 
-Envo has two execution modes with one meaning (brief §3.7): `envo build` makes native
-code; `envo run`, `envo file.envo` and `#!/usr/bin/env envo` run the program in the
+Envol has two execution modes with one meaning (brief §3.7): `envo build` makes native
+code; `envo run`, `envo file.envol` and `#!/usr/bin/env envo` run the program in the
 script runtime, sandboxed.
 
 ## One program, two engines (D31, D32)
@@ -62,7 +62,7 @@ not the script's own memory.
 
 ## Scripts (D33)
 
-`envo [--allow …] file.envo [args]` runs a script: permissions come before the file,
+`envo [--allow …] file.envol [args]` runs a script: permissions come before the file,
 and everything after it is the script's. So an executable file starting with
 `#!/usr/bin/env envo` (or `#!/usr/bin/env -S envo --allow read`) runs directly; the
 lexer skips the `#!` line ([lex.shebang.1]).

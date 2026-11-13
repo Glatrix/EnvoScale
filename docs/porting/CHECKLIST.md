@@ -67,7 +67,7 @@ Until a port is implemented, its reference adapter (`adapters/os/none`, `gpu/sof
 - **Backend:** `compiler/backend/aarch64/`: the encoder, the code generator (it follows
   the x86-64 one instruction for instruction, so the same tests apply), and the ELF and
   Mach-O writers.
-- **Runtime OS layer:** `compiler/runtime/<os>_aarch64.envo`, embedded in `envoc`.
+- **Runtime OS layer:** `compiler/runtime/<os>_aarch64.envol`, embedded in `envoc`.
 - **Adapters:** where only the system calls differ, a module gets a file per architecture
-  (`adapters/os/linux/sys/sys.<arch>.envo`); the loader takes `<name>.<arch>.envo` before
-  `<name>.envo`.
+  (`adapters/os/linux/sys/sys.<arch>.envol`); the loader takes `<name>.<arch>.envol` before
+  `<name>.envol`.

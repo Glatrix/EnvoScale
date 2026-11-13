@@ -1,0 +1,3 @@
+// Top-level statements are only allowed in the entry file ([item.mod.3]).
+// expect-error: E0210 @ setup.envol:3:1
+Setup();

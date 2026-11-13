@@ -2,7 +2,7 @@
 
 <img src="docs/images/experimental.svg" alt="Experimental: this project is an experiment, built with heavy use of AI. While it is early, some functionality may not work as intended." width="100%">
 
-**Envo** is a programming language, and **EnvoScale** is everything around it in one
+**Envol** is a programming language, and **EnvoScale** is everything around it in one
 place: the compiler, the standard library and the `envo` tool. Command-line programs,
 servers, desktop and terminal apps, websites, graphics and AI all use the same language
 and the same library, with no third-party code anywhere.
@@ -26,7 +26,7 @@ app.Get("/", new http.Handler { Fn = Hello });
 http.Serve(ref app, "127.0.0.1", 8080);
 ```
 
-The editor parts of the UI library, drawn by Envo itself, in a window and in a terminal:
+The editor parts of the UI library, drawn by Envol itself, in a window and in a terminal:
 
 <img src="docs/images/editor.png" width="49%"> <img src="docs/images/editor-terminal.png" width="49%">
 
@@ -34,14 +34,14 @@ The editor parts of the UI library, drawn by Envo itself, in a window and in a t
 ## Try it
 
 Download the latest [release](https://github.com/envoscale/EnvoScale/releases), unpack it,
-and run `bin/envo run hello.envo`. Or build from source; you need Git Bash or a Linux shell
+and run `bin/envo run hello.envol`. Or build from source; you need Git Bash or a Linux shell
 (or PowerShell on Windows), and nothing else:
 
 ```bash
 git clone https://github.com/envoscale/EnvoScale
 cd EnvoScale
 ./build.sh build
-build/envo/envo run examples/00-hello/main.envo
+build/envo/envo run examples/00-hello/main.envol
 ```
 
 On Windows without Git Bash, use `.\build.ps1 build` and `build\envo\envo.exe`.
@@ -54,8 +54,8 @@ about a minute.
 
 | Command | What it does |
 |---|---|
-| `envo run app.envo` | Runs a program as a script, sandboxed: `--allow net,fs:./data` to give it more |
-| `envo build app.envo -o app` | Builds a native executable for Windows, Linux or macOS, x86-64 or AArch64, or WebAssembly |
+| `envo run app.envol` | Runs a program as a script, sandboxed: `--allow net,fs:./data` to give it more |
+| `envo build app.envol -o app` | Builds a native executable for Windows, Linux or macOS, x86-64 or AArch64, or WebAssembly |
 | `envo new hello` | Starts a project |
 | `envo test` | Runs the tests in `tests/` folders |
 | `envo fmt` | Formats code; there is one layout |
@@ -74,7 +74,7 @@ about a minute.
 | `envo.ui`, `envo.edit`, `envo.lumen` | A UI toolkit with editors, trees, tabs and a command palette, one look in a window or a terminal |
 | `envo.gfx`, `envo.font`, `envo.gpu`, `envo.render3d` | 2D drawing, TrueType fonts, the GPU, 3D |
 | `envo.term`, `envo.cli` | Terminal apps and command-line parsing |
-| `envo.web` | Websites; [this project's site](website) is an Envo program |
+| `envo.web` | Websites; [this project's site](website) is an Envol program |
 | `envo.ai` | Tensors, training, tokenizers, and running Llama-family models locally |
 
 Operating system and driver code lives only in [`adapters/`](adapters); the library
@@ -82,7 +82,7 @@ itself never touches the OS ([how that works](docs/principles.md#ports-and-adapt
 
 ## Where the compiler comes from
 
-The compiler is written in Envo and compiles itself. To build it you need a compiler to
+The compiler is written in Envol and compiles itself. To build it you need a compiler to
 start with: `build.sh` downloads one from
 [EnvoScaleAsm](https://github.com/envoscale/EnvoScaleAsm), which builds it from a few
 kilobytes of assembly you can read, and publishes it only when Linux and Windows built the
@@ -100,7 +100,7 @@ get depends on these sources, not on the downloaded one.
 | [`tools/`](tools) | The `envo` tool |
 | [`tests/`](tests) | The test suites |
 | [`examples/`](examples) | Small programs |
-| [`website/`](website) | The website, written in Envo |
+| [`website/`](website) | The website, written in Envol |
 | [`docs/`](docs) | The language specification and how everything is built |
 
 ## Contributing

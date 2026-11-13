@@ -1,6 +1,6 @@
 # `examples/`
 
-Small, complete programs, one per domain. Each folder has a `main.envo`, an `envo.envon`
+Small, complete programs, one per domain. Each folder has a `main.envol`, an `envo.envon`
 manifest, and a README saying what it shows and from which milestone it runs.
 
 | Example | Shows | Runs from |

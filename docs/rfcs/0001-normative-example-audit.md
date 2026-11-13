@@ -134,4 +134,4 @@ When Stage 2 type-checks them (M3), `tests/spec/` gets the brief's original vers
 
 ## Migration / edition impact
 
-None: no Envo code exists yet.
+None: no Envol code exists yet.

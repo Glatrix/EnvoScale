@@ -1,0 +1,187 @@
+// Lowering views, slicing and `foreach`. Follows Stage 1's bootstrap/stage1/lower/views.envol.
+// A view is { ptr, u64 }, the same struct as `str`.
+namespace envoc.lower;
+
+use envoc.util;
+use envoc.syntax;
+use envoc.sema;
+use envoc.eir;
+
+impl Lower {
+    // The start address and length (u64) of an array, a view or a `str` expression a.
+    void LowerSequence(ref this, u32 a, ref u32 ptr, ref u32 len) {
+        u32 at = this.LNType(a);
+        Type ty = this.C.TypeAt(at);
+        if (ty.Kind == TYK_ARRAY) {
+            ptr = this.LowerExpr(a);        // an array value is its address
+            len = this.Const(ET_U64, ty.Count as u64);
+            return;
+        }
+        u32 st = this.StrType;
+        u32 view = this.LowerExpr(a);
+        ptr = this.Load(ET_PTR, this.Field(st, view, 0));
+        len = this.Load(ET_U64, this.Field(st, view, 1));
+    }
+
+    // A `str` bound must not split a UTF-8 sequence ([expr.slice.3]).
+    void CharBoundary(ref this, u32 ptr, u32 len, u32 b) {
+        u32 notZero = this.NewBlock();
+        u32 inside = this.NewBlock();
+        u32 done = this.NewBlock();
+        u32 zero = this.Const(ET_U64, 0);
+        u32 atZero = this.Bin(20, ET_U64, b, zero);
+        this.CondBr(atZero, done, notZero);
+        this.Start(notZero);
+        u32 atEnd = this.Bin(20, ET_U64, b, len);
+        this.CondBr(atEnd, done, inside);
+        this.Start(inside);
+        u32 byte = this.Load(ET_U8, this.Elem(ET_U8, ptr, b));
+        u32 mask = this.Const(ET_U8, 0xC0);
+        u32 top = this.Bin(14, ET_U8, byte, mask);
+        u32 cont = this.Const(ET_U8, 0x80);
+        u32 bad = this.Bin(20, ET_U8, top, cont);
+        this.Trap(bad, 6);
+        this.Br(done);
+        this.Start(done);
+    }
+
+    // a[lo..hi] ([expr.slice.1]–[expr.slice.3]): bounds as u64, then lo <= hi <= length.
+    u32 LowerSlice(ref this, u32 n, u32 t) {
+        Node node = this.C.NodeAt(n);
+        Node r = this.C.NodeAt(node.B);
+        u32 ptr = 0;
+        u32 len = 0;
+        this.LowerSequence(node.A, ref ptr, ref len);
+        u32 lo = this.Const(ET_U64, 0);
+        if (r.A != 0) {
+            u32 lt = this.LNType(r.A);
+            u32 lv = this.LowerExpr(r.A);
+            lo = this.Index64(lt, lv);
+        }
+        u32 hi = len;
+        if (r.B != 0) {
+            u32 ht = this.LNType(r.B);
+            u32 hv = this.LowerExpr(r.B);
+            hi = this.Index64(ht, hv);
+            if (r.Op == TK_DOT_DOT_EQ) {
+                // hi < length first, so hi + 1 cannot overflow
+                u32 past = this.Bin(25, ET_U64, hi, len);
+                this.Trap(past, 1);
+                u32 one = this.Const(ET_U64, 1);
+                hi = this.Bin(5, ET_U64, hi, one);
+            }
+        }
+        u32 over = this.Bin(24, ET_U64, hi, len);
+        this.Trap(over, 1);
+        u32 crossed = this.Bin(24, ET_U64, lo, hi);
+        this.Trap(crossed, 1);
+        Type at = this.C.TypeAt(this.LNType(node.A));
+        u32 et = ET_U8;
+        if (at.Kind == TYK_STR) {
+            this.CharBoundary(ptr, len, lo);
+            this.CharBoundary(ptr, len, hi);
+        } else {
+            et = this.LType(at.Elem);
+        }
+        u32 st = this.StrType;
+        u32 tmp = this.Slot(st);
+        u32 start = this.Elem(et, ptr, lo);
+        this.Store(ET_PTR, start, this.Field(st, tmp, 0));
+        u32 count = this.Bin(6, ET_U64, hi, lo);
+        this.Store(ET_U64, count, this.Field(st, tmp, 1));
+        return tmp;
+    }
+
+    // foreach ([s1.stmt.1]): an index over the sequence, or a counter over a range.
+    void LowerForeach(ref this, u32 n) {
+        Node node = this.C.NodeAt(n);
+        u32 s = this.C.NSym(node.A);
+        u32 et = this.LNType(node.A);
+        u32 eet = this.LType(et);
+        u32 head = this.NewBlock();
+        u32 body = this.NewBlock();
+        u32 step = this.NewBlock();
+        u32 exit = this.NewBlock();
+        if (this.C.NKind(node.B) == NK_RANGE) {
+            Node r = this.C.NodeAt(node.B);
+            bool inclusive = r.Op == TK_DOT_DOT_EQ;
+            u32 i = this.Slot(eet);
+            u32 hi = this.Slot(eet);
+            u32 a = this.LowerExpr(r.A);
+            this.Store(eet, a, i);
+            u32 b = this.LowerExpr(r.B);
+            this.Store(eet, b, hi);
+            this.SetSymSlot(s, i);
+            this.Br(head);
+            this.Start(head);
+            u16 cmp = 22;               // i < hi
+            if (inclusive) cmp = 23;    // i <= hi
+            u32 iv = this.Load(eet, i);
+            u32 hv = this.Load(eet, hi);
+            u32 more = this.Bin(cmp, eet, iv, hv);
+            this.CondBr(more, body, exit);
+            this.Start(body);
+            this.PushLoop(step, exit);
+            this.LowerStmt(node.C);
+            this.PopLoop();
+            this.JumpIfOpen(step);
+            this.Start(step);
+            // `..=` stops at hi without stepping past it, so hi may be the type's maximum
+            if (inclusive) {
+                u32 next = this.NewBlock();
+                u32 iv2 = this.Load(eet, i);
+                u32 hv2 = this.Load(eet, hi);
+                u32 last = this.Bin(20, eet, iv2, hv2);
+                this.CondBr(last, exit, next);
+                this.Start(next);
+            }
+            u32 cur = this.Load(eet, i);
+            u32 one = this.Const(eet, 1);
+            u32 inc = this.Bin(5, eet, cur, one);
+            this.Store(eet, inc, i);
+            this.Br(head);
+            this.Start(exit);
+            this.DropTemps();
+            return;
+        }
+        u32 ptr = 0;
+        u32 len = 0;
+        this.LowerSequence(node.B, ref ptr, ref len);
+        // the sequence may view a temporary: it lives until the loop ends ([own.temp.1])
+        usize mark = this.DropMark();
+        this.KeepTemps(0, true);
+        bool borrow = this.C.SymAt(s).Flags & SF_BYREF != 0;
+        u32 idx = this.Slot(ET_U64);
+        u32 zero = this.Const(ET_U64, 0);
+        this.Store(ET_U64, zero, idx);
+        u32 copy = 0;
+        if (!borrow) copy = this.Slot(eet);
+        this.Br(head);
+        this.Start(head);
+        u32 iv = this.Load(ET_U64, idx);
+        u32 more = this.Bin(22, ET_U64, iv, len);
+        this.CondBr(more, body, exit);
+        this.Start(body);
+        u32 at = this.Elem(eet, ptr, this.Load(ET_U64, idx));
+        if (borrow) {
+            this.SetSymSlot(s, at);
+        } else {
+            u32 x = this.LoadPlace(et, at);
+            this.StoreTo(et, x, copy);
+            this.SetSymSlot(s, copy);
+        }
+        this.PushLoop(step, exit);
+        this.LowerStmt(node.C);
+        this.PopLoop();
+        this.JumpIfOpen(step);
+        this.Start(step);
+        u32 cur = this.Load(ET_U64, idx);
+        u32 one = this.Const(ET_U64, 1);
+        u32 inc = this.Bin(5, ET_U64, cur, one);
+        this.Store(ET_U64, inc, idx);
+        this.Br(head);
+        this.Start(exit);
+        this.DropDownTo(mark, false);
+        this.DropTemps();
+    }
+}

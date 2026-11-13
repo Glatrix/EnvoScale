@@ -1,0 +1,615 @@
+// The checker's state: side tables, types, symbols, scopes and diagnostics. Follows Stage 1
+// (bootstrap/stage1/check/scope.envol); the passes are in decl.envol, stmt.envol, expr.envol
+// and the Envo-S1 files after them.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.diag;
+use envoc.syntax;
+
+public struct Checker {
+    Tree T;                 // the program; the checker owns it and may rewrite names
+    List<Text> Paths;       // per source file
+    List<Text> Texts;
+    List<u32> NTypes;       // per node: type of an expression, local, parameter or field
+    List<u64> NValues;      // per node: constant value, field offset, call environment
+    List<u32> NSyms;        // per node: the symbol a name resolved to; an item's symbol
+    List<u8> NMatched;      // per node: a match pattern whose value was recorded
+    List<u8> NConv;         // per node: 1 where a `string` is used as a `str`
+    List<u8> NMove;         // per node: 1 where a use moves a whole local, 2 a dropped temporary
+    List<Type> Types;
+    List<bool> ParamsIn;    // per type: does it mention a type parameter (HasParams)
+    List<u8> BorrowMemo;    // per type: HoldsBorrow, 0 not known yet, 1 no, 2 yes
+    List<Sym> Syms;
+    StrMap<u32> Global;     // program scope: name -> symbol
+    StrMap<u32> Derived;    // interned pointer, slice and array types
+    List<u32> Locals;       // a stack scanned from the top
+    usize LSP;              // local stack top
+    usize LBase;            // first local of the current function
+    usize Unsafe;           // unsafe block depth
+    usize Loops;            // loop depth
+    u32 Ret;                // current function's return type
+    bool Top;               // checking top-level statements
+    bool Brk;               // a break left the innermost loop
+    List<u32> ParamTypes;   // parameter types of functions and built-ins
+    bool Core;              // --core
+    bool Runtime;           // compiling with the runtime: the target built-ins exist
+    // generics, methods and interfaces (generic.envol)
+    List<u32> TypeArgs;     // type arguments of instances and of call environments
+    StrMap<u32> Instances;  // interned generic instance and function types
+    StrMap<u64> Methods;    // "<owner key>.<name>" -> method symbol | (impl index + 1) << 32
+    List<ImplRec> Impls;
+    List<u32> Bounds;       // pairs: (parameter type, interface type)
+    List<u32> Calls;        // generic and method call nodes, grouped by function body
+    List<u32> MainCalls;    // the same for the top-level statements
+    List<Inst> Insts;
+    StrMap<u32> InstMap;    // "<symbol>:<types>" -> Inst index
+    u32 Scope1;             // type parameter lists visible by name: the owner's,
+    u32 Scope2;             // and the function's own
+    u32 CurFn;
+    u32 CurBounds;
+    u32 NCurBounds;
+    // lambdas (closure.envol)
+    List<u32> LamStack;     // triples for the lambdas being checked: node, locals start, first change
+    List<u32> CapTmp;       // pairs (lambda, local) found so far
+    List<u32> Captures;     // each lambda's, contiguous (its NValue: first | count << 32)
+    // the prelude and ownership (own.envol)
+    u32 PreludeFile;        // 0xFFFFFFFF: none
+    u32 F32;                // the float types, 0 until a program names one (RFC 0006)
+    u32 F64;
+    u32 CopySym;
+    u32 DropSym;
+    u32 OptionSym;
+    u32 ResultSym;
+    u32 StringSym;
+    StrMap<u32> PreludeScope;
+    // namespaces (names.envol)
+    List<Text> FileNs;      // per source file: its namespace
+    StrMap<u32> NsSet;      // every namespace and namespace prefix
+    List<u32> Uses;         // the `use` items
+    StrMap<u32> TokSym;     // token index -> the item a qualified name resolved to
+    List<string> Owned;     // text made by the checker (joined names), kept for good
+    StrMap<u64> Summaries;  // function symbol -> its storage summary (summary.envol)
+    // borrows held in locals end at their last use (move.envol, [own.borrow.2]): a first,
+    // quiet pass of the move check numbers the statements and notes each local's last use
+    bool MvQuiet;           // the first pass: errors are not reported
+    bool MvRecord;          // the first pass: note uses
+    bool MvEarly;           // the second pass: end borrows after their holder's last use
+    u32 MvStamp;            // statements so far, in the order the move check visits them
+    List<u32> MvLast;       // per symbol: the stamp of its last use
+    List<u32> MvDecl;       // per symbol: the stamp of its declaration
+    // `once fn` inference ([fn.type.2]): a quiet move check of a lambda's body, while it is
+    // checked, notes whether the body moves out a value the lambda captured
+    bool MvProbing;         // the probe runs
+    u32 MvProbeCaps;        // the probed lambda's first capture
+    bool MvCapMoved;        // the probed lambda's body moved one of its captures
+
+    // A checker for a parsed program.
+    public static Checker New(in Sources src, Tree tree, bool core, bool runtime) {
+        usize count = tree.Nodes.Len();
+        Checker c = new Checker {
+            T = tree, Paths = List<Text>.New(), Texts = List<Text>.New(),
+            NTypes = List<u32>.New(), NValues = List<u64>.New(), NSyms = List<u32>.New(),
+            NMatched = List<u8>.New(), NConv = List<u8>.New(), NMove = List<u8>.New(),
+            Types = List<Type>.New(), ParamsIn = List<bool>.New(), BorrowMemo = List<u8>.New(), Syms = List<Sym>.New(),
+            Global = StrMap<u32>.New(), Derived = StrMap<u32>.New(),
+            Locals = List<u32>.New(), LSP = 0, LBase = 0, Unsafe = 0, Loops = 0, Ret = 0,
+            Top = false, Brk = false, ParamTypes = List<u32>.New(), Core = core, Runtime = runtime,
+            TypeArgs = List<u32>.New(), Instances = StrMap<u32>.New(), Methods = StrMap<u64>.New(),
+            Impls = List<ImplRec>.New(), Bounds = List<u32>.New(), Calls = List<u32>.New(),
+            MainCalls = List<u32>.New(), Insts = List<Inst>.New(), InstMap = StrMap<u32>.New(),
+            Scope1 = 0, Scope2 = 0, CurFn = 0, CurBounds = 0, NCurBounds = 0,
+            LamStack = List<u32>.New(), CapTmp = List<u32>.New(), Captures = List<u32>.New(),
+            PreludeFile = 0xFFFFFFFF, F32 = 0, F64 = 0, CopySym = 0, DropSym = 0, OptionSym = 0, ResultSym = 0,
+            StringSym = 0, PreludeScope = StrMap<u32>.New(),
+            FileNs = List<Text>.New(), NsSet = StrMap<u32>.New(), Uses = List<u32>.New(),
+            TokSym = StrMap<u32>.New(), Owned = List<string>.New(), Summaries = StrMap<u64>.New(),
+            MvQuiet = false, MvRecord = false, MvEarly = false, MvStamp = 0, MvLast = List<u32>.New(),
+            MvDecl = List<u32>.New(), MvProbing = false, MvProbeCaps = 0, MvCapMoved = false
+        };
+        c.TypeArgs.Push(0);     // index 0: "no environment"
+        for (usize f = 0; f < src.Count(); f++) {
+            c.Paths.Push(TextOf(src.Path(f)));
+            c.Texts.Push(TextOf(src.Text(f)));
+        }
+        for (usize i = 0; i < count; i++) {
+            c.NTypes.Push(0);
+            c.NValues.Push(0);
+            c.NSyms.Push(0);
+            c.NMatched.Push(0);
+            c.NConv.Push(0);
+            c.NMove.Push(0);
+        }
+        return c;
+    }
+
+    // ------------------------------------------------------------------ side tables
+
+    u32 NType(in this, u32 n) => this.NTypes.Get(n as usize);
+    void SetNType(ref this, u32 n, u32 t) => this.NTypes.Set(n as usize, t);
+    u64 NValue(in this, u32 n) => this.NValues.Get(n as usize);
+    void SetNValue(ref this, u32 n, u64 v) => this.NValues.Set(n as usize, v);
+    u32 NSym(in this, u32 n) => this.NSyms.Get(n as usize);
+    void SetNSym(ref this, u32 n, u32 s) => this.NSyms.Set(n as usize, s);
+    bool NMatchedAt(in this, u32 n) => this.NMatched.Get(n as usize) != 0;
+    void SetNMatched(ref this, u32 n) => this.NMatched.Set(n as usize, 1);
+    public bool IsConverted(in this, u32 n) => this.NConv.Get(n as usize) == 1;
+
+    // ------------------------------------------------------------------ nodes and tokens
+
+    Node NodeAt(in this, u32 n) => this.T.Nodes.Get(n as usize);
+    void PutNode(ref this, u32 n, Node x) => this.T.Nodes.Set(n as usize, x);
+    u16 NKind(in this, u32 n) => this.T.Nodes.Get(n as usize).Kind;
+    u32 NTok(in this, u32 n) => this.T.Nodes.Get(n as usize).Tok;
+    u32 NNext(in this, u32 n) => this.T.Nodes.Get(n as usize).Next;
+    Token Tok(in this, u32 tok) => this.T.Toks.Get(tok as usize);
+    u32 TokFile(in this, u32 tok) => this.T.Toks.Get(tok as usize).File;
+
+    // The text of token tok (it lives as long as the sources).
+    Text TokName(in this, u32 tok) {
+        Token t = this.T.Toks.Get(tok as usize);
+        Text file = this.Texts.Get(t.File as usize);
+        unsafe { return new Text { Ptr = &file.Ptr[t.Start as usize], Len = t.Len as usize }; }
+    }
+
+    str TokText(in this, u32 tok) => TextStr(this.TokName(tok));
+
+    bool SameName(in this, u32 a, u32 b) => Same(this.TokText(a), this.TokText(b));
+
+    // Keeps a string for good and returns a reference to it.
+    Text Keep(ref this, string s) {
+        Text t = new Text { Ptr = s.Data, Len = s.Count };
+        this.Owned.Push(s);
+        return t;
+    }
+
+    // ------------------------------------------------------------------ types
+
+    Type TypeAt(in this, u32 t) => this.Types.Get(t as usize);
+    // Stores type t. Types are interned and their parts exist first, so whether t mentions
+    // a type parameter is worked out here, once (HasParams reads it).
+    void PutType(ref this, u32 t, Type x) {
+        this.Types.Set(t as usize, x);
+        bool p = x.Kind == TYK_PARAM;
+        if (!p && (x.Kind == TYK_PTR || x.Kind == TYK_SLICE || x.Kind == TYK_ARRAY || x.Kind == TYK_FN)) p = this.HasParams(x.Elem);
+        for (u32 i = 0; i < x.NArgs && !p; i++) p = this.HasParams(this.EnvGet(x.Args, i));
+        while (this.ParamsIn.Len() <= t as usize) this.ParamsIn.Push(false);
+        this.ParamsIn.Set(t as usize, p);
+    }
+    u8 TyKind(in this, u32 t) => this.Types.Get(t as usize).Kind;
+    bool IsIntType(in this, u32 t) => this.TyKind(t) == TYK_INT;
+    public bool IsFloatType(in this, u32 t) => t != 0 && this.TyKind(t) == TYK_FLOAT;
+
+    // f32 (size 4) or f64 (size 8), interned the first time a program needs it: programs
+    // without floats keep Stage 1's type numbering (D17).
+    public u32 FloatType(ref this, u32 size) {
+        if (size == 4 && this.F32 != 0) return this.F32;
+        if (size == 8 && this.F64 != 0) return this.F64;
+        u32 t = this.TypeNew(TYK_FLOAT);
+        Type ty = this.TypeAt(t);
+        ty.Signed = true;
+        ty.Size = size;
+        ty.Align = size;
+        if (size == 4) ty.Name = TextOf("f32");
+        else ty.Name = TextOf("f64");
+        this.PutType(t, ty);
+        if (size == 4) this.F32 = t;
+        else this.F64 = t;
+        return t;
+    }
+
+    u32 TypeNew(ref this, u8 kind) {
+        u32 t = this.Types.Len() as u32;
+        this.Types.Push(new Type {
+            Kind = kind, Signed = false, Size = 0, Align = 0, Elem = 0, Count = 0, Sym = 0,
+            Name = TextOf(""), Args = 0, NArgs = 0, LState = 0
+        });
+        return t;
+    }
+
+    void PrimType(ref this, u8 kind, bool signed, u32 size, u32 align, str name) {
+        u32 t = this.TypeNew(kind);
+        Type ty = this.TypeAt(t);
+        ty.Signed = signed;
+        ty.Size = size;
+        ty.Align = align;
+        ty.Name = TextOf(name);
+        this.PutType(t, ty);
+    }
+
+    // The interned pointer, slice or array type of elem (count for arrays; 1 for `mut T[]`).
+    u32 TypeDerived(ref this, u8 kind, u32 elem, u32 count) {
+        string key = Decimal(kind as u64);
+        key.AppendByte(':');
+        AppendDecimal(ref key, elem as u64);
+        key.AppendByte(':');
+        AppendDecimal(ref key, count as u64);
+        u32? found = this.Derived.Get(key);
+        if (found.IsSome()) return found.Unwrap();
+        u32 t = this.TypeNew(kind);
+        Type ty = this.TypeAt(t);
+        ty.Elem = elem;
+        ty.Count = count;
+        if (kind == TYK_PTR) {
+            ty.Size = 8;
+            ty.Align = 8;
+        } else if (kind == TYK_SLICE) {
+            ty.Size = 16;
+            ty.Align = 8;
+        }
+        this.PutType(t, ty);
+        this.Derived.Put(key, t);
+        return t;
+    }
+
+    u32 TypePtrTo(ref this, u32 elem) => this.TypeDerived(TYK_PTR, elem, 0);
+
+    // A new struct or enum type for symbol s.
+    u32 TypeNamed(ref this, u8 kind, u32 s) {
+        u32 t = this.TypeNew(kind);
+        Type ty = this.TypeAt(t);
+        ty.Sym = s;
+        ty.Name = this.SymAt(s).Name;
+        this.PutType(t, ty);
+        return t;
+    }
+
+    // *T, T[], T[N], fn(…), or the type's own name with its arguments; ? for "no type".
+    void AppendType(in this, ref string b, u32 t) {
+        Type ty = this.TypeAt(t);
+        if (ty.Kind == TYK_PTR) {
+            b.AppendByte('*');
+            this.AppendType(ref b, ty.Elem);
+        } else if (ty.Kind == TYK_SLICE) {
+            if (ty.Count == 1) b.Append("mut ");
+            this.AppendType(ref b, ty.Elem);
+            b.Append("[]");
+        } else if (ty.Kind == TYK_ARRAY) {
+            this.AppendType(ref b, ty.Elem);
+            b.AppendByte('[');
+            AppendDecimal(ref b, ty.Count as u64);
+            b.AppendByte(']');
+        } else if (t == 0) {
+            b.AppendByte('?');
+        } else if (ty.Kind == TYK_FN) {
+            this.AppendFnType(ref b, ty);
+        } else {
+            b.Append(TextStr(ty.Name));
+            if (ty.NArgs > 0) {
+                b.AppendByte('<');
+                for (u32 i = 0; i < ty.NArgs; i++) {
+                    if (i > 0) b.Append(", ");
+                    this.AppendType(ref b, this.EnvGet(ty.Args, i));
+                }
+                b.AppendByte('>');
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ symbols
+
+    Sym SymAt(in this, u32 s) => this.Syms.Get(s as usize);
+    void PutSym(ref this, u32 s, Sym x) => this.Syms.Set(s as usize, x);
+    u8 SymKind(in this, u32 s) => this.Syms.Get(s as usize).Kind;
+    str SymName(in this, u32 s) => TextStr(this.Syms.Get(s as usize).Name);
+
+    void SetSymFlags(ref this, u32 s, u32 flags) {
+        Sym x = this.SymAt(s);
+        x.Flags = flags;
+        this.PutSym(s, x);
+    }
+
+    void AddSymFlags(ref this, u32 s, u32 flags) {
+        Sym x = this.SymAt(s);
+        x.Flags = x.Flags | flags;
+        this.PutSym(s, x);
+    }
+
+    void SetSymState(ref this, u32 s, u8 state) {
+        Sym x = this.SymAt(s);
+        x.State = state;
+        this.PutSym(s, x);
+    }
+
+    void SetSymType(ref this, u32 s, u32 t) {
+        Sym x = this.SymAt(s);
+        x.Type = t;
+        this.PutSym(s, x);
+    }
+
+    // A new zeroed symbol; its name is the token text of node n (if any).
+    u32 SymNew(ref this, u8 kind, u32 n) {
+        u32 s = this.Syms.Len() as u32;
+        Text name = TextOf("");
+        if (n != 0) name = this.TokName(this.NTok(n));
+        this.Syms.Push(new Sym {
+            Kind = kind, State = 0, LState = 0, Name = name, Node = n, Type = 0, Value = 0,
+            Aux = 0, Aux2 = 0, Params = 0, Flags = 0, NEnv = 0, NOwn = 0, OwnerTP = 0,
+            OwnerType = 0, Iface = 0, Recv = 0, Bounds = 0, NBounds = 0, Calls = 0, NCalls = 0,
+            Ns = TextOf("")
+        });
+        return s;
+    }
+
+    // Program scope.
+    u32 GFind(in this, str name) => this.Global.Get(name) ?? 0;
+
+    void GAdd(ref this, u32 s) {
+        Text name = this.SymAt(s).Name;
+        this.Global.Put(TextStr(name), s);
+    }
+
+    // Locals: the visible local with token tok's name, or 0.
+    u32 LocalFind(in this, u32 tok) {
+        str name = this.TokText(tok);
+        usize i = this.LSP;
+        while (i > this.LBase) {
+            i--;
+            u32 s = this.Locals.Get(i);
+            if (Same(this.SymName(s), name)) return s;
+        }
+        return 0;
+    }
+
+    // Adds a local symbol for node n with type t.
+    u32 LocalPush(ref this, u32 n, u32 t) {
+        u32 s = this.SymNew(SK_LOCAL, n);
+        this.LocalPushSym(s, t);
+        return s;
+    }
+
+    // Adds a local without a declaring node (a method's implicit `this`).
+    u32 LocalPushNamed(ref this, str name, u32 t) {
+        u32 s = this.SymNew(SK_LOCAL, 0);
+        Sym x = this.SymAt(s);
+        x.Name = TextOf(name);
+        this.PutSym(s, x);
+        this.LocalPushSym(s, t);
+        return s;
+    }
+
+    void LocalPushSym(ref this, u32 s, u32 t) {
+        Sym x = this.SymAt(s);
+        x.Type = t;
+        x.Value = this.LSP as u64;      // its stack index, for lambda captures
+        this.PutSym(s, x);
+        if (this.LSP == this.Locals.Len()) this.Locals.Push(s);
+        else {
+            usize at = this.LSP;
+            this.Locals.Set(at, s);
+        }
+        this.LSP++;
+    }
+
+    // Locals first, then program scope.
+    u32 Lookup(ref this, u32 tok) {
+        u32 fixed = this.FixedSym(tok);
+        if (fixed != 0) return fixed;
+        u32 s = this.LocalFind(tok);
+        if (s != 0) return s;
+        return this.GFindAt(tok);
+    }
+
+    // The program-scope symbol token tok names. Inside the prelude, the prelude's own items
+    // come first, so a program's items of the same names cannot change what it means.
+    u32 GFindAt(ref this, u32 tok) {
+        u32 fixed = this.FixedSym(tok);
+        if (fixed != 0) return fixed;
+        if (this.PreludeFile != 0xFFFFFFFF && this.TokFile(tok) == this.PreludeFile) {
+            u32? s = this.PreludeScope.Get(this.TokText(tok));
+            if (s.IsSome()) return s.Unwrap();
+        }
+        if (this.NsSet.Len() == 0) return this.GFind(this.TokText(tok));
+        return this.FindInScope(this.TokName(tok), this.TokFile(tok), tok);
+    }
+
+    // [core.name.2]: adds a local; E0204 if a visible local already has the name.
+    void DeclareLocal(ref this, u32 n, u32 t) {
+        u32 tok = this.NTok(n);
+        if (this.LocalFind(tok) != 0) {
+            string b = string.From("`");
+            b.Append(this.TokText(tok));
+            b.Append("` is already declared in this function");
+            this.Fail(tok, E_REDECLARED, b);
+        }
+        u32 s = this.LocalPush(n, t);
+        this.SetNSym(n, s);
+    }
+
+    // ------------------------------------------------------------------ diagnostics
+
+    void Fail(in this, u32 tok, u32 code, str msg) {
+        if (this.MvQuiet) return;
+        Token t = this.Tok(tok);
+        FailAt(TextStr(this.Paths.Get(t.File as usize)), TextStr(this.Texts.Get(t.File as usize)), t.Start as usize, code, msg);
+    }
+
+    void Error(in this, u32 code, u32 tok) => this.Fail(tok, code, CheckMessage(code));
+
+    // A message with `name` (the text of token nameTok) between prefix and suffix.
+    void FailName(in this, u32 tok, u32 code, str prefix, u32 nameTok, str suffix) {
+        string b = string.From(prefix);
+        b.Append(this.TokText(nameTok));
+        b.Append(suffix);
+        this.Fail(tok, code, b);
+    }
+
+    // E0301 "mismatched types: expected `T`, found `U`" at tok.
+    void Mismatch(in this, u32 expected, u32 tok, u32 found) {
+        string b = string.From("mismatched types: expected `");
+        this.AppendType(ref b, expected);
+        b.Append("`, found `");
+        this.AppendType(ref b, found);
+        b.AppendByte('`');
+        this.Fail(tok, E_MISMATCH, b);
+    }
+
+    // E0302 "operator `op` cannot be applied to `T`" at the operator token.
+    void BadOperand(in this, u32 t, u32 opTok) {
+        string b = string.From("operator `");
+        b.Append(this.TokText(opTok));
+        b.Append("` cannot be applied to `");
+        this.AppendType(ref b, t);
+        b.AppendByte('`');
+        this.Fail(opTok, E_BAD_OPERAND, b);
+    }
+
+    // E0304 "value does not fit in `T`".
+    void DoesNotFit(in this, u32 tok, u32 t) {
+        string b = string.From("value does not fit in `");
+        this.AppendType(ref b, t);
+        b.AppendByte('`');
+        this.Fail(tok, E_DOES_NOT_FIT, b);
+    }
+
+    // E0206 "`T` has no member `x`".
+    void NoMember(in this, u32 tok, u32 t) {
+        string b = string.From("`");
+        this.AppendType(ref b, t);
+        b.Append("` has no member `");
+        b.Append(this.TokText(tok));
+        b.AppendByte('`');
+        this.Fail(tok, E_NO_MEMBER, b);
+    }
+
+    // E0905 in Core (E0950 in Envo-S1) for a construct the checker recognises.
+    void NotCore(in this, str what, u32 tok) {
+        u32 code = E_CORE_CONSTRUCT;
+        string b = string.New();
+        if (this.Core) {
+            b.Append("not part of Envo-Core: ");
+        } else {
+            b.Append("not part of Envo-S1: ");
+            code = E_NOT_S1;
+        }
+        b.Append(what);
+        this.Fail(tok, code, b);
+    }
+
+    // "wrong number of arguments: expected want, found have" (E0307) at tok.
+    void ArgCount(in this, u32 tok, u32 want, u32 have) {
+        string b = string.From("wrong number of arguments: expected ");
+        AppendDecimal(ref b, want as u64);
+        b.Append(", found ");
+        AppendDecimal(ref b, have as u64);
+        this.Fail(tok, E_ARG_COUNT, b);
+    }
+
+    // ------------------------------------------------------------------ program scope
+
+    void AddPrimSym(ref this, str name, u32 t) {
+        u32 s = this.SymNew(SK_TYPE, 0);
+        Sym x = this.SymAt(s);
+        x.Name = TextOf(name);
+        x.Type = t;
+        this.PutSym(s, x);
+        this.GAdd(s);
+    }
+
+    void AddBuiltin(ref this, str name, u32 id, u32 ret, u32 n, u32 p1, u32 p2, u32 p3) {
+        u32 s = this.SymNew(SK_BUILTIN, 0);
+        u32 first = this.ParamTypes.Len() as u32;
+        this.ParamTypes.Push(p1);
+        this.ParamTypes.Push(p2);
+        this.ParamTypes.Push(p3);
+        Sym x = this.SymAt(s);
+        x.Name = TextOf(name);
+        x.Type = ret;
+        x.Aux = n;
+        x.Aux2 = id;
+        x.Params = first;
+        this.PutSym(s, x);
+        this.GAdd(s);
+    }
+
+    // A built-in with n parameters of one type.
+    void AddBuiltinN(ref this, str name, u32 id, u32 ret, u32 n, u32 p) {
+        u32 s = this.SymNew(SK_BUILTIN, 0);
+        u32 first = this.ParamTypes.Len() as u32;
+        for (u32 i = 0; i < n; i++) this.ParamTypes.Push(p);
+        Sym x = this.SymAt(s);
+        x.Name = TextOf(name);
+        x.Type = ret;
+        x.Aux = n;
+        x.Aux2 = id;
+        x.Params = first;
+        this.PutSym(s, x);
+        this.GAdd(s);
+    }
+
+    // The symbol just added is a prelude item, hidden by a program's own item of its name.
+    void MarkLastPrelude(ref this) {
+        u32 s = (this.Syms.Len() - 1) as u32;
+        this.AddSymFlags(s, SF_PRELUDE);
+    }
+
+    u32 ParamType(in this, u32 s, u32 i) => this.ParamTypes.Get((this.SymAt(s).Params + i) as usize);
+
+    // Primitive types, aliases and built-ins ([core.name.1]).
+    void InitScope(ref this) {
+        this.TypeNew(0);        // type 0: none
+        this.PrimType(TYK_VOID, false, 0, 1, "void");
+        this.PrimType(TYK_BOOL, false, 1, 1, "bool");
+        this.PrimType(TYK_STR, false, 16, 8, "str");
+        this.PrimType(TYK_INT, true, 1, 1, "i8");
+        this.PrimType(TYK_INT, true, 2, 2, "i16");
+        this.PrimType(TYK_INT, true, 4, 4, "i32");
+        this.PrimType(TYK_INT, true, 8, 8, "i64");
+        this.PrimType(TYK_INT, true, 8, 8, "isize");
+        this.PrimType(TYK_INT, false, 1, 1, "u8");
+        this.PrimType(TYK_INT, false, 2, 2, "u16");
+        this.PrimType(TYK_INT, false, 4, 4, "u32");
+        this.PrimType(TYK_INT, false, 8, 8, "u64");
+        this.PrimType(TYK_INT, false, 8, 8, "usize");
+        u32 ptrU8 = this.TypePtrTo(T_U8);
+        if (ptrU8 != T_PTR_U8) panic("checker: *u8 is not type 14");
+        this.SymNew(0, 0);      // symbol 0: none
+        for (u32 t = T_VOID; t <= T_USIZE; t++) {
+            Text name = this.TypeAt(t).Name;
+            this.AddPrimSym(TextStr(name), t);
+        }
+        this.AddPrimSym("byte", T_U8);
+        this.AddPrimSym("int", T_I32);
+        this.AddPrimSym("uint", T_U32);
+        this.AddPrimSym("long", T_I64);
+        this.AddPrimSym("ulong", T_U64);
+        this.AddBuiltin("print", 1, T_VOID, 1, T_STR, 0, 0);
+        this.AddBuiltin("write", 2, T_VOID, 2, T_I32, T_STR, 0);
+        this.AddBuiltin("read", 3, T_ISIZE, 3, T_I32, T_PTR_U8, T_USIZE);
+        this.AddBuiltin("open", 4, T_I32, 2, T_STR, T_I32, 0);
+        this.AddBuiltin("close", 5, T_VOID, 1, T_I32, 0, 0);
+        this.AddBuiltin("alloc", 6, T_PTR_U8, 1, T_USIZE, 0, 0);
+        this.AddBuiltin("exit", B_EXIT, T_VOID, 1, T_I32, 0, 0);
+        this.AddBuiltin("argc", 8, T_USIZE, 0, 0, 0, 0);
+        this.AddBuiltin("arg", 9, T_STR, 1, T_USIZE, 0, 0);
+        this.AddBuiltin("panic", B_PANIC, T_VOID, 1, T_STR, 0, 0);
+        this.AddBuiltin("str_from", B_STR_FROM, T_STR, 2, T_PTR_U8, T_USIZE, 0);
+        if (!this.Core) {
+            // the Envo-S1 built-ins (envo-s1.md section 7); a program's own items hide them
+            this.AddBuiltin("free", B_FREE, T_VOID, 1, T_PTR_U8, 0, 0);
+            this.MarkLastPrelude();
+            this.AddBuiltin("slice_from", B_SLICE_FROM, 0, 2, T_PTR_U8, T_USIZE, 0);
+            this.MarkLastPrelude();
+            this.AddBuiltin("slice_from_mut", B_SLICE_FROM_MUT, 0, 2, T_PTR_U8, T_USIZE, 0);
+            this.MarkLastPrelude();
+            // `Copy`, the automatic interface ([type.copy.1]); a program's own `Copy` hides it
+            u32 s = this.SymNew(SK_IFACE, 0);
+            Sym x = this.SymAt(s);
+            x.Name = TextOf("Copy");
+            x.Flags = SF_PRELUDE;
+            this.PutSym(s, x);
+            u32 t = this.TypeNamed(TYK_IFACE, s);
+            this.SetSymType(s, t);
+            this.CopySym = s;
+            this.GAdd(s);
+        }
+        if (this.Runtime) {
+            // target intrinsics for the runtime's OS layer
+            this.AddBuiltinN("__syscall", B_SYSCALL, T_I64, 7, T_I64);
+            this.AddBuiltinN("__wincall", B_WINCALL, T_I64, 11, T_I64);    // import slot and up to 10 arguments
+            this.AddBuiltinN("__wincall12", B_WINCALL, T_I64, 13, T_I64);  // import slot and 12 arguments
+            this.AddBuiltinN("__wincallp", B_WINCALLP, T_I64, 13, T_I64);  // a function pointer and 12 arguments
+            this.AddBuiltinN("__hostcall", B_HOSTCALL, T_I64, 5, T_I64);   // the WebAssembly host's function k and 4 arguments
+        }
+    }
+}

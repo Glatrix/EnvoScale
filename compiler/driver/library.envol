@@ -1,0 +1,203 @@
+// Library modules and the platform binding (PLAN D21, D23; docs/architecture/library.md).
+//
+// With `--lib <root>`, a `use a.b` that no loaded file declares loads the module file
+// `<root>/lib/a/b/b.envol`, and the files it loads are scanned the same way, until nothing
+// new is used. Two namespaces are adapters, found under `<root>/adapters/os/`: `os.<name>`
+// is `adapters/os/<name>/<name>.envol`, and `platform` is the binding for the target's
+// operating system (or `--os none`): `adapters/os/<os>/platform.envol`. A module may have
+// a file per architecture (PLAN D69): `<dir>/<name>.<arch>.envol` (arch x86_64 or aarch64)
+// is taken for that architecture's targets before `<dir>/<name>.envol`. A file of the
+// standard platform (under `<root>/lib/`) may use `platform` but no `os.*` namespace:
+// the library reaches the outside world only through ports (E0215).
+
+use envoc.util;
+use envoc.diag;
+use envoc.syntax;
+
+// The namespace paths a file declares and uses, from its tokens.
+struct ModuleRefs {
+    List<string> Declares;
+    List<string> Uses;
+    List<u32> UseOffsets;   // where each `use` path starts
+}
+
+// The dotted path starting at token i (IDENT ('.' IDENT)*), stopping before `.{`.
+string DottedPath(in List<Token> toks, str text, ref usize i) {
+    string path = string.New();
+    while (i < toks.Len()) {
+        Token t = toks.Get(i);
+        if (t.Kind != TK_IDENT) break;
+        if (path.Len() > 0) path.AppendByte('.');
+        path.Append(text[t.Start as usize..(t.Start + t.Len) as usize]);
+        i++;
+        if (i + 1 < toks.Len() && toks.Get(i).Kind == TK_DOT && toks.Get(i + 1).Kind == TK_IDENT) {
+            i++;
+            continue;
+        }
+        break;
+    }
+    return path;
+}
+
+ModuleRefs ScanModuleRefs(in List<Token> toks, str text) {
+    ModuleRefs r = new ModuleRefs { Declares = List<string>.New(), Uses = List<string>.New(), UseOffsets = List<u32>.New() };
+    usize i = 0;
+    while (i < toks.Len()) {
+        Token t = toks.Get(i);
+        i++;
+        if (t.Kind != TK_KW_NAMESPACE && t.Kind != TK_KW_USE) continue;
+        if (i >= toks.Len()) break;
+        u32 at = toks.Get(i).Start;
+        string path = DottedPath(toks, text, ref i);
+        if (path.Len() == 0) continue;
+        if (t.Kind == TK_KW_NAMESPACE) {
+            r.Declares.Push(path);
+        } else {
+            r.Uses.Push(path);
+            r.UseOffsets.Push(at);
+        }
+    }
+    return r;
+}
+
+bool HasText(in List<string> list, str s) {
+    foreach (var x in list.AsSlice()) {
+        if (Same(x.AsStr(), s)) return true;
+    }
+    return false;
+}
+
+// The file that holds module ns, under root.
+string ModuleFile(str root, str ns, str os) {
+    string p = string.From(root);
+    if (p.Len() > 0 && p.AsStr()[p.Len() - 1] != '/' && p.AsStr()[p.Len() - 1] != 0x5C) p.AppendByte('/');
+    if (Same(ns, "platform")) {
+        p.Append("adapters/os/");
+        p.Append(os);
+        p.Append("/platform.envol");
+        return p;
+    }
+    str rest = ns;
+    if (StartsWith(ns, "os.")) {
+        p.Append("adapters/");
+    } else {
+        p.Append("lib/");
+    }
+    // a.b.c -> a/b/c/c.envol
+    usize last = 0;
+    for (usize k = 0; k < rest.Len; k++) {
+        u8 c = rest[k];
+        if (c == '.') {
+            p.AppendByte('/');
+            last = k + 1;
+        } else {
+            p.AppendByte(c);
+        }
+    }
+    p.AppendByte('/');
+    p.Append(rest[last..rest.Len]);
+    p.Append(".envol");
+    return p;
+}
+
+// path with `\` as `/`, so paths compare the same on every host.
+string Slashes(str path) {
+    string r = string.New();
+    for (usize i = 0; i < path.Len; i++) {
+        if (path[i] == 0x5C) r.AppendByte('/');
+        else r.AppendByte(path[i]);
+    }
+    return r;
+}
+
+// Is path a module of the standard platform: under root's lib/ folder, and not in a
+// tests/ folder (a library's tests may use the reference adapters directly)?
+bool InLib(str root, str path) {
+    string prefix = Slashes(root);
+    if (prefix.Len() > 0 && prefix.AsStr()[prefix.Len() - 1] != '/') prefix.AppendByte('/');
+    prefix.Append("lib/");
+    string p = Slashes(path);
+    if (!StartsWith(p.AsStr(), prefix.AsStr())) return false;
+    str rest = p.AsStr()[prefix.Len()..p.Len()];
+    str tests = "/tests/";
+    for (usize i = 0; i + tests.Len <= rest.Len; i++) {
+        bool hit = true;
+        for (usize k = 0; k < tests.Len && hit; k++) {
+            if (rest[i + k] != tests[k]) hit = false;
+        }
+        if (hit) return false;
+    }
+    return true;
+}
+
+// path, a module file `<dir>/<name>.envol`, as its file for arch: `<dir>/<name>.<arch>.envol`.
+string ArchFile(str path, str arch) {
+    string p = string.From(path[0..path.Len - 6]);
+    p.AppendByte('.');
+    p.Append(arch);
+    p.Append(".envol");
+    return p;
+}
+
+// Loads the library modules the files in src use, transitively (D21, D23), for the
+// architecture arch (D69).
+void LoadLibraries(ref Sources src, str root, str os, str arch, bool core) {
+    LexTables tables = LexTables.New();
+    List<string> declared = List<string>.New();
+    List<string> wanted = List<string>.New();       // namespaces asked for, in order
+    List<usize> wantedFile = List<usize>.New();
+    List<u32> wantedAt = List<u32>.New();
+    List<string> tried = List<string>.New();
+    usize scanned = 0;
+    while (true) {
+        while (scanned < src.Count()) {
+            List<Token> toks = Lex(tables, src.Path(scanned), src.Text(scanned), scanned as u32, core);
+            ModuleRefs refs = ScanModuleRefs(toks, src.Text(scanned));
+            foreach (var d in refs.Declares.AsSlice()) {
+                if (!HasText(declared, d.AsStr())) declared.Push(string.From(d.AsStr()));
+            }
+            bool library = InLib(root, src.Path(scanned));
+            for (usize k = 0; k < refs.Uses.Len(); k++) {
+                str u = refs.Uses.AsSlice()[k].AsStr();
+                if (library && StartsWith(u, "os.")) {
+                    string msg = string.From("the standard platform cannot use the adapter `");
+                    msg.Append(u);
+                    msg.Append("`; it reaches the outside world through ports and `platform`");
+                    Fail(src, scanned, refs.UseOffsets.Get(k) as usize, 215, msg);
+                }
+                if (!HasText(wanted, u)) {
+                    wanted.Push(string.From(u));
+                    wantedFile.Push(scanned);
+                    wantedAt.Push(refs.UseOffsets.Get(k));
+                }
+            }
+            scanned++;
+        }
+        // load what is used but not declared; stop when nothing new is loaded
+        bool loaded = false;
+        for (usize k = 0; k < wanted.Len(); k++) {
+            str ns = wanted.AsSlice()[k].AsStr();
+            if (HasText(declared, ns) || HasText(tried, ns)) continue;
+            tried.Push(string.From(ns));
+            if (Same(ns, "platform") && Same(os, "macos")) {
+                Fail(src, wantedFile.Get(k), wantedAt.Get(k) as usize, 214, "the standard platform has no macOS adapters yet (M10): build with `--os none` for the reference adapters");
+            }
+            string file = ModuleFile(root, ns, os);
+            string archFile = ArchFile(file.AsStr(), arch);
+            string? text = ReadFile(archFile.AsStr());
+            if (text.IsSome()) file = archFile;
+            else text = ReadFile(file.AsStr());
+            if (text.IsNone()) {
+                string msg = string.From("no module `");
+                msg.Append(ns);
+                msg.Append("`: `");
+                msg.Append(file.AsStr());
+                msg.Append("` does not exist");
+                Fail(src, wantedFile.Get(k), wantedAt.Get(k) as usize, 214, msg);
+            }
+            src.Add(file.AsStr(), text.Unwrap());
+            loaded = true;
+        }
+        if (!loaded) break;
+    }
+}

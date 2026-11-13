@@ -1,0 +1,5 @@
+// expect-error: E0215 @ bad.envol:3:5
+// [D23] a file of the standard platform may not use an adapter namespace (`os.*`)
+// lib: root
+use bad;
+bad.Hello();

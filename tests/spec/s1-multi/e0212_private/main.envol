@@ -1,0 +1,5 @@
+// expect-error: E0212 @ main.envol:5:13
+// [s1.item.2] a private item is visible only inside its namespace
+use geo;
+i64 two = 1;
+i64 n = geo.Twice(two);

@@ -1,0 +1,151 @@
+// envo.ui's application components in pixels, with the test font: tabs over a split of
+// a tree and an editor; the pointer opens a tree item, drags the divider, puts the
+// cursor in the editor and extends the selection, and the wheel scrolls; the palette
+// draws above everything.
+// expect: tabs 0,0 320x32
+// expect: files 0,32 126x168
+// expect: editor 131,32 189x168
+// expect: 664de38d533a4f3c0f4ae3017fa5a53fd5adf2bb719f8960d88dd3b8a7207c02
+// expect: tree item opened
+// expect: ratio 533
+// expect: files 0,32 167x168
+// expect: line 1
+// expect: col 0
+// expect: anchor line 1
+// expect: head col 2
+// expect: 6d1876eba5a148fdc95b3f7aaf7d3b0c39985941803458de70e8280033cc06bd
+// expect: scroll 3
+// expect: palette rows 76
+// expect: b96fcbd2433b7fe3ca4cdd96d6d140538d8cdf0c1f5a6047ba9e3aa6502f62ba
+// expect: chose lil
+use envo.ui;
+use envo.edit;
+use envo.gfx;
+use envo.font;
+use envo.lumen;
+use ports;
+use ports.{Event, EventKind};
+use alloc.text;
+
+// "Envol Test", a font of six glyphs drawn for these tests (tests/data/mkfont.py makes
+// it): .notdef, space, 'l' (a bar), 'O' (a ring of quadratic curves), 'A' (a triangle
+// with a hole), 'i' (a composite of two bars).
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> TestFont() {
+    string h = string.New();
+    h.Append("000100000007004000020030636d6170000000000000007c0000004c676c796600000000000000c8000000d068656164");
+    h.Append("0000000000000198000000366868656100000000000001d000000024686d747800000000000001f4000000186c6f6361");
+    h.Append("000000000000020c0000001c6d61787000000000000002280000000600000001000300010000000c000400400000000c");
+    h.Append("00000000000000200041004f0069006cffff000000200041004f0069006cffffffe1ffc3ffb4ff9cff96000100000000");
+    h.Append("000000000000000000010064000000fa02bc00030000010101010064000000960000000002bc0000fd44000000020032");
+    h.Append("0032028a028a0007000f000001000100010001000100010001000100015e012c00000000fed4fed400000000012cff6a");
+    h.Append("000000000096009600000000028a0000fed4fed400000000012c012cff6a0000ff6aff6a000000000096009600020032");
+    h.Append("0000028a02bc0002000500000101010101010032012c012cfe7000c8ff9c000002bcfd440096000000fa0000ffff0064");
+    h.Append("000000fa05dc0023000200000000000300020000032000000001000000010000000000005f0f3cf5000b03e800000000");
+    h.Append("0000000000000000000000000000000002bc05dc000000080002000100000000000100000320ff38006402bc00000000");
+    h.Append("02bc00010000000000000000000000000000000601f40000012c0000015e000002bc000002bc0000015e000000000000");
+    h.Append("00000000000000000000002400000084000000b4000000d00000500000060000");
+    List<u8> b = List<u8>.New();
+    str s = h.AsStr();
+    for (usize i = 0; i + 1 < s.Len; i += 2) b.Push(Nib(s[i]) * 16 + Nib(s[i + 1]));
+    return b;
+}
+
+void Bounds(in ui.Tree t, str name, u32 id) {
+    write(1, name);
+    write(1, " ");
+    write(1, text.Int(t.X(id) as i64).AsStr());
+    write(1, ",");
+    write(1, text.Int(t.Y(id) as i64).AsStr());
+    write(1, " ");
+    write(1, text.Int(t.Width(id) as i64).AsStr());
+    write(1, "x");
+    print(text.Int(t.Height(id) as i64).AsStr());
+}
+
+void Report(str name, i64 v) {
+    write(1, name);
+    write(1, " ");
+    print(text.Int(v).AsStr());
+}
+
+List<u8> data = TestFont();
+font.Font f = font.Font.Parse(data.AsSlice()).Unwrap();
+lumen.Theme th = lumen.Light();
+ui.Tree t = ui.Tree.New();
+u32 tabs = t.Tabs(t.Root(), true);
+t.AddItem(tabs, "lO", 0);
+t.AddItem(tabs, "AO", 0);
+u32 split = t.Split(t.Root(), false);
+t.SetRatio(split, 400);
+u32 files = t.TreeView(split);
+t.AddItem(files, "Ol", 0);
+t.AddItem(files, "Ai", 1);
+t.AddItem(files, "iA", 0);
+u32 ed = t.Editor(split, "lOl\n\tAiO\nl\nO\nA\ni\nl\nO\nA\ni\nl\nO\nA\ni");
+t.SetSyntax(ed, "lOl", "");
+u32 pal = t.Palette(t.Root());
+t.AddItem(pal, "AOl", 0);
+t.AddItem(pal, "lil", 0);
+t.LayoutPixels(f, th, 320, 200);
+Bounds(t, "tabs", tabs);
+Bounds(t, "files", files);
+Bounds(t, "editor", ed);
+gfx.Canvas c = gfx.Canvas.New(320, 200);
+t.DrawPixels(ref c, f, th);
+print(c.Hash().AsStr());
+
+// a click on a tree item with children opens it
+u32 got = t.OnEvent(Event.Of(EventKind.MouseDown, t.X(files) + 20, t.Y(files) + 3, 1));
+if (got == files && t.Action() == ui.ACT_TOGGLE && t.IsOpen(files, 0)) print("tree item opened");
+t.OnEvent(Event.Of(EventKind.MouseUp, t.X(files) + 20, t.Y(files) + 3, 1));
+
+// dragging the divider
+i32 dx = t.X(files) + t.Width(files) + 2;
+t.OnEvent(Event.Of(EventKind.MouseDown, dx, 100, 1));
+t.OnEvent(Event.Of(EventKind.MouseMove, dx + 40, 100, 1));
+t.OnEvent(Event.Of(EventKind.MouseUp, dx + 40, 100, 1));
+Report("ratio", t.Ratio(split) as i64);
+t.LayoutPixels(f, th, 320, 200);
+Bounds(t, "files", files);
+
+// a click in the editor puts the cursor there (at the next layout); Shift extends
+i32 ex = t.X(ed);
+i32 ey = t.Y(ed);
+t.OnEvent(Event.Of(EventKind.MouseDown, ex + 40, ey + 25, 1));
+t.OnEvent(Event.Of(EventKind.MouseUp, ex + 40, ey + 25, 1));
+t.LayoutPixels(f, th, 320, 200);
+edit.Pos p = t.Buffer(ed)[0].Cursor();
+Report("line", p.Line as i64);
+Report("col", p.Col as i64);
+t.OnEvent(Event.Of(EventKind.MouseDown, ex + 60, ey + 5, 1).WithMods(ports.MOD_SHIFT));
+t.OnEvent(Event.Of(EventKind.MouseUp, ex + 60, ey + 5, 1));
+t.LayoutPixels(f, th, 320, 200);
+edit.Selection s = t.Buffer(ed)[0].SelectionAt(0);
+Report("anchor line", s.Anchor.Line as i64);
+Report("head col", s.Head.Col as i64);
+t.DrawPixels(ref c, f, th);
+print(c.Hash().AsStr());
+
+// the wheel scrolls three lines a notch, where the pointer is
+t.OnEvent(Event.Of(EventKind.MouseMove, ex + 50, ey + 50, 0));
+t.OnEvent(Event.Of(EventKind.Wheel, 0, 0, (0 - 120) as u32));
+t.LayoutPixels(f, th, 320, 200);
+Report("scroll", t.ScrollOf(ed) as i64);
+
+// the palette
+t.OpenPalette(pal);
+t.OnEvent(Event.Of(EventKind.Char, 0, 0, 'i' as u32));
+t.LayoutPixels(f, th, 320, 200);
+Report("palette rows", t.Height(pal) as i64);
+t.DrawPixels(ref c, f, th);
+print(c.Hash().AsStr());
+u32 chose = t.OnEvent(Event.Of(EventKind.KeyDown, 0, 0, ports.KEY_ENTER));
+if (chose == pal && t.Action() == ui.ACT_OPEN) {
+    write(1, "chose ");
+    print(t.ItemText(pal, t.Item()));
+}

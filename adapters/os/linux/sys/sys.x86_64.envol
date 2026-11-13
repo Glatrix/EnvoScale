@@ -1,0 +1,45 @@
+// os.linux.sys for x86-64: the system call numbers, and the calls whose form differs
+// between architectures (PLAN D69). The loader takes this file for x86_64 targets; its
+// twin sys.aarch64.envol for aarch64 ones.
+namespace os.linux.sys;
+
+public const i64 CLOSE = 3;
+public const i64 EXECVE = 59;
+public const i64 WAIT4 = 61;
+public const i64 GETCWD = 79;
+public const i64 CHDIR = 80;
+public const i64 CLOCK_GETTIME = 228;
+public const i64 NEWFSTATAT = 262;
+public const i64 GETDENTS64 = 217;
+public const i64 EXIT_GROUP = 231;
+public const i64 GETRANDOM = 318;
+public const i64 IOCTL = 16;
+public const i64 SOCKET = 41;
+public const i64 CONNECT = 42;
+public const i64 ACCEPT = 43;
+public const i64 SENDTO = 44;
+public const i64 RECVFROM = 45;
+public const i64 BIND = 49;
+public const i64 LISTEN = 50;
+public const i64 GETSOCKNAME = 51;
+public const i64 PIPE2 = 293;
+public const i64 KILL = 62;
+public const i64 WRITE = 1;
+public const i64 RT_SIGACTION = 13;
+public const i64 SETSOCKOPT = 54;
+
+public const i64 O_DIRECTORY = 0x10000;
+
+// struct stat: its size, and where st_mode (a u32) is.
+public const usize STAT_SIZE = 144;
+public const usize STAT_MODE = 24;
+
+public i64 Open(i64 path, i64 flags, i64 mode) => __syscall(2, path, flags, mode, 0, 0, 0);
+public i64 Mkdir(i64 path, i64 mode) => __syscall(83, path, mode, 0, 0, 0, 0);
+public i64 Rmdir(i64 path) => __syscall(84, path, 0, 0, 0, 0, 0);
+public i64 Unlink(i64 path) => __syscall(87, path, 0, 0, 0, 0, 0);
+public i64 Dup2(i64 from, i64 to) => __syscall(33, from, to, 0, 0, 0, 0);
+public i64 Fork() => __syscall(57, 0, 0, 0, 0, 0, 0);
+
+// poll(fds, n, ms): ms < 0 waits for ever.
+public i64 Poll(i64 fds, i64 n, i64 ms) => __syscall(7, fds, n, ms, 0, 0, 0);

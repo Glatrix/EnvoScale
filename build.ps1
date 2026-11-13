@@ -98,7 +98,7 @@ function Invoke-Build {
     New-Item -ItemType Directory -Force $envoDir | Out-Null
     $envoc = Join-Path $Build2 'envoc.exe'
     $files = @(Get-Content -LiteralPath (Join-Path $Root 'tools\envo\files.txt') | Where-Object { $_.Trim() -ne '' })
-    $files += @(Get-Content -LiteralPath (Join-Path $Stage2 'files.txt') | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne 'driver/main.envo' } | ForEach-Object { "compiler/$($_.Trim())" })
+    $files += @(Get-Content -LiteralPath (Join-Path $Stage2 'files.txt') | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne 'driver/main.envol' } | ForEach-Object { "compiler/$($_.Trim())" })
     foreach ($u in @(@{ Target = 'x86_64-windows'; Out = 'envo.exe' }, @{ Target = 'x86_64-linux'; Out = 'envo' })) {
         $out = Join-Path $envoDir $u.Out
         Say "build     tools/envo -> build/envo/$($u.Out)"
@@ -192,7 +192,7 @@ function Invoke-Test {
     # Windows with DYNAMIC_BASE and HIGH_ENTROPY_VA and no section both writable and executable
     Say ''
     Say 'hardening: W^X and ASLR in the executables envoc builds'
-    $hsrc = (Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envo' | Sort-Object Name | Select-Object -First 1).FullName
+    $hsrc = (Get-ChildItem -LiteralPath (Join-Path $Root 'tests\spec\core-run') -Filter '*.envol' | Sort-Object Name | Select-Object -First 1).FullName
     $hdir = Join-Path $Root 'build\hardening'
     New-Item -ItemType Directory -Force $hdir | Out-Null
     foreach ($hComp in @((Join-Path $Build2 'envoc.exe'))) {
@@ -220,18 +220,18 @@ function Invoke-Test {
 
     Say ''
     Say 'smoke tests'
-    $r = Invoke-Tool $exe @('lex', 'no such file.envo') $Root
-    if ($r.Code -eq 1 -and $r.Err.StartsWith("envoc: error: cannot open 'no such file.envo'")) { Pass 'missing file' } else { Bad 'missing file' "exit $($r.Code), stderr: $($r.Err)" }
+    $r = Invoke-Tool $exe @('lex', 'no such file.envol') $Root
+    if ($r.Code -eq 1 -and $r.Err.StartsWith("envoc: error: cannot open 'no such file.envol'")) { Pass 'missing file' } else { Bad 'missing file' "exit $($r.Code), stderr: $($r.Err)" }
     # Paths are UTF-8 on every OS: a name with a space, a Latin, a CJK and a non-BMP character.
     $tmp = Join-Path $Root 'build\tmp'
     New-Item -ItemType Directory -Force $tmp | Out-Null
-    $uname = "u$([char]0x00FC)nicode $([char]0x65E5)$([char]::ConvertFromUtf32(0x1F600)).envo"
+    $uname = "u$([char]0x00FC)nicode $([char]0x65E5)$([char]::ConvertFromUtf32(0x1F600)).envol"
     [IO.File]::WriteAllText((Join-Path $tmp $uname), "print(`"hi`")`n", $Utf8)
     $r = Invoke-Tool $exe @('lex', $uname) $tmp
     if ($r.Code -eq 0 -and $r.Out.StartsWith('1:1 n ident print')) { Pass 'unicode path' } else { Bad 'unicode path' "exit $($r.Code), stderr: $($r.Err)" }
     # Cross-compilation: this host builds the other OS's executable (it can only check the header).
-    [IO.File]::WriteAllText((Join-Path $tmp 'cross.envo'), "print(`"hi`")`n", $Utf8)
-    $r = Invoke-Tool $exe @('build', 'cross.envo', '-o', 'cross-linux', '--target', 'x86_64-linux') $tmp
+    [IO.File]::WriteAllText((Join-Path $tmp 'cross.envol'), "print(`"hi`")`n", $Utf8)
+    $r = Invoke-Tool $exe @('build', 'cross.envol', '-o', 'cross-linux', '--target', 'x86_64-linux') $tmp
     $ok = $false
     if ($r.Code -eq 0) { $head = [IO.File]::ReadAllBytes((Join-Path $tmp 'cross-linux')); $ok = ($head[0] -eq 0x7F -and $head[1] -eq 0x45 -and $head[2] -eq 0x4C -and $head[3] -eq 0x46) }
     if ($ok) { Pass 'cross build (linux)' } else { Bad 'cross build (linux)' "exit $($r.Code), stderr: $($r.Err)" }
@@ -244,7 +244,7 @@ function Invoke-Test {
         $runSuites = @('core-run', 's1-run', 's2-run')
         foreach ($suite in $runSuites) {
         Say "run tests ($compiler): tests/spec/$suite"
-        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envo' | Sort-Object Name) {
+        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envol' | Sort-Object Name) {
             $name = "$compiler spec/$suite/$($f.Name)"
             $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
             $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
@@ -284,16 +284,16 @@ function Invoke-Test {
         }
         }
 
-        # Multi-file programs: one folder per test. main.envo is the entry file and holds
-        # the annotations; the other .envo files follow in name order. Either
+        # Multi-file programs: one folder per test. main.envol is the entry file and holds
+        # the annotations; the other .envol files follow in name order. Either
         # `// expect-error: E#### @ <file>:L:C` (envoc check) or `// expect:` lines (build, run).
         $multiSuites = @('core-multi', 's1-multi')
         foreach ($msuite in $multiSuites) {
         Say "multi-file tests ($compiler): tests/spec/$msuite"
         foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$msuite") -Directory | Sort-Object Name) {
             $name = "$compiler spec/$msuite/$($d.Name)"
-            $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
-            $text = Normalize ([IO.File]::ReadAllText((Join-Path $d.FullName 'main.envo'), $Utf8))
+            $files = @('main.envol') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envol' | Where-Object { $_.Name -ne 'main.envol' } | Sort-Object Name | ForEach-Object { $_.Name })
+            $text = Normalize ([IO.File]::ReadAllText((Join-Path $d.FullName 'main.envol'), $Utf8))
             $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)$')
             if ($m.Success) {
                 $want = "$($m.Groups[2].Value): error[$($m.Groups[1].Value)]"
@@ -330,19 +330,19 @@ function Invoke-Test {
     $exe = $stage0Exe
 
 
-    # The runtime and prelude compiled into every program (compiler/driver/runtime*.envo)
+    # The runtime and prelude compiled into every program (compiler/driver/runtime*.envol)
     # must be generated from the current sources in compiler/runtime.
-    Say 'embedded runtime: compiler/driver/runtime*.envo'
-    $r = Invoke-Tool $envoc @('embed', 'compiler/runtime/common.envo', 'compiler/runtime/linux.envo', 'compiler/runtime/windows.envo', 'compiler/runtime/prelude.envo') $Root
-    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\runtime.envo'), $Utf8))
+    Say 'embedded runtime: compiler/driver/runtime*.envol'
+    $r = Invoke-Tool $envoc @('embed', 'compiler/runtime/common.envol', 'compiler/runtime/linux.envol', 'compiler/runtime/windows.envol', 'compiler/runtime/prelude.envol') $Root
+    $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root 'compiler\driver\runtime.envol'), $Utf8))
     if ($r.Code -eq 0 -and [string]::Equals($expected, (Normalize $r.Out))) { Pass 'embedded runtime' }
-    else { Bad 'embedded runtime' 'compiler/driver/runtime.envo is stale: regenerate it with envoc embed compiler/runtime/common.envo compiler/runtime/linux.envo compiler/runtime/windows.envo compiler/runtime/prelude.envo' }
+    else { Bad 'embedded runtime' 'compiler/driver/runtime.envol is stale: regenerate it with envoc embed compiler/runtime/common.envol compiler/runtime/linux.envol compiler/runtime/windows.envol compiler/runtime/prelude.envol' }
     foreach ($u in @(@('wasm', 'WASM', 'wasm'), @('linux_aarch64', 'A64', 'a64'), @('macos_aarch64', 'MACOS', 'macos'))) {
-        $r = Invoke-Tool $envoc @('embed', "compiler/runtime/$($u[0]).envo") $Root
-        $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root "compiler\driver\runtime_$($u[2]).envo"), $Utf8))
+        $r = Invoke-Tool $envoc @('embed', "compiler/runtime/$($u[0]).envol") $Root
+        $expected = Normalize ([IO.File]::ReadAllText((Join-Path $Root "compiler\driver\runtime_$($u[2]).envol"), $Utf8))
         $actual = (Normalize $r.Out) -replace '(?m)^const str RUNTIME_0 = ', "const str RUNTIME_$($u[1]) = "
         if ($r.Code -eq 0 -and [string]::Equals($expected, $actual)) { Pass "embedded runtime ($($u[0]))" }
-        else { Bad "embedded runtime ($($u[0]))" "compiler/driver/runtime_$($u[2]).envo is stale: regenerate it with envoc embed compiler/runtime/$($u[0]).envo, renaming RUNTIME_0 to RUNTIME_$($u[1])" }
+        else { Bad "embedded runtime ($($u[0]))" "compiler/driver/runtime_$($u[2]).envol is stale: regenerate it with envoc embed compiler/runtime/$($u[0]).envol, renaming RUNTIME_0 to RUNTIME_$($u[1])" }
     }
 
     Say ''
@@ -370,11 +370,11 @@ function Invoke-Test {
         if ($mode -eq '--core') { $pre = @('--core') }
         Say "golden tests ($mode): tests/golden/$($suite.Dir)"
         $dir = Join-Path $Root "tests\golden\$($suite.Dir)"
-        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envol' | Sort-Object Name) {
             $name = "$mode golden/$($suite.Dir)/$($f.Name)"
             $r = Invoke-Tool $envoc ($pre + @($suite.Command, $f.Name)) $dir
             if ($r.Code -ne 0) { Bad $name "exit $($r.Code), stderr: $($r.Err.Trim())"; continue }
-            $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.envo$', $suite.Ext), $Utf8))
+            $expected = Normalize ([IO.File]::ReadAllText(($f.FullName -replace '\.envol$', $suite.Ext), $Utf8))
             $actual = Normalize $r.Out
             if ([string]::Equals($expected, $actual)) { Pass $name } else { Bad $name 'output differs'; Show-Diff $expected $actual }
         }
@@ -395,7 +395,7 @@ function Invoke-Test {
         if ($mode -eq '--core') { $pre = @('--core') }
         Say "spec tests ($mode): tests/spec/$($suite.Dir)"
         $dir = Join-Path $Root "tests\spec\$($suite.Dir)"
-        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envol' | Sort-Object Name) {
             $name = "$mode spec/$($suite.Dir)/$($f.Name)"
             $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($f.FullName))
             $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\d+:\d+)')
@@ -470,7 +470,7 @@ function Invoke-Test {
     $vmDir = Join-Path $Root 'build\run-vm'
     New-Item -ItemType Directory -Force $vmDir | Out-Null
     foreach ($suite in @('core-run', 's1-run', 's2-run')) {
-        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envo' | Sort-Object Name) {
+        foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$suite") -Filter '*.envol' | Sort-Object Name) {
             $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
             $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
             $wantOut = ''
@@ -491,10 +491,10 @@ function Invoke-Test {
     }
     foreach ($msuite in @('core-multi', 's1-multi')) {
         foreach ($d in Get-ChildItem -LiteralPath (Join-Path $Root "tests\spec\$msuite") -Directory | Sort-Object Name) {
-            $main = Join-Path $d.FullName 'main.envo'
+            $main = Join-Path $d.FullName 'main.envol'
             $text = Normalize ([IO.File]::ReadAllText($main, $Utf8))
             if ($text -match '(?m)^// expect-error: ') { continue }
-            $files = @('main.envo') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envo' | Where-Object { $_.Name -ne 'main.envo' } | Sort-Object Name | ForEach-Object { $_.Name })
+            $files = @('main.envol') + @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.envol' | Where-Object { $_.Name -ne 'main.envol' } | Sort-Object Name | ForEach-Object { $_.Name })
             $lines = @([regex]::Matches($text, '(?m)^// expect: (.*)$') | ForEach-Object { $_.Groups[1].Value })
             $wantOut = ''
             if ($lines.Count -gt 0) { $wantOut = ($lines -join "`n") + "`n" }
@@ -509,8 +509,8 @@ function Invoke-Test {
     $boxDir = Join-Path $Root 'build\run-sandbox'
     if (Test-Path -LiteralPath $boxDir) { Remove-Item -Recurse -Force $boxDir }
     New-Item -ItemType Directory -Force $boxDir | Out-Null
-    Copy-Item -Path (Join-Path $Root 'tests\sandbox\*.envo') -Destination $boxDir
-    foreach ($f in Get-ChildItem -LiteralPath $boxDir -Filter '*.envo' | Sort-Object Name) {
+    Copy-Item -Path (Join-Path $Root 'tests\sandbox\*.envol') -Destination $boxDir
+    foreach ($f in Get-ChildItem -LiteralPath $boxDir -Filter '*.envol' | Sort-Object Name) {
         $text = Normalize ([IO.File]::ReadAllText($f.FullName, $Utf8))
         $argv = @('run')
         foreach ($m in [regex]::Matches($text, '(?m)^// allow: (.*)$')) { $argv += @('--allow', $m.Groups[1].Value.Trim()) }
@@ -534,14 +534,14 @@ function Invoke-Test {
     $openssl = Get-Command openssl -ErrorAction SilentlyContinue
     if (-not $openssl -and (Test-Path -LiteralPath 'C:\Program Files\Git\usr\bin\openssl.exe')) { $openssl = Get-Command 'C:\Program Files\Git\usr\bin\openssl.exe' }
     if ($openssl) {
-        Say 'tls: tests/tls/client.envo against openssl s_server'
+        Say 'tls: tests/tls/client.envol against openssl s_server'
         $tdir = Join-Path $Root 'build\run-tls'
         if (Test-Path -LiteralPath $tdir) { Remove-Item -Recurse -Force $tdir }
         New-Item -ItemType Directory -Force $tdir | Out-Null
         $os = $openssl.Source
         [IO.File]::WriteAllText((Join-Path $tdir 'leaf.ext'), "subjectAltName=DNS:localhost,IP:127.0.0.1`nbasicConstraints=CA:FALSE`n", $Utf8)
         $steps = @(
-            @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '30', '-subj', '/CN=Envo Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign'),
+            @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '30', '-subj', '/CN=Envol Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign'),
             @('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', 'other.key', '-out', 'other.pem', '-days', '30', '-subj', '/CN=Other CA'),
             @('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rsa.key', '-out', 'rsa.csr', '-subj', '/CN=localhost'),
             @('x509', '-req', '-in', 'rsa.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'rsa.pem', '-days', '30', '-sha256', '-extfile', 'leaf.ext'),
@@ -555,7 +555,7 @@ function Invoke-Test {
         }
         if ($certsOk) {
             $client = Join-Path $tdir 'client.exe'
-            $r = Invoke-Tool $envoc @('build', '--lib', $Root, (Join-Path $Root 'tests\tls\client.envo'), '-o', $client) $tdir
+            $r = Invoke-Tool $envoc @('build', '--lib', $Root, (Join-Path $Root 'tests\tls\client.envol'), '-o', $client) $tdir
             if ($r.Code -ne 0) { Bad 'tls client build' $r.Err.Trim() }
             else {
                 $port = 18443
@@ -591,18 +591,18 @@ function Invoke-Test {
     # without the library; CI runs the run and library tests on an arm64 machine
     # (build.sh cross, cross-run)
     $a64Out = Join-Path $Root 'build\hello-a64'
-    $r = Invoke-Tool $envoc @('build', (Join-Path $Root 'tests\spec\hello\console.envo'), '--lib', $Root, '-o', $a64Out, '--target', 'aarch64-linux') $Root
+    $r = Invoke-Tool $envoc @('build', (Join-Path $Root 'tests\spec\hello\console.envol'), '--lib', $Root, '-o', $a64Out, '--target', 'aarch64-linux') $Root
     $a64Head = ''
     if (Test-Path -LiteralPath $a64Out) { $a64Bytes = [IO.File]::ReadAllBytes($a64Out); $a64Head = '{0:x2}{1:x2}{2:x2}{3:x2}' -f $a64Bytes[16], $a64Bytes[17], $a64Bytes[18], $a64Bytes[19] }
     if ($r.Code -eq 0 -and $a64Head -eq '0300b700') { Pass 'aarch64-linux build' } else { Bad 'aarch64-linux build' "exit $($r.Code): $($r.Err.Trim())" }
-    # The website, written in Envo (website\README.md): it builds, and its pages are there.
+    # The website, written in Envol (website\README.md): it builds, and its pages are there.
     # Keep in step with build.sh.
-    Say 'website: website/site.envo builds the site, with the sandbox (envoc.wasm)'
+    Say 'website: website/site.envol builds the site, with the sandbox (envoc.wasm)'
     $cfiles = @(Get-Content (Join-Path $Root 'compiler\files.txt') | Where-Object { $_ -and -not $_.StartsWith('#') })
     $r = Invoke-Tool $envoc (@('build', '-O2', '--target', 'wasm32-web') + $cfiles + @('-o', (Join-Path $Root 'build\envoc.wasm'))) (Join-Path $Root 'compiler')
     if ($r.Code -ne 0) { Bad 'envoc.wasm build' $r.Err.Trim() }
     $siteTool = Join-Path $Root 'build\site-tool.exe'
-    $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, (Join-Path $Root 'website\site.envo'), '-o', $siteTool) $Root
+    $r = Invoke-Tool $envoc @('build', '-O2', '--lib', $Root, (Join-Path $Root 'website\site.envol'), '-o', $siteTool) $Root
     if ($r.Code -ne 0) { Bad 'website build' $r.Err.Trim() }
     else {
         $siteDir = Join-Path $Root 'build\site'
@@ -625,9 +625,9 @@ function Invoke-Test {
     if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "Hello, demo!`n") { Pass 'envo run --native' } else { Bad 'envo run --native' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     $r = Invoke-Tool $envo @('test', 'demo') $envoRun
     if ($r.Code -eq 0 -and $r.Out.Contains('4 passed, 0 failed')) { Pass 'envo test (package)' } else { Bad 'envo test (package)' "exit $($r.Code): $($r.Out.Trim())" }
-    [IO.File]::WriteAllText((Join-Path $envoRun 'bad.envo'), "i32 x = ;`n", $Utf8)
-    $r = Invoke-Tool $envo @('check', 'bad.envo') $envoRun
-    if ($r.Code -eq 1 -and $r.Err.Contains('bad.envo:1:9: error[E0101]') -and $r.Err.Contains('1 | i32 x = ;') -and $r.Err.Contains('envo explain E0101')) { Pass 'envo check' } else { Bad 'envo check' "exit $($r.Code): $($r.Err.Trim())" }
+    [IO.File]::WriteAllText((Join-Path $envoRun 'bad.envol'), "i32 x = ;`n", $Utf8)
+    $r = Invoke-Tool $envo @('check', 'bad.envol') $envoRun
+    if ($r.Code -eq 1 -and $r.Err.Contains('bad.envol:1:9: error[E0101]') -and $r.Err.Contains('1 | i32 x = ;') -and $r.Err.Contains('envo explain E0101')) { Pass 'envo check' } else { Bad 'envo check' "exit $($r.Code): $($r.Err.Trim())" }
     $r = Invoke-Tool $envo @('explain', 'E0004') $envoRun
     if ($r.Code -eq 0 -and $r.Out.Contains('E0004: unterminated string literal') -and $r.Out.Contains('[lex.str.1]')) { Pass 'envo explain' } else { Bad 'envo explain' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     $r = Invoke-Tool $envo @('explain', 'E9999') $envoRun
@@ -635,18 +635,18 @@ function Invoke-Test {
     $r = Invoke-Tool $envo @('version') $envoRun
     if ($r.Code -eq 0 -and $r.Out.StartsWith('envo ')) { Pass 'envo version' } else { Bad 'envo version' "exit $($r.Code)" }
     # envo prof: exact counts (tests/envo/prof); envo fuzz: finds a 4-byte magic input
-    Copy-Item (Join-Path $Root 'tests\envo\prof\hot.envo') $envoRun
-    Copy-Item (Join-Path $Root 'tests\envo\fuzz\magic.envo') $envoRun
-    $r = Invoke-Tool $envo @('prof', 'hot.envo') $envoRun
+    Copy-Item (Join-Path $Root 'tests\envo\prof\hot.envol') $envoRun
+    Copy-Item (Join-Path $Root 'tests\envo\fuzz\magic.envol') $envoRun
+    $r = Invoke-Tool $envo @('prof', 'hot.envol') $envoRun
     $errN = Normalize $r.Err
     if ($r.Code -eq 0 -and (Normalize $r.Out) -eq "ok`n" -and $errN -match '(?m)^ +177 +\d+ +[\d.]+  Fib$' -and $errN -match '(?m)^ +10 +\d+ +[\d.]+  Square$') { Pass 'envo prof' } else { Bad 'envo prof' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
-    $r = Invoke-Tool $envo @('fuzz', 'magic.envo', '--runs', '50000', '--seed', '1') $envoRun
+    $r = Invoke-Tool $envo @('fuzz', 'magic.envol', '--runs', '50000', '--seed', '1') $envoRun
     if ($r.Code -eq 1 -and $r.Out.Contains('crash: ') -and $r.Err.Contains('panic: found the magic input') -and (Test-Path -LiteralPath (Join-Path $envoRun 'build\fuzz\magic\crash'))) { Pass 'envo fuzz' } else { Bad 'envo fuzz' "exit $($r.Code): $($r.Out.Trim()) $($r.Err.Trim())" }
     # envo dbg: a scripted session (tests/envo/dbg) gives the expected transcript
-    Copy-Item (Join-Path $Root 'tests\envo\dbg\sum.envo') $envoRun
+    Copy-Item (Join-Path $Root 'tests\envo\dbg\sum.envol') $envoRun
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $envo
-    $psi.Arguments = 'dbg sum.envo'
+    $psi.Arguments = 'dbg sum.envol'
     $psi.WorkingDirectory = $envoRun
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
@@ -699,7 +699,7 @@ function Invoke-Test {
     if ($r.Code -eq 0 -and $sbText -match '"spdxVersion":\s*"SPDX-2.3"' -and $sbText -match '"name":\s*"greet"' -and $sbText.Contains('2025-11-12T00:00:00Z')) { Pass 'envo build --sbom' } else { Bad 'envo build --sbom' "exit $($r.Code): $($r.Err.Trim())" }
     # releases (docs\guides\offline-install.md): envo archive gives the same bytes on every
     # OS (the digest is pinned in both scripts); envo sign and envo verify
-    $RelTarSha = 'edfd900569a71a7c78d7ac53a36d0e885411c10e3591f9f66b07a76ceed1128b'
+    $RelTarSha = 'b54a3aa9ab43038969bf16347b53b6940e813f9889ab3be0e0f29c6ef9b11ee1'
     $env:SOURCE_DATE_EPOCH = '1762905600'
     $r = Invoke-Tool $envo @('archive', 'pk/greet', 'pk/greet.tar') $envoRun
     Remove-Item Env:SOURCE_DATE_EPOCH
@@ -717,7 +717,7 @@ function Invoke-Test {
     $frun = Join-Path $Root 'build\run-fuzz'
     if (Test-Path -LiteralPath $frun) { Remove-Item -Recurse -Force $frun }
     New-Item -ItemType Directory -Force $frun | Out-Null
-    foreach ($t in (Get-ChildItem -LiteralPath (Join-Path $Root 'tests\fuzz') -Filter '*.envo' | Sort-Object Name)) {
+    foreach ($t in (Get-ChildItem -LiteralPath (Join-Path $Root 'tests\fuzz') -Filter '*.envol' | Sort-Object Name)) {
         $n = $t.BaseName
         Copy-Item -Recurse (Join-Path $Root "tests\fuzz\corpus\$n") (Join-Path $frun "corpus-$n")
         $r = Invoke-Tool $envo @('fuzz', $t.FullName, '--runs', '300', '--seed', '1', '--corpus', "corpus-$n", '--max-len', '1024') $frun
@@ -746,10 +746,10 @@ function Invoke-Test {
     if ($p.ExitCode -eq 0 -and $hellos -eq 1 -and $got.Contains("42`n") -and $got.Contains('error[E0203]')) { Pass 'envo repl' } else { Bad 'envo repl' "exit $($p.ExitCode): $got $($errTask.Result)" }
     $r = Invoke-Tool $envo @('frobnicate') $envoRun
     if ($r.Code -eq 2) { Pass 'envo (unknown command)' } else { Bad 'envo (unknown command)' "exit $($r.Code)" }
-    # envo fmt: each tests\golden\fmt\name.envo formats to name.expected, which formats to
+    # envo fmt: each tests\golden\fmt\name.envol formats to name.expected, which formats to
     # itself; and the repository's own code is already in the canonical layout
     Say 'envo fmt: tests/golden/fmt, and --check on the code'
-    foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\golden\fmt') -Filter '*.envo' | Sort-Object Name) {
+    foreach ($f in Get-ChildItem -LiteralPath (Join-Path $Root 'tests\golden\fmt') -Filter '*.envol' | Sort-Object Name) {
         $expected = [IO.Path]::ChangeExtension($f.FullName, '.expected')
         $want = Normalize ([IO.File]::ReadAllText($expected, $Utf8))
         $r = Invoke-Tool $envo @('fmt', '--stdout', $f.FullName) $envoRun
@@ -764,7 +764,7 @@ function Invoke-Test {
     Say 'envo lsp: tests/lsp/session.jsonl'
     $lspDir = Join-Path $Root 'build\run-lsp'
     New-Item -ItemType Directory -Force $lspDir | Out-Null
-    $uri = 'file:///' + ((Join-Path $lspDir 'doc.envo') -replace '\\', '/')
+    $uri = 'file:///' + ((Join-Path $lspDir 'doc.envol') -replace '\\', '/')
     $framed = New-Object System.Text.StringBuilder
     foreach ($line in [IO.File]::ReadAllLines((Join-Path $Root 'tests\lsp\session.jsonl'), $Utf8)) {
         if ($line.Trim() -eq '') { continue }
@@ -795,12 +795,12 @@ function Invoke-Test {
     # instead of the repository
     Say 'spec tests: tests/spec/lib'
     $dir = Join-Path $Root 'tests\spec\lib'
-    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envo' | Sort-Object Name) {
+    foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.envol' | Sort-Object Name) {
         $text = [IO.File]::ReadAllText($f.FullName, $Utf8)
         $m = [regex]::Match($text, '(?m)^// expect-error: (E\d{4}) @ (\S+)')
         if (-not $m.Success) { Bad "spec/lib/$($f.Name)" 'no // expect-error: annotation'; continue }
         $where = $m.Groups[2].Value
-        if ($where -match '\.envo:') { $want = "$($where): error[$($m.Groups[1].Value)]" }
+        if ($where -match '\.envol:') { $want = "$($where): error[$($m.Groups[1].Value)]" }
         else { $want = "$($f.Name):$($where): error[$($m.Groups[1].Value)]" }
         $libRoot = $Root
         if ($text -match '(?m)^// lib: root') { $libRoot = 'root' }
@@ -855,7 +855,7 @@ function Invoke-Check {
 
     # docs/principles.md: lib/** never imports adapters/**.
     $lib = Join-Path $Root 'lib'
-    foreach ($f in Get-ChildItem -LiteralPath $lib -Recurse -Filter '*.envo' -ErrorAction SilentlyContinue) {
+    foreach ($f in Get-ChildItem -LiteralPath $lib -Recurse -Filter '*.envol' -ErrorAction SilentlyContinue) {
         $hits = Select-String -LiteralPath $f.FullName -Pattern '^\s*(use|using)\s+adapters\b'
         foreach ($h in $hits) { $problems.Add("lib imports an adapter: $($f.FullName.Substring($Root.Length + 1)):$($h.LineNumber)") }
     }
@@ -887,7 +887,7 @@ function Invoke-Check {
 # dist: the release archive (docs/guides/offline-install.md); the same bytes as build.sh's.
 function Invoke-Dist {
     Invoke-Build
-    $v = ([regex]::Match([IO.File]::ReadAllText((Join-Path $Root 'tools\envo\main.envo')), 'const str ENVO_VERSION = "([^"]*)"')).Groups[1].Value
+    $v = ([regex]::Match([IO.File]::ReadAllText((Join-Path $Root 'tools\envo\main.envol')), 'const str ENVO_VERSION = "([^"]*)"')).Groups[1].Value
     $dist = Join-Path $Root 'build\dist'
     if (Test-Path -LiteralPath $dist) { Remove-Item -Recurse -Force $dist }
     $top = Join-Path $dist "envoscale-$v"

@@ -1,4 +1,0 @@
-// expect-error: E0213 @ main.envo:3:5
-// [s1.item.1] `use` names a namespace
-use nowhere.at.all;
-print("x");

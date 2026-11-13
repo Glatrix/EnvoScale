@@ -1,0 +1,3 @@
+// The end of the entry file belongs to the entry file, not to the next one.
+// expect-error: E0101 @ main.envol:4:1
+void Open() {

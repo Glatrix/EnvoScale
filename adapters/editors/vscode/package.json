@@ -1,7 +1,7 @@
 {
-  "name": "envo",
-  "displayName": "Envo",
-  "description": "The Envo language: highlighting, diagnostics, completion, hover, go to definition, symbols and formatting through envo lsp.",
+  "name": "envol",
+  "displayName": "Envol",
+  "description": "The Envol language: highlighting, diagnostics, completion, hover, go to definition, symbols and formatting through envo lsp.",
   "version": "0.1.0",
   "publisher": "envoscale",
   "license": "SEE LICENSE IN LICENSE",
@@ -18,31 +18,31 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "workspaceContains:**/*.envo"
+    "workspaceContains:**/*.envol"
   ],
   "contributes": {
     "languages": [
       {
-        "id": "envo",
+        "id": "envol",
         "aliases": [
-          "Envo",
-          "envo"
+          "Envol",
+          "envol"
         ],
         "extensions": [
-          ".envo"
+          ".envol"
         ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "envo",
-        "scopeName": "source.envo",
-        "path": "./syntaxes/envo.tmLanguage.json"
+        "language": "envol",
+        "scopeName": "source.envol",
+        "path": "./syntaxes/envol.tmLanguage.json"
       }
     ],
     "configuration": {
-      "title": "Envo",
+      "title": "Envol",
       "properties": {
         "envo.path": {
           "type": "string",
@@ -52,14 +52,14 @@
         "envo.trace": {
           "type": "boolean",
           "default": false,
-          "description": "Log the messages between the editor and envo lsp in the Envo output channel."
+          "description": "Log the messages between the editor and envo lsp in the Envol output channel."
         }
       }
     },
     "commands": [
       {
         "command": "envo.restart",
-        "title": "Envo: Restart the Language Server"
+        "title": "Envol: Restart the Language Server"
       }
     ]
   }

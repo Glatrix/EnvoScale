@@ -1,0 +1,55 @@
+// os.linux.sys for AArch64 (PLAN D69): the system call numbers of the generic table, and
+// the calls x86-64 has that it does not: open, mkdir, rmdir and unlink are the *at forms
+// from the current directory, dup2 is dup3, fork is clone, poll is ppoll. The loader takes
+// this file for aarch64 targets; its twin sys.x86_64.envol for x86_64 ones.
+namespace os.linux.sys;
+
+public const i64 CLOSE = 57;
+public const i64 EXECVE = 221;
+public const i64 WAIT4 = 260;
+public const i64 GETCWD = 17;
+public const i64 CHDIR = 49;
+public const i64 CLOCK_GETTIME = 113;
+public const i64 NEWFSTATAT = 79;
+public const i64 GETDENTS64 = 61;
+public const i64 EXIT_GROUP = 94;
+public const i64 GETRANDOM = 278;
+public const i64 IOCTL = 29;
+public const i64 SOCKET = 198;
+public const i64 CONNECT = 203;
+public const i64 ACCEPT = 202;
+public const i64 SENDTO = 206;
+public const i64 RECVFROM = 207;
+public const i64 BIND = 200;
+public const i64 LISTEN = 201;
+public const i64 GETSOCKNAME = 204;
+public const i64 PIPE2 = 59;
+public const i64 KILL = 129;
+public const i64 WRITE = 64;
+public const i64 RT_SIGACTION = 134;
+public const i64 SETSOCKOPT = 208;
+
+public const i64 O_DIRECTORY = 0x4000;
+
+// struct stat (the generic layout): its size, and where st_mode (a u32) is.
+public const usize STAT_SIZE = 128;
+public const usize STAT_MODE = 16;
+
+const i64 AT_FDCWD = -100;
+const i64 AT_REMOVEDIR = 0x200;
+
+public i64 Open(i64 path, i64 flags, i64 mode) => __syscall(56, AT_FDCWD, path, flags, mode, 0, 0);
+public i64 Mkdir(i64 path, i64 mode) => __syscall(34, AT_FDCWD, path, mode, 0, 0, 0);
+public i64 Rmdir(i64 path) => __syscall(35, AT_FDCWD, path, AT_REMOVEDIR, 0, 0, 0);
+public i64 Unlink(i64 path) => __syscall(35, AT_FDCWD, path, 0, 0, 0, 0);
+public i64 Dup2(i64 from, i64 to) => __syscall(24, from, to, 0, 0, 0, 0);
+public i64 Fork() => __syscall(220, 17, 0, 0, 0, 0, 0);       // clone(SIGCHLD)
+
+// poll(fds, n, ms) as ppoll, with ms as a timespec: ms < 0 waits for ever.
+public i64 Poll(i64 fds, i64 n, i64 ms) {
+    if (ms < 0) return __syscall(73, fds, n, 0, 0, 8, 0);
+    u64[2] ts;
+    ts[0] = (ms / 1000) as u64;
+    ts[1] = ((ms % 1000) * 1000000) as u64;
+    unsafe { return __syscall(73, fds, n, &ts[0] as isize as i64, 0, 8, 0); }
+}

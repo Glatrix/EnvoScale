@@ -27,7 +27,7 @@ general shape; this page records how M4 builds it. Decisions D21–D25 are in
 
 `envoc --lib <dir>` names the folder that holds `lib/` and `adapters/`. When a file says
 `use a.b` and no loaded file declares namespace `a.b`, `envoc` loads
-`<dir>/lib/a/b/b.envo`, then does the same for the files it loaded, until nothing new is
+`<dir>/lib/a/b/b.envol`, then does the same for the files it loaded, until nothing new is
 used. The rule maps a namespace to exactly one file, because the runtime cannot list a
 folder yet. Package manifests (`envo.envon`, M5) will let a module span files.
 
@@ -46,8 +46,8 @@ values (D13, D22). Each adapter is a struct that implements the port:
 | `os.windows` | `adapters/os/windows` | KERNEL32 and ADVAPI32 through `__wincall` |
 | `os.linux` | `adapters/os/linux` | system calls through `__syscall` |
 
-`os.<name>` loads `adapters/os/<name>/<name>.envo`. The namespace **`platform`** is the
-one place where `lib/` meets an adapter. It loads `adapters/os/<os>/platform.envo`, where
+`os.<name>` loads `adapters/os/<name>/<name>.envol`. The namespace **`platform`** is the
+one place where `lib/` meets an adapter. It loads `adapters/os/<os>/platform.envol`, where
 `<os>` is the target's operating system or `none` with `--os none`. Every binding
 provides the same constructors: `platform.Console()`, `FileSystem()`, `Clock()`,
 `Entropy()`, `Environment()`, `Process()`, `Net()`, `Trust()`, `Terminal()`, `Window()`. Code that uses them writes `var fs = platform.FileSystem();`
@@ -130,4 +130,4 @@ adapter is complete when its suites pass.
 - Directory listing: no port operation yet. It needs `getdents64` and `FindFirstFileW`;
   planned with the build system (M5), which needs it.
 - Floats (`core.math`), a `write` that reports errors, an allocator interface for
-  collections: with the Envo features `envoc` does not compile yet.
+  collections: with the Envol features `envoc` does not compile yet.

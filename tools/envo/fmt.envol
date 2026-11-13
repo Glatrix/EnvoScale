@@ -1,0 +1,334 @@
+// `envo fmt`: one canonical layout for Envol source, with comments kept (PLAN M5.6).
+//
+// The formatter works on the compiler's tokens and the text between them, so it never
+// changes what a program means; it checks that by lexing its output again. It keeps the
+// author's line breaks and decides the rest:
+//
+// - indentation: 4 spaces per open `{`, and 4 more on a line that continues a statement
+//   (the line before ends in neither `{`, `}` nor `;`, nor in `,` directly inside braces);
+//   a line that starts with `}`, `)` or `]` closes without the extra 4;
+// - at most one blank line in a row, none at the start of a file, after a `{` or before
+//   a `}`;
+// - spacing: none before `,` `;` `)` `]` or after `(` `[`; one after `,` and `;`, before
+//   `{`, inside braces on one line (`{ x }`, but `{}` and `use a.{X}`), after `if`
+//   `while` `for` `foreach` `match`, and around `=`, `==`, `!=`, `<=`,
+//   `>=`, `&&`, `||`, `=>`, `??` and the compound assignments; other tokens keep whether
+//   the source had a space between them (`<` and `*` mean different things in
+//   different places), collapsed to one;
+// - no trailing spaces, tabs in indentation become spaces, one line break at the end;
+//   the file keeps its line endings (LF or CRLF); a byte order mark is dropped.
+//
+// Comments stay where they are: a comment on a line of its own takes the indentation
+// of the code that follows it; a comment after code keeps the space before it.
+// Block comments that span lines are copied as they are. A file whose first line starts
+// with `// Generated` is left to its generator.
+use std.fs;
+use std.env;
+use std.path;
+use core.text as ct;
+use alloc.text;
+use ports.{IoError};
+use envoc.syntax;
+
+const u8 OPEN_BRACE = 1;
+const u8 OPEN_PAREN = 2;
+const u8 OPEN_USE = 3;          // the `{` of `use a.{X, Y}`
+
+bool IsKind(in Token t, str src, str spelling) {
+    if (t.Len as usize != spelling.Len) return false;
+    return ct.Compare(src[t.Start as usize..(t.Start + t.Len) as usize], spelling) == 0;
+}
+
+str TokSrc(in Token t, str src) => src[t.Start as usize..(t.Start + t.Len) as usize];
+
+bool IsPunct(in Token t) => t.Kind >= TK_PUNCT_FIRST && t.Kind <= TK_PUNCT_LAST;
+
+// One of the given spellings, as a punctuation token.
+bool PunctIs(in Token t, str src, str spelling) => IsPunct(t) && IsKind(t, src, spelling);
+
+// Operators that always have a space on both sides.
+bool Spaced(in Token t, str src) {
+    if (!IsPunct(t)) return false;
+    str s = TokSrc(t, src);
+    return ct.Compare(s, "=") == 0 || ct.Compare(s, "==") == 0 || ct.Compare(s, "!=") == 0
+        || ct.Compare(s, "<=") == 0 || ct.Compare(s, ">=") == 0 || ct.Compare(s, "&&") == 0
+        || ct.Compare(s, "||") == 0 || ct.Compare(s, "=>") == 0 || ct.Compare(s, "??") == 0
+        || ct.Compare(s, "+=") == 0 || ct.Compare(s, "-=") == 0 || ct.Compare(s, "*=") == 0
+        || ct.Compare(s, "/=") == 0 || ct.Compare(s, "%=") == 0 || ct.Compare(s, "&=") == 0
+        || ct.Compare(s, "|=") == 0 || ct.Compare(s, "^=") == 0 || ct.Compare(s, "<<=") == 0
+        || ct.Compare(s, ">>=") == 0;
+}
+
+// Keywords followed by one space.
+bool SpaceAfterKeyword(in Token t, str src) {
+    if (t.Kind < TK_KW_FIRST || t.Kind > TK_KW_LAST) return false;
+    str s = TokSrc(t, src);
+    return ct.Compare(s, "if") == 0 || ct.Compare(s, "while") == 0 || ct.Compare(s, "for") == 0
+        || ct.Compare(s, "foreach") == 0 || ct.Compare(s, "match") == 0;
+}
+
+// Spaces (0 or 1) between prev and cur on one line; hadSpace says whether the source
+// had any, and inUse whether the innermost open bracket is a `use` list's.
+usize Spacing(in Token prev, in Token cur, str src, bool hadSpace, bool inUse) {
+    if (PunctIs(cur, src, ",") || PunctIs(cur, src, ";") || PunctIs(cur, src, ")") || PunctIs(cur, src, "]")) return 0;
+    if (PunctIs(prev, src, "(") || PunctIs(prev, src, "[")) return 0;
+    // braces: `{}` empty, `{ x }` with a space inside, `use a.{X}` as written
+    if (PunctIs(prev, src, "{") && PunctIs(cur, src, "}")) return 0;
+    if (!inUse && (PunctIs(prev, src, "{") || PunctIs(cur, src, "}"))) return 1;
+    if (PunctIs(prev, src, ",")) return 1;
+    if (PunctIs(prev, src, ";")) return 1;
+    if (PunctIs(cur, src, "{") && !PunctIs(prev, src, ".")) return 1;
+    if (SpaceAfterKeyword(prev, src)) return 1;
+    if (Spaced(prev, src) || Spaced(cur, src)) return 1;
+    if (hadSpace) return 1;
+    return 0;
+}
+
+struct Formatter {
+    str Src;
+    string Out;
+    List<u8> Open;          // the open brackets, innermost last
+    bool LineHasCode;       // the line being written has something on it
+    bool AfterOpenBrace;    // the last thing written was a `{` token
+    bool HavePrev;          // a token has been written
+    Token Prev;             // the last token written
+    u32 Braces;             // open `{` count
+
+    // Levels of indentation for a line that starts with token t; for a comment line,
+    // closing tokens do not dedent.
+    u32 Levels(in this, in Token t, bool comment) {
+        u32 levels = this.Braces;
+        bool closing = PunctIs(t, this.Src, "}") || PunctIs(t, this.Src, ")") || PunctIs(t, this.Src, "]");
+        if (!comment && PunctIs(t, this.Src, "}") && levels > 0) levels--;
+        if (!this.HavePrev || closing) return levels;
+        if (PunctIs(this.Prev, this.Src, "{") || PunctIs(this.Prev, this.Src, "}") || PunctIs(this.Prev, this.Src, ";")) return levels;
+        if (PunctIs(this.Prev, this.Src, ",") && this.Open.Len() > 0 && this.Open.Get(this.Open.Len() - 1) == OPEN_BRACE) return levels;
+        return levels + 1;
+    }
+
+    // Ends the current line and starts the next: newlines is how many line breaks the
+    // source had (2 or more keep one blank line).
+    void NewLine(ref this, u32 newlines, bool beforeClose, u32 levels) {
+        if (this.Out.Len() > 0) {
+            this.Out.AppendByte(10);
+            if (newlines >= 2 && !this.AfterOpenBrace && !beforeClose) this.Out.AppendByte(10);
+        }
+        for (u32 i = 0; i < levels * 4; i++) this.Out.AppendByte(' ');
+        this.LineHasCode = false;
+    }
+
+    // Writes the comments and line breaks in the text between two tokens, then places
+    // token t.
+    void Place(ref this, str gap, in Token t, bool last) {
+        usize j = 0;
+        u32 newlines = 0;
+        usize wsStart = 0;
+        bool space = false;
+        while (j < gap.Len) {
+            u8 c = gap[j];
+            if (c == 10) {
+                newlines++;
+                space = false;
+                j++;
+                wsStart = j;
+                continue;
+            }
+            if (c == ' ' || c == 9 || c == 13) {
+                if (!space) wsStart = j;
+                space = true;
+                j++;
+                continue;
+            }
+            bool line = c == '/' && j + 1 < gap.Len && gap[j + 1] == '/';
+            bool block = c == '/' && j + 1 < gap.Len && gap[j + 1] == '*';
+            if (!line && !block) {
+                j++;
+                continue;
+            }
+            usize end = j;
+            if (line) {
+                while (end < gap.Len && gap[end] != 10) end++;
+                while (end > j && (gap[end - 1] == 13 || gap[end - 1] == ' ' || gap[end - 1] == 9)) end--;
+            } else {
+                u32 depth = 0;
+                while (end + 1 < gap.Len) {
+                    if (gap[end] == '/' && gap[end + 1] == '*') {
+                        depth++;
+                        end += 2;
+                    } else if (gap[end] == '*' && gap[end + 1] == '/') {
+                        depth--;
+                        end += 2;
+                        if (depth == 0) break;
+                    } else {
+                        end++;
+                    }
+                }
+            }
+            str text = gap[j..end];
+            if (this.Out.Len() == 0) {
+                // the first thing in the file
+            } else if (newlines == 0) {
+                // after code on the same line: keep the space before it
+                if (space) this.Out.Append(gap[wsStart..j]);
+                else this.Out.AppendByte(' ');
+            } else if (block && ct.Contains(text, "\n")) {
+                // a block comment over several lines is copied as it is, indentation too
+                this.NewLine(newlines, false, 0);
+                if (space) this.Out.Append(gap[wsStart..j]);
+            } else {
+                this.NewLine(newlines, false, this.Levels(t, true));
+            }
+            this.Out.Append(text);
+            this.LineHasCode = true;
+            this.AfterOpenBrace = false;
+            newlines = 0;
+            space = false;
+            j = end;
+            wsStart = j;
+        }
+        if (last) return;
+        if (this.Out.Len() == 0) {
+            // the first thing in the file
+        } else if (newlines > 0) {
+            this.NewLine(newlines, PunctIs(t, this.Src, "}"), this.Levels(t, false));
+        } else {
+            bool inUse = this.Open.Len() > 0 && this.Open.Get(this.Open.Len() - 1) == OPEN_USE;
+            for (usize k = 0; k < Spacing(this.Prev, t, this.Src, space, inUse); k++) this.Out.AppendByte(' ');
+        }
+        bool wasDot = this.HavePrev && PunctIs(this.Prev, this.Src, ".");
+        this.Out.Append(TokSrc(t, this.Src));
+        this.LineHasCode = true;
+        this.AfterOpenBrace = PunctIs(t, this.Src, "{");
+        this.HavePrev = true;
+        this.Prev = t;
+        if (PunctIs(t, this.Src, "{") && wasDot) {
+            this.Open.Push(OPEN_USE);
+        } else if (PunctIs(t, this.Src, "{")) {
+            this.Open.Push(OPEN_BRACE);
+            this.Braces++;
+        } else if (PunctIs(t, this.Src, "(") || PunctIs(t, this.Src, "[")) {
+            this.Open.Push(OPEN_PAREN);
+        } else if (PunctIs(t, this.Src, "}") || PunctIs(t, this.Src, ")") || PunctIs(t, this.Src, "]")) {
+            u8? top = this.Open.Pop();
+            if (top.IsSome() && top.Unwrap() == OPEN_BRACE && this.Braces > 0) this.Braces--;
+        }
+    }
+}
+
+// src in canonical layout. path is for error messages.
+string FormatText(str path, str src) {
+    str text = src;
+    if (text.Len >= 3 && text[0] == 0xEF && text[1] == 0xBB && text[2] == 0xBF) text = text[3..text.Len];
+    bool crlf = ct.Contains(text, "\r\n");
+    LexTables tables = LexTables.New();
+    List<Token> toks = Lex(tables, path, text, 0, false);
+    Formatter f = new Formatter {
+        Src = text, Out = string.New(), Open = List<u8>.New(), LineHasCode = false,
+        AfterOpenBrace = false, HavePrev = false, Prev = toks.Get(0), Braces = 0,
+    };
+    usize prevEnd = 0;
+    for (usize i = 0; i < toks.Len(); i++) {
+        Token t = toks.Get(i);
+        bool last = t.Kind == TK_EOF;
+        f.Place(text[prevEnd..t.Start as usize], t, last);
+        prevEnd = (t.Start + t.Len) as usize;
+        if (last) break;
+    }
+    if (f.Out.Len() > 0) f.Out.AppendByte(10);
+    // the same tokens, or the formatter has a bug
+    List<Token> again = Lex(tables, path, f.Out.AsStr(), 0, false);
+    bool same = again.Len() == toks.Len();
+    for (usize i = 0; same && i < toks.Len(); i++) {
+        Token a = toks.Get(i);
+        Token b = again.Get(i);
+        if (a.Kind != b.Kind || ct.Compare(TokSrc(a, text), TokSrc(b, f.Out.AsStr())) != 0) same = false;
+    }
+    if (!same) {
+        string msg = string.From("formatting ");
+        msg.Append(path);
+        msg.Append(" would change its tokens (a bug in envo fmt); the file is left as it is");
+        EnvoFail(msg.AsStr(), 70);
+    }
+    if (!crlf) return string.From(f.Out.AsStr());
+    string r = string.New();
+    str o = f.Out.AsStr();
+    for (usize i = 0; i < o.Len; i++) {
+        if (o[i] == 10) r.AppendByte(13);
+        r.AppendByte(o[i]);
+    }
+    return r;
+}
+
+// The .envol files under dir, outside build/ and hidden folders, in byte order.
+void EnvoFiles(str dir, ref List<string> found) {
+    Result<List<string>, IoError> r = fs.ListDir(dir);
+    if (r.IsErr()) return;
+    List<string> names = r.Unwrap();
+    foreach (var n in names.AsSlice()) {
+        str name = n.AsStr();
+        if (name.Len == 0 || name[0] == '.' || ct.Compare(name, "build") == 0) continue;
+        string full = path.Join(dir, name);
+        if (fs.IsDir(full.AsStr())) EnvoFiles(full.AsStr(), ref found);
+        else if (ct.EndsWith(name, ".envol")) found.Push(full);
+    }
+}
+
+// `envo fmt [--check | --stdout] [path...]`
+i32 CmdEnvoFmt(usize from) {
+    bool check = false;
+    bool stdout = false;
+    List<string> paths = List<string>.New();
+    for (usize i = from; i < env.ArgCount(); i++) {
+        str a = env.Arg(i);
+        if (ct.Compare(a, "--check") == 0) check = true;
+        else if (ct.Compare(a, "--stdout") == 0) stdout = true;
+        else if (a.Len > 0 && a[0] == '-') EnvoFail("envo fmt takes paths, --check and --stdout", 2);
+        else paths.Push(string.From(a));
+    }
+    if (paths.Len() == 0) paths.Push(string.From("."));
+    List<string> files = List<string>.New();
+    foreach (var p in paths.AsSlice()) {
+        if (fs.IsDir(p.AsStr())) {
+            EnvoFiles(p.AsStr(), ref files);
+        } else if (fs.IsFile(p.AsStr())) {
+            files.Push(string.From(p.AsStr()));
+        } else {
+            string msg = string.From("no such file or folder: ");
+            msg.Append(p.AsStr());
+            EnvoFail(msg.AsStr(), 2);
+        }
+    }
+    usize changed = 0;
+    foreach (var file in files.AsSlice()) {
+        Result<string, IoError> r = fs.ReadText(file.AsStr());
+        if (r.IsErr()) {
+            string msg = string.From("cannot read ");
+            msg.Append(file.AsStr());
+            EnvoFail(msg.AsStr(), 1);
+        }
+        string src = r.Unwrap();
+        // generated files (`envoc1 embed`) are written by their generator
+        if (ct.StartsWith(src.AsStr(), "// Generated")) continue;
+        string formatted = FormatText(file.AsStr(), src.AsStr());
+        if (stdout) {
+            write(1, formatted.AsStr());
+            continue;
+        }
+        if (formatted.Equals(src.AsStr())) continue;
+        changed++;
+        if (check) {
+            write(1, "would reformat ");
+            print(file.AsStr());
+        } else {
+            if (fs.WriteText(file.AsStr(), formatted.AsStr()).IsErr()) {
+                string msg = string.From("cannot write ");
+                msg.Append(file.AsStr());
+                EnvoFail(msg.AsStr(), 1);
+            }
+            write(1, "formatted ");
+            print(file.AsStr());
+        }
+    }
+    if (check && changed > 0) return 1;
+    return 0;
+}

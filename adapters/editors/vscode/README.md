@@ -3,12 +3,12 @@
 > **Status:** Experimental (M14.9). Tests: `test/` (`node --test`), in CI against the
 > `envo` the build makes. Not on the Marketplace yet.
 
-The Envo extension for Visual Studio Code, in plain JavaScript with **no npm
+The Envol extension for Visual Studio Code, in plain JavaScript with **no npm
 dependencies**: nothing to install, nothing to audit but these files.
 
 | File | What it does |
 |---|---|
-| `package.json` | The manifest: the `envo` language for `.envo` files, the grammar, settings (`envo.path`, `envo.trace`) and the restart command |
+| `package.json` | The manifest: the `envo` language for `.envol` files, the grammar, settings (`envo.path`, `envo.trace`) and the restart command |
 | `syntaxes/envo.tmLanguage.json` | Highlighting: comments (nested block comments, `///` doc comments), strings (escapes, raw `"""` strings, `$"…{x}…"` interpolation), numbers with suffixes, keywords and modifiers from the lexical spec, primitive types, declarations, calls |
 | `language-configuration.json` | Comment toggling, brackets, auto-closing pairs, indentation, `///` continuing on Enter |
 | `lsp.js` | A Language Server Protocol client over a child process (framing, requests, notifications); knows nothing of VS Code |
@@ -18,12 +18,12 @@ dependencies**: nothing to install, nothing to audit but these files.
 ## Install from this folder
 
 1. Build EnvoScale (`./build.sh build`, or `.\build.ps1 build`) and put
-   `build/envo` on `PATH`, or set **Envo: Path** (`envo.path`) to the program.
-2. Copy this folder to your VS Code extensions folder as `envoscale.envo-0.1.0`:
+   `build/envo` on `PATH`, or set **Envol: Path** (`envo.path`) to the program.
+2. Copy this folder to your VS Code extensions folder as `envoscale.envol-0.1.0`:
    `%USERPROFILE%\.vscode\extensions\` on Windows, `~/.vscode/extensions/` elsewhere.
-3. Restart VS Code and open a `.envo` file.
+3. Restart VS Code and open a `.envol` file.
 
-"Envo: Restart the Language Server" restarts `envo lsp` after rebuilding it; the **Envo**
+"Envol: Restart the Language Server" restarts `envo lsp` after rebuilding it; the **Envol**
 output channel shows what the server says (and every message with `envo.trace` on).
 
 ## Tests

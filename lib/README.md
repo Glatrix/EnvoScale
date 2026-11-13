@@ -1,6 +1,6 @@
 # `lib/`
 
-The standard library, in Envo. Nothing here touches an operating system: it reaches the
+The standard library, in Envol. Nothing here touches an operating system: it reaches the
 outside world only through **ports**, interfaces defined in [`ports/`](ports/README.md)
 and implemented in [`adapters/`](../adapters/README.md). Using an adapter from `lib/` is a
 compile error (E0215); the one meeting point is the `platform` binding, which the build

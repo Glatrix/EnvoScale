@@ -4,9 +4,9 @@
 
 ## One binary (D26)
 
-`envo` is built from `tools/envo/` plus `compiler/` without `driver/main.envo`, by Stage 2
+`envo` is built from `tools/envo/` plus `compiler/` without `driver/main.envol`, by Stage 2
 with the library (`envoc build --lib <root>`), so it can use `std`, `envo.eon` and the
-ports. The compiler's driver functions are in `compiler/driver/build.envo`:
+ports. The compiler's driver functions are in `compiler/driver/build.envol`:
 
 | Function | Used by |
 |---|---|
@@ -37,11 +37,11 @@ dependencies {
 }
 ```
 
-- Sources: every `.envo` file in the folder and below it, outside `tests/` and
-  `build/` and outside nested packages. `main.envo` comes first and holds the
+- Sources: every `.envol` file in the folder and below it, outside `tests/` and
+  `build/` and outside nested packages. `main.envol` comes first and holds the
   program's top-level statements.
-- Tests: every `.envo` file under `tests/`, each a program built with the sources
-  except `main.envo`.
+- Tests: every `.envol` file under `tests/`, each a program built with the sources
+  except `main.envol`.
 - Output: `build/<name>` (`.exe` on Windows) inside the package.
 
 Listing a folder uses `FileSystem.List` (entries in byte order, so builds do not depend

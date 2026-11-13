@@ -13,7 +13,7 @@ Add **slicing**: `a[lo..hi]` makes a `T[]` view of part of an array or slice, an
 `str` view of part of a `str`. Either bound may be left out (`a[lo..]`, `a[..hi]`,
 `a[..]`), `..=` makes the upper bound inclusive, and the bounds are checked. A slice
 borrows what it views. For code that builds a view from raw parts, an `unsafe`
-built-in `slice_from(ptr, len)` mirrors `str_from`. Slicing is part of full Envo and of
+built-in `slice_from(ptr, len)` mirrors `str_from`. Slicing is part of full Envol and of
 Envo-S1; Envo-Core stays as it is.
 
 ## Motivation
@@ -21,7 +21,7 @@ Envo-S1; Envo-Core stays as it is.
 Chapter 2 defines `T[]` as a borrowed view of contiguous values, and Envo-Core has the
 type with indexing, `.Len` and `.Ptr`. But no rule says how to *make* one. The only
 slice a Core program can create is the zero value, which is empty
-(`tests/spec/core-run/panic_slice_bounds.envo`). Without a way to make views:
+(`tests/spec/core-run/panic_slice_bounds.envol`). Without a way to make views:
 
 - functions cannot take "part of a buffer" without passing a pointer and a length by
   hand, which needs `unsafe` and defeats bounds checking;
@@ -91,14 +91,14 @@ meaning chapter 3 gives them; this RFC only defines them as an index.
 - **[expr.slice.5]** `T[] slice_from<T>(*T ptr, usize len)` is a built-in that makes a
   view of `len` values at `ptr`. It needs `unsafe` (E0306): the caller vouches that the
   memory holds `len` valid `T`s and stays alive while the view is used. It is the
-  `T[]` counterpart of `str_from`. Full Envo also exposes it as
+  `T[]` counterpart of `str_from`. Full Envol also exposes it as
   `Span<T>.FromRaw(ptr, len)` in `envo.mem`.
 
 ### Envo-Core and Stage 0
 
 Envo-Core does not get slicing: Stage 0's line budget is spent (PLAN D11), and Core
 code can use a pointer and a length. [core.subset.1] still holds, because Core only
-gets smaller than full Envo. `envo-core.md` §3 says so next to `T[]`.
+gets smaller than full Envol. `envo-core.md` §3 says so next to `T[]`.
 
 ### Tests
 

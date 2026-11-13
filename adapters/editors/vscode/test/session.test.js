@@ -14,7 +14,7 @@ const fsx = require('fs');
 const pathx = require('path');
 const { pathToFileURL } = require('url');
 const folder = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'envo-vscode-'));
-const uri = pathToFileURL(pathx.join(folder, 'main.envo')).href;
+const uri = pathToFileURL(pathx.join(folder, 'main.envol')).href;
 process.on('exit', () => fsx.rmSync(folder, { recursive: true, force: true }));
 const fixed = '// The answer.\ni32 Answer() => 42;\n\nstruct Point {\n    i32 X;\n    i32 Y;\n}\n\nPoint p = new Point { X = 1, Y = 2 };\ni32 v = Answer() + p.X;\n';
 
@@ -33,7 +33,7 @@ test('a session with envo lsp', { skip: !envo && 'set ENVO to the envo program' 
   assert.ok(caps.hoverProvider && caps.definitionProvider && caps.documentSymbolProvider);
 
   let got = next();
-  c.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'envo', version: 1, text: 'i32 x = ;\n' } });
+  c.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'envol', version: 1, text: 'i32 x = ;\n' } });
   await got;
   assert.ok(published[0].diagnostics.length > 0, 'an error is reported');
 

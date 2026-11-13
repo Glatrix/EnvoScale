@@ -1,0 +1,336 @@
+// The EIR printer (eir.md section 3). Follows Stage 1's bootstrap/stage1/eir/print.envol.
+// Values and blocks are renumbered in order of definition (%0, %1, …, ^bb0, ^bb1, …), so
+// the output is canonical: printing a module, reading it back and printing it again gives
+// the same text ([eir.text.4]).
+namespace envoc.eir;
+
+use envoc.util;
+
+// v as `digits` hex digits, lowercase.
+public void AppendHex(ref string o, u64 v, u32 digits) {
+    u32 i = digits;
+    while (i > 0) {
+        i--;
+        u64 d = (v >> (i * 4) as u64) & 15;
+        if (d < 10) o.AppendByte((48 + d) as u8);
+        else o.AppendByte((87 + d) as u8);
+    }
+}
+
+void AppendEirString(ref string o, str s) {
+    o.AppendByte('"');
+    for (usize i = 0; i < s.Len; i++) {
+        u8 c = s[i];
+        if (c == '"') o.Append("\\\"");
+        else if (c == 0x5C) o.Append("\\\\");
+        else if (c == 10) o.Append("\\n");
+        else if (c < 0x20 || c >= 0x7F) {
+            o.Append("\\x");
+            AppendHex(ref o, c as u64, 2);
+        } else o.AppendByte(c);
+    }
+    o.AppendByte('"');
+}
+
+struct Printer {
+    List<u32> Num;      // per value: its canonical number + 1 (0 = not numbered yet)
+    u32 Next;
+
+    void Type(in this, in Module m, ref string o, u32 t) {
+        ETy ty = m.Ty(t);
+        if (ty.Kind == EK_STRUCT) {
+            o.AppendByte('$');
+            o.Append(TextStr(ty.Name));
+        } else if (ty.Kind == EK_ARRAY) {
+            o.AppendByte('[');
+            AppendDecimal(ref o, ty.Count as u64);
+            o.Append(" x ");
+            this.Type(m, ref o, ty.Elem);
+            o.AppendByte(']');
+        } else {
+            o.Append(TextStr(ty.Name));
+        }
+    }
+
+    // Gives value v the next number.
+    void Number(ref this, u32 v) {
+        this.Num.Set(v as usize, this.Next + 1);
+        this.Next++;
+    }
+
+    void Value(in this, ref string o, u32 v) {
+        o.AppendByte('%');
+        AppendDecimal(ref o, (this.Num.Get(v as usize) - 1) as u64);
+    }
+
+    // An integer constant of type t: signed types print negative values with a minus sign;
+    // floats print their bit pattern as 0f followed by 16 hex digits.
+    void Const(in this, in Module m, ref string o, u32 t, u64 v) {
+        if (m.IsFloat(t)) {
+            o.Append("0f");
+            AppendHex(ref o, v, 16);
+            return;
+        }
+        if (m.IsSigned(t) && (v as i64) < 0) {
+            o.AppendByte('-');
+            AppendDecimal(ref o, 0 -% v);
+            return;
+        }
+        AppendDecimal(ref o, v);
+    }
+
+    void Init(in this, in Module m, ref string o, u32 i) {
+        EInit init = m.Init(i);
+        if (init.Kind == EI_ZERO) o.Append("zero");
+        else if (init.Kind == EI_BYTES) {
+            o.Append("bytes ");
+            AppendEirString(ref o, TextStr(init.Bytes));
+        } else if (init.Kind == EI_INT) {
+            AppendDecimal(ref o, init.Int);
+        } else if (init.Kind == EI_ADDR) {
+            o.AppendByte('@');
+            o.Append(TextStr(init.Bytes));
+        } else {
+            o.AppendByte('{');
+            u32 e = init.First;
+            bool first = true;
+            while (e != 0) {
+                if (first) o.AppendByte(' ');
+                else o.Append(", ");
+                first = false;
+                this.Init(m, ref o, e);
+                e = m.Init(e).Next;
+            }
+            o.Append(" }");
+        }
+    }
+
+    // Operand k of an instruction: a value, an integer, a global or a branch target.
+    void Operand(in this, in Module m, ref string o, u32 k, u32 firstBlock, u32 valueType) {
+        EOp op = m.Op(k);
+        if (op.Kind == OK_VALUE) {
+            this.Value(ref o, op.Ref);
+        } else if (op.Kind == OK_INT || op.Kind == OK_CASE) {
+            this.Const(m, ref o, valueType, op.Int);
+        } else if (op.Kind == OK_GLOBAL) {
+            o.AppendByte('@');
+            o.Append(TextStr(op.Str));
+        } else {
+            o.Append("^bb");
+            AppendDecimal(ref o, (op.Ref - firstBlock) as u64);
+            if (op.NArgs > 0) {
+                o.AppendByte('(');
+                for (u32 i = 0; i < op.NArgs; i++) {
+                    if (i > 0) o.Append(", ");
+                    this.Value(ref o, m.Arg(op.Args + i));
+                }
+                o.AppendByte(')');
+            }
+        }
+    }
+
+    void Inst(in this, in Module m, ref string o, u32 i, u32 firstBlock) {
+        EInst inst = m.Inst(i);
+        OpInfo info = OpTable(inst.Op);
+        o.Append("  ");
+        if (inst.Result != 0) {
+            this.Value(ref o, inst.Result);
+            o.Append(" = ");
+        }
+        o.Append(TextStr(info.Name));
+        u8 sh = info.Shape;
+        u32 n = inst.NOps;
+        u32 f = inst.FirstOp;
+        if (sh == SH_CONST) {
+            o.AppendByte(' ');
+            this.Type(m, ref o, inst.Ty);
+            o.AppendByte(' ');
+            this.Const(m, ref o, inst.Ty, inst.Imm);
+        } else if (sh == SH_CONV) {
+            o.AppendByte(' ');
+            this.Type(m, ref o, inst.Ty);
+            o.Append(" -> ");
+            this.Type(m, ref o, inst.Ty2);
+            o.AppendByte(' ');
+            this.Operand(m, ref o, f, firstBlock, 0);
+        } else if (sh == SH_FIELD) {
+            o.AppendByte(' ');
+            this.Type(m, ref o, inst.Ty);
+            o.AppendByte(' ');
+            this.Operand(m, ref o, f, firstBlock, 0);
+            o.Append(", ");
+            AppendDecimal(ref o, inst.Imm);
+        } else if (sh == SH_CALL) {
+            o.AppendByte(' ');
+            this.Operand(m, ref o, f, firstBlock, 0);
+            o.AppendByte('(');
+            for (u32 k = 1; k < n; k++) {
+                if (k > 1) o.Append(", ");
+                this.Operand(m, ref o, f + k, firstBlock, 0);
+            }
+            o.AppendByte(')');
+        } else if (sh == SH_CALLIND) {
+            if (inst.Str.Len > 0) {
+                o.Append(" abi ");
+                AppendEirString(ref o, TextStr(inst.Str));
+            }
+            o.AppendByte(' ');
+            this.Type(m, ref o, inst.Ty);
+            o.Append(" (");
+            for (u32 k = 0; k + 1 < n; k++) {
+                if (k > 0) o.Append(", ");
+                this.Operand(m, ref o, f + k, firstBlock, 0);
+            }
+            o.Append(") ");
+            this.Operand(m, ref o, f + n - 1, firstBlock, 0);
+        } else if (sh == SH_INTRINSIC) {
+            o.AppendByte(' ');
+            o.Append(TextStr(inst.Str));
+            o.AppendByte('(');
+            for (u32 k = 0; k < n; k++) {
+                if (k > 0) o.Append(", ");
+                this.Operand(m, ref o, f + k, firstBlock, 0);
+            }
+            o.AppendByte(')');
+        } else if (sh == SH_SWITCH) {
+            o.AppendByte(' ');
+            this.Type(m, ref o, inst.Ty);
+            o.AppendByte(' ');
+            this.Operand(m, ref o, f, firstBlock, 0);
+            o.Append(", [");
+            u32 k = 1;
+            bool first = true;
+            while (k + 1 < n) {
+                if (!first) o.Append(", ");
+                first = false;
+                this.Operand(m, ref o, f + k, firstBlock, inst.Ty);
+                o.Append(": ");
+                this.Operand(m, ref o, f + k + 1, firstBlock, 0);
+                k += 2;
+            }
+            o.Append("], ");
+            this.Operand(m, ref o, f + n - 1, firstBlock, 0);
+        } else if (sh == SH_PANIC) {
+            o.AppendByte(' ');
+            AppendEirString(ref o, PanicReason(inst.Imm));
+        } else {
+            // type operand (if the shape has one), then the operands separated by commas
+            bool typed = sh == SH_SLOT || sh == SH_BIN || sh == SH_UN || sh == SH_CMP || sh == SH_SELECT ||
+                sh == SH_LOAD || sh == SH_STORE || sh == SH_ELEM || sh == SH_BOUNDS;
+            if (typed) {
+                o.AppendByte(' ');
+                this.Type(m, ref o, inst.Ty);
+            }
+            for (u32 k = 0; k < n; k++) {
+                if (k > 0) o.AppendByte(',');
+                o.AppendByte(' ');
+                this.Operand(m, ref o, f + k, firstBlock, ET_U64);
+            }
+        }
+        o.AppendByte(10);
+    }
+
+    void Func(ref this, in Module m, ref string o, u32 fi) {
+        this.Next = 0;
+        EFunc f = m.Func(fi);
+        o.AppendByte(10);
+        if (f.Extern) o.Append("extern @");
+        else o.Append("func @");
+        o.Append(TextStr(f.Name));
+        o.AppendByte('(');
+        for (u32 i = 0; i < f.NParams; i++) {
+            if (i > 0) o.Append(", ");
+            u32 v = f.FirstValue + i;
+            this.Number(v);
+            this.Value(ref o, v);
+            o.Append(": ");
+            this.Type(m, ref o, m.Val(v).Type);
+        }
+        o.Append(") -> ");
+        this.Type(m, ref o, f.Ret);
+        if (f.Abi.Len > 0) {
+            o.Append(" abi ");
+            AppendEirString(ref o, TextStr(f.Abi));
+        }
+        if (f.Extern) {
+            o.AppendByte(10);
+            return;
+        }
+        // number block parameters and results in order of definition first
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            if (b != f.FirstBlock) {
+                for (u32 k = 0; k < blk.NParams; k++) this.Number(blk.FirstParam + k);
+            }
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                u32 r = m.Inst(i).Result;
+                if (r != 0) this.Number(r);
+            }
+        }
+        o.Append(" {\n");
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            o.Append("^bb");
+            AppendDecimal(ref o, (b - f.FirstBlock) as u64);
+            if (b != f.FirstBlock && blk.NParams > 0) {
+                o.AppendByte('(');
+                for (u32 k = 0; k < blk.NParams; k++) {
+                    if (k > 0) o.Append(", ");
+                    u32 v = blk.FirstParam + k;
+                    this.Value(ref o, v);
+                    o.Append(": ");
+                    this.Type(m, ref o, m.Val(v).Type);
+                }
+                o.AppendByte(')');
+            }
+            o.Append(":\n");
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) this.Inst(m, ref o, i, f.FirstBlock);
+        }
+        o.Append("}\n");
+    }
+}
+
+// Appends module m in canonical text form.
+public void PrintModule(in Module m, ref string o) {
+    Printer p = new Printer { Num = List<u32>.New(), Next = 0 };
+    for (usize i = 0; i < m.Vals.Len(); i++) p.Num.Push(0);
+    o.Append("eir ");
+    AppendDecimal(ref o, m.Version as u64);
+    o.Append(" target ");
+    AppendEirString(ref o, TextStr(m.Target));
+    o.AppendByte(10);
+    u32 types = m.Types.Len() as u32;
+    bool any = false;
+    for (u32 t = ET_PTR + 1; t < types; t++) {
+        ETy ty = m.Ty(t);
+        if (ty.Kind != EK_STRUCT || !ty.Defined) continue;
+        if (!any) o.AppendByte(10);
+        any = true;
+        o.Append("type $");
+        o.Append(TextStr(ty.Name));
+        o.Append(" = ");
+        if (ty.Packed) o.Append("packed ");
+        o.AppendByte('{');
+        for (u32 i = 0; i < ty.NFields; i++) {
+            if (i == 0) o.AppendByte(' ');
+            else o.Append(", ");
+            p.Type(m, ref o, m.Field(ty.Fields + i));
+        }
+        o.Append(" }\n");
+    }
+    u32 globals = m.Globals.Len() as u32;
+    if (globals > 1) o.AppendByte(10);
+    for (u32 g = 1; g < globals; g++) {
+        EGlobal gl = m.Global(g);
+        o.Append("global @");
+        o.Append(TextStr(gl.Name));
+        o.Append(": ");
+        p.Type(m, ref o, gl.Type);
+        if (gl.ReadOnly) o.Append(" readonly");
+        o.Append(" = ");
+        p.Init(m, ref o, gl.Init);
+        o.AppendByte(10);
+    }
+    u32 funcs = m.Funcs.Len() as u32;
+    for (u32 f = 1; f < funcs; f++) p.Func(m, ref o, f);
+}

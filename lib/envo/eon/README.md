@@ -4,7 +4,7 @@
 > `lib/envo/eon/tests/`. `[Derive(Eon)]` and binary EON come later (they need
 > derives, M6+).
 
-EON (Envo Object Notation) reader and writer. Spec: [`docs/spec/eon.md`](../../../docs/spec/eon.md).
+EON (Envol Object Notation) reader and writer. Spec: [`docs/spec/eon.md`](../../../docs/spec/eon.md).
 
 ## Simple door
 

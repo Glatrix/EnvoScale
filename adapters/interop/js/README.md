@@ -9,7 +9,7 @@ framework:
   `node envo.js program.wasm [arguments…]` in Node.js, or
   `await EnvoWeb.run(bytes, { args, stdout, stderr, env })` in a page. It provides the
   program's one import, `envo.host(k, a, b, c, d)`. The functions `k` are listed in
-  `compiler/runtime/wasm.envo` and `adapters/os/wasm/wasm.envo`. `EnvoWeb.memoryFs(map)`
+  `compiler/runtime/wasm.envol` and `adapters/os/wasm/wasm.envol`. `EnvoWeb.memoryFs(map)`
   is a file system in memory for a page or a test: paths to bytes, which the program's
   writes land in.
 - [`sandbox.js`](sandbox.js) is the website's sandbox page. `envoc.wasm`, the compiler
@@ -20,9 +20,9 @@ framework:
   same bytes (the fixed point in WebAssembly), then compiles and runs a program in memory
   as the sandbox does. The bootstrap scripts run it where Node.js is installed.
   A library test can opt out with `// wasm: skip (why)`. It also runs the browser host
-  on a stand-in canvas ([`window-page.envo`](window-page.envo)) and, where Node can turn
+  on a stand-in canvas ([`window-page.envol`](window-page.envol)) and, where Node can turn
   JSPI on, a program whose endless loop yields to the page
-  ([`window-loop.envo`](window-loop.envo), [`window-loop.js`](window-loop.js)).
+  ([`window-loop.envol`](window-loop.envol), [`window-loop.js`](window-loop.js)).
 
 ## The browser host (M14.8)
 

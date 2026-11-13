@@ -1,4 +1,4 @@
-# EON — Envo Object Notation (`.envon`)
+# EON — Envol Object Notation (`.envon`)
 
 > **Status:** Draft. Read and written by the `envo.eon` library (`lib/envo/eon`, M5). The
 > root `envo.envon` is kept valid against this draft.
@@ -7,7 +7,7 @@
 > already use that one, among them another configuration language.
 
 EON is EnvoScale's data and configuration format: manifests, Lumen design tokens,
-linker layouts, lockfiles. It is a **strict literal subset of Envo syntax**: an EON
+linker layouts, lockfiles. It is a **strict literal subset of Envol syntax**: an EON
 document contains only literals, arrays and blocks, so it can never run code.
 
 ```eon
@@ -66,16 +66,16 @@ Absent, the version is 1. Readers reject versions they do not know. This is EON'
 header (brief §14.1); each schema built on EON (manifest, tokens, …) versions itself
 separately with a field of its own.
 
-## 4. Relationship to Envo
+## 4. Relationship to Envol
 
-**[eon.envo.1]** An EON value, written after `=` in Envo code where the target type is
-known, is a valid Envo initializer for that type: `[Derive(Eon)]` types round-trip
-through EON, and `Config c = { name = "x", port = 8080 };` is valid Envo when `Config`
+**[eon.envol.1]** An EON value, written after `=` in Envol code where the target type is
+known, is a valid Envol initializer for that type: `[Derive(Eon)]` types round-trip
+through EON, and `Config c = { name = "x", port = 8080 };` is valid Envol when `Config`
 has those fields. Blocks are anonymous initializers; arrays are collection literals.
 
-Envo initializers accept only `key = { … }`; EON accepts both forms
+Envol initializers accept only `key = { … }`; EON accepts both forms
 ([RFC 0007](../rfcs/0007-eon-block-shorthand.md)). A block written with the shorthand
-becomes an Envo initializer by inserting `=` before its `{`.
+becomes an Envol initializer by inserting `=` before its `{`.
 
 ## 5. Canonical form
 

@@ -1,0 +1,52 @@
+// Window conformance: what every IWindow adapter promises (lib/ports). A system that
+// cannot open windows says so from Open and then has no window; one that can opens a
+// small window for a moment: its drawable area has the size asked for, it takes a frame
+// and events, and it is gone once closed. With ENVO_WINDOW_REQUIRED set (CI under Xvfb), a
+// window that does not open is a failure.
+// expect: window: done
+use ports.{IWindow, Event, EventKind};
+use platform;
+use std.env;
+
+void Check(bool ok, str what) {
+    if (!ok) {
+        write(1, "failed: ");
+        print(what);
+    }
+}
+
+void Run<W>(ref W w) where W : IWindow {
+    Check(!w.IsOpen(), "not open before Open");
+    Check(w.Poll().Is(EventKind.None), "no events before Open");
+    if (!w.Open("Envol conformance", 400, 300)) {
+        Check(!w.IsOpen(), "not open when Open says no");
+        Check(env.Var("ENVO_WINDOW_REQUIRED").IsNone(), "a window opens (ENVO_WINDOW_REQUIRED is set)");
+        return;
+    }
+    Check(w.IsOpen(), "open after Open");
+    Check(w.Width() == 400 && w.Height() == 300, "the drawable area has the size asked for");
+    Check(!w.Open("again", 10, 10), "Open on an open window says no");
+    List<u8> frame = List<u8>.New();
+    for (usize i = 0; i < 400 * 300; i++) {
+        frame.Push(26);
+        frame.Push(115);
+        frame.Push(232);
+        frame.Push(255);
+    }
+    w.Present(frame.AsSlice(), 400, 300);
+    w.SetTitle("Envol conformance: titled");
+    // the events the system has: drained without waiting
+    u32 n = 0;
+    while (n < 10000 && !w.Poll().Is(EventKind.None)) n++;
+    Check(n < 10000, "Poll runs out of events");
+    Check(w.IsOpen(), "still open after a frame, a title and events");
+    w.Close();
+    Check(!w.IsOpen(), "closed after Close");
+    Check(w.Poll().Is(EventKind.None), "no events after Close");
+    Event e = Event.Of(EventKind.MouseDown, 3, 4, 1);
+    Check(e.X() == 3 && e.Y() == 4 && e.Code() == 1 && e.Is(EventKind.MouseDown), "an event keeps its fields");
+}
+
+var win = platform.Window();
+Run(ref win);
+print("window: done");

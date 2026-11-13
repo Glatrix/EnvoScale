@@ -3,7 +3,7 @@
 > **Status:** Compiles and runs with every stage: `envoc0` (M1), `envoc1` (M2) and
 > `envoc` (M3). Runs as a script from M6.
 
-The smallest complete Envo program:
+The smallest complete Envol program:
 
 ```envo
 print("Hello, World!")
@@ -17,13 +17,13 @@ Stage 0 will compile.
 ## Try it today
 
 ```sh
-build/stage2/envoc build examples/00-hello/main.envo -o hello && ./hello
+build/stage2/envoc build examples/00-hello/main.envol -o hello && ./hello
 ```
 
 ## When the toolchain exists
 
 ```sh
-envo run examples/00-hello/main.envo     # script mode (M6)
+envo run examples/00-hello/main.envol     # script mode (M6)
 envo build examples/00-hello             # native executable (M5)
 ```
 

@@ -1,4 +1,4 @@
-// The Envo extension for VS Code (M14.9): the grammar and editor settings come from
+// The Envol extension for VS Code (M14.9): the grammar and editor settings come from
 // package.json; this file runs `envo lsp` and connects it to the editor: documents are sent
 // whole as they change, diagnostics shown as they come, and completion, hover, go to
 // definition, document symbols and formatting asked of the server.
@@ -12,7 +12,7 @@ let output = null;
 let diagnostics = null;
 let warned = false;
 
-const isEnvo = (doc) => doc.languageId === 'envo';
+const isEnvo = (doc) => doc.languageId === 'envol';
 const docParams = (doc) => ({ textDocument: { uri: doc.uri.toString() } });
 
 async function start(context) {
@@ -29,7 +29,7 @@ async function start(context) {
       }
     },
     onExit: (code) => {
-      if (client === c) output.appendLine(`envo lsp exited (${code}); "Envo: Restart the Language Server" starts it again`);
+      if (client === c) output.appendLine(`envo lsp exited (${code}); "Envol: Restart the Language Server" starts it again`);
     },
   });
   try {
@@ -38,7 +38,7 @@ async function start(context) {
     output.appendLine(`could not start ${program} lsp: ${e.message}`);
     if (!warned) {
       warned = true;
-      vscode.window.showWarningMessage(`Envo: could not start "${program} lsp". Set envo.path to the envo program.`);
+      vscode.window.showWarningMessage(`Envol: could not start "${program} lsp". Set envo.path to the envo program.`);
     }
     return;
   }
@@ -56,7 +56,7 @@ async function stop() {
 function opened(doc) {
   if (!client || !isEnvo(doc)) return;
   client.notify('textDocument/didOpen', {
-    textDocument: { uri: doc.uri.toString(), languageId: 'envo', version: doc.version, text: doc.getText() },
+    textDocument: { uri: doc.uri.toString(), languageId: 'envol', version: doc.version, text: doc.getText() },
   });
 }
 
@@ -72,9 +72,9 @@ async function ask(method, params) {
 }
 
 function activate(context) {
-  output = vscode.window.createOutputChannel('Envo');
-  diagnostics = vscode.languages.createDiagnosticCollection('envo');
-  const selector = { language: 'envo' };
+  output = vscode.window.createOutputChannel('Envol');
+  diagnostics = vscode.languages.createDiagnosticCollection('envol');
+  const selector = { language: 'envol' };
   context.subscriptions.push(
     output,
     diagnostics,

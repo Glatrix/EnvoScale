@@ -69,12 +69,12 @@
   run.addEventListener('click', async () => {
     run.disabled = true;
     say('Compiling…');
-    const files = new Map([['main.envo', new TextEncoder().encode(code.value)]]);
+    const files = new Map([['main.envol', new TextEncoder().encode(code.value)]]);
     const fs = EnvoWeb.memoryFs(files);
     let log = '';
     const keep = (b) => { log += decoder.decode(b); };
     const t0 = performance.now();
-    const status = await EnvoWeb.run(envoc, { args: ['envoc', 'build', '--target', 'wasm32-web', 'main.envo', '-o', 'main.wasm'], fs, stdout: keep, stderr: keep });
+    const status = await EnvoWeb.run(envoc, { args: ['envoc', 'build', '--target', 'wasm32-web', 'main.envol', '-o', 'main.wasm'], fs, stdout: keep, stderr: keep });
     const t1 = performance.now();
     if (status !== 0 || !files.has('main.wasm')) {
       say(log || `The compiler stopped with code ${status}.`);

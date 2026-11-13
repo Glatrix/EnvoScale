@@ -1,4 +1,0 @@
-// Items of all files share one namespace: a second `Go` is a duplicate.
-// expect-error: E0201 @ other.envo:2:6
-void Go() {}
-Go();

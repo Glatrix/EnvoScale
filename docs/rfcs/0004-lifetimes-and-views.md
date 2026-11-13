@@ -27,7 +27,7 @@ explicit escape hatch yet" ([own.life.3]). Rust's `'a` reads oddly next to C#'s
 find hardest. Three things are needed:
 
 1. a way to write a signature that elision cannot express (`Longest` above);
-2. a rule that keeps every Envo-Core program valid Envo ([core.subset.1]), even though
+2. a rule that keeps every Envo-Core program valid Envol ([core.subset.1]), even though
    Core has no lifetimes and functions like `str Pick(str a, str b)` are valid Core;
 3. a way to write through a slice, which RFC 0002 deferred here ([expr.slice.4]).
 
@@ -122,7 +122,7 @@ Param = [ "in" | "ref" | "out" ] Type Identifier [ "from" Origin { "," Origin } 
   another package.
 - **[life.infer.4]** An Envo-Core program is a single executable package, so none of its
   functions are exported (its `public` has no effect, `envo-core.md` §4). Every Core
-  function falls under elision or [life.infer.2], and every Core program stays valid Envo
+  function falls under elision or [life.infer.2], and every Core program stays valid Envol
   ([core.subset.1]).
 
 ### Writable views: `mut T[]`

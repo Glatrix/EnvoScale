@@ -33,7 +33,7 @@ const bad = (name, why) => {
 
 for (const suite of suites) {
   const dir = path.join(root, 'tests', 'spec', suite);
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.envo')).sort()) {
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.envol')).sort()) {
     const src = fs.readFileSync(path.join(dir, file), 'utf8');
     const expected = lines(src, '// expect: ').map((l) => l + '\n').join('');
     const panic = lines(src, '// expect-panic: ')[0];
@@ -42,7 +42,7 @@ for (const suite of suites) {
     if (panic) want = 101;
     for (const opt of ['-O0', '-O2']) {
       const name = `wasm ${suite}/${file} ${opt}`;
-      const prog = path.join(work, `${path.basename(file, '.envo')}${opt}.wasm`);
+      const prog = path.join(work, `${path.basename(file, '.envol')}${opt}.wasm`);
       const build = spawnSync(envoc, ['build', opt, '--target', 'wasm32-web', path.join(dir, file), '-o', prog], { encoding: 'utf8' });
       if (build.status !== 0) {
         bad(name, `build failed: ${(build.stderr || '').slice(0, 400)}`);
@@ -57,7 +57,7 @@ for (const suite of suites) {
     }
   }
 }
-// The library tests (lib/**/tests/*.envo) at -O2, with the os.wasm adapters (or the
+// The library tests (lib/**/tests/*.envol) at -O2, with the os.wasm adapters (or the
 // reference ones for `// os: none`), unless a test says `// wasm: skip (why)`. They run
 // three folders below the root, as `envo test` runs them, so relative paths agree.
 if (process.argv.length <= 3) {
@@ -68,7 +68,7 @@ if (process.argv.length <= 3) {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith('.envo') && path.basename(d) === 'tests') tests.push(p);
+      else if (e.name.endsWith('.envol') && path.basename(d) === 'tests') tests.push(p);
     }
   };
   walk(path.join(root, 'lib'));
@@ -104,9 +104,9 @@ if (process.argv.length <= 3) {
 // wait: it reads what is queued and goes on.
 async function pagePhase() {
   const EnvoWeb = require('./envo.js');
-  const name = 'wasm the browser host (adapters/interop/js/window-page.envo)';
+  const name = 'wasm the browser host (adapters/interop/js/window-page.envol)';
   const prog = path.join(work, 'window-page.wasm');
-  const b = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', '--lib', root, path.join(__dirname, 'window-page.envo'), '-o', prog], { encoding: 'utf8' });
+  const b = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', '--lib', root, path.join(__dirname, 'window-page.envol'), '-o', prog], { encoding: 'utf8' });
   if (b.status !== 0) {
     bad(name, `build failed: ${(b.stderr || '').slice(0, 400)}`);
     return;
@@ -149,9 +149,9 @@ async function pagePhase() {
   else pass++;
 
   // under JSPI the loop yields to the page (where this Node can turn JSPI on)
-  const loopName = 'wasm the browser host yields under JSPI (window-loop.envo)';
+  const loopName = 'wasm the browser host yields under JSPI (window-loop.envol)';
   const loop = path.join(work, 'window-loop.wasm');
-  const lb = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', '--lib', root, path.join(__dirname, 'window-loop.envo'), '-o', loop], { encoding: 'utf8' });
+  const lb = spawnSync(envoc, ['build', '-O2', '--target', 'wasm32-web', '--lib', root, path.join(__dirname, 'window-loop.envol'), '-o', loop], { encoding: 'utf8' });
   if (lb.status !== 0) {
     bad(loopName, `build failed: ${(lb.stderr || '').slice(0, 400)}`);
     return;
@@ -180,10 +180,10 @@ async function compilerPhase() {
   if (r.status !== 0) bad('wasm envoc.wasm builds itself', `exit ${r.status}: ${(r.stderr || '').slice(0, 400)}`);
   else if (!fs.readFileSync(wasm).equals(fs.readFileSync(self))) bad('wasm envoc.wasm builds itself', 'the rebuilt compiler differs');
   else pass++;
-  const mem = new Map([['main.envo', new TextEncoder().encode('print("Hello from the sandbox");\n')]]);
+  const mem = new Map([['main.envol', new TextEncoder().encode('print("Hello from the sandbox");\n')]]);
   let log = '';
   const keep = (x) => { log += new TextDecoder().decode(x); };
-  const code = await EnvoWeb.run(fs.readFileSync(wasm), { args: ['envoc', 'build', '--target', 'wasm32-web', 'main.envo', '-o', 'main.wasm'], fs: EnvoWeb.memoryFs(mem), stdout: keep, stderr: keep });
+  const code = await EnvoWeb.run(fs.readFileSync(wasm), { args: ['envoc', 'build', '--target', 'wasm32-web', 'main.envol', '-o', 'main.wasm'], fs: EnvoWeb.memoryFs(mem), stdout: keep, stderr: keep });
   if (code !== 0 || !mem.has('main.wasm')) {
     bad('wasm sandbox compile', `exit ${code}: ${log}`);
     return;

@@ -32,7 +32,7 @@ writes this line, and `envoc` writes only this line, so the stages can be compar
 line where there is advice, and a pointer to `envo explain`:
 
 ```text
-kw.envo:1:8: error[E0101]: expected `;`, found `out`
+kw.envol:1:8: error[E0101]: expected `;`, found `out`
   |
 1 | string out = string.New();
   |        ^
@@ -82,7 +82,7 @@ help: `out` is a keyword, so it cannot be a name; choose another
 | E0211 | `namespace` must come first in its file | [s1.item.1] (Envo-S1) |
 | E0212 | `X` is private to namespace `N` | [s1.item.2] (Envo-S1) |
 | E0213 | unknown namespace `N` | [s1.item.1] (Envo-S1) |
-| E0214 | no module `a.b`: the file `<lib>/lib/a/b/b.envo` does not exist | the `use` path; `envoc --lib` only ([`library.md`](../architecture/library.md), D21) |
+| E0214 | no module `a.b`: the file `<lib>/lib/a/b/b.envol` does not exist | the `use` path; `envoc --lib` only ([`library.md`](../architecture/library.md), D21) |
 | E0215 | the standard platform cannot use the adapter `os.X` | the `use` path in a file under `lib/` ([`library.md`](../architecture/library.md), D23) |
 
 ## Types (E0300–E0399)

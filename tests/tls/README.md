@@ -5,7 +5,7 @@
 
 The scripts make a throwaway CA (P-256) and two server certificates it signs (RSA-2048
 and P-256, for `localhost`), start `openssl s_server -tls1_3 -www` on a local port, and
-run `client.envo` (built by Stage 2), which trusts only that CA:
+run `client.envol` (built by Stage 2), which trusts only that CA:
 
 | Server | Cipher suite | Expected |
 |---|---|---|

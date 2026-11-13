@@ -58,7 +58,7 @@ program's life, owns the selection to copy (answering other programs' requests f
 answers those requests, so a program with no window answers only when it next uses the
 clipboard. CI copies and pastes both ways with `xclip` under Xvfb.
 
-The Win32 adapter needs no callback from Windows into Envo code. Its window class uses
+The Win32 adapter needs no callback from Windows into Envol code. Its window class uses
 `DefWindowProcW` itself as the window procedure, so:
 - events are read from the message queue (`PeekMessageW`, then `TranslateMessage` for
   characters and `DispatchMessageW`);
@@ -149,7 +149,7 @@ video.
 ## Fonts
 
 `envo.font` reads TrueType outlines from the system's fonts (`System("sans-serif")`).
-Envo bundles none. Font files are treated as untrusted input:
+Envol bundles none. Font files are treated as untrusted input:
 - every read is checked;
 - composite glyphs nest at most 8 deep;
 - a glyph has at most 65,536 points;

@@ -1,0 +1,53 @@
+// The browser host's window (test-wasm.js runs it with a stand-in canvas): the events the
+// page queued come back as the port's, a frame lands on the canvas, the title reaches the
+// page, and the clipboard keeps text within the page.
+use ports.{IWindow, IClipboard, Event, EventKind};
+use platform;
+use alloc.text;
+
+str Name(EventKind k) {
+    if (k == EventKind.KeyDown) return "keydown";
+    if (k == EventKind.KeyUp) return "keyup";
+    if (k == EventKind.Char) return "char";
+    if (k == EventKind.MouseMove) return "move";
+    if (k == EventKind.MouseDown) return "down";
+    if (k == EventKind.MouseUp) return "up";
+    if (k == EventKind.Wheel) return "wheel";
+    return "other";
+}
+
+var w = platform.Window();
+if (!w.Open("Envol in a page", 4, 3)) {
+    print("no canvas");
+    exit(1);
+}
+write(1, "open ");
+write(1, text.Uint(w.Width() as u64).AsStr());
+write(1, "x");
+print(text.Uint(w.Height() as u64).AsStr());
+while (true) {
+    Event e = w.Poll();
+    if (e.Is(EventKind.None)) break;
+    write(1, Name(e.Kind()));
+    write(1, " ");
+    write(1, text.Int(e.X() as i64).AsStr());
+    write(1, " ");
+    write(1, text.Int(e.Y() as i64).AsStr());
+    write(1, " ");
+    write(1, text.Int(e.Delta() as i64).AsStr());
+    write(1, " ");
+    print(text.Uint(e.Mods() as u64).AsStr());
+}
+List<u8> frame = List<u8>.New();
+for (usize i = 0; i < 12; i++) {
+    frame.Push(i as u8);
+    frame.Push(10);
+    frame.Push(20);
+    frame.Push(255);
+}
+w.Present(frame.AsSlice(), 4, 3);
+w.SetTitle("titled");
+var c = platform.Clipboard();
+if (c.Text().IsNone() && c.SetText("copied") && c.Text().Unwrap().Equals("copied")) print("clipboard ok");
+w.Close();
+if (!w.IsOpen() && w.Poll().Is(EventKind.None)) print("closed");

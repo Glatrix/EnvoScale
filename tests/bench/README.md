@@ -9,16 +9,16 @@
 Each program prints its result as a test does (`// expect:`), so it doubles as a check.
 
 ```bash
-envo run -A tests/bench/vm/sieve.envo          # the script runtime
-envo run --native tests/bench/vm/sieve.envo    # native code (-O0)
+envo run -A tests/bench/vm/sieve.envol          # the script runtime
+envo run --native tests/bench/vm/sieve.envol    # native code (-O0)
 ```
 
 | Program | What it exercises | Native `-O0` | Script runtime |
 |---|---|---|---|
-| `fib.envo` | calls (Fibonacci of 27) | 0.02 s | 0.76 s |
-| `sieve.envo` | loops and memory (primes below 2 000 000) | 0.08 s | 6.95 s |
-| `text.envo` | library code (100 000 lines split, a map) | 0.20 s | 15.2 s |
-| the compiler building `calls.envo` | 30 000 lines of Envo-S1 | 0.12 s | 3.3 s |
+| `fib.envol` | calls (Fibonacci of 27) | 0.02 s | 0.76 s |
+| `sieve.envol` | loops and memory (primes below 2 000 000) | 0.08 s | 6.95 s |
+| `text.envol` | library code (100 000 lines split, a map) | 0.20 s | 15.2 s |
+| the compiler building `calls.envol` | 30 000 lines of Envo-S1 | 0.12 s | 3.3 s |
 
 Measured on the development machine (Windows, M6.6), wall time including the
 compile step. The script runtime is an interpreter over EIR: 35 to 100 times slower

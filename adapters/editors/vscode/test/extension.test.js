@@ -62,9 +62,9 @@ const fsx = require('fs');
 const pathx = require('path');
 const { pathToFileURL } = require('url');
 const folder = fsx.mkdtempSync(pathx.join(os.tmpdir(), 'envo-vscode-'));
-const uri = pathToFileURL(pathx.join(folder, 'ext.envo')).href;
+const uri = pathToFileURL(pathx.join(folder, 'ext.envol')).href;
 process.on('exit', () => fsx.rmSync(folder, { recursive: true, force: true }));
-const doc = (text, version) => ({ uri: fake.Uri.parse(uri), languageId: 'envo', version, getText: () => text });
+const doc = (text, version) => ({ uri: fake.Uri.parse(uri), languageId: 'envol', version, getText: () => text });
 
 test('activation registers the providers and starts the server', async () => {
   const context = { subscriptions: [] };

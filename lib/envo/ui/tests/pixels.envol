@@ -1,0 +1,106 @@
+// envo.ui in pixels: the same card laid out with the test font (labels from its glyphs:
+// l O A i and space), drawn on a canvas (by hash), and clicked: a click is a press and a
+// release on the same component; a release elsewhere is not a click.
+// expect: card 16,16 208x161
+// expect: title 32,32 47x28
+// expect: checkbox 32,72 49x32
+// expect: row 32,129 176x32
+// expect: no 99,129 48x32
+// expect: yes 155,129 53x32
+// expect: 2b05d82982f9d151c8ba8addd128301f0dfaa59b28c27f5cc1db9cbed7ece14a
+// expect: checkbox clicked, focused, on
+// expect: release elsewhere: no click
+// expect: pressing focuses
+// expect: tab twice: around to the other button
+// expect: enter activates it
+// expect: af56075636ba7719c9b40aa9d9e73ad49f74367b0fc80625bbd3112e986af198
+// expect: 5da4dc139325b9a8e86f7550b9053231d9bd74e41886c8e0dc9ec1737ef04270
+use envo.ui;
+use envo.gfx;
+use envo.font;
+use envo.lumen;
+use ports.{Event, EventKind};
+use alloc.text;
+
+// "Envol Test", a font of six glyphs drawn for these tests (tests/data/mkfont.py makes
+// it): .notdef, space, 'l' (a bar), 'O' (a ring of quadratic curves), 'A' (a triangle
+// with a hole), 'i' (a composite of two bars).
+u8 Nib(u8 c) {
+    if (c >= 'a') return c - 'a' + 10;
+    return c - '0';
+}
+
+List<u8> TestFont() {
+    string h = string.New();
+    h.Append("000100000007004000020030636d6170000000000000007c0000004c676c796600000000000000c8000000d068656164");
+    h.Append("0000000000000198000000366868656100000000000001d000000024686d747800000000000001f4000000186c6f6361");
+    h.Append("000000000000020c0000001c6d61787000000000000002280000000600000001000300010000000c000400400000000c");
+    h.Append("00000000000000200041004f0069006cffff000000200041004f0069006cffffffe1ffc3ffb4ff9cff96000100000000");
+    h.Append("000000000000000000010064000000fa02bc00030000010101010064000000960000000002bc0000fd44000000020032");
+    h.Append("0032028a028a0007000f000001000100010001000100010001000100015e012c00000000fed4fed400000000012cff6a");
+    h.Append("000000000096009600000000028a0000fed4fed400000000012c012cff6a0000ff6aff6a000000000096009600020032");
+    h.Append("0000028a02bc0002000500000101010101010032012c012cfe7000c8ff9c000002bcfd440096000000fa0000ffff0064");
+    h.Append("000000fa05dc0023000200000000000300020000032000000001000000010000000000005f0f3cf5000b03e800000000");
+    h.Append("0000000000000000000000000000000002bc05dc000000080002000100000000000100000320ff38006402bc00000000");
+    h.Append("02bc00010000000000000000000000000000000601f40000012c0000015e000002bc000002bc0000015e000000000000");
+    h.Append("00000000000000000000002400000084000000b4000000d00000500000060000");
+    List<u8> b = List<u8>.New();
+    str s = h.AsStr();
+    for (usize i = 0; i + 1 < s.Len; i += 2) b.Push(Nib(s[i]) * 16 + Nib(s[i + 1]));
+    return b;
+}
+
+void Bounds(in ui.Tree t, str name, u32 id) {
+    write(1, name);
+    write(1, " ");
+    write(1, text.Int(t.X(id) as i64).AsStr());
+    write(1, ",");
+    write(1, text.Int(t.Y(id) as i64).AsStr());
+    write(1, " ");
+    write(1, text.Int(t.Width(id) as i64).AsStr());
+    write(1, "x");
+    print(text.Int(t.Height(id) as i64).AsStr());
+}
+
+List<u8> data = TestFont();
+font.Font f = font.Font.Parse(data.AsSlice()).Unwrap();
+lumen.Theme th = lumen.Light();
+ui.Tree t = ui.Tree.New();
+t.SetPadding(t.Root(), ui.L);
+u32 card = t.Card(t.Root());
+u32 title = t.Text(card, "AlOi", ui.TITLE);
+u32 box = t.Checkbox(card, "Oil", false);
+t.Divider(card);
+u32 row = t.Row(card);
+t.Spacer(row);
+u32 no = t.Button(row, "lO", false);
+u32 yes = t.Button(row, "AO", true);
+t.LayoutPixels(f, th, 240, 200);
+Bounds(t, "card", card);
+Bounds(t, "title", title);
+Bounds(t, "checkbox", box);
+Bounds(t, "row", row);
+Bounds(t, "no", no);
+Bounds(t, "yes", yes);
+
+gfx.Canvas c = gfx.Canvas.New(240, 200);
+t.DrawPixels(ref c, f, th);
+print(c.Hash().AsStr());
+
+i32 bx = t.X(box) + 5;
+i32 by = t.Y(box) + 5;
+t.OnEvent(Event.Of(EventKind.MouseDown, bx, by, 1));
+u32 got = t.OnEvent(Event.Of(EventKind.MouseUp, bx, by, 1));
+if (got == box && t.Checked(box) && t.Focused() == box) print("checkbox clicked, focused, on");
+t.OnEvent(Event.Of(EventKind.MouseDown, t.X(yes) + 3, t.Y(yes) + 3, 1));
+if (t.OnEvent(Event.Of(EventKind.MouseUp, 1, 1, 1)) == 0) print("release elsewhere: no click");
+if (t.Focused() == yes) print("pressing focuses");
+t.OnEvent(Event.Of(EventKind.KeyDown, 0, 0, 9));
+t.OnEvent(Event.Of(EventKind.KeyDown, 0, 0, 9));
+if (t.Focused() == no) print("tab twice: around to the other button");
+if (t.OnEvent(Event.Of(EventKind.KeyDown, 0, 0, 13)) == no) print("enter activates it");
+t.DrawPixels(ref c, f, th);
+print(c.Hash().AsStr());
+lumen.Theme dark = lumen.Dark();
+t.DrawPixels(ref c, f, dark);
+print(c.Hash().AsStr());

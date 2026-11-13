@@ -24,13 +24,13 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | M6 | Script runtime | **Done**: `envo run` interprets the program's EIR, sandboxed with `--allow` permissions; scripts and `#!/usr/bin/env envo`; `envo repl`; every spec run test and library test passes in both modes (6.1–6.7) |
 | M7 | Crypto and network | **Done** (Experimental, not audited): `envo.crypto` (SHA-2, HMAC/HKDF, ChaCha20-Poly1305, AES-GCM, X25519, Ed25519, a CSPRNG; RSA, ECDSA and X.509 verification), the Net and Trust ports, `envo.http` (HTTP/1.1 client and server), `envo.tls` (a verifying TLS 1.3 client) (7.1–7.8) |
 | M8 | Graphics and UI | **Done** (Experimental): `envo.term` and the Terminal port, `envo.cli`, `envo.gfx`, `envo.font`, the Window port (Win32), `envo.lumen` and `envo.ui` (desktop and terminal renderers), `envo.gpu` (software and Direct3D 12) (8.1–8.9) |
-| M9 | Web | **Done** (Experimental): the WebAssembly backend, the JS host and `os.wasm`, `envo.markdown`, `envo.web` with Lumen's Landing and Docs templates, the website and its in-browser sandbox, built by Envo programs (9.1–9.8) |
+| M9 | Web | **Done** (Experimental): the WebAssembly backend, the JS host and `os.wasm`, `envo.markdown`, `envo.web` with Lumen's Landing and Docs templates, the website and its in-browser sandbox, built by Envol programs (9.1–9.8) |
 | M10 | AArch64 and macOS | **In progress**: AArch64 Linux works (Experimental, D69): `--target aarch64-linux`, the run tests and the library's tests pass on CI's arm64 runner. macOS executables work (Experimental, D70): `--target aarch64-macos`, signed Mach-O, the run tests pass on CI's macOS runner. Next: the macOS adapters, then the window and Metal |
 | M11 | 3D | **Done** (Experimental; ahead of M10): floats (RFC 0006), `envo.math`, `envo.ecs`, `envo.render3d` (software PBR: the same frame bit for bit in every build), glTF 2.0 import, the 3D gallery program in a window (11.1–11.6) |
 | M12 | AI | **Done** (Experimental): `envo.ai` tensors, autograd and optimizers; BPE, SentencePiece and WordPiece tokenizers; GGUF loading (11 tensor types); local inference for the Llama family; a text encoder (nomic-bert), exact and HNSW vector search; a matrix product on the GPU through `IGpu` (12.1–12.7) |
 | M13 | Ecosystem | **Done** (Experimental): `envo prof`, `envo fuzz` (coverage-guided), `envo dbg` (source-level), package dependencies with a lock, signed archives and a registry adapter, and the hex seed: Stage 0 built from commented hex with the OS alone, byte-identical to NASM (13.1–13.6) |
 | M14 | The application platform | **Done** (Experimental): a heap that frees, key codes and a clipboard port, processes with pipes, `envo query` and completion, hover, definition, symbols and formatting in `envo lsp`, `envo.edit`, application components in `envo.ui`, Linux windows over X11, the browser host, a VS Code extension (14.1–14.10). Open: a font for pages (#168, owner) |
-| M15 | Envo Studio, the IDE | **In progress** (PLAN §6): the shell (15.1) in its own repository, EnvoScaleStudio; files and the editor are next |
+| M15 | Envide, the IDE | **In progress** (PLAN §6): the shell (15.1) in its own repository, EnvoScaleStudio; files and the editor are next |
 | M16 | Performance | **In progress** (PLAN D79): against the compiler ported to Rust (EnvoScaleRust). Locals promoted to SSA values, and the x86-64 backend computing in registers with ten of them: with division by constants and jump tables too, the lex and parse benchmark is 38% and 30% faster; Rust is still about 4.5x faster on Windows |
 
 ### M0 Definition of Done
@@ -82,7 +82,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 |---|---|---|
 | EIR VM | `runtime/vm`: an interpreter over the compiler's EIR for the host target, runtime included (D31, D32); the compiler itself runs in it and builds byte-identical executables | Done |
 | REPL | `envo repl` (D36) | Done |
-| Shebang | `envo file.envo`, `#!/usr/bin/env envo` (D33); a shebang script runs on Linux in CI | Done |
+| Shebang | `envo file.envol`, `#!/usr/bin/env envo` (D33); a shebang script runs on Linux in CI | Done |
 | Sandbox permissions | `--allow read, write, fs (:path), env, run, net, all` (D34); `tests/sandbox` | Done |
 | Every spec test in both modes | every spec run and multi-file program, and every library test, in the VM too (D35); green on both hosts | Done |
 
@@ -120,7 +120,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | `envo.web` server/router | `envo.web`: routes with parameters, static files, `Serve` | Done |
 | SSG + SSR | one code path: `App.Handle` per request, `Build` to files | Done |
 | Lumen templates (Landing, Docs) | `envo.web.templates`, CSS from Lumen's tokens | Done |
-| The docs site built with EnvoScale | `website/site.envo` builds the site (with the sandbox) in CI; publishing is #61 | Done |
+| The docs site built with EnvoScale | `website/site.envol` builds the site (with the sandbox) in CI; publishing is #61 | Done |
 
 ### M11 Definition of Done
 
@@ -174,7 +174,7 @@ as sub-issues, owner decisions marked **Needs Decision**.
 | **RFCs** (`docs/rfcs`) | — | Template; RFCs 0001–0005 | — | As listed on the roadmap |
 | **Seed** (`bootstrap/seed`) | — | — | Everything (Phase B, before 1.0) | After Stage 0's `.eas` subset is final |
 | **Stage 0** (`bootstrap/stage0`) | Experimental | `envoc0` in 15k lines of assembly: `lex`, `parse`, `check`, `build`; PE/ELF output, cross-compiles; hello world is 8 KB | Fixes only (line budget used up) | — |
-| **Stage 1** (`bootstrap/stage1`) | Experimental | `envoc1` in 17k lines of Envo-Core: front end, EIR v1 with verifier, x86-64 backend, PE/ELF, runtime in Envo. Compiles Envo-Core exactly like `envoc0`, and Envo-S1 (generics, interfaces, closures, ownership, enums, views, namespaces, prelude) | Speed (no optimizer, by design: D15) | Fixes found by Stage 2 |
+| **Stage 1** (`bootstrap/stage1`) | Experimental | `envoc1` in 17k lines of Envo-Core: front end, EIR v1 with verifier, x86-64 backend, PE/ELF, runtime in Envol. Compiles Envo-Core exactly like `envoc0`, and Envo-S1 (generics, interfaces, closures, ownership, enums, views, namespaces, prelude) | Speed (no optimizer, by design: D15) | Fixes found by Stage 2 |
 | **Stage 2** (`compiler/`) | Experimental | `envoc` in Envo-S1, built by `envoc1`: `lex`, `parse`, `check`, `eir` and `build`, matching `envoc1` byte for byte on the tests and on both compilers; binary EIR, `.eo` objects and `envoc link`; `-O2`; the fixed point (D18) in CI; `--lib` for the standard platform; the driver as a library for `envo`; a WebAssembly backend (`--target wasm32-web`, D48) | Generic instances checked one by one (a view passed into a `ref T` in generic code is not tracked) | M9: the compiler in the browser |
 | **NASM adapter** (`adapters/bootstrap/nasm`) | Experimental | `assemble.ps1`, `assemble.sh` | — | — |
 | **Build scripts** (`bootstrap.ps1`, `bootstrap.sh`) | Experimental | `check`, `build`, `test`, `fixedpoint` on PowerShell and Git Bash; build `envo` after Stage 2 and test through it | — | — |

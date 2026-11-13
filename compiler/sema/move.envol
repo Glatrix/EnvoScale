@@ -1,0 +1,1093 @@
+// The move checker ([own.move.2], [own.move.3], [s1.own.1]). Follows Stage 1's
+// bootstrap/stage1/check/move.envol. It runs over each function body after the body is
+// type-checked, following the structured control flow with one state per tracked place: a
+// local that is not `Copy`, or one field of such a local (a partial move). Where branches
+// meet, a place moved on one side only is "maybe moved"; loops repeat until their state is
+// stable. Using a moved place is E0501; moving out of a borrow is E0502. Every move of a
+// whole local is marked in Checker.NMove, for lowering.
+namespace envoc.sema;
+
+use envoc.util;
+use envoc.syntax;
+
+public const u8 PS_OWNED = 0;
+public const u8 PS_MOVED = 1;
+public const u8 PS_MAYBE = 2;
+
+public const u32 E_USE_AFTER_MOVE = 501;
+public const u32 E_BORROW_CONFLICT = 503;
+public const u32 E_MOVED_WHILE_BORROWED = 504;
+public const u32 E_BORROW_NOT_DECLARED = 507;
+public const u32 E_TEMP_VIEW_ESCAPES = 509;
+public const u32 E_BAD_FROM = 508;
+
+// The state of every tracked place at one point of the body.
+struct MoveSnap {
+    List<u8> S;
+    bool Dead;      // unreachable
+
+    static MoveSnap New() => new MoveSnap { S = List<u8>.New(), Dead = false };
+
+    static MoveSnap DeadEnd() => new MoveSnap { S = List<u8>.New(), Dead = true };
+
+    MoveSnap Copy() {
+        MoveSnap s = MoveSnap.New();
+        s.Dead = this.Dead;
+        foreach (var v in this.S.AsSlice()) s.S.Push(v);
+        return s;
+    }
+
+    u8 At(in this, usize i) {
+        if (i >= this.S.Len()) return PS_OWNED;
+        return this.S.Get(i);
+    }
+
+    void Put(ref this, usize i, u8 v) {
+        while (this.S.Len() <= i) this.S.Push(PS_OWNED);
+        this.S.Set(i, v);
+    }
+
+    bool SameAs(in this, in MoveSnap b) {
+        if (this.Dead != b.Dead) return false;
+        usize n = this.S.Len();
+        if (b.S.Len() > n) n = b.S.Len();
+        for (usize i = 0; i < n; i++) {
+            if (this.At(i) != b.At(i)) return false;
+        }
+        return true;
+    }
+}
+
+// The state where control from a and from b meet.
+MoveSnap SnapJoin(in MoveSnap a, in MoveSnap b) {
+    if (a.Dead) return b.Copy();
+    if (b.Dead) return a.Copy();
+    MoveSnap r = MoveSnap.New();
+    usize n = a.S.Len();
+    if (b.S.Len() > n) n = b.S.Len();
+    for (usize i = 0; i < n; i++) {
+        u8 v = a.At(i);
+        if (v != b.At(i)) v = PS_MAYBE;
+        r.Put(i, v);
+    }
+    return r;
+}
+
+struct LoopFrame {
+    MoveSnap Brk;   // the join of the states at each `break`
+    MoveSnap Cont;  // and at each `continue`
+}
+
+struct MoveCx {
+    List<u32> Places;       // pairs (local symbol, 0 for the whole local or field index + 1)
+    MoveSnap St;
+    List<LoopFrame> Loops;
+    u32 Caps;               // in a lambda body: its captures (in Checker.Captures)
+    u32 NCaps;
+    bool CapsOnce;          // the lambda is a `once fn` that owns its captures: it may move them
+    List<u32> Frozen;       // locals that a match arm's bindings borrow: no changes or moves
+    List<u32> ViewLocals;   // pairs (a local in scope, the local whose storage it views)
+    u32 DirectArg;          // the argument node being checked as a call's direct argument
+
+    static MoveCx New() => new MoveCx {
+        Places = List<u32>.New(), St = MoveSnap.New(), Loops = List<LoopFrame>.New(),
+        Caps = 0, NCaps = 0, CapsOnce = false, Frozen = List<u32>.New(), ViewLocals = List<u32>.New(), DirectArg = 0
+    };
+
+    bool IsFrozen(in this, u32 s) {
+        foreach (var f in this.Frozen.AsSlice()) {
+            if (f == s) return true;
+        }
+        // a local holding a view of s, while it is in scope
+        for (usize i = 0; i < this.ViewLocals.Len(); i += 2) {
+            if (this.ViewLocals.Get(i + 1) == s) return true;
+        }
+        return false;
+    }
+
+    u32 ViewLocalOf(in this, u32 s) {
+        for (usize i = 0; i < this.ViewLocals.Len(); i += 2) {
+            if (this.ViewLocals.Get(i) == s) return this.ViewLocals.Get(i + 1);
+        }
+        return 0;
+    }
+
+    // The index of place (s, field), or -1 if it is not tracked yet.
+    isize PlaceFind(in this, u32 s, u32 field) {
+        for (usize i = 0; i < this.Places.Len(); i += 2) {
+            if (this.Places.Get(i) == s && this.Places.Get(i + 1) == field) return (i / 2) as isize;
+        }
+        return -1;
+    }
+
+    u8 PlaceState(in this, u32 s, u32 field) {
+        isize i = this.PlaceFind(s, field);
+        if (i < 0) return PS_OWNED;
+        return this.St.At(i as usize);
+    }
+
+    void PlaceSet(ref this, u32 s, u32 field, u8 v) {
+        isize i = this.PlaceFind(s, field);
+        if (i < 0) {
+            i = (this.Places.Len() / 2) as isize;
+            this.Places.Push(s);
+            this.Places.Push(field);
+        }
+        this.St.Put(i as usize, v);
+    }
+
+    // A new value for local s: it and its fields are owned again.
+    void PlaceReset(ref this, u32 s) {
+        for (usize i = 0; i < this.Places.Len(); i += 2) {
+            if (this.Places.Get(i) == s) this.St.Put(i / 2, PS_OWNED);
+        }
+    }
+
+    void PopFrozen(ref this) {
+        this.Frozen.Pop();
+    }
+}
+
+impl Checker {
+    // The local array whose storage the value of expression e may view ([expr.slice.4]),
+    // or 0.
+    u32 ViewOfLocal(ref this, in MoveCx x, u32 e) {
+        if (e == 0) return 0;
+        Node node = this.NodeAt(e);
+        u16 k = node.Kind;
+        if (k == NK_LAMBDA) {
+            u64 cv = this.NValue(e);
+            u32 first = (cv & 0xFFFFFFFF) as u32;
+            u32 count = (cv >> 32) as u32;
+            for (u32 i = 0; i < count; i++) {
+                u32 r = x.ViewLocalOf(this.Captures.Get((first + i) as usize));
+                if (r != 0) return r;
+            }
+            return 0;
+        }
+        if (this.IsConverted(e)) {
+            // a `str` of a local `string`
+            return this.OwnedLocalAt(this.PlaceRoot(e));
+        }
+        if (!this.HoldsBorrow(this.NType(e))) return 0;
+        if (this.IsSlicing(e)) {
+            if (this.TyKind(this.NType(node.A)) == TYK_ARRAY) return this.OwnedLocalAt(this.PlaceRoot(node.A));
+            return this.ViewOfLocal(x, node.A);
+        }
+        if (k == NK_NAME || k == NK_THIS) return x.ViewLocalOf(this.NSym(e));
+        if (k == NK_MEMBER || k == NK_INDEX || k == NK_CAST || k == NK_TRY) return this.ViewOfLocal(x, node.A);
+        if (k == NK_COND) {
+            u32 r = this.ViewOfLocal(x, node.B);
+            if (r != 0) return r;
+            return this.ViewOfLocal(x, node.C);
+        }
+        if (k == NK_CALL) {
+            // what the callee's result may view: its storage summary (summary.envol); a
+            // built-in or a function value may view any argument
+            u32 cs = this.NSym(e);
+            u64 sum = 0xFFFFFFFFFFFFFFFF;
+            if (cs != 0 && this.SymKind(cs) == SK_FN) sum = this.StorageSummary(cs);
+            // a variant takes its payload: it holds what the payload views, nothing more
+            if (cs != 0 && this.SymKind(cs) == SK_ENUM) sum = 0;
+            if (cs == 0 && this.NKind(node.A) == NK_NAME) {
+                // of the built-ins, only str_from and slice_from make views (of their pointer)
+                u32 b = this.NSym(node.A);
+                if (b == 0) b = this.Lookup(this.NTok(node.A));
+                sum = 0;
+                if (b != 0 && this.SymKind(b) == SK_BUILTIN) {
+                    u32 id = this.SymAt(b).Aux2;
+                    if (id == B_STR_FROM || id == B_SLICE_FROM || id == B_SLICE_FROM_MUT) sum = 2;
+                }
+            }
+            if (this.NKind(node.A) == NK_MEMBER && sum & 1 != 0 && cs != 0 && this.SymKind(cs) == SK_FN && this.SymAt(cs).Flags & SF_STATIC == 0) {
+                u32 obj = this.NodeAt(node.A).A;
+                u32 r = this.LocalRootOf(obj);
+                if (r == 0) r = this.ViewOfLocal(x, obj);
+                if (r != 0) return r;
+            }
+            u32 a = node.B;
+            u32 i = 1;
+            while (a != 0) {
+                u32 r = 0;
+                if (i >= 64 || sum & (1 as u64) << i != 0) r = this.ArgRootOf(a, sum == 2);
+                if (r == 0) r = this.ViewOfLocal(x, a);
+                if (r != 0) return r;
+                a = this.NNext(a);
+                i++;
+            }
+            return 0;
+        }
+        if (k == NK_NEW) {
+            u32 init = node.B;
+            while (init != 0) {
+                u32 r = this.ViewOfLocal(x, this.NodeAt(init).A);
+                if (r != 0) return r;
+                init = this.NNext(init);
+            }
+        }
+        return 0;
+    }
+
+    // The owned local a place-root node names, or 0.
+    u32 OwnedLocalAt(in this, u32 root) {
+        if (root == 0) return 0;
+        u32 s = this.NSym(root);
+        if (s != 0 && this.SymKind(s) == SK_LOCAL && this.SymAt(s).Flags & SF_BYREF == 0) return s;
+        return 0;
+    }
+
+    // The owned local whose storage place (or `&place`) e is in, or 0.
+    u32 LocalRootOf(in this, u32 e) {
+        u32 n = e;
+        while (n != 0) {
+            Node node = this.NodeAt(n);
+            if (node.Kind == NK_NAME || node.Kind == NK_THIS) {
+                u32 s = this.NSym(n);
+                if (s == 0 || this.SymKind(s) != SK_LOCAL || this.SymAt(s).Flags & SF_BYREF != 0) return 0;
+                return s;
+            }
+            // through a raw pointer the storage is not the local's ([own.unsafe.1])
+            if ((node.Kind == NK_MEMBER || node.Kind == NK_INDEX) && this.TyKind(this.NType(node.A)) == TYK_PTR) return 0;
+            if (node.Kind == NK_MEMBER || node.Kind == NK_INDEX || (node.Kind == NK_UNARY && node.Op == TK_AMP)) n = node.A;
+            else return 0;
+        }
+        return 0;
+    }
+
+    // The owned local whose storage argument a gives the callee: the place itself, or for a
+    // pointer argument (str_from, slice_from) only `&place`.
+    u32 ArgRootOf(in this, u32 a, bool pointer) {
+        if (!pointer) return this.LocalRootOf(a);
+        u32 n = a;
+        while (this.NKind(n) == NK_CAST) n = this.NodeAt(n).A;
+        if (this.NKind(n) == NK_UNARY && this.NodeAt(n).Op == TK_AMP) return this.LocalRootOf(n);
+        return 0;
+    }
+
+    // A value kept in local s: if it views a local, s does too, and the local is frozen.
+    void KeepView(ref this, ref MoveCx x, u32 s, u32 e) {
+        u32 r = this.ViewOfLocal(x, e);
+        if (r == 0 || s == 0) return;
+        x.ViewLocals.Push(s);
+        x.ViewLocals.Push(r);
+    }
+
+    // Is local s borrowed exclusively: viewed by a local `mut T[]` in scope?
+    bool IsExclusive(in this, in MoveCx x, u32 s) {
+        for (usize i = 0; i < x.ViewLocals.Len(); i += 2) {
+            if (x.ViewLocals.Get(i + 1) == s && this.IsMutView(this.SymAt(x.ViewLocals.Get(i)).Type)) return true;
+        }
+        return false;
+    }
+
+    // The block's own locals go out of scope: the borrows they held end.
+    void EndViews(in this, ref MoveCx x, u32 block) {
+        u32 st = this.NodeAt(block).A;
+        while (st != 0) {
+            if (this.NKind(st) == NK_VAR) {
+                u32 v = this.NSym(st);
+                usize keep = 0;
+                for (usize i = 0; i < x.ViewLocals.Len(); i += 2) {
+                    u32 holder = x.ViewLocals.Get(i);
+                    u32 root = x.ViewLocals.Get(i + 1);
+                    if (holder == v) continue;
+                    x.ViewLocals.Set(keep, holder);
+                    x.ViewLocals.Set(keep + 1, root);
+                    keep += 2;
+                }
+                while (x.ViewLocals.Len() > keep) x.ViewLocals.Pop();
+            }
+            st = this.NNext(st);
+        }
+    }
+
+    // A value that leaves the function may not view one of its local arrays
+    // ([own.borrow.3]: the array is dropped while borrowed).
+    void ViewEscapes(ref this, in MoveCx x, u32 e, u32 tok) {
+        u32 r = this.ViewOfLocal(x, e);
+        // storage behind an `in`/`ref` local is the caller's: the origin checks cover it
+        if (r != 0 && this.SymAt(r).Flags & SF_BYREF == 0) this.BorrowError(tok, r, E_MOVED_WHILE_BORROWED, "` is dropped when this function returns, but a view of it would outlive it");
+    }
+
+    // A change to place n (assignment, `++`, `ref`): not while a binding borrows its local.
+    void MvMutate(ref this, in MoveCx x, u32 n) {
+        u32 root = this.PlaceRoot(n);
+        if (root == 0 || this.NSym(root) == 0) return;
+        this.NoteUse(this.NSym(root));
+        if (x.IsFrozen(this.NSym(root))) this.BorrowError(this.NTok(root), this.NSym(root), E_BORROW_CONFLICT, "` is borrowed here (by a view, a `foreach` element or a `match` binding), so it cannot change");
+    }
+
+    // A `match` in Envo-S1 form ([s1.expr.1]): a temporary scrutinee is taken; an arm whose
+    // bindings take an owned local's payload moves that local; an arm whose bindings borrow
+    // it freezes it. move: an expression match whose value is taken.
+    void MvMatch(ref this, ref MoveCx x, u32 n, bool isExpr, bool move) {
+        Node m = this.NodeAt(n);
+        u64 kind = this.NValue(n);
+        this.MvExpr(ref x, m.A, kind == MS_TEMP as u64);
+        u32 root = 0;
+        if (kind == MS_BORROW as u64) root = this.PlaceRoot(m.A);
+        MoveSnap before = x.St.Copy();
+        MoveSnap after = MoveSnap.DeadEnd();
+        u32 arm = m.B;
+        while (arm != 0) {
+            Node a = this.NodeAt(arm);
+            x.St = before.Copy();
+            if (kind == MS_OWNED_LOCAL as u64 && this.NValue(arm) == 1) x.PlaceSet(this.NSym(m.A), 0, PS_MOVED);
+            bool froze = root != 0 && this.NSym(root) != 0 && this.ArmBorrows(a.A);
+            if (froze) x.Frozen.Push(this.NSym(root));
+            this.ResetBindings(ref x, a.A);
+            this.MvExpr(ref x, a.E, false);
+            if (isExpr && this.NKind(a.B) != NK_BLOCK) this.MvExpr(ref x, a.B, move);
+            else this.MvStmt(ref x, a.B);
+            if (froze) x.PopFrozen();
+            after = SnapJoin(after, x.St);
+            arm = a.Next;
+        }
+        x.St = after;
+    }
+
+    // The bindings of a pattern list are new each time the arm runs (in a loop, too).
+    void ResetBindings(in this, ref MoveCx x, u32 pat) {
+        while (pat != 0) {
+            if (this.NKind(pat) == NK_CALL) {
+                u32 b = this.NodeAt(pat).B;
+                while (b != 0) {
+                    if (this.NKind(b) == NK_NAME && this.NSym(b) != 0) x.PlaceReset(this.NSym(b));
+                    b = this.NNext(b);
+                }
+            }
+            pat = this.NNext(pat);
+        }
+    }
+
+    // Does a pattern list bind a payload by borrowing it?
+    bool ArmBorrows(in this, u32 pat) {
+        while (pat != 0) {
+            if (this.NKind(pat) == NK_CALL) {
+                u32 a = this.NodeAt(pat).B;
+                while (a != 0) {
+                    if (this.NKind(a) == NK_NAME && this.SymAt(this.NSym(a)).Flags & SF_BYREF != 0) return true;
+                    a = this.NNext(a);
+                }
+            }
+            pat = this.NNext(pat);
+        }
+        return false;
+    }
+
+    // Is local s a capture of the lambda body being checked?
+    bool IsCapture(in this, in MoveCx x, u32 s) {
+        for (u32 i = 0; i < x.NCaps; i++) {
+            if (this.Captures.Get((x.Caps + i) as usize) == s) return true;
+        }
+        return false;
+    }
+
+    void UsedAfterMove(in this, u32 tok, u32 s, u8 st, bool partly) {
+        string b = string.From("value used after move: `");
+        b.Append(this.SymName(s));
+        if (partly) b.Append("` was partly moved");
+        else if (st == PS_MAYBE) b.Append("` may have been moved");
+        else b.Append("` was moved");
+        this.Fail(tok, E_USE_AFTER_MOVE, b);
+    }
+
+    // E0502 "cannot move out of <what>[`x`]<why>".
+    void MoveOutOfBorrow(in this, u32 tok, str what, u32 s, str why) {
+        string b = string.From("cannot move out of ");
+        b.Append(what);
+        if (s != 0) {
+            b.AppendByte('`');
+            b.Append(this.SymName(s));
+            b.AppendByte('`');
+        }
+        b.Append(why);
+        this.Fail(tok, E_MOVE_OUT_OF_BORROW, b);
+    }
+
+    void BorrowError(in this, u32 tok, u32 s, u32 code, str rest) {
+        string b = string.From("`");
+        b.Append(this.SymName(s));
+        b.Append(rest);
+        this.Fail(tok, code, b);
+    }
+
+    // A use of the whole of local s at node n; move: the use takes ownership.
+    void UseLocal(ref this, ref MoveCx x, u32 n, u32 s, bool move) {
+        this.NoteUse(s);
+        Sym sym = this.SymAt(s);
+        u32 tok = this.NTok(n);
+        u8 st = x.PlaceState(s, 0);
+        if (st != PS_OWNED) this.UsedAfterMove(tok, s, st, false);
+        if (this.IsExclusive(x, s)) this.BorrowError(tok, s, E_BORROW_CONFLICT, "` is borrowed exclusively by a kept `mut` view, so it cannot be used here");
+        for (usize i = 0; i < x.Places.Len(); i += 2) {
+            if (x.Places.Get(i) != s || x.Places.Get(i + 1) == 0) continue;
+            if (x.St.At(i / 2) != PS_OWNED) this.UsedAfterMove(tok, s, PS_MOVED, true);
+        }
+        if (!move || this.IsCopy(sym.Type)) return;
+        if (x.IsFrozen(s)) this.BorrowError(tok, s, E_MOVED_WHILE_BORROWED, "` is moved while it is borrowed (by a view, a `foreach` element or a `match` binding)");
+        if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "", s, ", which is borrowed; borrow it or clone it instead");
+        if (this.IsCapture(x, s) && !x.CapsOnce) {
+            this.NoteCapMoved(x);
+            this.MoveOutOfBorrow(tok, "", s, ", which this lambda captures");
+        }
+        x.PlaceSet(s, 0, PS_MOVED);
+        this.NMove.Set(n as usize, 1);
+    }
+
+    // A use of field k of local s, through member node top; move: the field is taken;
+    // direct: the use is of top itself, not of a field inside it.
+    void UseField(ref this, ref MoveCx x, u32 top, u32 s, u32 k, bool move, bool direct) {
+        this.NoteUse(s);
+        Sym sym = this.SymAt(s);
+        u32 tok = this.NTok(top);
+        u8 st = x.PlaceState(s, 0);
+        if (st != PS_OWNED) this.UsedAfterMove(tok, s, st, false);
+        st = x.PlaceState(s, k + 1);
+        if (st != PS_OWNED) this.UsedAfterMove(tok, s, st, true);
+        if (!move || this.IsCopy(this.NType(top))) return;
+        if (sym.Flags & SF_BYREF != 0) this.MoveOutOfBorrow(tok, "a field of ", s, ", which is borrowed");
+        if (this.IsCapture(x, s) && !x.CapsOnce) {
+            this.NoteCapMoved(x);
+            this.MoveOutOfBorrow(tok, "a field of ", s, ", which this lambda captures");
+        }
+        // the rest of a partly moved value is dropped field by field, with a drop flag per
+        // field (M3.10; Stage 1 has one flag per local and rejects this). A type with its
+        // own `Drop` needs all of itself, and flags go one level deep only.
+        if (this.NeedsDropAt(sym.Type)) {
+            if (this.HasDropImpl(sym.Type) || !direct) this.MoveOutOfBorrow(tok, "a field of ", s, ", whose type has a drop; move the whole value");
+            this.NMove.Set(top as usize, 3);
+            this.AddSymFlags(s, SF_PARTLY);
+        }
+        x.PlaceSet(s, k + 1, PS_MOVED);
+    }
+
+    // The local (an NK_NAME or NK_THIS node) a member chain starts from, with in top the
+    // member directly on it; 0 if the chain goes through a pointer, an index or a call.
+    u32 MemberRoot(in this, u32 n, ref u32 top) {
+        u32 m = n;
+        while (this.NKind(m) == NK_MEMBER) {
+            Node node = this.NodeAt(m);
+            if (this.TyKind(this.NType(node.A)) != TYK_STRUCT) return 0;
+            u16 k = this.NKind(node.A);
+            if (k == NK_NAME || k == NK_THIS) {
+                u32 s = this.NSym(node.A);
+                if (s == 0 || this.SymKind(s) != SK_LOCAL) return 0;
+                top = m;
+                return s;
+            }
+            m = node.A;
+        }
+        return 0;
+    }
+
+    // The index of the field that member node m names.
+    u32 MemberIndex(in this, u32 m) {
+        u32 st = this.NType(this.NodeAt(m).A);
+        u32 field = this.StructFieldNamed(st, m);
+        u32 f = this.NodeAt(this.SymAt(this.TypeAt(st).Sym).Node).A;
+        u32 i = 0;
+        while (f != field) {
+            i++;
+            f = this.NNext(f);
+        }
+        return i;
+    }
+
+    // Expression n; move: its value is taken (a by-value argument, an initializer, …).
+    void MvExpr(ref this, ref MoveCx x, u32 n, bool move) {
+        if (n == 0) return;
+        Node node = this.NodeAt(n);
+        u16 k = node.Kind;
+        if (this.IsConverted(n)) {
+            // a `string` used as a `str` is borrowed, not taken; the `str` may not outlive a
+            // temporary `string` (it is dropped at the end of the statement)
+            move = false;
+            if (x.DirectArg != n && this.PlaceRoot(n) == 0) this.Fail(node.Tok, E_MOVED_WHILE_BORROWED, "this `str` would outlive the temporary `string` it borrows; store the `string` in a variable first");
+        }
+        if (k == NK_NAME || k == NK_THIS) {
+            u32 s = this.NSym(n);
+            if (s != 0 && this.SymKind(s) == SK_LOCAL) this.UseLocal(ref x, n, s, move);
+            return;
+        }
+        if (k == NK_MEMBER) {
+            if (this.NType(node.A) == 0) return;    // Enum.Variant
+            u32 top = 0;
+            u32 s = this.MemberRoot(n, ref top);
+            if (s != 0) {
+                // tracked per first-level field: taking x.a.b takes x.a
+                bool take = move && !this.IsCopy(this.NType(n));
+                this.UseField(ref x, top, s, this.MemberIndex(top), take, n == top);
+                return;
+            }
+            this.MvExpr(ref x, node.A, false);
+            if (move && !this.IsCopy(this.NType(n)) && this.TyKind(this.NType(node.A)) != TYK_PTR) {
+                this.MoveOutOfBorrow(node.Tok, "a field of a temporary or an element", 0, "; move the whole value");
+            }
+            return;
+        }
+        if (k == NK_RANGE) {
+            this.MvExpr(ref x, node.A, false);
+            this.MvExpr(ref x, node.B, false);
+            return;
+        }
+        if (this.IsSlicing(n)) {
+            // a view borrows the sliced storage; an exclusive view changes it
+            if (this.IsMutView(this.NType(n))) this.MvMutate(x, node.A);
+            this.MvExpr(ref x, node.A, false);
+            this.MvExpr(ref x, node.B, false);
+            return;
+        }
+        if (k == NK_INDEX) {
+            this.MvExpr(ref x, node.A, false);
+            this.MvExpr(ref x, node.B, false);
+            if (move && !this.IsCopy(this.NType(n)) && this.TyKind(this.NType(node.A)) != TYK_PTR) {
+                this.MoveOutOfBorrow(node.Tok, "an element", 0, "; swap it out or clone it");
+            }
+            return;
+        }
+        // a value that needs a drop and is not taken anywhere is a temporary, dropped at the
+        // end of its statement
+        if ((k == NK_CALL || k == NK_NEW) && !move && this.NeedsDropAt(this.NType(n))) this.NMove.Set(n as usize, 2);
+        if (k == NK_CALL) {
+            this.MvCall(ref x, n);
+            this.CheckCallBorrows(n);
+            return;
+        }
+        if (k == NK_NEW) {
+            u32 init = node.B;
+            while (init != 0) {
+                this.MvExpr(ref x, this.NodeAt(init).A, true);
+                init = this.NNext(init);
+            }
+            return;
+        }
+        if (k == NK_LAMBDA) {
+            this.MvLambda(ref x, n);
+            return;
+        }
+        if (k == NK_MATCH) {
+            this.MvMatch(ref x, n, true, move);
+            return;
+        }
+        if (k == NK_TRY) {
+            this.MvExpr(ref x, node.A, true);
+            return;
+        }
+        if (k == NK_BINARY && node.Op == TK_QQ) {
+            // the left side is taken; the right side runs only when it is `None`
+            this.MvExpr(ref x, node.A, true);
+            MoveSnap before = x.St.Copy();
+            this.MvExpr(ref x, node.B, move);
+            x.St = SnapJoin(before, x.St);
+            return;
+        }
+        if (k == NK_COND) {
+            // like `if`: each branch from the state after the condition
+            this.MvExpr(ref x, node.A, false);
+            MoveSnap before = x.St.Copy();
+            this.MvExpr(ref x, node.B, move);
+            MoveSnap then = x.St.Copy();
+            x.St = before;
+            this.MvExpr(ref x, node.C, move);
+            x.St = SnapJoin(then, x.St);
+            return;
+        }
+        if (k == NK_UNARY || k == NK_CAST) {
+            this.MvExpr(ref x, node.A, false);
+            return;
+        }
+        if (k == NK_BINARY) {
+            this.MvExpr(ref x, node.A, false);
+            this.MvExpr(ref x, node.B, false);
+        }
+    }
+
+    // A call: the receiver, then the arguments in order, each taken unless passed
+    // `in`/`ref`.
+    void MvCall(ref this, ref MoveCx x, u32 n) {
+        Node node = this.NodeAt(n);
+        u32 cs = this.NSym(n);
+        u32 a = node.B;
+        if (cs != 0 && this.SymKind(cs) == SK_FN) {
+            Sym fs = this.SymAt(cs);
+            if (fs.Flags & SF_METHOD != 0 && fs.Flags & SF_STATIC == 0 && this.NKind(node.A) == NK_MEMBER) {
+                u32 obj = this.NodeAt(node.A).A;
+                bool byValue = fs.Flags & (SF_RECV_IN | SF_RECV_REF) == 0 && this.TyKind(this.NType(obj)) != TYK_PTR;
+                if (fs.Flags & SF_RECV_REF != 0) this.MvMutate(x, obj);
+                this.MvExpr(ref x, obj, byValue);
+            }
+            u32 p = this.FirstParam(cs);
+            // the locals this call can change that can hold views ([own.borrow.2]): a value
+            // that views a local, given to the call, may be kept in them
+            List<u32> keepers = List<u32>.New();
+            if (fs.Flags & SF_METHOD != 0 && fs.Flags & SF_STATIC == 0 && fs.Flags & SF_RECV_REF != 0 && this.NKind(node.A) == NK_MEMBER) this.AddKeeper(ref keepers, this.NodeAt(node.A).A);
+            u32 a0 = a;
+            while (a != 0) {
+                if (this.NodeAt(p).Flags & NF_REF != 0) {
+                    this.MvMutate(x, a);
+                    this.AddKeeper(ref keepers, a);
+                }
+                bool take = this.NodeAt(p).Flags & (NF_IN | NF_REF) == 0;
+                // [view.4] a `mut T[]` passed to a `mut T[]` parameter is reborrowed
+                if (this.IsMutView(this.NType(p)) && this.IsMutView(this.NType(a))) take = false;
+                u32 outer = x.DirectArg;
+                x.DirectArg = a;
+                this.MvExpr(ref x, a, take);
+                x.DirectArg = outer;
+                a = this.NNext(a);
+                p = this.NNext(p);
+            }
+            if (keepers.Len() > 0) {
+                a = a0;
+                while (a != 0) {
+                    u32 r = this.ViewOfLocal(x, a);
+                    if (r != 0) {
+                        foreach (var keeper in keepers.AsSlice()) {
+                            if (keeper != r) {
+                                x.ViewLocals.Push(keeper);
+                                x.ViewLocals.Push(r);
+                            }
+                        }
+                    }
+                    a = this.NNext(a);
+                }
+            }
+            return;
+        }
+        u32 ft = this.NType(node.A);
+        if (this.TyKind(ft) == TYK_FN) {
+            Type f = this.TypeAt(ft);
+            // [fn.type.3] calling a `once fn` uses it up
+            this.MvExpr(ref x, node.A, f.Count == FK_ONCE);
+            u32 i = 0;
+            while (a != 0) {
+                this.MvExpr(ref x, a, this.EnvGet(f.Sym, i) == 0);
+                a = this.NNext(a);
+                i++;
+            }
+            return;
+        }
+        while (a != 0) {
+            // built-ins take `Copy` values and keep nothing, so a temporary `string` may be
+            // lent to one directly (`print(text.Int(n))`; Stage 1: E0504)
+            u32 outer = x.DirectArg;
+            x.DirectArg = a;
+            this.MvExpr(ref x, a, true);
+            x.DirectArg = outer;
+            a = this.NNext(a);
+        }
+    }
+
+    // A lambda: a copying lambda takes its captures ([fn.cap.1]); then its body, on its own.
+    void MvLambda(ref this, ref MoveCx x, u32 n) {
+        Node lam = this.NodeAt(n);
+        u64 cv = this.NValue(n);
+        u32 first = (cv & 0xFFFFFFFF) as u32;
+        u32 count = (cv >> 32) as u32;
+        bool copies = this.NSym(n) != 1 || lam.Flags & NF_MOVE != 0;
+        for (u32 i = 0; i < count; i++) {
+            u32 s = this.Captures.Get((first + i) as usize);
+            u32 t = this.SymAt(s).Type;
+            if (copies && !this.IsCopy(t) && this.NeedsDropAt(t)) {
+                this.NotCore("a lambda that takes a value with a drop; a function value does not own resources in Envo-S1", lam.Tok);
+            }
+            this.UseLocal(ref x, n, s, copies);
+        }
+        MoveCx inner = MoveCx.New();
+        inner.Caps = first;
+        inner.NCaps = count;
+        // a `once fn` that took its captures may give them away (M3.10; Stage 1: E0502)
+        inner.CapsOnce = copies && this.TypeAt(this.NType(n)).Count == FK_ONCE;
+        if (this.NKind(lam.B) == NK_BLOCK) this.MvStmt(ref inner, lam.B);
+        else this.MvExpr(ref inner, lam.B, true);
+    }
+
+    // [fn.type.2] Does lambda n's body move out a value the lambda captured? Then a lambda
+    // with no target type is a `once fn`: it owns its captures and calling it uses it up.
+    // A quiet move check of the body alone tells, while the lambda is checked (its body's
+    // types are known by then); moves inside lambdas nested in it count only when they
+    // take a capture of n itself.
+    bool LambdaMovesCapture(ref this, u32 n) {
+        u64 cv = this.NValue(n);
+        u32 count = (cv >> 32) as u32;
+        if (count == 0) return false;
+        bool sQuiet = this.MvQuiet;
+        bool sRecord = this.MvRecord;
+        bool sEarly = this.MvEarly;
+        u32 sStamp = this.MvStamp;
+        this.MvQuiet = true;
+        this.MvRecord = false;
+        this.MvEarly = false;
+        this.MvProbing = true;
+        this.MvProbeCaps = (cv & 0xFFFFFFFF) as u32;
+        this.MvCapMoved = false;
+        MoveCx inner = MoveCx.New();
+        inner.Caps = this.MvProbeCaps;
+        inner.NCaps = count;
+        Node lam = this.NodeAt(n);
+        if (this.NKind(lam.B) == NK_BLOCK) this.MvStmt(ref inner, lam.B);
+        else this.MvExpr(ref inner, lam.B, true);
+        bool moved = this.MvCapMoved;
+        this.MvProbing = false;
+        this.MvCapMoved = false;
+        this.MvQuiet = sQuiet;
+        this.MvRecord = sRecord;
+        this.MvEarly = sEarly;
+        this.MvStamp = sStamp;
+        return moved;
+    }
+
+    void NoteCapMoved(ref this, in MoveCx x) {
+        if (this.MvProbing && x.Caps == this.MvProbeCaps) this.MvCapMoved = true;
+    }
+
+    void MvStmt(ref this, ref MoveCx x, u32 n) {
+        Node node = this.NodeAt(n);
+        u16 k = node.Kind;
+        if (x.St.Dead) return;      // unreachable code moves nothing
+        this.MvStamp++;
+        if (this.MvEarly) this.EndDeadBorrows(ref x);
+        if (k == NK_BLOCK) {
+            u32 s = node.A;
+            while (s != 0) {
+                this.MvStmt(ref x, s);
+                s = this.NNext(s);
+            }
+            this.EndViews(ref x, n);
+            return;
+        }
+        if (k == NK_UNSAFE) {
+            this.MvStmt(ref x, node.A);
+            return;
+        }
+        if (k == NK_IF) {
+            this.MvExpr(ref x, node.A, false);
+            MoveSnap before = x.St.Copy();
+            this.MvStmt(ref x, node.B);
+            MoveSnap then = x.St.Copy();
+            x.St = before;
+            if (node.C != 0) this.MvStmt(ref x, node.C);
+            x.St = SnapJoin(then, x.St);
+            return;
+        }
+        if (k == NK_WHILE || k == NK_FOR) {
+            if (k == NK_FOR && node.A != 0) this.MvStmt(ref x, node.A);
+            this.MvLoop(ref x, n);
+            return;
+        }
+        if (k == NK_BREAK || k == NK_CONTINUE) {
+            LoopFrame f = x.Loops.Pop().Unwrap();
+            if (k == NK_BREAK) f.Brk = SnapJoin(f.Brk, x.St);
+            else f.Cont = SnapJoin(f.Cont, x.St);
+            x.Loops.Push(f);
+            x.St = MoveSnap.DeadEnd();
+            return;
+        }
+        if (k == NK_RETURN) {
+            this.MvExpr(ref x, node.A, true);
+            this.ViewEscapes(x, node.A, node.Tok);
+            x.St = MoveSnap.DeadEnd();
+            return;
+        }
+        if (k == NK_FOREACH) {
+            this.MvForeach(ref x, n);
+            return;
+        }
+        if (k == NK_MATCH && this.NValue(n) != 0) {
+            this.MvMatch(ref x, n, false, false);
+            return;
+        }
+        if (k == NK_MATCH) {
+            this.MvExpr(ref x, node.A, false);
+            MoveSnap before = x.St.Copy();
+            MoveSnap after = MoveSnap.DeadEnd();
+            u32 arm = node.B;
+            while (arm != 0) {
+                x.St = before.Copy();
+                this.MvStmt(ref x, this.NodeAt(arm).B);
+                after = SnapJoin(after, x.St);
+                arm = this.NNext(arm);
+            }
+            x.St = after;
+            return;
+        }
+        if (k == NK_VAR && this.NSym(n) != 0) this.NoteDecl(this.NSym(n));
+        if (k == NK_VAR && this.NSym(n) != 0 && this.SymAt(this.NSym(n)).Flags & SF_BYREF != 0) {
+            // [own.borrow.4] a local that borrows a place reads it, and the place's local
+            // may not change or move until the local's last use (EndDeadBorrows)
+            u32 s = this.NSym(n);
+            this.MvExpr(ref x, node.B, false);
+            x.PlaceReset(s);
+            u32 root = this.PlaceRoot(node.B);
+            // an `in` local cannot change anyway; an owned or `ref` one is frozen
+            if (root != 0 && this.NSym(root) != 0 && this.SymAt(this.NSym(root)).Flags & SF_READONLY == 0) {
+                x.ViewLocals.Push(s);
+                x.ViewLocals.Push(this.NSym(root));
+            }
+            return;
+        }
+        if (k == NK_VAR) {
+            this.MvExpr(ref x, node.B, true);
+            u32 s = this.NSym(n);
+            if (s != 0) x.PlaceReset(s);
+            this.KeepView(ref x, s, node.B);
+            return;
+        }
+        if (k == NK_EXPR) {
+            this.MvExpr(ref x, node.A, false);
+            return;
+        }
+        if (k == NK_ASSIGN) {
+            bool plain = this.TokName(node.Tok).Len == 1;
+            this.MvExpr(ref x, node.B, plain);
+            u32 target = node.A;
+            this.MvMutate(x, target);
+            u16 tk = this.NKind(target);
+            if (plain && (tk == NK_NAME || tk == NK_THIS) && this.NSym(target) != 0 && this.SymKind(this.NSym(target)) == SK_LOCAL) {
+                x.PlaceReset(this.NSym(target));
+                if (this.SymAt(this.NSym(target)).Flags & SF_BYREF != 0) this.ViewEscapes(x, node.B, node.Tok);
+                else this.KeepView(ref x, this.NSym(target), node.B);
+                return;
+            }
+            // stored somewhere that may outlive the function
+            u32 vroot = this.PlaceRoot(target);
+            if (vroot == 0 || this.NSym(vroot) == 0 || this.SymKind(this.NSym(vroot)) != SK_LOCAL || this.SymAt(this.NSym(vroot)).Flags & SF_BYREF != 0) this.ViewEscapes(x, node.B, node.Tok);
+            else this.KeepView(ref x, this.NSym(vroot), node.B);
+            u32 top = 0;
+            u32 s = this.MemberRoot(target, ref top);
+            if (plain && s != 0 && top == target) {
+                // a field gets a new value; the rest of the local must still be there
+                u8 st = x.PlaceState(s, 0);
+                if (st != PS_OWNED) this.UsedAfterMove(this.NTok(target), s, st, false);
+                x.PlaceSet(s, this.MemberIndex(top) + 1, PS_OWNED);
+                return;
+            }
+            this.MvExpr(ref x, target, false);
+            return;
+        }
+        // NK_INC, NK_DEC
+        this.MvMutate(x, node.A);
+        this.MvExpr(ref x, node.A, false);
+    }
+
+    // foreach: the sequence is read (a borrowed element freezes a local sequence during the
+    // loop), then the body runs like a `while` that may stop before any iteration.
+    void MvForeach(ref this, ref MoveCx x, u32 n) {
+        Node node = this.NodeAt(n);
+        this.MvExpr(ref x, node.B, false);
+        u32 root = 0;
+        if (this.NSym(node.A) != 0 && this.SymAt(this.NSym(node.A)).Flags & SF_BYREF != 0) {
+            root = this.PlaceRoot(node.B);
+            if (root != 0) root = this.NSym(root);
+        }
+        if (root != 0) x.Frozen.Push(root);
+        this.MvLoopParts(ref x, 0, node.C, 0, false);
+        if (root != 0) x.PopFrozen();
+    }
+
+    // while / for: the body runs from the join of the entry and every way back to the
+    // head, until that join stops changing (states only grow, so this ends).
+    void MvLoop(ref this, ref MoveCx x, u32 n) {
+        Node node = this.NodeAt(n);
+        bool isFor = node.Kind == NK_FOR;
+        u32 cond = node.A;
+        u32 body = node.B;
+        u32 step = 0;
+        if (isFor) {
+            cond = node.B;
+            body = node.D;
+            step = node.C;
+        }
+        // `while (true)` and `for (;;)` leave only through `break`
+        bool forever = cond == 0 || (this.NKind(cond) == NK_BOOL && Same(this.TokText(this.NTok(cond)), "true"));
+        this.MvLoopParts(ref x, cond, body, step, forever);
+    }
+
+    void MvLoopParts(ref this, ref MoveCx x, u32 cond, u32 body, u32 step, bool forever) {
+        u32 loopStart = this.MvStamp;
+        this.MvLoopRounds(ref x, cond, body, step, forever);
+        // a local from before the loop that the loop uses is used until the loop ends: the
+        // next round uses it again
+        if (this.MvRecord) {
+            for (usize s = 0; s < this.MvLast.Len(); s++) {
+                if (this.MvLast.Get(s) > loopStart && this.DeclStamp(s as u32) <= loopStart) this.MvLast.Set(s, this.MvStamp);
+            }
+        }
+    }
+
+    void MvLoopRounds(ref this, ref MoveCx x, u32 cond, u32 body, u32 step, bool forever) {
+        MoveSnap entry = x.St.Copy();
+        MoveSnap head = entry.Copy();
+        MoveSnap exit = MoveSnap.DeadEnd();
+        for (u32 round = 0; round < 8; round++) {
+            x.St = head.Copy();
+            if (cond != 0) this.MvExpr(ref x, cond, false);
+            exit = MoveSnap.DeadEnd();
+            if (!forever) exit = x.St.Copy();
+            x.Loops.Push(new LoopFrame { Brk = MoveSnap.DeadEnd(), Cont = MoveSnap.DeadEnd() });
+            this.MvStmt(ref x, body);
+            LoopFrame done = x.Loops.Pop().Unwrap();
+            x.St = SnapJoin(x.St, done.Cont);
+            if (step != 0) this.MvStmt(ref x, step);
+            exit = SnapJoin(exit, done.Brk);
+            MoveSnap next = SnapJoin(entry, x.St);
+            if (next.SameAs(head)) break;
+            head = next;
+        }
+        x.St = exit;
+    }
+
+    // The move check of function symbol s (its body is checked; its bounds are current).
+    void MoveCheckFn(ref this, u32 s) {
+        this.MvBegin();
+        this.MoveCheckFnPass(s);
+        this.MvSecond();
+        this.MoveCheckFnPass(s);
+        this.MvEnd();
+    }
+
+    void MoveCheckFnPass(ref this, u32 s) {
+        Sym sym = this.SymAt(s);
+        Node fn = this.NodeAt(sym.Node);
+        MoveCx x = MoveCx.New();
+        if (this.NKind(fn.C) == NK_BLOCK) this.MvStmt(ref x, fn.C);
+        else this.MvExpr(ref x, fn.C, sym.Type != T_VOID);
+    }
+
+    // The move check of the top-level statements, in order.
+    void MoveCheckMain(ref this, u32 first) {
+        this.MvBegin();
+        this.MoveCheckMainPass(first);
+        this.MvSecond();
+        this.MoveCheckMainPass(first);
+        this.MvEnd();
+    }
+
+    void MoveCheckMainPass(ref this, u32 first) {
+        MoveCx x = MoveCx.New();
+        u32 n = first;
+        while (n != 0) {
+            if (!NodeIsItem(this.NKind(n))) this.MvStmt(ref x, n);
+            n = this.NNext(n);
+        }
+    }
+
+    // ------------------------------------------------------------------ last uses
+    // A borrow held in a local (a view, or a local that borrows a place, [own.borrow.4])
+    // ends at the local's last use rather than at the end of its block ([own.borrow.2]).
+    // The move check runs twice over a function: the first pass, quiet, numbers the
+    // statements in the order it visits them (MvStamp) and notes where each local is used
+    // last; the second visits them in the same order and ends a borrow before the first
+    // statement after its holder's last use. A use inside a loop lasts to the loop's end,
+    // since the next round may use the local again; a local that a lambda captures, or that
+    // another kept borrow rests on, keeps its borrow to the end of its block.
+
+    void MvBegin(ref this) {
+        this.MvQuiet = true;
+        this.MvRecord = true;
+        this.MvEarly = false;
+        this.MvStamp = 0;
+        this.MvLast = List<u32>.New();
+        this.MvDecl = List<u32>.New();
+    }
+
+    void MvSecond(ref this) {
+        this.MvQuiet = false;
+        this.MvRecord = false;
+        this.MvEarly = true;
+        this.MvStamp = 0;
+    }
+
+    void MvEnd(ref this) {
+        this.MvEarly = false;
+    }
+
+    void NoteUse(ref this, u32 s) {
+        if (!this.MvRecord) return;
+        while (this.MvLast.Len() <= s as usize) this.MvLast.Push(0);
+        if (this.MvLast.Get(s as usize) < this.MvStamp) this.MvLast.Set(s as usize, this.MvStamp);
+    }
+
+    void NoteDecl(ref this, u32 s) {
+        if (!this.MvRecord) return;
+        while (this.MvDecl.Len() <= s as usize) this.MvDecl.Push(0);
+        this.MvDecl.Set(s as usize, this.MvStamp);
+    }
+
+    u32 DeclStamp(in this, u32 s) {
+        if (s as usize >= this.MvDecl.Len()) return 0;
+        return this.MvDecl.Get(s as usize);
+    }
+
+    u32 LastUse(in this, u32 s) {
+        if (s as usize >= this.MvLast.Len()) return 0;
+        return this.MvLast.Get(s as usize);
+    }
+
+    // Is local s captured by any lambda?
+    bool Captured(in this, u32 s) {
+        foreach (var c in this.Captures.AsSlice()) {
+            if (c == s) return true;
+        }
+        return false;
+    }
+
+    // Notes the local at the root of place n as one a call may store views in, if its type
+    // can hold them.
+    void AddKeeper(ref this, ref List<u32> keepers, u32 n) {
+        u32 root = this.PlaceRoot(n);
+        if (root == 0 || this.NSym(root) == 0) return;
+        u32 s = this.NSym(root);
+        if (this.SymKind(s) != SK_LOCAL || !this.CanKeepViews(this.SymAt(s).Type)) return;
+        keepers.Push(s);
+    }
+
+    // Can a value of type t keep a view: hold a borrow itself, or be a generic instance
+    // (a List<str>, a Map<K, str>) whose type arguments can, through its storage? A bare
+    // type parameter is not counted: generic code that fills a buffer through `ref T`
+    // (a terminal's Read) would otherwise freeze it for good. Its instances are checked
+    // where they are concrete.
+    bool CanKeepViews(ref this, u32 t) {
+        Type ty = this.TypeAt(t);
+        if (ty.Kind == TYK_PARAM) return false;
+        if (this.HoldsBorrow(t)) return true;
+        if (ty.Kind == TYK_PTR) return this.CanKeepViews(ty.Elem);
+        if (ty.Kind != TYK_STRUCT && ty.Kind != TYK_UNION) return false;
+        for (u32 i = 0; i < ty.NArgs; i++) {
+            if (this.CanKeepViews(this.EnvGet(ty.Args, i))) return true;
+        }
+        return false;
+    }
+
+    // Ends the borrows whose holders are not used from here on.
+    void EndDeadBorrows(ref this, ref MoveCx x) {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            usize i = 0;
+            while (i < x.ViewLocals.Len()) {
+                u32 holder = x.ViewLocals.Get(i);
+                bool live = this.LastUse(holder) >= this.MvStamp || this.Captured(holder);
+                if (!live) {
+                    // another kept borrow resting on this holder keeps it
+                    for (usize j = 0; j < x.ViewLocals.Len(); j += 2) {
+                        if (j != i && x.ViewLocals.Get(j + 1) == holder) live = true;
+                    }
+                }
+                if (live) {
+                    i += 2;
+                    continue;
+                }
+                usize last = x.ViewLocals.Len() - 2;
+                for (usize k = i; k < last; k++) x.ViewLocals.Set(k, x.ViewLocals.Get(k + 2));
+                x.ViewLocals.Pop();
+                x.ViewLocals.Pop();
+                changed = true;
+            }
+        }
+    }
+
+    // Is node n a slicing (an index whose index is a range)?
+    bool IsSlicing(in this, u32 n) => this.NKind(n) == NK_INDEX && this.NKind(this.NodeAt(n).B) == NK_RANGE;
+}

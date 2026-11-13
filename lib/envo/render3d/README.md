@@ -11,7 +11,7 @@
   - each pixel is shaded physically: Cook-Torrance with a GGX distribution, Smith-Schlick
     geometry and Schlick's Fresnel, under a hemispheric sky and ground;
   - the frame is tone-mapped (ACES) into sRGB.
-- **Determinism:** all of it is IEEE arithmetic in Envo, so a frame is the same bit for
+- **Determinism:** all of it is IEEE arithmetic in Envol, so a frame is the same bit for
   bit at `-O0` and `-O2`, in WebAssembly and in the script runtime. The tests compare its
   hash.
 

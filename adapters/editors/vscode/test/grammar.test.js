@@ -1,5 +1,5 @@
 // The manifest, editor settings and grammar: every file package.json names exists and
-// parses, every pattern compiles, and the grammar scopes a line of Envo as expected.
+// parses, every pattern compiles, and the grammar scopes a line of Envol as expected.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -9,7 +9,7 @@ const path = require('path');
 const dir = path.join(__dirname, '..');
 const json = (p) => JSON.parse(fs.readFileSync(path.join(dir, p), 'utf8'));
 const pkg = json('package.json');
-const grammar = json('syntaxes/envo.tmLanguage.json');
+const grammar = json('syntaxes/envol.tmLanguage.json');
 
 test('package.json names files that exist', () => {
   assert.ok(fs.existsSync(path.join(dir, pkg.main)));
@@ -57,12 +57,12 @@ const scopeOf = (rule, line) => {
   return null;
 };
 
-test('a line of Envo gets its scopes', () => {
-  assert.strictEqual(scopeOf('keywords', 'return x;'), 'keyword.control.envo');
-  assert.strictEqual(scopeOf('keywords', 'public static'), 'storage.modifier.envo');
-  assert.strictEqual(scopeOf('types', 'usize n'), 'support.type.primitive.envo');
-  assert.strictEqual(scopeOf('numbers', 'x = 0xFF_u8;'), 'constant.numeric.hex.envo');
-  assert.strictEqual(scopeOf('comments', '/// The answer.'), 'comment.line.documentation.envo');
-  assert.strictEqual(scopeOf('declarations', 'struct Point {'), 'keyword.declaration.envo entity.name.type.envo');
+test('a line of Envol gets its scopes', () => {
+  assert.strictEqual(scopeOf('keywords', 'return x;'), 'keyword.control.envol');
+  assert.strictEqual(scopeOf('keywords', 'public static'), 'storage.modifier.envol');
+  assert.strictEqual(scopeOf('types', 'usize n'), 'support.type.primitive.envol');
+  assert.strictEqual(scopeOf('numbers', 'x = 0xFF_u8;'), 'constant.numeric.hex.envol');
+  assert.strictEqual(scopeOf('comments', '/// The answer.'), 'comment.line.documentation.envol');
+  assert.strictEqual(scopeOf('declarations', 'struct Point {'), 'keyword.declaration.envol entity.name.type.envol');
   assert.ok(!new RegExp(grammar.repository.types.match).test('i32x'));
 });

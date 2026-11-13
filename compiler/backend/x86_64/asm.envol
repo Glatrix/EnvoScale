@@ -1,0 +1,557 @@
+// An x86-64 encoder: machine code into a buffer, with labels and fixups. Follows Stage 1's
+// bootstrap/stage1/x64/asm.envol. Encodings are fixed (memory operands always use a 32-bit
+// displacement, jumps a 32-bit offset), so the output depends only on the instructions.
+namespace envoc.x64;
+
+use envoc.util;
+use envoc.diag;
+
+public const u8 RAX = 0;
+public const u8 RCX = 1;
+public const u8 RDX = 2;
+public const u8 RBX = 3;
+public const u8 RSP = 4;
+public const u8 RBP = 5;
+public const u8 RSI = 6;
+public const u8 RDI = 7;
+public const u8 R8 = 8;
+public const u8 R9 = 9;
+public const u8 R10 = 10;
+public const u8 R11 = 11;
+
+// Condition codes (the low nibble of Jcc / SETcc).
+public const u8 CC_O = 0;
+public const u8 CC_B = 2;       // unsigned <
+public const u8 CC_AE = 3;      // unsigned >=
+public const u8 CC_E = 4;
+public const u8 CC_NE = 5;
+public const u8 CC_BE = 6;      // unsigned <=
+public const u8 CC_A = 7;       // unsigned >
+public const u8 CC_P = 10;      // parity: an unordered float compare
+public const u8 CC_NP = 11;
+public const u8 CC_L = 12;      // signed <
+public const u8 CC_GE = 13;
+public const u8 CC_LE = 14;
+public const u8 CC_G = 15;
+
+// Two-operand ALU opcodes (op r/m64, r64).
+public const u8 ALU_ADD = 0x01;
+public const u8 ALU_OR = 0x09;
+public const u8 ALU_AND = 0x21;
+public const u8 ALU_SUB = 0x29;
+public const u8 ALU_XOR = 0x31;
+public const u8 ALU_CMP = 0x39;
+
+// Fixup kinds.
+const u8 FX_REL32 = 1;      // 32-bit offset from the end of the field to the label
+const u8 FX_ABS64 = 2;      // the label's absolute address (image base + RVA)
+const u8 FX_RVA32 = 3;      // the label's RVA, 32 bits (PE import structures)
+const u8 FX_RVA64 = 4;      // the label's RVA, 64 bits (PE import lookup entries)
+
+struct Fixup {
+    u32 At;         // offset of the field in its buffer
+    u32 Label;
+    u8 Kind;
+    bool InData;    // the field is in the data buffer
+}
+
+const u64 UNBOUND = 18446744073709551615;
+const u64 DATA_BIT = 0x8000000000000000;
+
+// Overwrites 4 or 8 bytes of s at `at`, little-endian.
+void PutBytes(ref string s, usize at, u64 v, usize n) {
+    unsafe {
+        for (usize i = 0; i < n; i++) s.Data[at + i] = (v >> (8 * i) as u64 & 0xFF) as u8;
+    }
+}
+
+public struct Asm {
+    string Code;
+    string Data;
+    List<u64> Labels;   // per label: (in data << 63) | offset, or UNBOUND
+    List<Fixup> Fixups;
+
+    public static Asm New() {
+        Asm a = new Asm { Code = string.New(), Data = string.New(), Labels = List<u64>.New(), Fixups = List<Fixup>.New() };
+        a.Labels.Push(UNBOUND);     // label 0: none
+        return a;
+    }
+
+    public u32 NewLabel(ref this) {
+        u32 l = this.Labels.Len() as u32;
+        this.Labels.Push(UNBOUND);
+        return l;
+    }
+
+    // Binds label l to the current code offset.
+    public void Bind(ref this, u32 l) {
+        u64 at = this.Code.Len() as u64;
+        this.Labels.Set(l as usize, at);
+    }
+
+    // Binds label l to the current data offset.
+    public void BindData(ref this, u32 l) {
+        u64 at = this.Data.Len() as u64 | DATA_BIT;
+        this.Labels.Set(l as usize, at);
+    }
+
+    // Binds label l to the start of the data.
+    public void BindDataStart(ref this, u32 l) {
+        this.Labels.Set(l as usize, DATA_BIT);
+    }
+
+    // The self-relocation stub at the entry of a Linux program (PLAN D68): the program is
+    // position-independent and loaded anywhere, so it adds the load address to each 8-byte
+    // absolute address in its data. table holds their count, then each one's data offset
+    // (WriteImage fills it); data0 is the data's start. The stub sits at the start of the
+    // code, which the image puts at ELF_HEADERS, so the image's base is that much before.
+    public void RelocStub(ref this, u32 data0, u32 table) {
+        this.B(0x4C);                                   // lea r8, [rip - (ELF_HEADERS + 7)]: the base
+        this.B(0x8D);
+        this.B(0x05);
+        this.U32((0x100000000 - (ELF_HEADERS + 7)) as u32);
+        this.B(0x4C);                                   // lea r9, [rip + data0]
+        this.B(0x8D);
+        this.B(0x0D);
+        this.Rel32(data0);
+        this.B(0x48);                                   // lea rsi, [rip + table]
+        this.B(0x8D);
+        this.B(0x35);
+        this.Rel32(table);
+        this.B(0x8B);                                   // mov ecx, [rsi]: the count
+        this.B(0x0E);
+        this.B(0x48);                                   // add rsi, 4
+        this.B(0x83);
+        this.B(0xC6);
+        this.B(0x04);
+        this.B(0x85);                                   // test ecx, ecx
+        this.B(0xC9);
+        this.B(0x74);                                   // jz +14: past the loop
+        this.B(0x0E);
+        this.B(0x8B);                                   // loop: mov eax, [rsi]
+        this.B(0x06);
+        this.B(0x4D);                                   // add [r9 + rax], r8
+        this.B(0x01);
+        this.B(0x04);
+        this.B(0x01);
+        this.B(0x48);                                   // add rsi, 4
+        this.B(0x83);
+        this.B(0xC6);
+        this.B(0x04);
+        this.B(0xFF);                                   // dec ecx
+        this.B(0xC9);
+        this.B(0x75);                                   // jnz loop
+        this.B(0xF2);
+    }
+
+    void B(ref this, u8 b) => this.Code.AppendByte(b);
+
+    void U32(ref this, u32 v) {
+        this.B((v & 0xFF) as u8);
+        this.B((v >> 8 & 0xFF) as u8);
+        this.B((v >> 16 & 0xFF) as u8);
+        this.B((v >> 24) as u8);
+    }
+
+    void U64(ref this, u64 v) {
+        this.U32((v & 0xFFFFFFFF) as u32);
+        this.U32((v >> 32) as u32);
+    }
+
+    void AddFixup(ref this, u32 label, u8 kind, bool inData) {
+        u32 at = this.Code.Len() as u32;
+        if (inData) at = this.Data.Len() as u32;
+        this.Fixups.Push(new Fixup { At = at, Label = label, Kind = kind, InData = inData });
+    }
+
+    // A rel32 field referring to label l (the field is the last part of the instruction).
+    void Rel32(ref this, u32 l) {
+        this.AddFixup(l, FX_REL32, false);
+        this.U32(0);
+    }
+
+    // ------------------------------------------------------------------ encoding helpers
+
+    // REX prefix for operand size w (1 = 64-bit), ModRM reg and rm/base register.
+    // byteReg: an 8-bit register operand among spl, bpl, sil, dil needs a REX prefix.
+    void Rex(ref this, bool w, u8 reg, u8 rm, bool byteReg) {
+        u8 rex = 0x40;
+        if (w) rex = rex | 8;
+        if (reg >= 8) rex = rex | 4;
+        if (rm >= 8) rex = rex | 1;
+        if (rex != 0x40 || (byteReg && reg >= 4 && reg < 8)) this.B(rex);
+    }
+
+    // ModRM for a register operand.
+    void ModRR(ref this, u8 reg, u8 rm) => this.B(0xC0 | (reg & 7) << 3 | rm & 7);
+
+    // ModRM (+ SIB) + disp32 for [base + disp].
+    void ModMem(ref this, u8 reg, u8 rb, i32 disp) {
+        this.B(0x80 | (reg & 7) << 3 | rb & 7);
+        if (rb & 7 == RSP) this.B(0x24);       // SIB: rb only
+        this.U32(disp as u32);
+    }
+
+    // ------------------------------------------------------------------ moves
+
+    // mov dst, src (64-bit)
+    public void MovRR(ref this, u8 dst, u8 src) {
+        this.Rex(true, src, dst, false);
+        this.B(0x89);
+        this.ModRR(src, dst);
+    }
+
+    // mov dst, imm64 (shorter forms for small values, but always the same for a value)
+    public void MovRI(ref this, u8 dst, u64 imm) {
+        if (imm <= 0xFFFFFFFF) {
+            // mov r32, imm32 zero-extends
+            this.Rex(false, 0, dst, false);
+            this.B(0xB8 + (dst & 7));
+            this.U32(imm as u32);
+            return;
+        }
+        this.Rex(true, 0, dst, false);
+        this.B(0xB8 + (dst & 7));
+        this.U64(imm);
+    }
+
+    // Load size bytes from [rb + disp] into dst, zero- or sign-extended to 64 bits.
+    public void Load(ref this, u8 dst, u8 rb, i32 disp, u32 size, bool signed) {
+        if (size == 8) {
+            this.Rex(true, dst, rb, false);
+            this.B(0x8B);
+        } else if (size == 4 && !signed) {
+            this.Rex(false, dst, rb, false);
+            this.B(0x8B);
+        } else if (size == 4) {
+            this.Rex(true, dst, rb, false);
+            this.B(0x63);                   // movsxd
+        } else {
+            this.Rex(signed, dst, rb, false);
+            this.B(0x0F);
+            if (size == 1 && !signed) this.B(0xB6);
+            if (size == 2 && !signed) this.B(0xB7);
+            if (size == 1 && signed) this.B(0xBE);
+            if (size == 2 && signed) this.B(0xBF);
+        }
+        this.ModMem(dst, rb, disp);
+    }
+
+    // Store the low size bytes of src to [rb + disp].
+    public void Store(ref this, u8 rb, i32 disp, u8 src, u32 size) {
+        if (size == 2) this.B(0x66);
+        this.Rex(size == 8, src, rb, size == 1);
+        if (size == 1) this.B(0x88);
+        else this.B(0x89);
+        this.ModMem(src, rb, disp);
+    }
+
+    // lea dst, [rb + disp]
+    public void LeaRM(ref this, u8 dst, u8 rb, i32 disp) {
+        this.Rex(true, dst, rb, false);
+        this.B(0x8D);
+        this.ModMem(dst, rb, disp);
+    }
+
+    // lea dst, [rip + label]
+    public void LeaLabel(ref this, u8 dst, u32 label) {
+        this.Rex(true, dst, 0, false);
+        this.B(0x8D);
+        this.B((dst & 7) << 3 | 5);
+        this.Rel32(label);
+    }
+
+    // ------------------------------------------------------------------ arithmetic
+
+    // op dst, src (64-bit): ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_XOR, ALU_CMP
+    public void Alu(ref this, u8 op, u8 dst, u8 src) {
+        this.Rex(true, src, dst, false);
+        this.B(op);
+        this.ModRR(src, dst);
+    }
+
+    // op r, imm32 (sign-extended): ext is the ModRM digit (0 add, 5 sub, 7 cmp, 4 and, 1 or)
+    public void AluImm(ref this, u8 ext, u8 r, i32 imm) {
+        this.Rex(true, 0, r, false);
+        this.B(0x81);
+        this.ModRR(ext, r);
+        this.U32(imm as u32);
+    }
+
+    // imul dst, src (64-bit, sets OF on signed overflow)
+    public void ImulRR(ref this, u8 dst, u8 src) {
+        this.Rex(true, dst, src, false);
+        this.B(0x0F);
+        this.B(0xAF);
+        this.ModRR(dst, src);
+    }
+
+    // F7 group on r (64-bit): 2 not, 3 neg, 4 mul, 6 div, 7 idiv
+    public void Group3(ref this, u8 ext, u8 r) {
+        this.Rex(true, 0, r, false);
+        this.B(0xF7);
+        this.ModRR(ext, r);
+    }
+
+    // D3 group on r by cl (64-bit): 4 shl, 5 shr, 7 sar
+    public void ShiftCl(ref this, u8 ext, u8 r) {
+        this.Rex(true, 0, r, false);
+        this.B(0xD3);
+        this.ModRR(ext, r);
+    }
+
+    // test a, b (64-bit)
+    // shl/shr/sar r, imm (ext 4, 5, 7)
+    public void ShiftImm(ref this, u8 ext, u8 r, u8 n) {
+        this.Rex(true, 0, r, false);
+        this.B(0xC1);
+        this.ModRR(ext, r);
+        this.B(n);
+    }
+
+    public void TestRR(ref this, u8 x, u8 y) {
+        this.Rex(true, y, x, false);
+        this.B(0x85);
+        this.ModRR(y, x);
+    }
+
+    // cqo
+    public void Cqo(ref this) {
+        this.B(0x48);
+        this.B(0x99);
+    }
+
+    // setcc r8 then movzx r64, r8
+    public void SetCC(ref this, u8 cc, u8 r) {
+        this.Rex(false, 0, r, true);
+        this.B(0x0F);
+        this.B(0x90 + cc);
+        this.ModRR(0, r);
+        this.Extend(r, 1, false);
+    }
+
+    // Re-normalize r to its low size bytes, zero- or sign-extended to 64 bits.
+    public void Extend(ref this, u8 r, u32 size, bool signed) {
+        if (size == 8) return;
+        if (size == 4 && !signed) {
+            // mov r32, r32 zero-extends
+            this.Rex(false, r, r, false);
+            this.B(0x89);
+            this.ModRR(r, r);
+            return;
+        }
+        if (size == 4) {
+            this.Rex(true, r, r, false);
+            this.B(0x63);
+            this.ModRR(r, r);
+            return;
+        }
+        this.Rex(true, r, r, size == 1);
+        this.B(0x0F);
+        if (size == 1 && !signed) this.B(0xB6);
+        if (size == 2 && !signed) this.B(0xB7);
+        if (size == 1 && signed) this.B(0xBE);
+        if (size == 2 && signed) this.B(0xBF);
+        this.ModRR(r, r);
+    }
+
+    // ------------------------------------------------------------------ control flow
+
+    public void Jmp(ref this, u32 label) {
+        this.B(0xE9);
+        this.Rel32(label);
+    }
+
+    public void Jcc(ref this, u8 cc, u32 label) {
+        this.B(0x0F);
+        this.B(0x80 + cc);
+        this.Rel32(label);
+    }
+
+    public void CallLabel(ref this, u32 label) {
+        this.B(0xE8);
+        this.Rel32(label);
+    }
+
+    // call [r]
+    public void CallMem(ref this, u8 r) {
+        this.Rex(false, 0, r, false);
+        this.B(0xFF);
+        this.ModMem(2, r, 0);
+    }
+
+    // jmp r
+    public void JmpR(ref this, u8 r) {
+        this.Rex(false, 0, r, false);
+        this.B(0xFF);
+        this.ModRR(4, r);
+    }
+
+    // call r
+    public void CallR(ref this, u8 r) {
+        this.Rex(false, 0, r, false);
+        this.B(0xFF);
+        this.ModRR(2, r);
+    }
+
+    public void RetNear(ref this) => this.B(0xC3);
+
+    // ------------------------------------------------------------------ SSE2 (RFC 0006)
+
+    // movq xmm, r64 (wide) or movd xmm, r32
+    public void MovXR(ref this, u8 x, u8 r, bool wide) {
+        this.B(0x66);
+        this.Rex(wide, x, r, false);
+        this.B(0x0F);
+        this.B(0x6E);
+        this.ModRR(x, r);
+    }
+
+    // movq r64, xmm (wide) or movd r32, xmm
+    public void MovRX(ref this, u8 r, u8 x, bool wide) {
+        this.B(0x66);
+        this.Rex(wide, x, r, false);
+        this.B(0x0F);
+        this.B(0x7E);
+        this.ModRR(x, r);
+    }
+
+    // A scalar SSE instruction xmm, xmm: prefix (F2 double, F3 single), 0F, op.
+    public void Sse(ref this, u8 prefix, u8 op, u8 dst, u8 src) {
+        this.B(prefix);
+        this.Rex(false, dst, src, false);
+        this.B(0x0F);
+        this.B(op);
+        this.ModRR(dst, src);
+    }
+
+    // cvtsi2sd (F2) / cvtsi2ss (F3) xmm, r64
+    public void CvtI2F(ref this, u8 prefix, u8 x, u8 r) {
+        this.B(prefix);
+        this.Rex(true, x, r, false);
+        this.B(0x0F);
+        this.B(0x2A);
+        this.ModRR(x, r);
+    }
+
+    // cvttsd2si (F2) / cvttss2si (F3) r64, xmm: toward zero
+    public void CvtF2I(ref this, u8 prefix, u8 r, u8 x) {
+        this.B(prefix);
+        this.Rex(true, r, x, false);
+        this.B(0x0F);
+        this.B(0x2C);
+        this.ModRR(r, x);
+    }
+
+    // ucomisd (double) / ucomiss xmm a, xmm b: the flags of a compared with b
+    public void Ucomis(ref this, bool dbl, u8 a, u8 b) {
+        if (dbl) this.B(0x66);
+        this.Rex(false, a, b, false);
+        this.B(0x0F);
+        this.B(0x2E);
+        this.ModRR(a, b);
+    }
+
+    public void Push(ref this, u8 r) {
+        this.Rex(false, 0, r, false);
+        this.B(0x50 + (r & 7));
+    }
+
+    public void Pop(ref this, u8 r) {
+        this.Rex(false, 0, r, false);
+        this.B(0x58 + (r & 7));
+    }
+
+    public void Syscall(ref this) {
+        this.B(0x0F);
+        this.B(0x05);
+    }
+
+    public void RepMovsb(ref this) {
+        this.B(0xF3);
+        this.B(0xA4);
+    }
+
+    public void RepStosb(ref this) {
+        this.B(0xF3);
+        this.B(0xAA);
+    }
+
+    public void Ud2(ref this) {
+        this.B(0x0F);
+        this.B(0x0B);
+    }
+
+    // ------------------------------------------------------------------ data
+
+    public void DataByte(ref this, u8 b) => this.Data.AppendByte(b);
+
+    public void DataZeros(ref this, usize n) {
+        for (usize i = 0; i < n; i++) this.Data.AppendByte(0);
+    }
+
+    // An 8-byte data field holding label l's absolute address.
+    public void DataAddr(ref this, u32 l) {
+        this.AddFixup(l, FX_ABS64, true);
+        this.DataZeros(8);
+    }
+
+    // A 4- or 8-byte data field holding label l's RVA.
+    public void DataRva(ref this, u32 l, u32 size) {
+        if (size == 4) this.AddFixup(l, FX_RVA32, true);
+        else this.AddFixup(l, FX_RVA64, true);
+        this.DataZeros(size as usize);
+    }
+
+    public void DataU32(ref this, u32 v) {
+        this.Data.AppendByte((v & 0xFF) as u8);
+        this.Data.AppendByte((v >> 8 & 0xFF) as u8);
+        this.Data.AppendByte((v >> 16 & 0xFF) as u8);
+        this.Data.AppendByte((v >> 24) as u8);
+    }
+
+    public void DataAlign(ref this, usize align) {
+        while (this.Data.Len() % align != 0) this.Data.AppendByte(0);
+    }
+
+    // The offset of label l in the linked section (after Link).
+    public u64 LabelOffset(in this, u32 l, u64 dataStart) {
+        u64 lv = this.Labels.Get(l as usize);
+        if (lv & DATA_BIT != 0) return (lv & ~DATA_BIT) + dataStart;
+        return lv;
+    }
+
+    // ------------------------------------------------------------------ linking
+
+    // Lays out [code][data] at section RVA rva and resolves every fixup. Returns the
+    // section bytes; dataStart receives the data's offset in the section.
+    public string Link(in this, u64 imageBase, u64 rva, ref u64 dataStart) {
+        usize codeLen = this.Code.Len();
+        // the data starts on a page of its own, so code and data get their own protections
+        usize dataOff = (((rva as usize + codeLen + 0xFFF) & ~0xFFF) - rva as usize);
+        dataStart = dataOff as u64;
+        string img = string.New();
+        img.Append(this.Code);
+        for (usize i = codeLen; i < dataOff; i++) img.AppendByte(0);
+        img.Append(this.Data);
+        foreach (var f in this.Fixups.AsSlice()) {
+            u64 lv = this.Labels.Get(f.Label as usize);
+            if (lv == UNBOUND) ToolFail("x64: a label is used but never bound", EXIT_INTERNAL);
+            u64 target = lv & ~DATA_BIT;
+            if (lv & DATA_BIT != 0) target += dataOff as u64;
+            u64 at = f.At as u64;
+            if (f.InData) at += dataOff as u64;
+            if (f.Kind == FX_REL32) {
+                u64 rel = target -% (at + 4);
+                PutBytes(ref img, at as usize, rel & 0xFFFFFFFF, 4);
+            } else if (f.Kind == FX_ABS64) {
+                PutBytes(ref img, at as usize, imageBase + rva + target, 8);
+            } else if (f.Kind == FX_RVA32) {
+                PutBytes(ref img, at as usize, (rva + target) & 0xFFFFFFFF, 4);
+            } else {
+                PutBytes(ref img, at as usize, rva + target, 8);
+            }
+        }
+        return img;
+    }
+}

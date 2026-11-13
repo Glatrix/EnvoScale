@@ -1,0 +1,20 @@
+// --allow env,read:env_only.envol: a comma list; environment variables, and reading one
+// named file.
+// allow: env,read:env_only.envol
+// expect: env ok
+// expect: this file ok
+// expect: other denied
+use std.fs;
+use std.env;
+use ports.{IoError};
+
+bool IsDenied<T>(Result<T, IoError> r) {
+    match r {
+        Ok(_) => { return false; }
+        Err(e) => { return e == IoError.Denied; }
+    }
+}
+
+if (env.Var("PATH").IsSome()) print("env ok");
+if (fs.ReadText("env_only.envol").IsOk()) print("this file ok");
+if (IsDenied(fs.ReadText("paths.envol"))) print("other denied");

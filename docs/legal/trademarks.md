@@ -1,6 +1,6 @@
 # Trademark policy
 
-"EnvoScale", "Envo" and the EnvoScale logos (the "**Marks**") identify the official
+"EnvoScale", "Envol" and the EnvoScale logos (the "**Marks**") identify the official
 EnvoScale project and the products of its licensor. The licenses in [`LICENSE`](../../LICENSE)
 cover the software, not the Marks. This policy says how you may use the Marks.
 
@@ -10,8 +10,8 @@ cover the software, not the Marks. This policy says how you may use the Marks.
 
 ## Allowed without asking
 
-- Saying truthfully that your program is written in Envo or built with EnvoScale
-  ("Written in Envo", "Built with EnvoScale").
+- Saying truthfully that your program is written in Envol or built with EnvoScale
+  ("Written in Envol", "Built with EnvoScale").
 - Referring to EnvoScale in articles, talks, courses, books, reviews and comparisons.
 - Naming a library or tool so that it says it works with EnvoScale, if the name does not
   start with the Marks and does not suggest it is official: `json-for-envo` is fine,

@@ -9,10 +9,10 @@ text (the notes `envo` prints when it denies something).
 
 | Program | Permissions | Checks |
 |---|---|---|
-| `nothing.envo` | none | the console works; reading, writing, listing, making folders, environment variables and starting programs are denied |
-| `read_only.envo` | `read` | reading and listing work; writing and deleting are denied |
-| `paths.envo` | `fs:box` | reading and writing under `box/` work; outside it, and `box/../`, are denied |
-| `env_only.envo` | `env,read:env_only.envo` | a comma list; one named file |
-| `everything.envo` | `all` | everything works |
+| `nothing.envol` | none | the console works; reading, writing, listing, making folders, environment variables and starting programs are denied |
+| `read_only.envol` | `read` | reading and listing work; writing and deleting are denied |
+| `paths.envol` | `fs:box` | reading and writing under `box/` work; outside it, and `box/../`, are denied |
+| `env_only.envol` | `env,read:env_only.envol` | a comma list; one named file |
+| `everything.envol` | `all` | everything works |
 
 The bootstrap script for Linux also runs a `#!/usr/bin/env envo` script found on `PATH`.

@@ -3,7 +3,7 @@
 > **Status:** Version 1 (M8.6). Tokens: [`lib/envo/lumen/tokens.envon`](../../lib/envo/lumen/tokens.envon);
 > code: `envo.lumen`; used by `envo.ui` as its default theme.
 
-Lumen is how Envo programs look by default: calm surfaces, one accent color, type on the
+Lumen is how Envol programs look by default: calm surfaces, one accent color, type on the
 system's own fonts, and generous, regular spacing. A theme is a set of token values; a
 program can override any of them.
 

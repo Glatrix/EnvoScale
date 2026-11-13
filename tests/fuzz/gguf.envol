@@ -1,0 +1,21 @@
+// Fuzz target (tools/fuzz): gguf on the bytes of the file named by the first argument.
+// A panic is a bug. Run: envo fuzz tests/fuzz/gguf.envol --corpus <a copy of corpus/gguf>
+use std.env;
+use std.fs;
+use envo.ai.gguf;
+var r = fs.ReadText(env.Arg(1));
+if (r.IsErr()) return;
+string data = r.Unwrap();
+str d = data.AsStr();
+var f = gguf.File.Parse(string.From(d));
+if (f.IsOk()) {
+    gguf.File g = f.Unwrap();
+    for (usize i = 0; i < g.TensorCount(); i++) {
+        List<f32> x = g.Floats(i);
+    }
+    for (usize i = 0; i < g.MetaCount(); i++) {
+        str k = g.KeyAt(i);
+        str? s = g.Str(k);
+        f64? n = g.Number(k);
+    }
+}

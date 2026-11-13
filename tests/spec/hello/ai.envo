@@ -1,4 +1,0 @@
-// Gallery: AI. Runs from M12 (envo.ai): a local model answers. Output depends on the
-// model, so there is no expect line; no model ships with Envo.
-use envo.ai;
-print(ai.Load("tiny.gguf").Ask("Say hello").AsStr());

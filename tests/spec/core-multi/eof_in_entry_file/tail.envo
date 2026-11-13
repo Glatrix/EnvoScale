@@ -1,2 +1,0 @@
-// Parsed only if main.envo were complete.
-void Tail() {}

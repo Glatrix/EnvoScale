@@ -26,7 +26,7 @@ Ports are **values passed around as capabilities**, not global singletons:
 
 - A program receives its ports through a typed **context** at startup. `std.fs` functions
   use the context's `FileSystem`; a test can pass an in-memory one instead.
-- Script mode starts with **no** capabilities. `envo run app.envo --allow net,fs:./data`
+- Script mode starts with **no** capabilities. `envo run app.envol --allow net,fs:./data`
   grants a `NetStack` and a `FileSystem` restricted to `./data`. Restriction is itself an
   adapter wrapping another adapter.
 - Libraries that need a capability say so in their signature, so `envo audit` can show

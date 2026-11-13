@@ -10,7 +10,7 @@ platform.
 | [`os/linux`](os/linux) | Linux, x86-64 and AArch64: the same ports over system calls, windows and the clipboard over X11 |
 | [`os/wasm`](os/wasm) | The browser and Node.js, over the JavaScript host |
 | [`os/none`](os/none) | The reference adapters: in memory, for the tests and as a fallback |
-| [`interop/js`](interop/js) | The JavaScript host that runs Envo's WebAssembly |
+| [`interop/js`](interop/js) | The JavaScript host that runs Envol's WebAssembly |
 | [`editors/vscode`](editors/vscode) | The VS Code extension, a client of `envo lsp` |
 
 Rules:

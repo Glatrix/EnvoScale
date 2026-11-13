@@ -64,7 +64,7 @@ rounds toward zero and saturates, with NaN becoming 0, so it never panics either
   integer's do (frame slots and general registers) and pass through `xmm0`/`xmm1` for each
   operation; that is simple, and enough until a float register allocator pays for itself.
   WebAssembly reinterprets the `i64` locals as `f64`/`f32`. The script runtime does the
-  same arithmetic with Envo's own floats.
+  same arithmetic with Envol's own floats.
 - **Library.**
   - `alloc.text`: `Float(v, digits)` writes `v` with that many digits after the point,
     and `FloatShort(v)` with up to 15 significant digits and no trailing zeros.
@@ -100,7 +100,7 @@ and checked. They are opt-in by type, and the rules are the hardware's.
 ## Prior art
 
 C#, Rust and Java give IEEE 754 binary32 and binary64 with round-to-nearest-even. Rust
-and Java (since 2021) define saturating float-to-integer casts, as Envo does.
+and Java (since 2021) define saturating float-to-integer casts, as Envol does.
 
 ## Unresolved questions
 

@@ -12,7 +12,7 @@ print(ai.Load("tiny.gguf").Ask("Say hello").AsStr());
 
 `ai.Load` reads a GGUF model (llama, mistral, qwen2 or qwen3 architecture) and `Ask`
 answers in the model's chat format when its file names one (ChatML, Llama 3, `[INST]` or
-Zephyr; Qwen 3's thinking is turned off). No model ships with Envo: point it at one you
+Zephyr; Qwen 3's thinking is turned off). No model ships with Envol: point it at one you
 have the right to use.
 
 ## Full-control door
@@ -32,24 +32,24 @@ have the right to use.
 | `Hnsw` | approximate nearest neighbours (a hierarchical navigable small world graph): `New(dim, m, ef, seed)`, `Add`, `Nearest`, `SetEf`; deterministic for a seed |
 | `MatMulOn(dev, a, b)` | the matrix product on a device through `IGpu` (D61): Direct3D 12 compute on Windows, the CPU elsewhere |
 
-Training, tokenizing and inference are IEEE arithmetic in Envo, so a program gives the
+Training, tokenizing and inference are IEEE arithmetic in Envol, so a program gives the
 same numbers at -O0, at -O2, in the script runtime and in WebAssembly.
 
 ## How it is tested
 
-- `tests/train.envo`: a network learns XOR (Adam), a gradient matches a finite
+- `tests/train.envol`: a network learns XOR (Adam), a gradient matches a finite
   difference, a softmax classifier learns three classes (SGD).
-- `tokenizer/tests/bpe.envo`: training, round trips for any bytes, SentencePiece merges
+- `tokenizer/tests/bpe.envol`: training, round trips for any bytes, SentencePiece merges
   and byte fallback.
-- `gguf/tests/gguf.envo`: files written and read back, half precision (every finite
+- `gguf/tests/gguf.envol`: files written and read back, half precision (every finite
   value round trips), the block formats against values worked by hand, malformed files
   refused.
-- `tests/llm.envo`: two tiny models made by `tests/mkmodel.py` (llama-style and
+- `tests/llm.envol`: two tiny models made by `tests/mkmodel.py` (llama-style and
   qwen3-style, with random weights) run through `Model` and match a numpy reference
   of the same architecture: the logits after a prompt and greedy generation.
-- `tests/search.envo`: a tiny nomic-bert model (also from `mkmodel.py`) matches its
+- `tests/search.envol`: a tiny nomic-bert model (also from `mkmodel.py`) matches its
   numpy reference (tokens and embedding); HNSW's recall against the exact index.
-- `tests/train.envo` also checks the device product against the CPU's.
+- `tests/train.envol` also checks the device product against the CPU's.
 
 Checked by hand on a real model: nomic-embed-text v1.5 (Q4_K_M, from LM Studio) loads,
 its WordPiece ids are BERT's, and it ranks texts sensibly ("What is a kitten?" against

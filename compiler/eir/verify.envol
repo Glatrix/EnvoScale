@@ -1,0 +1,398 @@
+// The EIR verifier (eir.md section 6). Follows Stage 1's bootstrap/stage1/eir/verify.envol.
+// For EIR text, a failure is an E06xx diagnostic at the offending instruction; for EIR the
+// compiler built itself it is an internal error.
+namespace envoc.eir;
+
+use envoc.util;
+use envoc.diag;
+
+struct Doms {
+    usize Words;        // u64 words per block bit set
+    List<u64> Bits;     // block i's dominators at [i * Words, (i + 1) * Words)
+    List<u8> Reach;     // reachable from the entry
+
+    bool Has(in this, u32 b, u32 x) {
+        u64 w = this.Bits.Get((b as usize) * this.Words + (x / 64) as usize);
+        return (w >> (x % 64) as u64) & 1 != 0;
+    }
+}
+
+impl Module {
+    void VFail(in this, u32 pos, u32 code, str msg) {
+        if (this.FromText) FailAt(TextStr(this.SrcPath), TextStr(this.SrcText), pos as usize, code, msg);
+        if (this.SrcPath.Len > 0) {
+            // binary EIR read from a file: bad input, not a compiler bug
+            string e = string.From(TextStr(this.SrcPath));
+            e.Append(": invalid EIR: ");
+            e.Append(msg);
+            ToolFail(e, EXIT_ERRORS);
+        }
+        string b = string.From("EIR verifier: ");
+        b.Append(msg);
+        ToolFail(b, EXIT_INTERNAL);
+    }
+
+    u32 VType(in this, u32 v) => this.Val(v).Type;
+
+    // The type of value operand o (E0605 if it is not a value).
+    u32 VOpType(in this, u32 o) {
+        EOp op = this.Op(o);
+        if (op.Kind != OK_VALUE) this.VFail(op.Pos, 605, "expected a value operand");
+        return this.VType(op.Ref);
+    }
+
+    void VExpect(in this, u32 o, u32 t, str what) {
+        if (this.VOpType(o) != t) {
+            string b = string.From("mismatched types: ");
+            b.Append(what);
+            this.VFail(this.Op(o).Pos, 605, b);
+        }
+    }
+
+    // Does constant v fit type t ([eir.verify.3])?
+    bool VFits(in this, u64 v, u32 t) {
+        u8 k = this.Ty(t).Kind;
+        if (k == EK_BOOL) return v <= 1;
+        if (k == EK_PTR || k == EK_F64 || k == EK_I64 || k == EK_U64) return true;
+        if (k == EK_F32) return v >> 32 == 0;
+        u64 bits = this.Bits(t) as u64;
+        if (this.IsSigned(t)) {
+            u64 shift = 64 - bits;
+            return ((v << shift) as i64 >> shift) as u64 == v;
+        }
+        return v >> bits == 0;
+    }
+
+    // Branch target o: the block exists and gets one argument of the right type per
+    // parameter ([eir.verify.2]).
+    void VTarget(in this, u32 o, u32 func) {
+        EOp op = this.Op(o);
+        if (op.Kind != OK_TARGET) this.VFail(op.Pos, 605, "expected a block");
+        EBlock target = this.Block(op.Ref);
+        if (target.Func != func) this.VFail(op.Pos, 603, "branch to a block of another function");
+        if (op.Ref == this.Func(func).FirstBlock) this.VFail(op.Pos, 607, "a branch cannot target the entry block");
+        if (op.NArgs != target.NParams) this.VFail(op.Pos, 607, "wrong number of branch arguments");
+        for (u32 i = 0; i < op.NArgs; i++) {
+            if (this.VType(this.Arg(op.Args + i)) != this.VType(target.FirstParam + i)) this.VFail(op.Pos, 607, "branch argument type does not match the block parameter");
+        }
+    }
+
+    // The per-instruction rules ([eir.verify.3], [eir.verify.6], [eir.verify.7]).
+    void VInst(in this, u32 i, u32 func) {
+        EInst inst = this.Inst(i);
+        OpInfo info = OpTable(inst.Op);
+        u8 sh = info.Shape;
+        u32 f = inst.FirstOp;
+        u32 n = inst.NOps;
+        u32 pos = inst.Pos;
+        u32 t = inst.Ty;
+        if (sh == SH_CONST) {
+            if (!this.IsScalar(t)) this.VFail(pos, 605, "`const` needs a scalar type");
+            if (!this.VFits(inst.Imm, t)) this.VFail(pos, 613, "constant does not fit its type");
+        } else if (sh == SH_ADDR) {
+            // resolved by name when read; nothing more to check
+        } else if (sh == SH_SLOT) {
+            if (t == ET_VOID) this.VFail(pos, 605, "`slot` needs a sized type");
+        } else if (sh == SH_UNARY_V) {
+            this.VExpect(f, ET_PTR, "`slot.end` needs a `ptr`");
+        } else if (sh == SH_BIN || sh == SH_UN || sh == SH_CMP) {
+            bool ok = this.IsInt(t);
+            if (info.FloatOnly) ok = this.IsFloat(t);
+            else if (!info.IntOnly) ok = this.IsScalar(t);
+            // the bitwise operations also apply to bool
+            if ((inst.Op == 14 || inst.Op == 15 || inst.Op == 16 || inst.Op == 17) && t == ET_BOOL) ok = true;
+            if (!ok) this.VFail(pos, 605, "this instruction cannot operate on this type");
+            for (u32 k = 0; k < n; k++) this.VExpect(f + k, t, "operand type differs from the instruction's type");
+        } else if (sh == SH_SELECT) {
+            if (!this.IsScalar(t)) this.VFail(pos, 605, "`select` needs a scalar type");
+            this.VExpect(f, ET_BOOL, "the condition must be `bool`");
+            this.VExpect(f + 1, t, "operand type differs from the instruction's type");
+            this.VExpect(f + 2, t, "operand type differs from the instruction's type");
+        } else if (sh == SH_CONV) {
+            u32 t2 = inst.Ty2;
+            this.VExpect(f, t, "operand type differs from the conversion's source type");
+            bool ok = false;
+            u16 op = inst.Op;
+            if (op == 32) ok = this.IsInt(t) && this.IsInt(t2) && this.Bits(t2) < this.Bits(t);
+            if (op == 33 || op == 34) ok = this.IsInt(t) && this.IsInt(t2) && this.Bits(t2) > this.Bits(t);
+            if (op == 35) ok = this.IsInt(t) && this.IsFloat(t2);
+            if (op == 36) ok = this.IsFloat(t) && this.IsInt(t2);
+            if (op == 37) ok = this.Ty(t).Kind == EK_F32 && this.Ty(t2).Kind == EK_F64;
+            if (op == 38) ok = this.Ty(t).Kind == EK_F64 && this.Ty(t2).Kind == EK_F32;
+            if (op == 39) ok = t == ET_PTR && this.IsInt(t2) && this.Bits(t2) == 64;
+            if (op == 40) ok = this.IsInt(t) && this.Bits(t) == 64 && t2 == ET_PTR;
+            if (op == 41) ok = this.IsScalar(t) && this.IsScalar(t2) && this.Ty(t).Size == this.Ty(t2).Size;
+            if (!ok) this.VFail(pos, 605, "invalid conversion between these types");
+        } else if (sh == SH_LOAD) {
+            if (!this.IsScalar(t)) this.VFail(pos, 605, "`load` reads a scalar type");
+            this.VExpect(f, ET_PTR, "the address must be a `ptr`");
+        } else if (sh == SH_STORE) {
+            if (!this.IsScalar(t)) this.VFail(pos, 605, "`store` writes a scalar type");
+            this.VExpect(f, t, "the stored value differs from the instruction's type");
+            this.VExpect(f + 1, ET_PTR, "the address must be a `ptr`");
+        } else if (sh == SH_FIELD) {
+            ETy st = this.Ty(t);
+            if (st.Kind != EK_STRUCT) this.VFail(pos, 605, "`fieldaddr` needs a struct type");
+            if (inst.Imm >= st.NFields as u64) this.VFail(pos, 611, "no such field");
+            this.VExpect(f, ET_PTR, "the address must be a `ptr`");
+        } else if (sh == SH_ELEM) {
+            if (t == ET_VOID) this.VFail(pos, 605, "`elemaddr` needs a sized type");
+            this.VExpect(f, ET_PTR, "the address must be a `ptr`");
+            if (!this.IsInt(this.VOpType(f + 1))) this.VFail(this.Op(f + 1).Pos, 605, "the index must be an integer");
+        } else if (sh == SH_PTRADD) {
+            this.VExpect(f, ET_PTR, "the address must be a `ptr`");
+            this.VExpect(f + 1, ET_I64, "the offset must be an `i64`");
+        } else if (sh == SH_VALUES) {
+            u16 op = inst.Op;
+            if (op == 47 || op == 48) {
+                for (u32 k = 0; k + 1 < n; k++) this.VExpect(f + k, ET_PTR, "the address must be a `ptr`");
+                EOp size = this.Op(f + n - 1);
+                if (size.Kind != OK_INT) this.VExpect(f + n - 1, ET_U64, "the size must be a `u64`");
+            } else if (op == 50) {
+                for (u32 k = 0; k < 3; k++) this.VExpect(f + k, ET_U64, "`bounds.range` takes `u64` operands");
+            } else {
+                this.VExpect(f, ET_PTR, "the address must be a `ptr`");
+                this.VExpect(f + 1, ET_U64, "the length must be a `u64`");
+                this.VExpect(f + 2, ET_U64, "the offset must be a `u64`");
+            }
+        } else if (sh == SH_BOUNDS) {
+            if (!this.IsInt(t)) this.VFail(pos, 605, "`bounds` needs an integer type");
+            this.VExpect(f, t, "operand type differs from the instruction's type");
+            this.VExpect(f + 1, t, "operand type differs from the instruction's type");
+        } else if (sh == SH_CALL) {
+            // [eir.verify.6]
+            EFunc callee = this.Func(this.Op(f).Ref);
+            if (n - 1 != callee.NParams) this.VFail(pos, 610, "wrong number of arguments");
+            for (u32 k = 1; k < n; k++) this.VExpect(f + k, this.VType(callee.FirstValue + k - 1), "argument type differs from the parameter");
+        } else if (sh == SH_CALLIND) {
+            if (t != ET_VOID && !this.IsScalar(t)) this.VFail(pos, 605, "a call returns a scalar or `void`");
+            if (inst.Result != 0 && t == ET_VOID) this.VFail(pos, 610, "this call returns nothing");
+            this.VExpect(f + n - 1, ET_PTR, "the callee must be a `ptr`");
+            for (u32 k = 0; k + 1 < n; k++) this.VOpType(f + k);
+        } else if (sh == SH_INTRINSIC) {
+            Intrinsic x = IntrinsicNamed(TextStr(inst.Str));
+            // wincall takes the slot and 10 arguments, or 12 (`__wincall12`)
+            if (n != x.N && !(x.AllI64 && x.N == 11 && n == 13)) this.VFail(pos, 610, "wrong number of arguments");
+            if (x.AllI64) {
+                for (u32 k = 0; k < n; k++) this.VExpect(f + k, ET_I64, "the target intrinsics take `i64` arguments");
+            } else {
+                if (n > 0) this.VExpect(f, x.P0, "argument type differs from the intrinsic's parameter");
+                if (n > 1) this.VExpect(f + 1, x.P1, "argument type differs from the intrinsic's parameter");
+                if (n > 2) this.VExpect(f + 2, x.P2, "argument type differs from the intrinsic's parameter");
+            }
+        } else if (sh == SH_BR) {
+            this.VTarget(f, func);
+        } else if (sh == SH_CONDBR) {
+            this.VExpect(f, ET_BOOL, "the condition must be `bool`");
+            this.VTarget(f + 1, func);
+            this.VTarget(f + 2, func);
+        } else if (sh == SH_SWITCH) {
+            if (!this.IsInt(t)) this.VFail(pos, 605, "`switch` needs an integer type");
+            this.VExpect(f, t, "the value differs from the switch type");
+            u32 k = 1;
+            while (k + 1 < n) {
+                EOp key = this.Op(f + k);
+                if (!this.VFits(key.Int, t)) this.VFail(key.Pos, 613, "constant does not fit its type");
+                for (u32 j = 1; j < k; j += 2) {
+                    if (this.Op(f + j).Int == key.Int) this.VFail(key.Pos, 611, "duplicate `switch` key");
+                }
+                this.VTarget(f + k + 1, func);
+                k += 2;
+            }
+            this.VTarget(f + n - 1, func);
+        } else if (sh == SH_RET) {
+            u32 ret = this.Func(func).Ret;
+            if (ret == ET_VOID && n != 0) this.VFail(pos, 610, "this function returns nothing");
+            if (ret != ET_VOID) {
+                if (n != 1) this.VFail(pos, 610, "`ret` needs a value");
+                this.VExpect(f, ret, "the returned value differs from the function's result type");
+            }
+        } else if (sh == SH_PANIC) {
+            if (inst.Imm >= PANIC_COUNT) this.VFail(pos, 611, "unknown panic reason");
+        }
+        if (inst.Result != 0 && !this.IsScalar(this.VType(inst.Result))) this.VFail(pos, 605, "a result must have a scalar type");
+    }
+
+    // ------------------------------------------------------------------ dominance
+
+    // The successors of block b (its terminator's targets), as block offsets in the
+    // function.
+    void Successors(in this, u32 b, u32 first, ref List<u64> into) {
+        while (into.Len() > 0) into.Pop();
+        EBlock blk = this.Block(b);
+        if (blk.NInsts == 0) return;
+        EInst term = this.Inst(blk.FirstInst + blk.NInsts - 1);
+        for (u32 k = 0; k < term.NOps; k++) {
+            EOp op = this.Op(term.FirstOp + k);
+            if (op.Kind == OK_TARGET) into.Push((op.Ref - first) as u64);
+        }
+    }
+
+    // Dominator sets by iterative data flow (blocks are few; bit sets are simple and exact).
+    Doms ComputeDoms(in this, u32 func) {
+        EFunc f = this.Func(func);
+        u32 nb = f.NBlocks;
+        usize words = ((nb + 63) / 64) as usize;
+        Doms d = new Doms { Words = words, Bits = List<u64>.New(), Reach = List<u8>.New() };
+        for (usize i = 0; i < (nb as usize) * words; i++) d.Bits.Push(0);
+        for (u32 i = 0; i < nb; i++) d.Reach.Push(0);
+        List<u64> succ = List<u64>.New();
+        // reachability from the entry
+        List<u64> stack = List<u64>.New();
+        stack.Push(0);
+        d.Reach.Set(0, 1);
+        while (stack.Len() > 0) {
+            u64 b = stack.Pop().Unwrap();
+            this.Successors(f.FirstBlock + b as u32, f.FirstBlock, ref succ);
+            foreach (var s in succ.AsSlice()) {
+                if (d.Reach.Get(s as usize) == 0) {
+                    d.Reach.Set(s as usize, 1);
+                    stack.Push(s);
+                }
+            }
+        }
+        // entry: {entry}; others: everything
+        for (u32 b = 0; b < nb; b++) {
+            for (usize w = 0; w < words; w++) {
+                u64 all = 18446744073709551615;
+                if (b == 0) all = 0;
+                d.Bits.Set((b as usize) * words + w, all);
+            }
+        }
+        d.Bits.Set(0, 1);
+        // the reachable predecessors of each block, found once (Stage 1 recomputes them on
+        // every pass; the sets are the same)
+        List<u32> predCount = List<u32>.New();
+        for (u32 b = 0; b <= nb; b++) predCount.Push(0);
+        for (u32 p = 0; p < nb; p++) {
+            if (d.Reach.Get(p as usize) == 0) continue;
+            this.Successors(f.FirstBlock + p, f.FirstBlock, ref succ);
+            foreach (var s in succ.AsSlice()) predCount.Set((s + 1) as usize, predCount.Get((s + 1) as usize) + 1);
+        }
+        for (u32 b = 0; b < nb; b++) predCount.Set((b + 1) as usize, predCount.Get((b + 1) as usize) + predCount.Get(b as usize));
+        List<u32> preds = List<u32>.New();
+        List<u32> fill = List<u32>.New();
+        for (u32 b = 0; b < nb; b++) fill.Push(predCount.Get(b as usize));
+        for (u32 i = 0; i < predCount.Get(nb as usize); i++) preds.Push(0);
+        for (u32 p = 0; p < nb; p++) {
+            if (d.Reach.Get(p as usize) == 0) continue;
+            this.Successors(f.FirstBlock + p, f.FirstBlock, ref succ);
+            foreach (var s in succ.AsSlice()) {
+                u32 at = fill.Get(s as usize);
+                preds.Set(at as usize, p);
+                fill.Set(s as usize, at + 1);
+            }
+        }
+        bool changed = true;
+        List<u64> fresh = List<u64>.New();
+        for (usize w = 0; w < words; w++) fresh.Push(0);
+        while (changed) {
+            changed = false;
+            for (u32 b = 1; b < nb; b++) {
+                if (d.Reach.Get(b as usize) == 0) continue;
+                for (usize w = 0; w < words; w++) fresh.Set(w, 18446744073709551615);
+                for (u32 pi = predCount.Get(b as usize); pi < predCount.Get((b + 1) as usize); pi++) {
+                    u32 p = preds.Get(pi as usize);
+                    for (usize w = 0; w < words; w++) {
+                        u64 both = fresh.Get(w) & d.Bits.Get((p as usize) * words + w);
+                        fresh.Set(w, both);
+                    }
+                }
+                usize bw = (b / 64) as usize;
+                u64 with = fresh.Get(bw) | (1 << (b % 64) as u64);
+                fresh.Set(bw, with);
+                for (usize w = 0; w < words; w++) {
+                    usize at = (b as usize) * words + w;
+                    if (d.Bits.Get(at) != fresh.Get(w)) {
+                        d.Bits.Set(at, fresh.Get(w));
+                        changed = true;
+                    }
+                }
+            }
+        }
+        return d;
+    }
+
+    // [eir.verify.4] value v, used in block `at` by instruction `user`, must be defined at
+    // a point that dominates the use.
+    void VDominates(in this, in Doms d, u32 v, u32 first, u32 at, u32 user, u32 pos) {
+        EVal val = this.Val(v);
+        if (val.Inst == 0) {
+            // a parameter: function parameters live in the entry block
+            if (d.Has(at - first, val.Block - first)) return;
+        } else if (val.Block == at) {
+            if (val.Inst < user) return;
+        } else if (d.Has(at - first, val.Block - first)) {
+            return;
+        }
+        this.VFail(pos, 608, "this value is used where its definition does not dominate");
+    }
+
+    // ------------------------------------------------------------------ module
+
+    void VerifyFunc(in this, u32 fi) {
+        EFunc f = this.Func(fi);
+        for (u32 k = 0; k < f.NParams; k++) {
+            if (!this.IsScalar(this.VType(f.FirstValue + k))) this.VFail(f.Pos, 605, "parameters must have scalar types");
+        }
+        if (f.Ret != ET_VOID && !this.IsScalar(f.Ret)) this.VFail(f.Pos, 605, "the result must be a scalar type or `void`");
+        if (f.Extern) return;
+        // [eir.verify.2] terminators, [eir.verify.5] slots
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = this.Block(b);
+            if (blk.NInsts == 0) this.VFail(blk.Pos, 606, "a block must end with exactly one terminator");
+            bool leading = b == f.FirstBlock;
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = this.Inst(i);
+                OpInfo info = OpTable(inst.Op);
+                bool last = i == blk.FirstInst + blk.NInsts - 1;
+                if (info.Term != last) this.VFail(inst.Pos, 606, "a block must end with exactly one terminator");
+                if (inst.Op == OP_SLOT && !leading) this.VFail(inst.Pos, 609, "`slot` only at the start of the entry block");
+                if (inst.Op != OP_SLOT) leading = false;
+                this.VInst(i, fi);
+            }
+            for (u32 k = 0; k < blk.NParams; k++) {
+                if (!this.IsScalar(this.VType(blk.FirstParam + k))) this.VFail(blk.Pos, 605, "block parameters must have scalar types");
+            }
+        }
+        // [eir.verify.4]
+        Doms d = this.ComputeDoms(fi);
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            if (d.Reach.Get((b - f.FirstBlock) as usize) == 0) continue;
+            EBlock blk = this.Block(b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = this.Inst(i);
+                for (u32 k = 0; k < inst.NOps; k++) {
+                    EOp op = this.Op(inst.FirstOp + k);
+                    if (op.Kind == OK_VALUE) this.VDominates(d, op.Ref, f.FirstBlock, b, i, op.Pos);
+                    if (op.Kind == OK_TARGET) {
+                        for (u32 a = 0; a < op.NArgs; a++) this.VDominates(d, this.Arg(op.Args + a), f.FirstBlock, b, i, op.Pos);
+                    }
+                }
+            }
+        }
+    }
+
+    // Verifies the module ([eir.verify.1]-[eir.verify.7]). Returns only if it is valid.
+    public void Verify(ref this) {
+        // [eir.verify.1] struct types are defined and not recursive
+        for (u32 t = ET_PTR + 1; t < this.Types.Len() as u32; t++) {
+            ETy ty = this.Ty(t);
+            if (ty.Kind == EK_STRUCT && !ty.Defined) this.VFail(0, 603, "unknown struct type");
+            if (!this.Layout(t)) this.VFail(0, 612, "struct type contains itself");
+        }
+        for (u32 g = 1; g < this.Globals.Len() as u32; g++) {
+            EGlobal gl = this.Global(g);
+            if (gl.Type == ET_VOID) this.VFail(gl.Pos, 605, "a global needs a sized type");
+            EInit init = this.Init(gl.Init);
+            if (init.Kind == EI_BYTES) {
+                ETy gt = this.Ty(gl.Type);
+                if (gt.Kind != EK_ARRAY || gt.Elem != ET_U8 || gt.Count as usize != init.Bytes.Len) this.VFail(gl.Pos, 605, "`bytes` needs a `[N x u8]` of the same length");
+            }
+            if (init.Kind == EI_INT && !(this.IsInt(gl.Type) || gl.Type == ET_BOOL)) this.VFail(gl.Pos, 605, "an integer initializer needs an integer type");
+            if (init.Kind == EI_ADDR && gl.Type != ET_PTR) this.VFail(gl.Pos, 605, "an address initializer needs `ptr`");
+            if (init.Kind == EI_ADDR && !this.Names.Has(TextStr(init.Bytes))) this.VFail(gl.Pos, 603, "unknown global or function");
+        }
+        for (u32 f = 1; f < this.Funcs.Len() as u32; f++) this.VerifyFunc(f);
+    }
+}

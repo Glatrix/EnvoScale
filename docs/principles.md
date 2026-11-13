@@ -45,7 +45,7 @@ rewrite.
 
 Memory safety, no data races and no null by default. `unsafe` unlocks raw pointers,
 inline assembly and unchecked operations, and is easy to find. Scripts run sandboxed:
-`envo run app.envo --allow net,fs:./data`.
+`envo run app.envol --allow net,fs:./data`.
 
 ## Learn from everyone, copy from no one
 

@@ -14,7 +14,7 @@ platform's layers working together:
 ## Try it
 
 ```sh
-build/stage2/envoc build --lib . examples/01-files/main.envo -o words
+build/stage2/envoc build --lib . examples/01-files/main.envol -o words
 ./words README.md
 ```
 

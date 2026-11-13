@@ -1,0 +1,55 @@
+// `envo dbg` (PLAN D65): runs a program in the script runtime under the debugger
+// (runtime/vm/debug.envol). It stops before the program's first line and reads commands
+// from stdin: break [file:]line, continue, step, next, finish, bt, print name, locals,
+// list, where, quit. At the end of input the program runs to its end.
+use std.env;
+use core.text as ct;
+use envoc.eir;
+use envoc.diag;
+use envo.vm;
+
+i32 CmdEnvoDbg(usize from) {
+    BuildOpts o = new BuildOpts {
+        Inputs = List<string>.New(), Output = string.New(), Target = HostTargetCode(), Opt = false,
+        Os = string.New(), RunArgs = List<string>.New(), Native = false, Allows = List<string>.New(), Sbom = false,
+    };
+    usize i = from;
+    while (i < env.ArgCount()) {
+        str a = env.Arg(i);
+        if (Eq(a, "--")) {
+            for (usize k = i + 1; k < env.ArgCount(); k++) o.RunArgs.Push(string.From(env.Arg(k)));
+            break;
+        }
+        if (Eq(a, "-A")) {
+            o.Allows.Push(string.From("all"));
+            i++;
+        } else if (Eq(a, "--allow") && i + 1 < env.ArgCount()) {
+            o.Allows.Push(string.From(env.Arg(i + 1)));
+            i += 2;
+        } else if (a.Len > 0 && a[0] == '-') {
+            string msg = string.From("unknown option '");
+            msg.Append(a);
+            msg.Append("' for `envo dbg`; it takes --allow and the program, then -- and its arguments");
+            EnvoFail(msg.AsStr(), 2);
+        } else {
+            o.Inputs.Push(string.From(a));
+            i++;
+        }
+    }
+    Plan p = PlanScript(o);
+    string home = EnvoHome();
+    vm.Sandbox box = MakeSandbox(o);
+    Sources src = Sources.New();
+    // -O0: every statement keeps its instructions, and every local its slot
+    Module m = CompileProgram(ref src, p.Files, HostTargetCode(), false, true, -1, false, home.AsStr(), o.Os.AsStr());
+    vm.Debugger d = vm.Debugger.New();
+    for (usize f = 0; f < src.Count(); f++) d.Source(src.Path(f), src.Text(f));
+    List<string> args = List<string>.New();
+    args.Push(string.From(p.Files.AsSlice()[0].AsStr()));
+    foreach (var a in o.RunArgs.AsSlice()) args.Push(string.From(a.AsStr()));
+    vm.Vm machine = vm.Vm.New(m, box);
+    machine.Debug(d);
+    print("envo dbg: stopped before the first line; `help` lists the commands");
+    i32 code = machine.Run(args);
+    return code;
+}

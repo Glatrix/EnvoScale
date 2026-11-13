@@ -1,11 +1,11 @@
 # `compiler/`
 
-`envoc`, the Envo compiler: about 24,000 lines of Envo that compile Envo, including
+`envoc`, the Envol compiler: about 24,000 lines of Envol that compile Envol, including
 themselves. The `envo` tool contains it; `envoc` on its own is what `build.sh` builds
 first. How it is built and tested: [docs/architecture/stage2.md](../docs/architecture/stage2.md).
 
 ```
-source (.envo)
+source (.envol)
   → syntax/    lexer and parser
   → sema/      names, types, generics, ownership and borrow checking
   → eir/       lowering to EIR, the typed SSA intermediate form (text and binary)

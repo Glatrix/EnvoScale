@@ -7,11 +7,11 @@ more is reserved one page at a time, touching each (a stack probe), so a large f
 never jumps past the stack's guard page; all three stages do this. `envoc build -map
 <file>` writes each function's address, for profilers and debugging.
 
-- `asm.envo`: the instruction encoder, with code and data buffers, labels and fixups.
-- `gen.envo`: code generation. At `-O0` every SSA value has its own stack slot and
+- `asm.envol`: the instruction encoder, with code and data buffers, labels and fixups.
+- `gen.envol`: code generation. At `-O0` every SSA value has its own stack slot and
   `envoc build` writes the same bytes as `envoc1 build`.
-- `regalloc.envo`: `-O2` register allocation.
-- `image.envo`: PE (Windows) and ELF (Linux) executables, and the Windows import table.
+- `regalloc.envol`: `-O2` register allocation.
+- `image.envol`: PE (Windows) and ELF (Linux) executables, and the Windows import table.
 
 ## -O2
 

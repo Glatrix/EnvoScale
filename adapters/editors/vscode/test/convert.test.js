@@ -40,7 +40,7 @@ const vs = {
 const r = (l0, c0, l1, c1) => ({ start: { line: l0, character: c0 }, end: { line: l1, character: c1 } });
 
 test('diagnostics keep their range, severity and code', () => {
-  const ds = convert.diagnostics(vs, { uri: 'file:///a.envo', diagnostics: [{ range: r(0, 8, 0, 9), message: 'expected an expression', severity: 1, code: 'E0101' }] });
+  const ds = convert.diagnostics(vs, { uri: 'file:///a.envol', diagnostics: [{ range: r(0, 8, 0, 9), message: 'expected an expression', severity: 1, code: 'E0101' }] });
   assert.strictEqual(ds.length, 1);
   assert.strictEqual(ds[0].severity, vs.DiagnosticSeverity.Error);
   assert.strictEqual(ds[0].code, 'E0101');
@@ -49,7 +49,7 @@ test('diagnostics keep their range, severity and code', () => {
 
 test('a symbol whose range does not hold its name is widened', () => {
   // as envo lsp answers for a one-line function today
-  const s = convert.symbols(vs, [{ name: 'Answer', detail: 'i32 Answer()', kind: 12, range: r(1, 0, 1, 0), selectionRange: r(1, 4, 1, 10) }], 'file:///a.envo');
+  const s = convert.symbols(vs, [{ name: 'Answer', detail: 'i32 Answer()', kind: 12, range: r(1, 0, 1, 0), selectionRange: r(1, 4, 1, 10) }], 'file:///a.envol');
   assert.strictEqual(s[0].kind, 11);
   assert.deepStrictEqual([s[0].range.start.character, s[0].range.end.character], [0, 10]);
 });
@@ -64,7 +64,7 @@ test('hover markdown and locations', () => {
   const h = convert.hover(vs, { contents: { kind: 'markdown', value: '```envo\ni32 Answer()\n```' } });
   assert.match(h.contents.value, /Answer/);
   assert.strictEqual(convert.hover(vs, null), null);
-  const ls = convert.locations(vs, { uri: 'file:///a.envo', range: r(1, 4, 1, 10) });
+  const ls = convert.locations(vs, { uri: 'file:///a.envol', range: r(1, 4, 1, 10) });
   assert.strictEqual(ls.length, 1);
   assert.strictEqual(ls[0].range.end.character, 10);
 });

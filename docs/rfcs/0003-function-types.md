@@ -193,7 +193,7 @@ LambdaParam = [ "in" | "ref" | "out" ] [ Type ] Identifier
   targets. A non-null `env` points to a heap block whose first word is a pointer to the
   closure's drop routine, followed by the captures. Function items and capture-free
   closures use a null `env`; calls still pass it, and their code ignores it.
-- **[fn.abi.3]** The layout of closure types and function values is unspecified to Envo
+- **[fn.abi.3]** The layout of closure types and function values is unspecified to Envol
   code except through `extern "C" fn`, which is exactly a C function pointer.
 
 ### Errors
@@ -228,7 +228,7 @@ once the borrow checker exists (M2.10).
 ## Alternatives
 
 - **C# delegates, `Func<A, R>` and `Action<A>`.** Familiar, but the result comes last,
-  unlike every Envo declaration, the arity is fixed per type name, and delegates are
+  unlike every Envol declaration, the arity is fixed per type name, and delegates are
   always heap-allocated and dynamically dispatched.
 - **Rust's three traits only, `F: Fn(A) -> R`, plus `Box<dyn Fn>`.** Precise, but the
   simple door would need generics and boxes to take a callback.

@@ -1,0 +1,352 @@
+// Lowering tagged enums and Envo-S1 `match`. Follows Stage 1's
+// bootstrap/stage1/lower/enums.envol. A tagged enum is the EIR struct
+// { u32 tag, [K x word] } (word: the largest payload alignment); variant V's payload is the
+// struct of its fields, laid over the words.
+namespace envoc.lower;
+
+use envoc.util;
+use envoc.syntax;
+use envoc.sema;
+use envoc.eir;
+
+u32 WordType(u32 size) {
+    if (size == 8) return ET_U64;
+    if (size == 4) return ET_U32;
+    if (size == 2) return ET_U16;
+    return ET_U8;
+}
+
+impl Lower {
+    // The EIR type of concrete tagged enum type t.
+    u32 TaggedEType(ref this, u32 t) {
+        u64 align = 0;
+        this.C.SizeOf(t, 0, ref align);
+        Type ty = this.C.TypeAt(t);
+        string name = string.New();
+        this.C.AppendMangle(ref name, t);
+        List<u32> fields = List<u32>.New();
+        fields.Push(ET_U32);
+        fields.Push(this.M.ArrayType(WordType(ty.Count), ty.Elem));
+        Text kept = this.M.Keep(name);
+        return this.StructOf(kept, fields);
+    }
+
+    // The EIR struct of variant v's payload in concrete tagged enum type t.
+    u32 PayloadEType(ref this, u32 t, u32 v) {
+        string name = string.New();
+        this.C.AppendMangle(ref name, t);
+        name.Append(".");
+        name.Append(this.C.TokText(this.C.NTok(v)));
+        List<u32> fields = List<u32>.New();
+        u32 f = this.C.NodeAt(v).E;
+        while (f != 0) {
+            u32 pt = this.C.PayloadType(t, f);
+            fields.Push(this.LType(pt));
+            f = this.C.NNext(f);
+        }
+        Text kept = this.M.Keep(name);
+        return this.StructOf(kept, fields);
+    }
+
+    // The address of variant v's payload in the tagged value at p.
+    u32 PayloadAddr(ref this, u32 t, u32 p) {
+        u32 et = this.LType(t);
+        return this.Field(et, p, 1);
+    }
+
+    // Variant v of concrete type t, built from the payload arguments args (a node list).
+    u32 LowerVariantValue(ref this, u32 t, u32 v, u32 args) {
+        u32 et = this.LType(t);
+        if (!this.C.IsTagged(t)) return this.Const(et, this.C.NValue(v));     // a fieldless enum
+        u32 tmp = this.Slot(et);
+        this.ZeroBytes(tmp, this.ESizeOf(et) as u64);
+        u32 tag = this.Const(ET_U32, this.C.NValue(v));
+        this.Store(ET_U32, tag, this.Field(et, tmp, 0));
+        u32 pt = this.PayloadEType(t, v);
+        u32 pay = this.PayloadAddr(t, tmp);
+        u32 a = args;
+        u32 f = this.C.NodeAt(v).E;
+        u32 i = 0;
+        while (a != 0) {
+            u32 ft = this.C.PayloadType(t, f);
+            u32 x = this.LowerExpr(a);
+            u32 at = this.Field(pt, pay, i);
+            this.StoreTo(ft, x, at);
+            a = this.C.NNext(a);
+            f = this.C.NNext(f);
+            i++;
+        }
+        return tmp;
+    }
+
+    // The address of field 0 of variant v's payload in the tagged value at p, of type t.
+    u32 PayloadField0(ref this, u32 t, u32 v, u32 p) {
+        u32 pt = this.PayloadEType(t, v);
+        u32 pay = this.PayloadAddr(t, p);
+        return this.Field(pt, pay, 0);
+    }
+
+    // `a ?? b`: a's `Some` value, or b.
+    u32 LowerCoalesce(ref this, u32 n, u32 t) {
+        Node node = this.C.NodeAt(n);
+        u32 ot = this.LNType(node.A);
+        u32 some = this.C.VariantByName(this.C.OptionSym, "Some");
+        u32 v = this.LowerExpr(node.A);
+        u32 tag = this.Load(ET_U32, this.Field(this.LType(ot), v, 0));
+        u32 slot = this.Slot(this.LType(t));
+        u32 yes = this.NewBlock();
+        u32 no = this.NewBlock();
+        u32 join = this.NewBlock();
+        u32 key = this.Const(ET_U32, this.C.NValue(some));
+        u32 is = this.Bin(20, ET_U32, tag, key);
+        this.CondBr(is, yes, no);
+        this.Start(yes);
+        u32 inner = this.LoadPlace(t, this.PayloadField0(ot, some, v));
+        this.StoreTo(t, inner, slot);
+        this.Br(join);
+        this.Start(no);
+        u32 other = this.LowerExpr(node.B);
+        this.StoreTo(t, other, slot);
+        this.Br(join);
+        this.Start(join);
+        return this.LoadPlace(t, slot);
+    }
+
+    // `e?`: e's value, or return `None` (or e's error) from the function, with the drops
+    // of a `return`.
+    u32 LowerTry(ref this, u32 n, u32 t) {
+        Node node = this.C.NodeAt(n);
+        u32 ot = this.LNType(node.A);
+        bool option = this.C.IsOptionType(ot);
+        u32 s = this.C.ResultSym;
+        if (option) s = this.C.OptionSym;
+        u32 good = this.C.VariantByName(s, "Ok");
+        u32 bad = this.C.VariantByName(s, "Err");
+        if (option) {
+            good = this.C.VariantByName(s, "Some");
+            bad = this.C.VariantByName(s, "None");
+        }
+        u32 v = this.LowerExpr(node.A);
+        u32 tag = this.Load(ET_U32, this.Field(this.LType(ot), v, 0));
+        u32 ok = this.NewBlock();
+        u32 fail = this.NewBlock();
+        u32 key = this.Const(ET_U32, this.C.NValue(good));
+        u32 is = this.Bin(20, ET_U32, tag, key);
+        this.CondBr(is, ok, fail);
+        this.Start(fail);
+        u32 rt = this.RetType;
+        u32 rs = this.RetSlot;
+        u32 et = this.LType(rt);
+        u32 rv = this.Slot(et);
+        this.ZeroBytes(rv, this.ESizeOf(et) as u64);
+        u32 badTag = this.Const(ET_U32, this.C.NValue(bad));
+        this.Store(ET_U32, badTag, this.Field(et, rv, 0));
+        if (!option) {
+            // the error moves into the result
+            u32 errType = this.C.TypeArg(ot, 1);
+            u32 err = this.LoadPlace(errType, this.PayloadField0(ot, bad, v));
+            u32 to = this.PayloadField0(rt, bad, rv);
+            this.StoreTo(errType, err, to);
+        }
+        this.CopyBytes(rs, rv, this.ESizeOf(et) as u64);
+        this.DropTempsOnPath();
+        this.DropDownTo(0, true);
+        this.Ret();
+        this.Start(ok);
+        u32 p = this.PayloadField0(ot, good, v);
+        return this.LoadPlace(t, p);
+    }
+
+    // Drops the payload of the variant tagged value p holds (each field that needs it).
+    void DropPayload(ref this, u32 t, u32 p) {
+        u32 tag = this.Load(ET_U32, this.Field(this.LType(t), p, 0));
+        u32 v = this.C.NodeAt(this.C.SymAt(this.C.TypeAt(t).Sym).Node).B;
+        while (v != 0) {
+            bool needs = false;
+            u32 f = this.C.NodeAt(v).E;
+            while (f != 0) {
+                u32 pt = this.C.PayloadType(t, f);
+                if (this.C.NeedsDrop(pt)) needs = true;
+                f = this.C.NNext(f);
+            }
+            if (needs) {
+                u32 yes = this.NewBlock();
+                u32 next = this.NewBlock();
+                u32 key = this.Const(ET_U32, this.C.NValue(v));
+                u32 is = this.Bin(20, ET_U32, tag, key);
+                this.CondBr(is, yes, next);
+                this.Start(yes);
+                u32 pt = this.PayloadEType(t, v);
+                u32 pay = this.PayloadAddr(t, p);
+                f = this.C.NodeAt(v).E;
+                u32 i = 0;
+                while (f != 0) {
+                    u32 ft = this.C.PayloadType(t, f);
+                    if (this.C.NeedsDrop(ft)) {
+                        u32 at = this.Field(pt, pay, i);
+                        this.DropValue(ft, at);
+                    }
+                    f = this.C.NNext(f);
+                    i++;
+                }
+                this.Br(next);
+                this.Start(next);
+            }
+            v = this.C.NNext(v);
+        }
+    }
+
+    // An Envo-S1 match ([s1.expr.1]): each arm tests its patterns in order, binds, checks
+    // its guard, and runs; a failed guard goes on to the next arm. isExpr: returns the
+    // value.
+    u32 LowerMatchS1(ref this, u32 n, bool isExpr) {
+        Node m = this.C.NodeAt(n);
+        u32 st = this.LNType(m.A);
+        bool tagged = this.C.IsTagged(st);
+        u32 kind = this.C.NValue(n) as u32;
+        usize mark = this.DropMark();
+        u32 v = this.LowerExpr(m.A);
+        this.DropTemps();
+        if (tagged && kind == MS_TEMP) {
+            // the temporary is held like a local: dropped at the end unless an arm takes it
+            u32 hold = this.C.NSym(n);
+            this.SetSymSlot(hold, v);
+            this.TrackDrop(hold, st, true, m.Tok);
+        }
+        u32 tag = v;
+        u32 tt = this.LType(st);
+        if (tagged) {
+            tag = this.Load(ET_U32, this.Field(tt, v, 0));
+            tt = ET_U32;
+        }
+        u32 rt = 0;
+        u32 slot = 0;
+        if (isExpr) {
+            rt = this.LNType(n);
+            slot = this.Slot(this.LType(rt));
+        }
+        u32 join = this.NewBlock();
+        u32 arm = m.B;
+        while (arm != 0) {
+            Node a = this.C.NodeAt(arm);
+            u32 next = this.NewBlock();
+            u32 bind = this.NewBlock();
+            u32 pat = a.A;
+            while (pat != 0) {
+                if (this.C.NKind(pat) == NK_WILD) {
+                    this.Br(bind);
+                } else {
+                    u32 other = this.NewBlock();
+                    u64 key = this.C.NValue(pat);
+                    if (!tagged) key = this.C.WrapValue(key, this.IntReprType(st));
+                    u32 kv = this.Const(tt, key);
+                    u32 is = this.Bin(20, tt, tag, kv);
+                    this.CondBr(is, bind, other);
+                    this.Start(other);
+                }
+                pat = this.C.NNext(pat);
+            }
+            this.JumpIfOpen(next);
+            this.Start(bind);
+            usize armMark = this.DropMark();
+            if (tagged) this.LowerBindings(a.A, st, v);
+            if (a.E != 0) {
+                u32 body = this.NewBlock();
+                u32 g = this.LowerExpr(a.E);
+                this.DropTemps();
+                this.CondBr(g, body, next);
+                this.Start(body);
+            }
+            // the arm takes the payload: the scrutinee is moved, the bindings own it
+            if (tagged && this.C.NValue(arm) == 1) {
+                if (kind == MS_OWNED_LOCAL) this.SetDropFlag(this.C.NSym(m.A), false);
+                if (kind == MS_TEMP) this.SetDropFlag(this.C.NSym(n), false);
+                this.TrackBindings(a.A, st);
+                this.DropSkipped(a.A, st, v);
+            }
+            if (isExpr && this.C.NKind(a.B) != NK_BLOCK) {
+                u32 x = this.LowerExpr(a.B);
+                this.StoreTo(rt, x, slot);
+                this.DropTemps();
+            } else {
+                this.LowerStmt(a.B);
+            }
+            this.DropDownTo(armMark, false);
+            this.JumpIfOpen(join);
+            this.Start(next);
+            arm = a.Next;
+        }
+        // no arm matched: the checker proved this cannot happen
+        this.Unreachable();
+        this.Start(join);
+        this.DropDownTo(mark, false);
+        if (isExpr) return this.LoadPlace(rt, slot);
+        return 0;
+    }
+
+    // The bindings of a tagged pattern: a borrowed one is the payload field's address; any
+    // other gets a copy of the field.
+    void LowerBindings(ref this, u32 pat, u32 t, u32 v) {
+        if (this.C.NKind(pat) != NK_CALL) return;
+        u32 variant = this.C.NSym(pat);
+        u32 pt = this.PayloadEType(t, variant);
+        u32 pay = this.PayloadAddr(t, v);
+        u32 a = this.C.NodeAt(pat).B;
+        u32 f = this.C.NodeAt(variant).E;
+        u32 i = 0;
+        while (a != 0) {
+            if (this.C.NKind(a) == NK_NAME) {
+                u32 s = this.C.NSym(a);
+                u32 ft = this.C.PayloadType(t, f);
+                u32 addr = this.Field(pt, pay, i);
+                if (this.C.SymAt(s).Flags & SF_BYREF != 0) {
+                    this.SetSymSlot(s, addr);
+                } else {
+                    u32 slot = this.Slot(this.LType(ft));
+                    u32 x = this.LoadPlace(ft, addr);
+                    this.StoreTo(ft, x, slot);
+                    this.SetSymSlot(s, slot);
+                }
+            }
+            a = this.C.NNext(a);
+            f = this.C.NNext(f);
+            i++;
+        }
+    }
+
+    // An arm that takes the payload drops the fields its pattern skips (`_`) at once.
+    void DropSkipped(ref this, u32 pat, u32 t, u32 v) {
+        if (this.C.NKind(pat) != NK_CALL) return;
+        u32 variant = this.C.NSym(pat);
+        u32 pt = this.PayloadEType(t, variant);
+        u32 pay = this.PayloadAddr(t, v);
+        u32 a = this.C.NodeAt(pat).B;
+        u32 f = this.C.NodeAt(variant).E;
+        u32 i = 0;
+        while (a != 0) {
+            u32 ft = this.C.PayloadType(t, f);
+            if (this.C.NKind(a) == NK_WILD && this.C.NeedsDrop(ft)) {
+                u32 at = this.Field(pt, pay, i);
+                this.DropValue(ft, at);
+            }
+            a = this.C.NNext(a);
+            f = this.C.NNext(f);
+            i++;
+        }
+    }
+
+    // The bindings that own their value start their drop flags.
+    void TrackBindings(ref this, u32 pat, u32 t) {
+        if (this.C.NKind(pat) != NK_CALL) return;
+        u32 a = this.C.NodeAt(pat).B;
+        u32 f = this.C.NodeAt(this.C.NSym(pat)).E;
+        while (a != 0) {
+            if (this.C.NKind(a) == NK_NAME && this.C.SymAt(this.C.NSym(a)).Flags & SF_BYREF == 0) {
+                u32 pt = this.C.PayloadType(t, f);
+                this.TrackDrop(this.C.NSym(a), pt, true, this.C.NTok(a));
+            }
+            a = this.C.NNext(a);
+            f = this.C.NNext(f);
+        }
+    }
+}

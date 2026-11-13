@@ -1,0 +1,3 @@
+// An error in a later file is reported with that file's path, line and column.
+// expect-error: E0203 @ lib.envol:3:25
+Helper();

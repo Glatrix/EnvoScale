@@ -1,7 +1,7 @@
 # `runtime/vm` — the script runtime
 
 > **Status:** Experimental (M6): an interpreter for EIR, behind `envo run`, scripts
-> (`envo file.envo`, `#!/usr/bin/env envo`) and the REPL. Compiled into `envo`.
+> (`envo file.envol`, `#!/usr/bin/env envo`) and the REPL. Compiled into `envo`.
 
 `envo run` compiles the program for this machine in memory, runtime included, and hands
 the EIR module to the VM (PLAN D31, D32):
@@ -17,7 +17,7 @@ the EIR module to the VM (PLAN D31, D32):
   calls `__main` and ends through `__rt_exit`.
 - **System calls are forwarded.** The runtime's two target intrinsics (`syscall` on
   Linux, `wincall` on Windows) go to the host through `platform.RawCall`, past the
-  permission checks in [`sandbox.envo`](sandbox.envo).
+  permission checks in [`sandbox.envol`](sandbox.envol).
 - **Function values** are tagged function indexes, not code addresses.
 
 Floating-point instructions are not run yet (Envo-S1 has no floats). Instructions are
@@ -26,6 +26,6 @@ most frequent operations are tested first. Speed: 35 to 100 times slower than `-
 native code ([`tests/bench`](../../tests/bench/README.md)); a JIT that reuses the
 native backends comes later.
 
-Files: `vm.envo` (the interpreter), `sandbox.envo` (permissions). Tests: every spec run
+Files: `vm.envol` (the interpreter), `sandbox.envol` (permissions). Tests: every spec run
 program and every library test run in both modes (`bootstrap.* test`, `envo test`);
 `tests/sandbox`.

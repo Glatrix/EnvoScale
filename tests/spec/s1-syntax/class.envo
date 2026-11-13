@@ -1,3 +1,0 @@
-// Classes are full Envo only ([s1.type.3]).
-// expect-error: E0950 @ 3:1
-class Node { }

@@ -1,0 +1,510 @@
+// Executable images (PLAN D68): code and data in separate pages, the code read and
+// execute, the data read and write (W^X), loaded at an address the system chooses (ASLR):
+// Linux programs are position-independent (ET_DYN) and relocate their few absolute
+// addresses themselves (RelocStub); Windows programs carry base relocations. Follows
+// Stage 1's bootstrap/stage1/x64/image.envol. Windows images import from KERNEL32.dll and
+// ADVAPI32.dll; import k is the k-th slot of the address table, reached through `wincall`:
+// KERNEL32's functions are 0-27, slot 28 ends them, ADVAPI32's SystemFunction036
+// (RtlGenRandom) is slot 29 and slot 30 ends it, WS2_32's are slots 31-45, ended by
+// slot 46, CRYPT32's are slots 47-49, ended by slot 50, more of KERNEL32's (a second
+// descriptor) are slots 51-60, ended by 61, USER32's are slots 62-76, ended by 77, and
+// GDI32's is slot 78, ended by 79 (PLAN D25, D28, D40, D41, D43, D45).
+namespace envoc.x64;
+
+use envoc.util;
+
+const u64 IMAGE_BASE = 0x400000;
+const u64 ELF_HEADERS = 232;        // ELF header (64) + 3 program headers (56 each)
+const u64 PE_SECTION_RVA = 0x1000;
+
+// The same values as envoc.lower's.
+const u32 TARGET_LINUX = 1;
+const u32 TARGET_WINDOWS = 2;
+
+const u32 WIN_IMPORTS = 28;        // from KERNEL32.dll; then ADVAPI32's one, at slot 29
+const u32 WS_IMPORTS = 15;         // from WS2_32.dll, at slots 31-45
+const u32 CR_IMPORTS = 3;          // from CRYPT32.dll, at slots 47-49
+const u32 K2_IMPORTS = 10;         // from KERNEL32.dll again, at slots 51-60
+const u32 US_IMPORTS = 15;         // from USER32.dll, at slots 62-76
+const u32 GD_IMPORTS = 1;          // from GDI32.dll, at slot 78
+
+// The KERNEL32.dll functions, by wincall index.
+str WinImport(u32 k) {
+    match k {
+        0 => { return "GetStdHandle"; }
+        1 => { return "GetCommandLineW"; }
+        2 => { return "CreateFileW"; }
+        3 => { return "ReadFile"; }
+        4 => { return "WriteFile"; }
+        5 => { return "CloseHandle"; }
+        6 => { return "VirtualAlloc"; }
+        7 => { return "VirtualFree"; }
+        8 => { return "GetLastError"; }
+        9 => { return "ExitProcess"; }
+        10 => { return "MultiByteToWideChar"; }
+        11 => { return "WideCharToMultiByte"; }
+        12 => { return "GetSystemTimePreciseAsFileTime"; }
+        13 => { return "QueryPerformanceCounter"; }
+        14 => { return "QueryPerformanceFrequency"; }
+        15 => { return "DeleteFileW"; }
+        16 => { return "CreateDirectoryW"; }
+        17 => { return "RemoveDirectoryW"; }
+        18 => { return "GetFileAttributesW"; }
+        19 => { return "CreateProcessW"; }
+        20 => { return "WaitForSingleObject"; }
+        21 => { return "GetExitCodeProcess"; }
+        22 => { return "FindFirstFileW"; }
+        23 => { return "FindNextFileW"; }
+        24 => { return "FindClose"; }
+        25 => { return "SetHandleInformation"; }
+        26 => { return "GetEnvironmentVariableW"; }
+        _ => { return "GetCurrentDirectoryW"; }
+    }
+}
+
+// The WS2_32.dll functions (D40), by their index after ADVAPI32's: import slot 31 + k.
+str WsImport(u32 k) {
+    match k {
+        0 => { return "WSAStartup"; }
+        1 => { return "socket"; }
+        2 => { return "connect"; }
+        3 => { return "bind"; }
+        4 => { return "listen"; }
+        5 => { return "accept"; }
+        6 => { return "send"; }
+        7 => { return "recv"; }
+        8 => { return "closesocket"; }
+        9 => { return "getaddrinfo"; }
+        10 => { return "freeaddrinfo"; }
+        11 => { return "WSAGetLastError"; }
+        12 => { return "setsockopt"; }
+        13 => { return "shutdown"; }
+        _ => { return "getsockname"; }
+    }
+}
+
+// The CRYPT32.dll functions (D41), by their index after WS2_32's: import slot 47 + k.
+str CrImport(u32 k) {
+    match k {
+        0 => { return "CertOpenSystemStoreW"; }
+        1 => { return "CertEnumCertificatesInStore"; }
+        _ => { return "CertCloseStore"; }
+    }
+}
+
+// More KERNEL32.dll functions, in a second descriptor (D43, D45): import slot 51 + k.
+str K2Import(u32 k) {
+    match k {
+        0 => { return "GetConsoleMode"; }
+        1 => { return "SetConsoleMode"; }
+        2 => { return "GetConsoleScreenBufferInfo"; }
+        3 => { return "SetConsoleOutputCP"; }
+        4 => { return "ReadConsoleInputW"; }
+        5 => { return "GetModuleHandleW"; }
+        6 => { return "GetProcAddress"; }
+        7 => { return "LoadLibraryW"; }
+        8 => { return "PeekNamedPipe"; }
+        _ => { return "Sleep"; }
+    }
+}
+
+// The USER32.dll functions (D45): import slot 62 + k.
+str UsImport(u32 k) {
+    match k {
+        0 => { return "RegisterClassExW"; }
+        1 => { return "CreateWindowExW"; }
+        2 => { return "PeekMessageW"; }
+        3 => { return "TranslateMessage"; }
+        4 => { return "DispatchMessageW"; }
+        5 => { return "IsWindow"; }
+        6 => { return "DestroyWindow"; }
+        7 => { return "GetClientRect"; }
+        8 => { return "GetDC"; }
+        9 => { return "ReleaseDC"; }
+        10 => { return "LoadCursorW"; }
+        11 => { return "AdjustWindowRect"; }
+        12 => { return "SetWindowTextW"; }
+        13 => { return "ShowWindow"; }
+        _ => { return "SetProcessDPIAware"; }
+    }
+}
+
+// The GDI32.dll functions (D45): import slot 78 + k.
+str GdImport(u32 k) {
+    match k {
+        _ => { return "SetDIBitsToDevice"; }
+    }
+}
+
+struct WinImports {
+    u32 Dir;        // the import directory (eight descriptors, 160 bytes)
+    u32 Iat;        // the first IAT entry; entry k is 8k bytes after it
+}
+
+// The import directory, lookup and address tables, hint/name entries and DLL name, in the
+// data. Returns the labels the PE header and wincall need.
+WinImports EmitImports(ref Asm a) {
+    u32[28] names;
+    u32[15] wsNames;
+    u32[3] crNames;
+    u32[10] k2Names;
+    u32[15] usNames;
+    u32[1] gdNames;
+    u32 ilt5 = a.NewLabel();
+    u32 iat5 = a.NewLabel();
+    u32 ilt6 = a.NewLabel();
+    u32 dll6 = a.NewLabel();
+    u32 iat6 = a.NewLabel();
+    u32 ilt7 = a.NewLabel();
+    u32 dll7 = a.NewLabel();
+    u32 iat7 = a.NewLabel();
+    u32 ilt4 = a.NewLabel();
+    u32 dll4 = a.NewLabel();
+    u32 iat4 = a.NewLabel();
+    u32 ilt3 = a.NewLabel();
+    u32 dll3 = a.NewLabel();
+    u32 iat3 = a.NewLabel();
+    u32 ilt = a.NewLabel();
+    u32 dll = a.NewLabel();
+    u32 ilt2 = a.NewLabel();
+    u32 dll2 = a.NewLabel();
+    u32 iat2 = a.NewLabel();
+    u32 name2 = a.NewLabel();
+    u32 dir = a.NewLabel();
+    u32 iat = a.NewLabel();
+    for (u32 k = 0; k < WIN_IMPORTS; k++) names[k] = a.NewLabel();
+    for (u32 k = 0; k < WS_IMPORTS; k++) wsNames[k] = a.NewLabel();
+    for (u32 k = 0; k < CR_IMPORTS; k++) crNames[k] = a.NewLabel();
+    for (u32 k = 0; k < K2_IMPORTS; k++) k2Names[k] = a.NewLabel();
+    for (u32 k = 0; k < US_IMPORTS; k++) usNames[k] = a.NewLabel();
+    for (u32 k = 0; k < GD_IMPORTS; k++) gdNames[k] = a.NewLabel();
+    a.DataAlign(8);
+    a.BindData(dir);
+    a.DataRva(ilt, 4);          // OriginalFirstThunk
+    a.DataU32(0);               // TimeDateStamp
+    a.DataU32(0);               // ForwarderChain
+    a.DataRva(dll, 4);          // Name
+    a.DataRva(iat, 4);          // FirstThunk
+    a.DataRva(ilt2, 4);         // ADVAPI32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll2, 4);
+    a.DataRva(iat2, 4);
+    a.DataRva(ilt3, 4);         // WS2_32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll3, 4);
+    a.DataRva(iat3, 4);
+    a.DataRva(ilt4, 4);         // CRYPT32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll4, 4);
+    a.DataRva(iat4, 4);
+    a.DataRva(ilt5, 4);         // KERNEL32.dll again
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll, 4);
+    a.DataRva(iat5, 4);
+    a.DataRva(ilt6, 4);         // USER32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll6, 4);
+    a.DataRva(iat6, 4);
+    a.DataRva(ilt7, 4);         // GDI32.dll
+    a.DataU32(0);
+    a.DataU32(0);
+    a.DataRva(dll7, 4);
+    a.DataRva(iat7, 4);
+    a.DataZeros(20);            // the null descriptor
+    a.DataAlign(8);
+    a.BindData(ilt);
+    for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
+    a.DataZeros(8);
+    a.BindData(ilt2);
+    a.DataRva(name2, 8);
+    a.DataZeros(8);
+    a.BindData(ilt3);
+    for (u32 k = 0; k < WS_IMPORTS; k++) a.DataRva(wsNames[k], 8);
+    a.DataZeros(8);
+    a.BindData(ilt4);
+    for (u32 k = 0; k < CR_IMPORTS; k++) a.DataRva(crNames[k], 8);
+    a.DataZeros(8);
+    a.BindData(ilt5);
+    for (u32 k = 0; k < K2_IMPORTS; k++) a.DataRva(k2Names[k], 8);
+    a.DataZeros(8);
+    a.BindData(ilt6);
+    for (u32 k = 0; k < US_IMPORTS; k++) a.DataRva(usNames[k], 8);
+    a.DataZeros(8);
+    a.BindData(ilt7);
+    for (u32 k = 0; k < GD_IMPORTS; k++) a.DataRva(gdNames[k], 8);
+    a.DataZeros(8);
+    a.BindData(iat);
+    for (u32 k = 0; k < WIN_IMPORTS; k++) a.DataRva(names[k], 8);
+    a.DataZeros(8);             // slot 28 ends KERNEL32's
+    a.BindData(iat2);           // slot 29
+    a.DataRva(name2, 8);
+    a.DataZeros(8);             // slot 30 ends ADVAPI32's
+    a.BindData(iat3);           // slots 31-45
+    for (u32 k = 0; k < WS_IMPORTS; k++) a.DataRva(wsNames[k], 8);
+    a.DataZeros(8);             // slot 46 ends WS2_32's
+    a.BindData(iat4);           // slots 47-49
+    for (u32 k = 0; k < CR_IMPORTS; k++) a.DataRva(crNames[k], 8);
+    a.DataZeros(8);             // slot 50 ends CRYPT32's
+    a.BindData(iat5);           // slots 51-60
+    for (u32 k = 0; k < K2_IMPORTS; k++) a.DataRva(k2Names[k], 8);
+    a.DataZeros(8);             // slot 61 ends KERNEL32's second
+    a.BindData(iat6);           // slots 62-76
+    for (u32 k = 0; k < US_IMPORTS; k++) a.DataRva(usNames[k], 8);
+    a.DataZeros(8);             // slot 77 ends USER32's
+    a.BindData(iat7);           // slot 78
+    for (u32 k = 0; k < GD_IMPORTS; k++) a.DataRva(gdNames[k], 8);
+    a.DataZeros(8);             // slot 79 ends GDI32's
+    for (u32 k = 0; k < WIN_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(names[k]);
+        a.DataZeros(2);         // hint
+        str name = WinImport(k);
+        for (usize i = 0; i < name.Len; i++) a.DataByte(name[i]);
+        a.DataByte(0);
+    }
+    a.DataAlign(2);
+    a.BindData(name2);
+    a.DataZeros(2);
+    str random = "SystemFunction036";
+    for (usize i = 0; i < random.Len; i++) a.DataByte(random[i]);
+    a.DataByte(0);
+    for (u32 k = 0; k < WS_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(wsNames[k]);
+        a.DataZeros(2);         // hint
+        str wname = WsImport(k);
+        for (usize i = 0; i < wname.Len; i++) a.DataByte(wname[i]);
+        a.DataByte(0);
+    }
+    for (u32 k = 0; k < CR_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(crNames[k]);
+        a.DataZeros(2);         // hint
+        str cname = CrImport(k);
+        for (usize i = 0; i < cname.Len; i++) a.DataByte(cname[i]);
+        a.DataByte(0);
+    }
+    for (u32 k = 0; k < K2_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(k2Names[k]);
+        a.DataZeros(2);         // hint
+        str kname = K2Import(k);
+        for (usize i = 0; i < kname.Len; i++) a.DataByte(kname[i]);
+        a.DataByte(0);
+    }
+    for (u32 k = 0; k < US_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(usNames[k]);
+        a.DataZeros(2);         // hint
+        str uname = UsImport(k);
+        for (usize i = 0; i < uname.Len; i++) a.DataByte(uname[i]);
+        a.DataByte(0);
+    }
+    for (u32 k = 0; k < GD_IMPORTS; k++) {
+        a.DataAlign(2);
+        a.BindData(gdNames[k]);
+        a.DataZeros(2);         // hint
+        str gname = GdImport(k);
+        for (usize i = 0; i < gname.Len; i++) a.DataByte(gname[i]);
+        a.DataByte(0);
+    }
+    a.BindData(dll);
+    str kernel = "KERNEL32.dll";
+    for (usize i = 0; i < kernel.Len; i++) a.DataByte(kernel[i]);
+    a.DataByte(0);
+    a.BindData(dll2);
+    str advapi = "ADVAPI32.dll";
+    for (usize i = 0; i < advapi.Len; i++) a.DataByte(advapi[i]);
+    a.DataByte(0);
+    a.BindData(dll3);
+    str ws2 = "WS2_32.dll";
+    for (usize i = 0; i < ws2.Len; i++) a.DataByte(ws2[i]);
+    a.DataByte(0);
+    a.BindData(dll4);
+    str crypt32 = "CRYPT32.dll";
+    for (usize i = 0; i < crypt32.Len; i++) a.DataByte(crypt32[i]);
+    a.DataByte(0);
+    a.BindData(dll6);
+    str user32 = "USER32.dll";
+    for (usize i = 0; i < user32.Len; i++) a.DataByte(user32[i]);
+    a.DataByte(0);
+    a.BindData(dll7);
+    str gdi32 = "GDI32.dll";
+    for (usize i = 0; i < gdi32.Len; i++) a.DataByte(gdi32[i]);
+    a.DataByte(0);
+    return new WinImports { Dir = dir, Iat = iat };
+}
+
+void Put16(ref string f, usize at, u64 v) => PutBytes(ref f, at, v, 2);
+void Put32(ref string f, usize at, u64 v) => PutBytes(ref f, at, v & 0xFFFFFFFF, 4);
+void Put64(ref string f, usize at, u64 v) => PutBytes(ref f, at, v, 8);
+
+// n zero bytes.
+string Zeros(usize n) {
+    string s = string.New();
+    s.Reserve(n);
+    for (usize i = 0; i < n; i++) s.AppendByte(0);
+    return s;
+}
+
+// Links the code and data and returns a complete executable. The code starts with the
+// entry point. data0 and relocs are the labels of RelocStub (Linux).
+string WriteImage(ref Asm a, u32 target, WinImports imports, u32 data0, u32 relocs) {
+    u64 dataStart = 0;
+    if (target == TARGET_WINDOWS) {
+        string section = a.Link(IMAGE_BASE, PE_SECTION_RVA, ref dataStart);
+        u64 textSize = dataStart;                                   // page-aligned
+        u64 dataSize = (section.Len() as u64 - dataStart + 0xFFF) & ~0xFFF;
+        string reloc = BaseRelocs(a, dataStart);
+        u64 relocRva = PE_SECTION_RVA + textSize + dataSize;
+        u64 relocSize = (reloc.Len() as u64 + 0xFFF) & ~0xFFF;
+        u64 fileSize = relocRva + relocSize;
+        string f = Zeros(0x1000);
+        f.Append(section);
+        while (f.Len() < relocRva as usize) f.AppendByte(0);
+        f.Append(reloc);
+        while (f.Len() < fileSize as usize) f.AppendByte(0);
+        Put16(ref f, 0, 0x5A4D);                    // MZ
+        Put32(ref f, 0x3C, 0x40);                   // e_lfanew
+        Put32(ref f, 0x40, 0x4550);                 // PE
+        Put16(ref f, 0x44, 0x8664);                 // AMD64
+        Put16(ref f, 0x46, 3);                      // .text, .data, .reloc
+        Put16(ref f, 0x54, 240);                    // SizeOfOptionalHeader
+        Put16(ref f, 0x56, 0x0022);                 // EXECUTABLE | LARGE_ADDRESS_AWARE
+        Put16(ref f, 0x58, 0x020B);                 // PE32+
+        Put32(ref f, 0x5C, textSize);               // SizeOfCode
+        Put32(ref f, 0x60, dataSize + relocSize);   // SizeOfInitializedData
+        Put32(ref f, 0x68, PE_SECTION_RVA);         // entry point: the start of the code
+        Put32(ref f, 0x6C, PE_SECTION_RVA);         // BaseOfCode
+        Put64(ref f, 0x70, IMAGE_BASE);             // preferred; the loader moves it (ASLR)
+        Put32(ref f, 0x78, 0x1000);                 // SectionAlignment
+        Put32(ref f, 0x7C, 0x1000);                 // FileAlignment
+        Put16(ref f, 0x80, 6);                      // OS version 6.0
+        Put16(ref f, 0x88, 6);                      // subsystem version 6.0
+        Put32(ref f, 0x90, fileSize);               // SizeOfImage
+        Put32(ref f, 0x94, 0x1000);                 // SizeOfHeaders
+        Put16(ref f, 0x9C, 3);                      // console
+        Put16(ref f, 0x9E, 0x8160);                 // HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT | TERMINAL_SERVER_AWARE
+        Put64(ref f, 0xA0, 0x800000);               // stack reserve (8 MiB)
+        Put64(ref f, 0xA8, 0x1000);                 // stack commit
+        Put64(ref f, 0xB0, 0x100000);               // heap reserve
+        Put64(ref f, 0xB8, 0x1000);                 // heap commit
+        Put32(ref f, 0xC4, 16);                     // NumberOfRvaAndSizes
+        Put32(ref f, 0xD0, PE_SECTION_RVA + a.LabelOffset(imports.Dir, dataStart));
+        Put32(ref f, 0xD4, 100);
+        Put32(ref f, 0xF0, relocRva);               // base relocation table
+        Put32(ref f, 0xF4, reloc.Len() as u64);
+        Section(ref f, 0x148, 0x7865742E, 0x74, textSize, PE_SECTION_RVA, textSize, 0x60000020);                  // .text: CODE | EXECUTE | READ
+        Section(ref f, 0x170, 0x7461642E, 0x61, dataSize, PE_SECTION_RVA + textSize, dataSize, 0xC0000040);       // .data: DATA | READ | WRITE
+        Section(ref f, 0x198, 0x6C65722E, 0x636F, reloc.Len() as u64, relocRva, relocSize, 0x42000040);          // .reloc: DATA | DISCARDABLE | READ
+        return f;
+    }
+    // the table RelocStub reads: the count, then the data offset of each absolute address
+    a.DataAlign(4);
+    a.BindData(relocs);
+    u32 count = 0;
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind == FX_ABS64 && x.InData) count++;
+    }
+    a.DataU32(count);
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind == FX_ABS64 && x.InData) a.DataU32(x.At);
+    }
+    a.BindDataStart(data0);
+    string section = a.Link(0, ELF_HEADERS, ref dataStart);
+    u64 codeEnd = ELF_HEADERS + dataStart;          // page-aligned
+    u64 fileSize = ELF_HEADERS + section.Len() as u64;
+    string f = Zeros(ELF_HEADERS as usize);
+    f.Append(section);
+    Put32(ref f, 0, 0x464C457F);                    // 0x7F 'E' 'L' 'F'
+    Put32(ref f, 4, 0x00010102);                    // 64-bit, little-endian, version 1
+    Put16(ref f, 16, 3);                            // ET_DYN: position-independent
+    Put16(ref f, 18, 0x3E);                         // x86-64
+    Put32(ref f, 20, 1);
+    Put64(ref f, 24, ELF_HEADERS);                  // entry point: the start of the code
+    Put64(ref f, 32, 64);                           // program headers follow
+    Put16(ref f, 52, 64);
+    Put16(ref f, 54, 56);
+    Put16(ref f, 56, 3);
+    Put32(ref f, 64, 1);                            // PT_LOAD, R | X: the headers and the code
+    Put32(ref f, 68, 5);
+    Put64(ref f, 96, codeEnd);
+    Put64(ref f, 104, codeEnd);
+    Put64(ref f, 112, 0x1000);
+    Put32(ref f, 120, 1);                           // PT_LOAD, R | W: the data
+    Put32(ref f, 124, 6);
+    Put64(ref f, 128, codeEnd);
+    Put64(ref f, 136, codeEnd);
+    Put64(ref f, 144, codeEnd);
+    Put64(ref f, 152, fileSize - codeEnd);
+    Put64(ref f, 160, fileSize - codeEnd);
+    Put64(ref f, 168, 0x1000);
+    Put32(ref f, 176, 0x6474E551);                  // PT_GNU_STACK, R | W
+    Put32(ref f, 180, 6);
+    Put64(ref f, 224, 16);
+    return f;
+}
+
+// A PE section header at `at`: name (low 4 bytes, then 4 more), sizes, address, flags.
+void Section(ref string f, usize at, u64 name, u64 name2, u64 vsize, u64 rva, u64 rawSize, u64 flags) {
+    Put32(ref f, at, name);
+    Put32(ref f, at + 4, name2);
+    Put32(ref f, at + 8, vsize);
+    Put32(ref f, at + 12, rva);
+    Put32(ref f, at + 16, rawSize);
+    Put32(ref f, at + 20, rva);                     // PointerToRawData: files map 1:1
+    Put32(ref f, at + 36, flags);
+}
+
+// The base relocation table: a DIR64 entry for each 8-byte absolute address, in blocks of
+// one page each. With none, one block of padding (the loader needs no work).
+string BaseRelocs(in Asm a, u64 dataStart) {
+    string r = string.New();
+    List<u64> rvas = List<u64>.New();
+    foreach (var x in a.Fixups.AsSlice()) {
+        if (x.Kind != FX_ABS64) continue;
+        u64 at = x.At as u64;
+        if (x.InData) at += dataStart;
+        rvas.Push(PE_SECTION_RVA + at);
+    }
+    if (rvas.Len() == 0) {
+        AppendU32(ref r, PE_SECTION_RVA);
+        AppendU32(ref r, 12);
+        AppendU32(ref r, 0);                        // two ABSOLUTE (padding) entries
+        return r;
+    }
+    usize i = 0;
+    while (i < rvas.Len()) {
+        u64 page = rvas.Get(i) & ~0xFFF;
+        usize j = i;
+        while (j < rvas.Len() && rvas.Get(j) & ~0xFFF == page) j++;
+        u64 n = (j - i) as u64;
+        u64 size = 8 + 2 * n;
+        if (n % 2 == 1) size += 2;
+        AppendU32(ref r, page);
+        AppendU32(ref r, size);
+        for (usize k = i; k < j; k++) {
+            u64 e = 0xA000 | (rvas.Get(k) & 0xFFF);     // IMAGE_REL_BASED_DIR64
+            r.AppendByte((e & 0xFF) as u8);
+            r.AppendByte((e >> 8) as u8);
+        }
+        if (n % 2 == 1) {
+            r.AppendByte(0);
+            r.AppendByte(0);
+        }
+        i = j;
+    }
+    return r;
+}
+
+void AppendU32(ref string s, u64 v) {
+    s.AppendByte((v & 0xFF) as u8);
+    s.AppendByte((v >> 8 & 0xFF) as u8);
+    s.AppendByte((v >> 16 & 0xFF) as u8);
+    s.AppendByte((v >> 24 & 0xFF) as u8);
+}

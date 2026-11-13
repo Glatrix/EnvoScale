@@ -6,9 +6,9 @@
 *.ps1 text eol=crlf
 
 # Test inputs whose exact bytes matter: invalid UTF-8, raw control bytes, a BOM,
-# and CRLF line endings (flags.envo). Git must never rewrite them.
-tests/spec/01-lexical/*.bin.envo binary
-tests/golden/lexer/*.envo -text
+# and CRLF line endings (flags.envol). Git must never rewrite them.
+tests/spec/01-lexical/*.bin.envol binary
+tests/golden/lexer/*.envol -text
 
 *.exe binary
 *.bin binary

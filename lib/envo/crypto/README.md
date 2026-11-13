@@ -49,4 +49,4 @@ Entropy (the CSPRNG).
 Plain Envo-S1 with no tables or hardware instructions: AES computes its S-box, the
 curve uses 16-bit limbs. Fine for keys, handshakes and tests; slow for bulk data. The
 full X25519/Ed25519 vector set takes about two minutes in the script runtime, so it runs
-natively only (`x25519_vm.envo` covers the curve there).
+natively only (`x25519_vm.envol` covers the curve there).
