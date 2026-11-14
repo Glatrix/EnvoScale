@@ -15,17 +15,19 @@ const u32 INLINE_MAX = 16;          // a single-block callee's instructions, the
 const u32 INLINE_MULTI_MAX = 16;    // a callee with more blocks: the instructions of all of them
 // (constants and field addresses are not counted: they become immediates and addressing)
 const u32 INLINE_COLD_MAX = 8;      // and of its blocks that panic, counted apart
+// a small callee that grew by inlining its own small callees: up to this many times the limits
+const u32 INLINE_GROWN = 2;
 const u16 OP_ZERO = 48;
 const u16 OP_RET = 58;
 
 // Can calls to function c be inlined into function f?
-bool Inlinable(in Module m, u32 f, u32 c) {
+bool Inlinable(in Module m, u32 f, u32 c, u32 grow) {
     if (c == f) return false;
     EFunc cf = m.Func(c);
     if (cf.Extern || cf.NBlocks == 0) return false;
     if (cf.NBlocks == 1) {
         EBlock blk = m.Block(cf.FirstBlock);
-        if (Cost(m, blk) > INLINE_MAX) return false;
+        if (Cost(m, blk) > INLINE_MAX * grow) return false;
         return m.Inst(blk.FirstInst + blk.NInsts - 1).Op == OP_RET;
     }
     u32 n = 0;
@@ -36,7 +38,7 @@ bool Inlinable(in Module m, u32 f, u32 c) {
         // does not keep a small function from being inlined
         if (Panics(m, blk)) cold += blk.NInsts;
         else n += Cost(m, blk);
-        if (n > INLINE_MULTI_MAX || cold > INLINE_COLD_MAX) return false;
+        if (n > INLINE_MULTI_MAX * grow || cold > INLINE_COLD_MAX * grow) return false;
         EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
         // a returned value becomes a branch argument, which must be a value
         if (term.Op == OP_RET && term.NOps == 1 && m.Op(term.FirstOp).Kind != OK_VALUE) return false;
@@ -81,7 +83,7 @@ struct Site {
     u32 Cont;           // Multi: new relative id of the continuation block
 }
 
-void InlineFunc(ref Module m, u32 fi) {
+void InlineFunc(ref Module m, u32 fi, in List<bool> small) {
     EFunc f = m.Func(fi);
     List<Site> sites = List<Site>.New();
     List<u32> repl = List<u32>.New();       // per caller value: what it becomes (itself if nothing)
@@ -94,11 +96,14 @@ void InlineFunc(ref Module m, u32 fi) {
         EBlock blk = m.Block(b);
         blockMap.Push(nblocks);
         nblocks++;
+        // a path that panics stays as it is: inlining the panic's own helpers there would
+        // only add slots that every inlined copy zeroes
+        if (Panics(m, blk)) continue;
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
             if (inst.Op != OP_CALL) continue;
             u32 c = m.Op(inst.FirstOp).Ref;
-            if (!Inlinable(m, fi, c)) continue;
+            if (!small.Get(c as usize) || !Inlinable(m, fi, c, INLINE_GROWN)) continue;
             EFunc cf = m.Func(c);
             u32 slots = 0;
             EBlock cb = m.Block(cf.FirstBlock);
@@ -370,7 +375,56 @@ void CopyCallee(ref Module m, u32 k, u32 nb, in EFunc cf, u32 v0, u32 b0, in Sit
 
 // Inlines small functions into their callers, one level, in function order.
 public void InlineSmall(ref Module m) {
-    for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
-        if (!m.Func(fi).Extern) InlineFunc(ref m, fi);
+    // callees before their callers, so what is inlined is already final: a small function
+    // that calls another small one inlines both
+    u32 nf = m.Funcs.Len() as u32;
+    List<u32> efirst = List<u32>.New();    // per function: where its callees start in edges
+    List<u32> edges = List<u32>.New();
+    for (u32 fi = 0; fi < nf; fi++) {
+        efirst.Push(edges.Len() as u32);
+        EFunc f = m.Func(fi);
+        if (f.Extern) continue;
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                if (inst.Op == OP_CALL) edges.Push(m.Op(inst.FirstOp).Ref);
+            }
+        }
     }
+    efirst.Push(edges.Len() as u32);
+    List<u8> state = List<u8>.New();       // 0 unseen, else seen
+    for (u32 fi = 0; fi < nf; fi++) state.Push(0);
+    List<u32> order = List<u32>.New();
+    List<u32> stack = List<u32>.New();     // pairs: a function, the next of its edges to follow
+    for (u32 root = 1; root < nf; root++) {
+        if (state.Get(root as usize) != 0) continue;
+        state.Set(root as usize, 1);
+        stack.Push(root);
+        stack.Push(efirst.Get(root as usize));
+        while (stack.Len() > 0) {
+            u32 at = stack.Pop().Unwrap();
+            u32 fi = stack.Get(stack.Len() - 1);
+            u32 callee = 0;
+            while (at < efirst.Get((fi + 1) as usize) && callee == 0) {
+                u32 c = edges.Get(at as usize);
+                at++;
+                if (c < nf && c != 0 && state.Get(c as usize) == 0) callee = c;
+            }
+            if (callee != 0) {
+                stack.Push(at);
+                state.Set(callee as usize, 1);
+                stack.Push(callee);
+                stack.Push(efirst.Get(callee as usize));
+            } else {
+                stack.Pop();
+                if (!m.Func(fi).Extern) order.Push(fi);
+            }
+        }
+    }
+    // which functions are small enough is decided on them as written: a callee that grew
+    // by inlining is still inlined while it stays within INLINE_GROWN times the limits
+    List<bool> small = List<bool>.New();
+    for (u32 fi = 0; fi < nf; fi++) small.Push(fi != 0 && Inlinable(m, nf, fi, 1));
+    for (usize j = 0; j < order.Len(); j++) InlineFunc(ref m, order.Get(j), small);
 }

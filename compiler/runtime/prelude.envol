@@ -88,10 +88,13 @@ struct List<T> {
     usize Len() => this.Count;
 
     void Push(ref this, T item) {
-        if (this.Count == this.Cap) this.Grow();
+        // the count is read once: the item's store could be to anywhere, as far as the
+        // compiler knows, and n < Cap, so n + 1 cannot wrap
+        usize n = this.Count;
+        if (n == this.Cap) this.Grow();
         // writing through a raw pointer stores without dropping (the slot is empty)
-        unsafe { this.Data[this.Count] = item; }
-        this.Count++;
+        unsafe { this.Data[n] = item; }
+        this.Count = n +% 1;
     }
 
     T? Pop(ref this) {
@@ -165,17 +168,21 @@ struct string {
 
     usize Len() => this.Count;
 
-    // Both check for room inline and call Reserve only to grow, so they inline.
+    // Both check for room inline and call Reserve only to grow, so they inline. They read
+    // the count once (the bytes' stores could be to anywhere, as far as the compiler
+    // knows); the new count is at most Cap, so it cannot wrap.
     void Append(ref this, str s) {
-        if (s.Len > this.Cap - this.Count) this.Reserve(s.Len);
-        unsafe { string.CopyBytes(&this.Data[this.Count], s.Ptr, s.Len); }
-        this.Count += s.Len;
+        usize n = this.Count;
+        if (s.Len > this.Cap - n) this.Reserve(s.Len);
+        unsafe { string.CopyBytes(&this.Data[n], s.Ptr, s.Len); }
+        this.Count = n +% s.Len;
     }
 
     void AppendByte(ref this, u8 b) {
-        if (this.Count == this.Cap) this.Reserve(1);
-        unsafe { this.Data[this.Count] = b; }
-        this.Count++;
+        usize n = this.Count;
+        if (n == this.Cap) this.Reserve(1);
+        unsafe { this.Data[n] = b; }
+        this.Count = n +% 1;
     }
 
     str AsStr() {

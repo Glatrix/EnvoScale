@@ -5,8 +5,11 @@
 // the value that would cost least in memory (its uses, weighted by 8 per enclosing loop)
 // is the one that stays there. The callee-saved
 // registers rbx and r12-r15 survive everything; rsi, rdi and r8-r10 are free between
-// calls, so they go only to values whose interval holds no call or system call (and rsi
-// and rdi none of the copies and fills that use them). The code generator's scratch
+// calls, so they go to values whose interval holds no call or system call (and rsi and rdi
+// none of the copies and fills that use them). A value that crosses calls and finds no
+// callee-saved register may still take one of them when storing it before each call it
+// lives through and loading it after costs less than keeping it in memory: those calls
+// are listed in keepInst and keepVal for the code generator. The code generator's scratch
 // registers are rax, rcx, rdx and r11.
 //
 // At -O2 calls pass their first NARGREGS arguments in rdi, rsi, r8, r9 and r10: the
@@ -27,6 +30,7 @@ const u32 NREGS = 10;       // allocatable: the callee-saved first, then the cal
 const u32 NSAVED = 5;       // the callee-saved ones, which a function that uses them saves
 
 public const u32 NARGREGS = 5;
+public const u32 KEEP_NO_LOAD = 0x80000000;     // keepVal: the value is not loaded after the call
 
 // The register argument k arrives in.
 u8 ArgReg(u32 k) {
@@ -150,7 +154,7 @@ struct BitSets {
 // The registers of function fi's values (relative to its first), NOREG for a value that
 // stays in memory. Values with remat[k] set are recomputed where used and get none.
 // used[r] is set for each register given out.
-List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> used) {
+List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> used, ref List<u32> keepInst, ref List<u32> keepVal) {
     EFunc f = m.Func(fi);
     u32 nv = f.NValues;
     u32 nb = f.NBlocks;
@@ -169,6 +173,8 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         end.Push(0);
     }
     for (u32 k = 0; k < f.NParams; k++) start.Set(k as usize, 0);
+    List<u32> defPos = List<u32>.New();     // per value: the position that defines it
+    for (u32 k = 0; k < nv; k++) defPos.Push(0);
     BitSets defs = BitSets.New(nb, nv);
     BitSets uses = BitSets.New(nb, nv);
     List<u32> clob = List<u32>.New();      // per position: the caller-saved registers it overwrites
@@ -180,6 +186,12 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
     List<u32> op0 = List<u32>.New();
     for (u32 k = 0; k < nv; k++) op0.Push(NOHINT);
     clob.Push(0);
+    // per position: the weight of the calls up to it, times 8 (a value kept in a
+    // caller-saved register is stored and loaded around each)
+    List<u64> callW = List<u64>.New();
+    u64 callSum = 0;
+    callW.Push(0);
+    List<u32> callPos = List<u32>.New();    // the positions of calls, in order
     // how deep in loops each block is: a branch back to an earlier block (in the order
     // the blocks are emitted) closes a loop over the blocks between
     List<u32> depth = List<u32>.New();
@@ -193,6 +205,25 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             u32 tb = op.Ref - f.FirstBlock;
             if (tb > bi) continue;
             for (u32 k = tb; k <= bi; k++) depth.Set(k as usize, depth.Get(k as usize) + 1);
+        }
+    }
+    // blocks only one arm of a conditional branch reaches: a call there runs on some of
+    // the passes only (a list or string growing, an error path), counted 1/8 as often
+    List<u32> npred = List<u32>.New();
+    List<bool> armOnly = List<bool>.New();
+    for (u32 bi = 0; bi < nb; bi++) {
+        npred.Push(0);
+        armOnly.Push(false);
+    }
+    for (u32 bi = 0; bi < nb; bi++) {
+        EBlock blk = m.Block(f.FirstBlock + bi);
+        EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
+        for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind != OK_TARGET) continue;
+            u32 tb = op.Ref - f.FirstBlock;
+            npred.Set(tb as usize, npred.Get(tb as usize) + 1);
+            armOnly.Set(tb as usize, term.Op == 56);
         }
     }
     // what keeping each value in memory would cost: its uses and definition, each weighted
@@ -211,11 +242,13 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         EBlock blk = m.Block(f.FirstBlock + bi);
         bstart.Push(pos);
         clob.Push(0);
+        callW.Push(callSum);
         posBlock.Push(bi);
         posInst.Push(NOHINT);
         for (u32 k = 0; k < blk.NParams; k++) {
             u32 v = blk.FirstParam + k - f.FirstValue;
             defs.Add(bi, v);
+            defPos.Set(v as usize, pos);
             if (start.Get(v as usize) > pos) start.Set(v as usize, pos);
         }
         if (bi == 0) {
@@ -224,7 +257,14 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
         pos++;
         for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
             EInst inst = m.Inst(i);
-            clob.Push(Clobbers(m, inst));
+            u32 cl = Clobbers(m, inst);
+            clob.Push(cl);
+            if (cl == 31) {
+                callPos.Push(pos);
+                if (npred.Get(bi as usize) == 1 && armOnly.Get(bi as usize)) callSum += wt;
+                else callSum += 8 * wt;
+            }
+            callW.Push(callSum);
             posBlock.Push(bi);
             posInst.Push(i);
             for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
@@ -254,6 +294,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                     op0.Set(v as usize, m.Op(inst.FirstOp).Ref - f.FirstValue);
                 }
                 defs.Add(bi, v);
+                defPos.Set(v as usize, pos);
                 if (start.Get(v as usize) > pos) start.Set(v as usize, pos);
             }
             pos++;
@@ -293,24 +334,56 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             }
         }
     }
+    // each interval covers the blocks it is live in (the set bits only: functions grown by
+    // inlining have many blocks and values)
     for (u32 bi = 0; bi < nb; bi++) {
-        for (u32 v = 0; v < nv; v++) {
-            if (live.Has(bi, v) && start.Get(v as usize) > bstart.Get(bi as usize)) start.Set(v as usize, bstart.Get(bi as usize));
-            if (liveOut.Has(bi, v) && end.Get(v as usize) < bend.Get(bi as usize)) end.Set(v as usize, bend.Get(bi as usize));
+        u32 bs = bstart.Get(bi as usize);
+        u32 be = bend.Get(bi as usize);
+        for (usize w = 0; w < live.Words; w++) {
+            u64 li = live.Bits.Get(bi as usize * live.Words + w);
+            u64 lo = liveOut.Bits.Get(bi as usize * live.Words + w);
+            u64 any = li | lo;
+            u32 v = (w * 64) as u32;
+            while (any != 0) {
+                while (any & 0xFF == 0) {
+                    any = any >> 8;
+                    li = li >> 8;
+                    lo = lo >> 8;
+                    v += 8;
+                }
+                if (li & 1 != 0 && start.Get(v as usize) > bs) start.Set(v as usize, bs);
+                if (lo & 1 != 0 && end.Get(v as usize) < be) end.Set(v as usize, be);
+                any = any >> 1;
+                li = li >> 1;
+                lo = lo >> 1;
+                v++;
+            }
         }
     }
 
-    // per caller-saved register: how many positions up to p overwrite it
+    // per caller-saved register: how many positions up to p overwrite it, and how many of
+    // them are not calls
     List<u32> prefix = List<u32>.New();      // (p + 1) * 5 + r
-    for (u32 r = 0; r < 5; r++) prefix.Push(0);
+    List<u32> prefixOther = List<u32>.New();
+    for (u32 r = 0; r < 5; r++) {
+        prefix.Push(0);
+        prefixOther.Push(0);
+    }
     for (u32 q = 0; q < clob.Len() as u32; q++) {
         u32 c = clob.Get(q as usize);
         for (u32 r = 0; r < 5; r++) {
             u32 n = prefix.Get((q * 5 + r) as usize);
-            if ((c >> r) & 1 != 0) n++;
+            u32 no = prefixOther.Get((q * 5 + r) as usize);
+            if ((c >> r) & 1 != 0) {
+                n++;
+                if (c != 31) no++;
+            }
             prefix.Push(n);
+            prefixOther.Push(no);
         }
     }
+    List<bool> keep = List<bool>.New();     // per value: kept in a caller-saved register across calls
+    for (u32 k = 0; k < nv; k++) keep.Push(false);
 
     // each value's partners in the pairs, in one flat list
     List<u32> pfirst = List<u32>.New();
@@ -361,10 +434,12 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             u32 ce = end.Get(cur as usize);
             // the caller-saved registers overwritten after its definition, up to its last use
             u32 forbid = 0;
+            u32 forbidOther = 0;
             u32 last = ce;
             if (last >= clob.Len() as u32) last = clob.Len() as u32 - 1;
             for (u32 r = 0; r < 5; r++) {
                 if (prefix.Get(((last + 1) * 5 + r) as usize) != prefix.Get(((cs + 1) * 5 + r) as usize)) forbid = forbid | (1 << r);
+                if (prefixOther.Get(((last + 1) * 5 + r) as usize) != prefixOther.Get(((cs + 1) * 5 + r) as usize)) forbidOther = forbidOther | (1 << r);
             }
             // free the registers of intervals that ended
             for (u32 r = 0; r < NREGS; r++) {
@@ -415,6 +490,14 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             for (u32 r = 0; r < NSAVED && pick == NREGS; r++) {
                 if (holder.Get(r as usize) == 0 && shareEnd.Get(r as usize) <= cs) pick = r;
             }
+            // a caller-saved register, stored and loaded around the calls it lives through,
+            // when that costs less than memory
+            if (pick == NREGS && forbid != forbidOther && 2 * (callW.Get(last as usize) - callW.Get(cs as usize)) < 8 * weight.Get(cur as usize)) {
+                for (u32 r = NSAVED; r < NREGS && pick == NREGS; r++) {
+                    if ((forbidOther >> (r - NSAVED)) & 1 == 0 && holder.Get(r as usize) == 0 && shareEnd.Get(r as usize) <= cs) pick = r;
+                }
+                if (pick != NREGS) keep.Set(cur as usize, true);
+            }
             if (pick == NREGS) {
                 // all it may have are taken: the cheapest of the holders and this one goes
                 // to memory (of equal cost, the one that ends last)
@@ -438,6 +521,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 u64 wc = weight.Get(cur as usize);
                 if (wc < wv || (wc == wv && end.Get(victim as usize) <= ce)) continue;
                 regs.Set(victim as usize, NOREG);
+                keep.Set(victim as usize, false);
                 pick = far;
             }
             if (shared) {
@@ -447,6 +531,43 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             }
             regs.Set(cur as usize, AllocReg(pick));
             used.Set(pick as usize, true);
+        }
+    }
+
+    // the calls each kept value lives through (after its definition, with a use after) or
+    // reads
+    for (u32 k = 0; k < nv; k++) {
+        if (!keep.Get(k as usize) || regs.Get(k as usize) == NOREG) continue;
+        u32 dp = defPos.Get(k as usize);
+        u32 last = end.Get(k as usize);
+        if (last >= clob.Len() as u32) last = clob.Len() as u32 - 1;
+        // the first call after its start
+        usize lo = 0;
+        usize hi = callPos.Len();
+        while (lo < hi) {
+            usize mid = (lo + hi) / 2;
+            if (callPos.Get(mid) <= start.Get(k as usize)) lo = mid + 1;
+            else hi = mid;
+        }
+        for (usize c = lo; c < callPos.Len() && callPos.Get(c) <= last; c++) {
+            u32 p = callPos.Get(c);
+            u32 b = posBlock.Get(p as usize);
+            if (posBlock.Get(dp as usize) == b && dp >= p) continue;
+            u32 i = posInst.Get(p as usize);
+            bool after = liveOut.Has(b, k);
+            EBlock blk = m.Block(f.FirstBlock + b);
+            for (u32 j = i + 1; j < blk.FirstInst + blk.NInsts && !after; j++) {
+                if (Reads(m, f, j, k)) after = true;
+            }
+            if (after) {
+                keepInst.Push(i);
+                keepVal.Push(k);
+            } else if (Reads(m, f, i, k)) {
+                // an argument of the call only: read from its slot while the call sets up
+                // its arguments, not loaded after
+                keepInst.Push(i);
+                keepVal.Push(k | KEEP_NO_LOAD);
+            }
         }
     }
     return regs;
