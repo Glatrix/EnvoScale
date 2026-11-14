@@ -172,3 +172,111 @@ bool UsesValue(in Module m, u32 i, u32 v) {
     }
     return false;
 }
+
+// A `zero` of a local (an inlined callee's, zeroed as a call would get it) that is written
+// whole before anything can read it, within its block, goes: by a whole copy or zero, by
+// a call returning an aggregate there, or by stores to its fields. Unless its address is
+// stored somewhere or passed on as a value, only its own uses can read it (a call it is
+// passed to reads it during that call only).
+bool DropDeadZeros(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    // per value: does a use let its address out (anything but the accesses below)?
+    List<bool> escapes = List<bool>.New();
+    List<u32> nuse = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) {
+        escapes.Push(false);
+        nuse.Push(0);
+    }
+    bool zeros = false;
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op == MG_ZERO) zeros = true;
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_TARGET) {
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        u32 k = m.Arg(op.Args + a) - f.FirstValue;
+                        if (k < nv) escapes.Set(k as usize, true);
+                    }
+                    continue;
+                }
+                if (op.Kind != OK_VALUE) continue;
+                u32 k = op.Ref - f.FirstValue;
+                if (k >= nv) continue;
+                nuse.Set(k as usize, nuse.Get(k as usize) + 1);
+                u32 at = o - inst.FirstOp;
+                bool fine = (inst.Op == MG_ZERO && at == 0) || (inst.Op == MG_COPY && at <= 1) || inst.Op == MG_SLOTEND ||
+                    (inst.Op == 42 && at == 0) || (inst.Op == 43 && at == 1) || inst.Op == 44 ||
+                    ((inst.Op == MG_CALL || inst.Op == 53) && at >= 1);
+                if (!fine) escapes.Set(k as usize, true);
+            }
+        }
+    }
+    if (!zeros) return false;
+    bool changed = false;
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 z = blk.FirstInst; z < blk.FirstInst + blk.NInsts; z++) {
+            EInst zi = m.Inst(z);
+            if (zi.Op != MG_ZERO || zi.NOps != 2) continue;
+            EOp sop = m.Op(zi.FirstOp);
+            if (sop.Kind != OK_VALUE) continue;
+            u32 s = sop.Ref;
+            u32 si = m.Val(s).Inst;
+            if (si == 0 || m.Inst(si).Op != OP_SLOT) continue;
+            u32 sty = m.Inst(si).Ty;
+            u64 size = m.Ty(sty).Size as u64;
+            if (size == 0 || size > 64 || !WholeSize(m, zi.FirstOp + 1, size)) continue;
+            bool esc = escapes.Get((s - f.FirstValue) as usize);
+            u64 full = 0xFFFFFFFFFFFFFFFF;
+            if (size < 64) full = ((1 as u64) << size) - 1;
+            u64 covered = 0;
+            bool stop = false;
+            u32 j = z + 1;
+            while (j < blk.FirstInst + blk.NInsts && !stop && covered != full) {
+                EInst x = m.Inst(j);
+                bool uses = false;
+                for (u32 o = x.FirstOp; o < x.FirstOp + x.NOps; o++) {
+                    EOp op = m.Op(o);
+                    if (op.Kind == OK_VALUE && op.Ref == s) uses = true;
+                }
+                if (!uses) {
+                    // once the address is out, a call, a load or a copy may read it
+                    if (esc && (x.Op == MG_CALL || x.Op == 53 || x.Op == 54 || x.Op == 42 || x.Op == MG_COPY)) stop = true;
+                    j++;
+                    continue;
+                }
+                if ((x.Op == MG_COPY && x.NOps == 3 && m.Op(x.FirstOp).Ref == s && m.Op(x.FirstOp + 1).Ref != s && WholeSize(m, x.FirstOp + 2, size)) ||
+                    (x.Op == MG_ZERO && WholeSize(m, x.FirstOp + 1, size)) ||
+                    (x.Op == MG_CALL && x.Imm == 1 && WritesWhole(m, j, s, size))) {
+                    covered = full;
+                } else if (x.Op == 44 && x.NOps == 1 && nuse.Get((x.Result - f.FirstValue) as usize) == 1 && j + 1 < blk.FirstInst + blk.NInsts) {
+                    // a field, stored to right after
+                    EInst st = m.Inst(j + 1);
+                    if (st.Op == 43 && st.NOps == 2 && m.Op(st.FirstOp + 1).Kind == OK_VALUE && m.Op(st.FirstOp + 1).Ref == x.Result && (m.Op(st.FirstOp).Kind != OK_VALUE || m.Op(st.FirstOp).Ref != s)) {
+                        u64 off = m.FieldOffset(x.Ty, x.Imm as u32);
+                        u64 n = m.Ty(st.Ty).Size as u64;
+                        if (off + n <= size && n < 64) covered = covered | ((((1 as u64) << n) - 1) << off);
+                        else stop = true;
+                        j++;
+                    } else {
+                        stop = true;
+                    }
+                } else {
+                    stop = true;
+                }
+                j++;
+            }
+            if (covered == full) {
+                zi.Op = 0;
+                zi.NOps = 0;
+                m.Insts.Set(z as usize, zi);
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}

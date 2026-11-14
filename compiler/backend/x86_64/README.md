@@ -62,7 +62,9 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   its whole interval, when storing it to its slot before each of those calls and loading
   it after costs less than memory; while such a call sets up its arguments, it reads the
   value from the slot. A value that gets no register keeps its stack slot. When registers run out, the value that would cost least in memory (its
-  uses, weighted by 8 for each loop around them) is the one that stays there. rax, rcx,
+  uses, weighted by 8 for each loop around them; loops are found from the branches back
+  to a block on the path that reaches them, not from the layout order) is the one that
+  stays there. rax, rcx,
   rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed
   to a parameter takes the parameter's, and the result of an add, sub, mul, `and`, `or` or

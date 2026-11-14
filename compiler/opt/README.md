@@ -48,6 +48,12 @@ variable's uses take the temporary and the copy goes. It runs before the first C
 the temporary still has just those two uses, so the struct is copied once and the later
 passes see one local.
 
+The same file drops a `zero` of a local (an inlined callee's, zeroed as a call would get
+it) that is written whole in its block before anything can read it: by a whole copy or
+`zero`, by a call returning an aggregate there, or by stores to all its bytes. Only the
+local's own uses can read it unless its address is stored or passed on as a value (a call
+it is passed to reads it during that call only).
+
 ## `args.envol`: arguments passed without a copy
 
 An aggregate argument is passed as a pointer to a copy the callee owns. A function that

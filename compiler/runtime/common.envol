@@ -153,6 +153,8 @@ void __rt_heap_chunk(usize lo, usize hi) {
                 h[1] = bytes;
                 return (at + 16) as *u8;
             }
+            // the same size rounded up to 16, so n need not live this long
+            return __rt_alloc_slow(units << 4);
         }
     }
     return __rt_alloc_slow(n);
@@ -236,12 +238,8 @@ void __rt_free(*u8 p) {
         usize a = p as usize;
         if (a == 0 || a & 15 != 0 || __rt_heap_meta == 0) return;
         *usize m = __rt_heap_meta as *usize;
-        usize n = m[__RT_NCHUNKS];
-        bool inside = false;
-        for (usize i = 0; i < n && !inside; i++) {
-            if (a >= m[__RT_NCHUNKS + 1 + 2 * i] + 16 && a < m[__RT_NCHUNKS + 2 + 2 * i]) inside = true;
-        }
-        if (!inside) return;
+        // most blocks are in the first chunk; the others are looked for apart
+        if ((a < m[__RT_NCHUNKS + 1] + 16 || a >= m[__RT_NCHUNKS + 2]) && !__rt_heap_owns(m, a)) return;
         *usize h = (a - 16) as *usize;
         usize w = h[0];
         if (w & ~0x3FF != __RT_MAGIC || w & __RT_FREE_BIT != 0) return;
@@ -254,13 +252,31 @@ void __rt_free(*u8 p) {
     }
 }
 
+// Is address a inside one of the chunks after the first?
+bool __rt_heap_owns(*usize m, usize a) {
+    unsafe {
+        usize n = m[__RT_NCHUNKS];
+        for (usize i = 1; i < n; i++) {
+            if (a >= m[__RT_NCHUNKS + 1 + 2 * i] + 16 && a < m[__RT_NCHUNKS + 2 + 2 * i]) return true;
+        }
+        return false;
+    }
+}
+
 // `realloc` (Envo-S1): p's block with room for n bytes, keeping its first old bytes, the
 // rest zeroed; p itself when it is a large block with that much reserved after it, else
-// a new block (and p is given back).
+// a new block (and p is given back). A null p (a list or string's first block) goes
+// straight to __rt_alloc.
 *u8 __rt_realloc(*u8 p, usize old, usize n) {
     unsafe {
+        if (p as usize == 0) return __rt_alloc(n);
+    }
+    return __rt_realloc_slow(p, old, n);
+}
+
+*u8 __rt_realloc_slow(*u8 p, usize old, usize n) {
+    unsafe {
         usize a = p as usize;
-        if (a == 0) return __rt_alloc(n);
         *usize h = (a - 16) as *usize;
         usize w = h[0];
         if (w & ~0x3FF == __RT_MAGIC && w & __RT_DIRECT_BIT != 0 && w & __RT_FREE_BIT == 0) {

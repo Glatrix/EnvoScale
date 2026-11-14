@@ -190,19 +190,107 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
     List<u32> callInst = List<u32>.New();
     List<u64> callWt = List<u64>.New();
     List<bool> callRare = List<bool>.New();     // on one arm of a branch
-    // how deep in loops each block is: a branch back to an earlier block (in the order
-    // the blocks are emitted) closes a loop over the blocks between
+    // how deep in loops each block is: a search from the entry finds the branches back to
+    // a block still on its path, and each such block's loop is it and the blocks that
+    // reach those branches without passing it (the layout order would count joins that
+    // block layout placed early as loops)
     List<u32> depth = List<u32>.New();
-    for (u32 bi = 0; bi < nb; bi++) depth.Push(0);
+    List<u32> succFirst = List<u32>.New();
+    List<u32> succ = List<u32>.New();
+    List<u32> npredOf = List<u32>.New();
     for (u32 bi = 0; bi < nb; bi++) {
+        depth.Push(0);
+        npredOf.Push(0);
+    }
+    for (u32 bi = 0; bi < nb; bi++) {
+        succFirst.Push(succ.Len() as u32);
         EBlock blk = m.Block(f.FirstBlock + bi);
         EInst term = m.Inst(blk.FirstInst + blk.NInsts - 1);
         for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
             EOp op = m.Op(o);
             if (op.Kind != OK_TARGET) continue;
             u32 tb = op.Ref - f.FirstBlock;
-            if (tb > bi) continue;
-            for (u32 k = tb; k <= bi; k++) depth.Set(k as usize, depth.Get(k as usize) + 1);
+            succ.Push(tb);
+            npredOf.Set(tb as usize, npredOf.Get(tb as usize) + 1);
+        }
+    }
+    succFirst.Push(succ.Len() as u32);
+    List<u32> predFirst = List<u32>.New();
+    u32 acc = 0;
+    for (u32 bi = 0; bi < nb; bi++) {
+        predFirst.Push(acc);
+        acc += npredOf.Get(bi as usize);
+    }
+    predFirst.Push(acc);
+    List<u32> preds = List<u32>.New();
+    List<u32> fill = List<u32>.New();
+    for (u32 k = 0; k < acc; k++) preds.Push(0);
+    for (u32 bi = 0; bi < nb; bi++) fill.Push(predFirst.Get(bi as usize));
+    for (u32 bi = 0; bi < nb; bi++) {
+        for (u32 s = succFirst.Get(bi as usize); s < succFirst.Get((bi + 1) as usize); s++) {
+            u32 tb = succ.Get(s as usize);
+            preds.Set(fill.Get(tb as usize) as usize, bi);
+            fill.Set(tb as usize, fill.Get(tb as usize) + 1);
+        }
+    }
+    List<u8> state = List<u8>.New();       // 0 unseen, 1 on the path, 2 done
+    List<u32> latchOf = List<u32>.New();   // per block: 1 if a branch back reaches it as a header
+    for (u32 bi = 0; bi < nb; bi++) {
+        state.Push(0);
+        latchOf.Push(0);
+    }
+    List<u32> backFrom = List<u32>.New();
+    List<u32> backTo = List<u32>.New();
+    List<u32> dfs = List<u32>.New();       // pairs: block, next successor
+    state.Set(0, 1);
+    dfs.Push(0);
+    dfs.Push(succFirst.Get(0));
+    while (dfs.Len() > 0) {
+        u32 at = dfs.Pop().Unwrap();
+        u32 x = dfs.Get(dfs.Len() - 1);
+        if (at < succFirst.Get((x + 1) as usize)) {
+            dfs.Push(at + 1);
+            u32 s = succ.Get(at as usize);
+            if (state.Get(s as usize) == 1) {
+                backFrom.Push(x);
+                backTo.Push(s);
+            } else if (state.Get(s as usize) == 0) {
+                state.Set(s as usize, 1);
+                dfs.Push(s);
+                dfs.Push(succFirst.Get(s as usize));
+            }
+        } else {
+            dfs.Pop();
+            state.Set(x as usize, 2);
+        }
+    }
+    List<u32> mark = List<u32>.New();      // per block: the header + 1 of the loop last marking it
+    for (u32 bi = 0; bi < nb; bi++) mark.Push(0);
+    List<u32> walk = List<u32>.New();
+    for (usize e = 0; e < backTo.Len(); e++) {
+        u32 h = backTo.Get(e);
+        if (latchOf.Get(h as usize) != 0) continue;      // its loop is counted once
+        latchOf.Set(h as usize, 1);
+        mark.Set(h as usize, h + 1);
+        depth.Set(h as usize, depth.Get(h as usize) + 1);
+        for (usize e2 = e; e2 < backTo.Len(); e2++) {
+            if (backTo.Get(e2) != h) continue;
+            u32 u = backFrom.Get(e2);
+            if (mark.Get(u as usize) != h + 1) {
+                mark.Set(u as usize, h + 1);
+                depth.Set(u as usize, depth.Get(u as usize) + 1);
+                walk.Push(u);
+            }
+        }
+        while (walk.Len() > 0) {
+            u32 x = walk.Pop().Unwrap();
+            for (u32 q = predFirst.Get(x as usize); q < predFirst.Get((x + 1) as usize); q++) {
+                u32 p = preds.Get(q as usize);
+                if (mark.Get(p as usize) == h + 1) continue;
+                mark.Set(p as usize, h + 1);
+                depth.Set(p as usize, depth.Get(p as usize) + 1);
+                walk.Push(p);
+            }
         }
     }
     // blocks only one arm of a conditional branch reaches: a call there runs on some of
@@ -297,6 +385,48 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
             pos++;
         }
         bend.Push(pos - 1);
+    }
+
+    // outside loops, a call is rare too when the function can return without passing its
+    // block (an early exit's slow path); checked by a search that avoids it, in functions
+    // of up to 512 blocks
+    if (nb <= 512) {
+        List<u8> seen = List<u8>.New();
+        for (u32 bi = 0; bi < nb; bi++) seen.Push(0);
+        List<u32> work = List<u32>.New();
+        u32 avoided = NOHINT;
+        bool returns = false;
+        for (usize c = 0; c < callPos.Len(); c++) {
+            if (callRare.Get(c)) continue;
+            u32 cb = posBlock.Get(callPos.Get(c) as usize);
+            if (cb == 0 || depth.Get(cb as usize) != 0) continue;
+            if (cb != avoided) {
+                avoided = cb;
+                for (u32 bi = 0; bi < nb; bi++) seen.Set(bi as usize, 0);
+                while (work.Len() > 0) work.Pop();
+                work.Push(0);
+                seen.Set(0, 1);
+                returns = false;
+                while (work.Len() > 0 && !returns) {
+                    u32 x = work.Pop().Unwrap();
+                    EBlock xb = m.Block(f.FirstBlock + x);
+                    EInst xt = m.Inst(xb.FirstInst + xb.NInsts - 1);
+                    if (xt.Op == 58) returns = true;
+                    for (u32 o = xt.FirstOp; o < xt.FirstOp + xt.NOps; o++) {
+                        EOp op = m.Op(o);
+                        if (op.Kind != OK_TARGET) continue;
+                        u32 s = op.Ref - f.FirstBlock;
+                        if (s == cb || seen.Get(s as usize) != 0) continue;
+                        seen.Set(s as usize, 1);
+                        work.Push(s);
+                    }
+                }
+            }
+            if (returns) {
+                callRare.Set(c, true);
+                callWt.Set(c, callWt.Get(c) / 8);
+            }
+        }
     }
 
     // liveness: in(b) = uses(b) + (out(b) - defs(b)), out(b) = the union of in(successors)
