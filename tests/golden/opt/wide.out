@@ -1,0 +1,105 @@
+eir 1 target "x86_64-linux"
+
+type $str = { ptr, u64 }
+
+func @Column(%0: ptr, %1: u64) -> u32 {
+^bb0:
+  %2 = const u64 0
+  %3 = const u64 1
+  %4 = const u8 10
+  %5 = fieldaddr $str %0, 1
+  %6 = load u64 %5
+  %7 = fieldaddr $str %0, 0
+  %8 = load ptr %7
+  br ^bb1(%1)
+^bb1(%9: u64):
+  %10 = const u64 8
+  %11 = cmp.ge u64 %9, %10
+  condbr %11, ^bb2, ^bb4(%9)
+^bb2:
+  %12 = cmp.le u64 %9, %6
+  condbr %12, ^bb3, ^bb4(%9)
+^bb3:
+  %13 = sub.wrap u64 %9, %10
+  %14 = elemaddr u8 %8, %13
+  %15 = load u64 %14
+  %16 = const u64 723401728380766730
+  %17 = xor u64 %15, %16
+  %18 = const u64 0
+  %19 = const u64 72340172838076673
+  %20 = sub.wrap u64 %17, %19
+  %21 = const u64 18446744073709551615
+  %22 = xor u64 %17, %21
+  %23 = and u64 %20, %22
+  %24 = const u64 9259542123273814144
+  %25 = and u64 %23, %24
+  %26 = cmp.ne u64 %25, %18
+  condbr %26, ^bb4(%9), ^bb1(%13)
+^bb4(%27: u64):
+  %28 = cmp.gt u64 %27, %2
+  condbr %28, ^bb5, ^bb7
+^bb5:
+  %29 = sub.wrap u64 %27, %3
+  bounds u64 %29, %6
+  %30 = elemaddr u8 %8, %29
+  %31 = load u8 %30
+  %32 = cmp.ne u8 %31, %4
+  condbr %32, ^bb6, ^bb7
+^bb6:
+  br ^bb4(%29)
+^bb7:
+  %33 = const u32 1
+  %34 = const u8 192
+  %35 = const u8 128
+  br ^bb8(%33, %27)
+^bb8(%36: u32, %37: u64):
+  %38 = const u64 8
+  %39 = add.wrap u64 %37, %38
+  %40 = cmp.le u64 %39, %1
+  condbr %40, ^bb9, ^bb11(%36, %37)
+^bb9:
+  %41 = cmp.le u64 %39, %6
+  condbr %41, ^bb10, ^bb11(%36, %37)
+^bb10:
+  %42 = elemaddr u8 %8, %37
+  %43 = load u64 %42
+  %44 = const u64 13889313184910721216
+  %45 = and u64 %43, %44
+  %46 = const u64 9259542123273814144
+  %47 = xor u64 %45, %46
+  %48 = const u64 9187201950435737471
+  %49 = and u64 %47, %48
+  %50 = add.wrap u64 %49, %48
+  %51 = or u64 %50, %47
+  %52 = or u64 %51, %48
+  %53 = const u64 18446744073709551615
+  %54 = xor u64 %52, %53
+  %55 = const u64 7
+  %56 = shr u64 %54, %55
+  %57 = const u64 72340172838076673
+  %58 = mul.wrap u64 %56, %57
+  %59 = const u64 56
+  %60 = shr u64 %58, %59
+  %61 = sub.wrap u64 %38, %60
+  %62 = trunc u64 -> u32 %61
+  %63 = add.chk u32 %36, %62
+  br ^bb8(%63, %39)
+^bb11(%64: u32, %65: u64):
+  %66 = cmp.lt u64 %65, %1
+  condbr %66, ^bb12, ^bb15
+^bb12:
+  bounds u64 %65, %6
+  %67 = elemaddr u8 %8, %65
+  %68 = load u8 %67
+  %69 = and u8 %68, %34
+  %70 = cmp.ne u8 %69, %35
+  condbr %70, ^bb13, ^bb14(%64)
+^bb13:
+  %71 = add.chk u32 %64, %33
+  br ^bb14(%71)
+^bb14(%72: u32):
+  %73 = add.wrap u64 %65, %3
+  br ^bb11(%72, %73)
+^bb15:
+  ret %64
+}

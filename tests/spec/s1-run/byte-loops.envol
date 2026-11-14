@@ -1,0 +1,88 @@
+// Byte loops that count, or look back for, a byte give what one byte at a time gives, for
+// every length and offset around the eight-byte steps, and still panic on a bad index.
+// expect: columns ok
+// expect: counts ok
+// expect: masked ok
+u32 Column(str text, usize off) {
+    usize lineStart = off;
+    while (lineStart > 0 && text[lineStart - 1] != 10) lineStart--;
+    u32 col = 1;
+    for (usize i = lineStart; i < off; i++) {
+        if (text[i] & 0xC0 != 0x80) col++;
+    }
+    return col;
+}
+
+u64 Count(str s, u8 k) {
+    u64 n = 0;
+    for (usize i = 0; i < s.Len; i++) {
+        if (s[i] == k) n++;
+    }
+    return n;
+}
+
+u32 Others(str s, usize from, u8 k) {
+    u32 n = 0;
+    for (usize i = from; i < s.Len; i++) {
+        if (s[i] != k) n++;
+    }
+    return n;
+}
+
+// The same, recursively (no loops to widen).
+usize LineStartRec(str t, usize at) {
+    if (at == 0 || t[at - 1] == 10) return at;
+    return LineStartRec(t, at - 1);
+}
+
+u32 ColumnRec(str t, usize i, usize off) {
+    if (i >= off) return 1;
+    u32 rest = ColumnRec(t, i + 1, off);
+    if (t[i] & 0xC0 != 0x80) return rest + 1;
+    return rest;
+}
+
+u64 CountRec(str s, usize i, u8 k) {
+    if (i >= s.Len) return 0;
+    u64 rest = CountRec(s, i + 1, k);
+    if (s[i] == k) return rest + 1;
+    return rest;
+}
+
+u32 OthersRec(str s, usize i, u8 k) {
+    if (i >= s.Len) return 0;
+    u32 rest = OthersRec(s, i + 1, k);
+    if (s[i] != k) return rest + 1;
+    return rest;
+}
+
+string text = string.New();
+for (usize i = 0; i < 300; i++) {
+    usize r = (i * 7919 + 13) % 23;
+    if (r == 0) text.AppendByte(10);
+    else if (r < 4) text.Append("é");
+    else if (r == 4) text.Append("€");
+    else text.AppendByte((97 + r) as u8);
+}
+str t = text.AsStr();
+bool ok = true;
+for (usize off = 0; off <= t.Len; off++) {
+    if (off < t.Len && t[off] & 0xC0 == 0x80) continue;
+    if (Column(t, off) != ColumnRec(t, LineStartRec(t, off), off)) ok = false;
+}
+if (ok) print("columns ok"); else print("columns wrong");
+bool counts = true;
+for (usize len = 0; len < 40; len++) {
+    if (t[len] & 0xC0 == 0x80) continue;
+    str s = t[0..len];
+    for (u8 k = 97; k < 120; k++) {
+        if (Count(s, k) != CountRec(s, 0, k)) counts = false;
+    }
+    if (Count(s, 10) != CountRec(s, 0, 10)) counts = false;
+}
+if (counts) print("counts ok"); else print("counts wrong");
+bool masked = true;
+for (usize from = 0; from < 30; from++) {
+    if (Others(t, from, 0x61) != OthersRec(t, from, 0x61)) masked = false;
+}
+if (masked) print("masked ok"); else print("masked wrong");

@@ -278,6 +278,7 @@ struct Gen {
         // 32-bit add and sub: the flags check them, and the result is already normal
         bool wide32 = size == 4 && op != 7 && op <= 9;
         if (op == 7) this.A.ImulRR(d, rb);
+        else if (op == 16 && isImm && imm == -1 && size == 8) this.A.Group3(2, d);       // not
         else if (wide32 && isImm) this.A.AluImm32(ext, d, imm);
         else if (wide32) this.A.Alu32(code, d, rb);
         else if (isImm) this.A.AluImm(ext, d, imm);
@@ -306,6 +307,23 @@ struct Gen {
     // l = ceil(log2 d), m = floor(2^64 (2^l - d) / d) + 1, q = (t + ((x - t) >> 1)) >> (l - 1)
     // with t = the high half of m * x). x is in rax and the divisor in rcx; leaves the
     // result in rax. False (nothing emitted) if the divisor is not such a constant.
+    // -O2: is the divisor of inst a constant UnsignedDivConst handles?
+    bool DivisorConst(in this, in Module m, in EInst inst) {
+        if (!this.Opt) return false;
+        EOp dop = m.Op(inst.FirstOp + 1);
+        u64 d = 0;
+        if (dop.Kind == OK_INT) {
+            d = dop.Int;
+        } else if (dop.Kind == OK_VALUE) {
+            usize k = (dop.Ref - this.FirstValue) as usize;
+            if (this.RematKind.Get(k) != REMAT_CONST) return false;
+            d = this.RematImm.Get(k);
+        } else {
+            return false;
+        }
+        return d >= 2 && d <= 0x8000000000000000;
+    }
+
     bool UnsignedDivConst(ref this, in Module m, in EInst inst, u16 op) {
         if (!this.Opt) return false;
         EOp dop = m.Op(inst.FirstOp + 1);
@@ -684,8 +702,12 @@ struct Gen {
             else if (op == 14) ext = 4;
             else if (op == 15) ext = 1;
             else if (op == 16) ext = 6;
+            // a shift by a constant in range, or an unsigned division by a constant, does not
+            // read the second operand from rcx
+            bool noRcx = (op == OP_SHL || op == OP_SHR) && this.Opt && this.SmallImm(m, f + 1, ref shiftBy) && shiftBy >= 0 && shiftBy < (ty.Size * 8) as i32;
+            if ((op == 12 || op == 13) && !signed && this.DivisorConst(m, inst)) noRcx = true;
             if (ext != 0xFF && this.SmallImm(m, f + 1, ref imm)) this.A.AluImm(ext, RAX, imm);
-            else this.LoadOp(m, RCX, f + 1);
+            else if (!noRcx) this.LoadOp(m, RCX, f + 1);
             if (ext != 0xFF && this.SmallImm(m, f + 1, ref imm)) {
                 // done above, with the immediate
             } else if (op == 5 || op == 8) this.A.Alu(ALU_ADD, RAX, RCX);

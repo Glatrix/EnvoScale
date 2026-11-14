@@ -1,0 +1,53 @@
+eir 1 target "x86_64-linux"
+
+type $str = { ptr, u64 }
+
+; the column of byte offset %1 in a text: a loop back to the line's start, then a count of
+; the bytes that do not continue a character. Each gets a loop in front that takes eight
+; bytes a step while they lie below both its bound and the text's length
+func @Column(%0: ptr, %1: u64) -> u32 {
+^bb0:
+  %2 = const u64 0
+  %3 = const u64 1
+  %4 = const u8 10
+  %5 = fieldaddr $str %0, 1
+  %6 = load u64 %5
+  %7 = fieldaddr $str %0, 0
+  %8 = load ptr %7
+  br ^bb1(%1)
+^bb1(%9: u64):
+  %10 = cmp.gt u64 %9, %2
+  condbr %10, ^bb2, ^bb4
+^bb2:
+  %11 = sub.wrap u64 %9, %3
+  bounds u64 %11, %6
+  %12 = elemaddr u8 %8, %11
+  %13 = load u8 %12
+  %14 = cmp.ne u8 %13, %4
+  condbr %14, ^bb3, ^bb4
+^bb3:
+  br ^bb1(%11)
+^bb4:
+  %15 = const u32 1
+  %16 = const u8 192
+  %17 = const u8 128
+  br ^bb5(%15, %9)
+^bb5(%18: u32, %19: u64):
+  %20 = cmp.lt u64 %19, %1
+  condbr %20, ^bb6, ^bb9
+^bb6:
+  bounds u64 %19, %6
+  %21 = elemaddr u8 %8, %19
+  %22 = load u8 %21
+  %23 = and u8 %22, %16
+  %24 = cmp.ne u8 %23, %17
+  condbr %24, ^bb7, ^bb8(%18)
+^bb7:
+  %25 = add.chk u32 %18, %15
+  br ^bb8(%25)
+^bb8(%26: u32):
+  %27 = add.wrap u64 %19, %3
+  br ^bb5(%26, %27)
+^bb9:
+  ret %18
+}

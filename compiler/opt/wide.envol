@@ -1,0 +1,537 @@
+// -O2: byte loops that count or look for a byte take eight bytes a step. Two shapes, as
+// lowering and the earlier passes leave them (the string's pointer and length hoisted):
+//
+//   count:          for (i = a; i < end; i++) if (s[i] & M == K) n++;     (or != K)
+//   find backward:  while (i > 0 && s[i - 1] != K) i--;                    (or == K)
+//
+// A loop of its own goes in front of each: while the next eight bytes are below both the
+// loop's end and the string's length, it loads them as one u64 and finds the matching
+// bytes with word arithmetic (a byte is zero in z exactly when ((z & 0x7F..) + 0x7F..) | z
+// has its top bit clear), adds their number to the count or moves past all eight when
+// none is the byte looked for. The original loop then does the rest from where it stopped,
+// so a bad index still panics where it did, and a count that overflows still overflows.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 WD_CONST = 1;
+const u16 WD_ADDW = 5;
+const u16 WD_SUBW = 6;
+const u16 WD_MULW = 7;
+const u16 WD_SUBCHK = 9;
+const u16 WD_ADDCHK = 8;
+const u16 WD_AND = 14;
+const u16 WD_OR = 15;
+const u16 WD_XOR = 16;
+const u16 WD_SHR = 19;
+const u16 WD_EQ = 20;
+const u16 WD_NE = 21;
+const u16 WD_LT = 22;
+const u16 WD_LE = 23;
+const u16 WD_GT = 24;
+const u16 WD_GE = 25;
+const u16 WD_TRUNC = 32;
+const u16 WD_LOAD = 42;
+const u16 WD_ELEM = 45;
+const u16 WD_BOUNDS = 49;
+const u16 WD_BR = 55;
+const u16 WD_CONDBR = 56;
+
+const u32 WIDE_COUNT = 1;
+const u32 WIDE_FIND_BACK = 2;
+
+const u64 WD_ONES = 0x0101010101010101;
+const u64 WD_LOW7 = 0x7F7F7F7F7F7F7F7F;
+const u64 WD_HIGH = 0x8080808080808080;
+const u64 WD_ALL = 0xFFFFFFFFFFFFFFFF;
+
+// A loop to widen (blocks relative to the function, values absolute).
+struct WideLoop {
+    u32 Kind;
+    u32 Header;
+    u32 PreInst;        // the terminator entering the header from outside
+    u32 PreOp;          // its operand that targets the header
+    u32 Idx;            // which header parameter is the index
+    u32 AccTy;          // count: the count's type and its add (wrapping or checked)
+    u16 AccOp;
+    u32 Ptr;
+    u32 Len;
+    u32 End;            // count: the loop's bound
+    u64 Mask;
+    u64 Key;
+    bool OnEqual;       // count: counts bytes equal to Key; find: goes on past bytes equal to it
+}
+
+// Widens function fi's byte loops; true if any.
+bool WidenByteLoops(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nb = f.NBlocks;
+    if (nb < 3) return false;
+    // predecessors: how many edges come in, and the last one (terminator, operand)
+    List<u32> npred = List<u32>.New();
+    List<u32> predInst = List<u32>.New();
+    List<u32> predOp = List<u32>.New();
+    List<u32> predBlock = List<u32>.New();
+    for (u32 b = 0; b < nb; b++) {
+        npred.Push(0);
+        predInst.Push(0);
+        predOp.Push(0);
+        predBlock.Push(0);
+    }
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        u32 ti = blk.FirstInst + blk.NInsts - 1;
+        EInst term = m.Inst(ti);
+        for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind != OK_TARGET) continue;
+            u32 t = op.Ref - f.FirstBlock;
+            npred.Set(t as usize, npred.Get(t as usize) + 1);
+            predInst.Set(t as usize, ti);
+            predOp.Set(t as usize, o);
+            predBlock.Set(t as usize, b);
+        }
+    }
+    List<WideLoop> loops = List<WideLoop>.New();
+    for (u32 h = 0; h < nb; h++) {
+        if (npred.Get(h as usize) != 2) continue;
+        WideLoop w = new WideLoop {
+            Kind = 0, Header = h, PreInst = 0, PreOp = 0, Idx = 0, AccTy = 0, AccOp = 0,
+            Ptr = 0, Len = 0, End = 0, Mask = 0xFF, Key = 0, OnEqual = false
+        };
+        u32 back = NONE;      // the block that branches back
+        if (WdMatchCount(m, f, h, npred, ref w, ref back) || WdMatchFindBack(m, f, h, npred, ref w, ref back)) {
+            // the other way in: the only edge from a block that is not the back edge's
+            u32 pre = NONE;
+            for (u32 b = 0; b < nb; b++) {
+                if (b == back) continue;
+                EBlock blk = m.Block(f.FirstBlock + b);
+                u32 ti = blk.FirstInst + blk.NInsts - 1;
+                EInst term = m.Inst(ti);
+                for (u32 o = term.FirstOp; o < term.FirstOp + term.NOps; o++) {
+                    EOp op = m.Op(o);
+                    if (op.Kind != OK_TARGET || op.Ref != f.FirstBlock + h) continue;
+                    if (pre == NONE) {
+                        pre = o;
+                        w.PreInst = ti;
+                    } else {
+                        pre = NONE - 1;
+                    }
+                }
+            }
+            if (pre >= NONE - 1) continue;
+            w.PreOp = pre;
+            loops.Push(w);
+        }
+    }
+    if (loops.Len() == 0) return false;
+
+    // the new body: the same values and blocks (the edges into the headers go to the new
+    // loops instead), then each new loop's three blocks
+    u32 v0 = m.Vals.Len() as u32;
+    u32 b0 = m.Blocks.Len() as u32;
+    for (u32 k = 0; k < f.NValues; k++) {
+        EVal old = m.Val(f.FirstValue + k);
+        old.Block = old.Block - f.FirstBlock + b0;
+        m.Vals.Push(old);
+    }
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        u32 first = m.Insts.Len() as u32;
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            u32 at = m.Ops.Len() as u32;
+            EInst inst = m.Inst(i);
+            Move(ref m, i, b0 + b, f, v0, b0);
+            for (usize j = 0; j < loops.Len(); j++) {
+                WideLoop w = loops.Get(j);
+                if (w.PreInst != i) continue;
+                EOp op = m.Op(at + w.PreOp - inst.FirstOp);
+                op.Ref = b0 + nb + 3 * j as u32;
+                m.Ops.Set((at + w.PreOp - inst.FirstOp) as usize, op);
+            }
+        }
+        u32 fp = 0;
+        if (blk.NParams > 0) fp = v0 + blk.FirstParam - f.FirstValue;
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = blk.NParams, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+    }
+    for (usize j = 0; j < loops.Len(); j++) {
+        WideLoop w = loops.Get(j);
+        u32 wb = b0 + nb + 3 * j as u32;
+        u32 hb = b0 + w.Header;
+        EBlock h = m.Block(f.FirstBlock + w.Header);
+        u32 ptr = v0 + w.Ptr - f.FirstValue;
+        u32 len = v0 + w.Len - f.FirstValue;
+        // W(params as the header's): enough bytes left?
+        u32 first = m.Insts.Len() as u32;
+        u32 fp = m.Vals.Len() as u32;
+        for (u32 k = 0; k < h.NParams; k++) m.Vals.Push(new EVal { Type = m.Val(h.FirstParam + k).Type, Block = wb, Inst = 0, Pos = 0 });
+        List<u32> params = List<u32>.New();
+        for (u32 k = 0; k < h.NParams; k++) params.Push(fp + k);
+        u32 i = fp + w.Idx;
+        u32 eight = WdEmit(ref m, wb, WD_CONST, ET_U64, 8, NONE, NONE);
+        u32 next = 0;
+        if (w.Kind == WIDE_COUNT) {
+            next = WdEmit(ref m, wb, WD_ADDW, ET_U64, 0, i, eight);
+            u32 c1 = WdEmit(ref m, wb, WD_LE, ET_U64, 0, next, v0 + w.End - f.FirstValue);
+            WdCondBr(ref m, wb, c1, wb + 1, hb, params);
+        } else {
+            u32 c1 = WdEmit(ref m, wb, WD_GE, ET_U64, 0, i, eight);
+            WdCondBr(ref m, wb, c1, wb + 1, hb, params);
+        }
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = fp, NParams = h.NParams, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+        // W2: and inside the string?
+        first = m.Insts.Len() as u32;
+        u32 c2 = 0;
+        if (w.Kind == WIDE_COUNT) c2 = WdEmit(ref m, wb + 1, WD_LE, ET_U64, 0, next, len);
+        else c2 = WdEmit(ref m, wb + 1, WD_LE, ET_U64, 0, i, len);
+        WdCondBr(ref m, wb + 1, c2, wb + 2, hb, params);
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = 0, NParams = 0, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+        // WB: the eight bytes
+        first = m.Insts.Len() as u32;
+        u32 b = wb + 2;
+        u32 at = i;
+        if (w.Kind == WIDE_FIND_BACK) at = WdEmit(ref m, b, WD_SUBW, ET_U64, 0, i, eight);
+        u32 p = WdEmit(ref m, b, WD_ELEM, ET_U8, 0, ptr, at);
+        u32 x = WdEmit(ref m, b, WD_LOAD, ET_U64, 0, p, NONE);
+        if (w.Mask != 0xFF) x = WdEmit(ref m, b, WD_AND, ET_U64, 0, x, WdEmit(ref m, b, WD_CONST, ET_U64, (w.Mask & 0xFF) *% WD_ONES, NONE, NONE));
+        u32 z = WdEmit(ref m, b, WD_XOR, ET_U64, 0, x, WdEmit(ref m, b, WD_CONST, ET_U64, (w.Key & w.Mask & 0xFF) *% WD_ONES, NONE, NONE));
+        if (w.Kind == WIDE_COUNT) {
+            // top bit of each byte of zm: that byte of z is zero
+            u32 lo = WdEmit(ref m, b, WD_CONST, ET_U64, WD_LOW7, NONE, NONE);
+            u32 u = WdEmit(ref m, b, WD_ADDW, ET_U64, 0, WdEmit(ref m, b, WD_AND, ET_U64, 0, z, lo), lo);
+            u = WdEmit(ref m, b, WD_OR, ET_U64, 0, WdEmit(ref m, b, WD_OR, ET_U64, 0, u, z), lo);
+            u32 zm = WdEmit(ref m, b, WD_XOR, ET_U64, 0, u, WdEmit(ref m, b, WD_CONST, ET_U64, WD_ALL, NONE, NONE));
+            // their number: the bits moved to each byte's bottom, summed into the top byte
+            u32 m1 = WdEmit(ref m, b, WD_SHR, ET_U64, 0, zm, WdEmit(ref m, b, WD_CONST, ET_U64, 7, NONE, NONE));
+            u32 m2 = WdEmit(ref m, b, WD_MULW, ET_U64, 0, m1, WdEmit(ref m, b, WD_CONST, ET_U64, WD_ONES, NONE, NONE));
+            u32 n = WdEmit(ref m, b, WD_SHR, ET_U64, 0, m2, WdEmit(ref m, b, WD_CONST, ET_U64, 56, NONE, NONE));
+            if (!w.OnEqual) n = WdEmit(ref m, b, WD_SUBW, ET_U64, 0, eight, n);
+            if (m.Ty(w.AccTy).Size < 8) n = WdEmitConv(ref m, b, WD_TRUNC, ET_U64, w.AccTy, n);
+            u32 acc = WdEmit(ref m, b, w.AccOp, w.AccTy, 0, fp + 1 - w.Idx, n);
+            List<u32> args = List<u32>.New();
+            if (w.Idx == 0) {
+                args.Push(next);
+                args.Push(acc);
+            } else {
+                args.Push(acc);
+                args.Push(next);
+            }
+            WdBr(ref m, b, wb, args);
+        } else {
+            u32 stop = 0;
+            u32 zero = WdEmit(ref m, b, WD_CONST, ET_U64, 0, NONE, NONE);
+            if (w.OnEqual) {
+                // goes on past the byte: stops at the first that differs
+                stop = WdEmit(ref m, b, WD_NE, ET_U64, 0, z, zero);
+            } else {
+                // stops at the byte: any zero byte in z
+                u32 d = WdEmit(ref m, b, WD_SUBW, ET_U64, 0, z, WdEmit(ref m, b, WD_CONST, ET_U64, WD_ONES, NONE, NONE));
+                u32 nz = WdEmit(ref m, b, WD_XOR, ET_U64, 0, z, WdEmit(ref m, b, WD_CONST, ET_U64, WD_ALL, NONE, NONE));
+                u32 hit = WdEmit(ref m, b, WD_AND, ET_U64, 0, WdEmit(ref m, b, WD_AND, ET_U64, 0, d, nz), WdEmit(ref m, b, WD_CONST, ET_U64, WD_HIGH, NONE, NONE));
+                stop = WdEmit(ref m, b, WD_NE, ET_U64, 0, hit, zero);
+            }
+            // found: the byte loop takes over here; else on, eight bytes back
+            List<u32> moved = List<u32>.New();
+            moved.Push(at);
+            WdCondBr2(ref m, b, stop, hb, params, wb, moved);
+        }
+        m.Blocks.Push(new EBlock { Func = fi, FirstParam = 0, NParams = 0, FirstInst = first, NInsts = m.Insts.Len() as u32 - first, Pos = 0 });
+    }
+    EFunc nf = m.Func(fi);
+    nf.FirstValue = v0;
+    nf.FirstBlock = b0;
+    nf.NValues = m.Vals.Len() as u32 - v0;
+    nf.NBlocks = nb + 3 * loops.Len() as u32;
+    m.Funcs.Set(fi as usize, nf);
+    return true;
+}
+
+// count: header h(i, n) or h(n, i): `cmp.lt u64 i, end; condbr c, body, exit`; the body
+// checks, loads and compares s[i]; one arm adds 1 to n, both meet in a block that adds 1
+// to i and branches back.
+bool WdMatchCount(in Module m, in EFunc f, u32 h, in List<u32> npred, ref WideLoop w, ref u32 back) {
+    EBlock hb = m.Block(f.FirstBlock + h);
+    if (hb.NParams != 2 || hb.NInsts != 2) return false;
+    EInst c = m.Inst(hb.FirstInst);
+    if (c.Op != WD_LT || c.Ty != ET_U64 || c.NOps != 2) return false;
+    u32 iv = 0;
+    if (!WdValueOp(m, c.FirstOp, ref iv)) return false;
+    if (iv < hb.FirstParam || iv >= hb.FirstParam + 2) return false;
+    u32 idx = iv - hb.FirstParam;
+    u32 acc = hb.FirstParam + 1 - idx;
+    u32 end = 0;
+    if (!WdValueOp(m, c.FirstOp + 1, ref end)) return false;
+    u32 body = 0;
+    if (!WdCondTo(m, f, hb.FirstInst + 1, c.Result, ref body)) return false;
+    if (npred.Get(body as usize) != 1) return false;
+    EBlock bb = m.Block(f.FirstBlock + body);
+    u32 at = bb.FirstInst;
+    u32 len = 0;
+    u32 ptr = 0;
+    u32 byte = 0;
+    if (bb.NParams != 0 || !WdAccess(m, bb, iv, ref at, ref len, ref ptr, ref byte)) return false;
+    u64 mask = 0xFF;
+    u32 tested = byte;
+    EInst a = m.Inst(at);
+    if (a.Op == WD_AND && a.Ty == ET_U8 && WdOpIs(m, a.FirstOp, byte) && WdConstOp(m, a.FirstOp + 1, ref mask)) {
+        tested = a.Result;
+        at++;
+    }
+    EInst q = m.Inst(at);
+    u64 key = 0;
+    if ((q.Op != WD_EQ && q.Op != WD_NE) || q.Ty != ET_U8 || !WdOpIs(m, q.FirstOp, tested) || !WdConstOp(m, q.FirstOp + 1, ref key)) return false;
+    at++;
+    if (at != bb.FirstInst + bb.NInsts - 1) return false;
+    EInst br = m.Inst(at);
+    if (br.Op != WD_CONDBR || br.NOps != 3 || !WdOpIs(m, br.FirstOp, q.Result)) return false;
+    EOp t1 = m.Op(br.FirstOp + 1);
+    EOp t2 = m.Op(br.FirstOp + 2);
+    // one arm: the increment block; the other: the join, passed n
+    u32 inc = 0;
+    u32 join = 0;
+    bool incOnTrue = t1.NArgs == 0 && t2.NArgs == 1;
+    if (incOnTrue) {
+        inc = t1.Ref - f.FirstBlock;
+        join = t2.Ref - f.FirstBlock;
+        if (m.Arg(t2.Args) != acc) return false;
+    } else if (t2.NArgs == 0 && t1.NArgs == 1) {
+        inc = t2.Ref - f.FirstBlock;
+        join = t1.Ref - f.FirstBlock;
+        if (m.Arg(t1.Args) != acc) return false;
+    } else {
+        return false;
+    }
+    if (npred.Get(inc as usize) != 1 || npred.Get(join as usize) != 2) return false;
+    EBlock ib = m.Block(f.FirstBlock + inc);
+    if (ib.NParams != 0 || ib.NInsts != 2) return false;
+    EInst add = m.Inst(ib.FirstInst);
+    if ((add.Op != WD_ADDW && add.Op != WD_ADDCHK) || add.NOps != 2 || !WdOpIs(m, add.FirstOp, acc) || !WdIsOne(m, add.FirstOp + 1)) return false;
+    u32 ts = m.Ty(add.Ty).Size;
+    if (!m.IsInt(add.Ty) || (ts != 4 && ts != 8)) return false;
+    EInst ibr = m.Inst(ib.FirstInst + 1);
+    if (ibr.Op != WD_BR || ibr.NOps != 1) return false;
+    EOp it = m.Op(ibr.FirstOp);
+    if (it.Ref - f.FirstBlock != join || it.NArgs != 1 || m.Arg(it.Args) != add.Result) return false;
+    EBlock jb = m.Block(f.FirstBlock + join);
+    if (jb.NParams != 1 || jb.NInsts != 2) return false;
+    EInst step = m.Inst(jb.FirstInst);
+    if ((step.Op != WD_ADDW && step.Op != WD_ADDCHK) || step.Ty != ET_U64 || !WdOpIs(m, step.FirstOp, iv) || !WdIsOne(m, step.FirstOp + 1)) return false;
+    EInst jbr = m.Inst(jb.FirstInst + 1);
+    if (jbr.Op != WD_BR || jbr.NOps != 1) return false;
+    EOp jt = m.Op(jbr.FirstOp);
+    if (jt.Ref - f.FirstBlock != h || jt.NArgs != 2) return false;
+    if (m.Arg(jt.Args + idx) != step.Result || m.Arg(jt.Args + 1 - idx) != jb.FirstParam) return false;
+    // what the loop reads stays put: defined outside it
+    List<u32> inside = List<u32>.New();
+    inside.Push(h);
+    inside.Push(body);
+    inside.Push(inc);
+    inside.Push(join);
+    if (!WdOutside(m, f, end, inside) || !WdOutside(m, f, len, inside) || !WdOutside(m, f, ptr, inside)) return false;
+    bool countsEqual = q.Op == WD_EQ;
+    if (!incOnTrue) countsEqual = !countsEqual;
+    w.Kind = WIDE_COUNT;
+    w.Idx = idx;
+    w.AccTy = add.Ty;
+    w.AccOp = add.Op;
+    w.Ptr = ptr;
+    w.Len = len;
+    w.End = end;
+    w.Mask = mask & 0xFF;
+    w.Key = key & 0xFF;
+    w.OnEqual = countsEqual;
+    back = join;
+    // a key the mask cannot produce matches nothing: leave such a loop alone
+    return (w.Key & ~w.Mask) == 0;
+}
+
+// find backward: header h(i): `cmp.gt u64 i, 0` (or `cmp.ne`); the body takes j = i - 1,
+// checks, loads and compares s[j], and goes back to h with j (directly or through a block
+// that only branches) while the byte is not (or is) the key.
+bool WdMatchFindBack(in Module m, in EFunc f, u32 h, in List<u32> npred, ref WideLoop w, ref u32 back) {
+    EBlock hb = m.Block(f.FirstBlock + h);
+    if (hb.NParams != 1 || hb.NInsts != 2) return false;
+    u32 iv = hb.FirstParam;
+    EInst c = m.Inst(hb.FirstInst);
+    u64 zero = 1;
+    if ((c.Op != WD_GT && c.Op != WD_NE) || c.Ty != ET_U64 || !WdOpIs(m, c.FirstOp, iv) || !WdConstOp(m, c.FirstOp + 1, ref zero) || zero != 0) return false;
+    u32 body = 0;
+    if (!WdCondTo(m, f, hb.FirstInst + 1, c.Result, ref body)) return false;
+    if (npred.Get(body as usize) != 1) return false;
+    EBlock bb = m.Block(f.FirstBlock + body);
+    if (bb.NParams != 0 || bb.NInsts < 2) return false;
+    EInst dec = m.Inst(bb.FirstInst);
+    if ((dec.Op != WD_SUBW && dec.Op != WD_SUBCHK) || dec.Ty != ET_U64 || !WdOpIs(m, dec.FirstOp, iv) || !WdIsOne(m, dec.FirstOp + 1)) return false;
+    u32 j = dec.Result;
+    u32 at = bb.FirstInst + 1;
+    u32 len = 0;
+    u32 ptr = 0;
+    u32 byte = 0;
+    if (!WdAccess(m, bb, j, ref at, ref len, ref ptr, ref byte)) return false;
+    EInst q = m.Inst(at);
+    u64 key = 0;
+    if ((q.Op != WD_EQ && q.Op != WD_NE) || q.Ty != ET_U8 || !WdOpIs(m, q.FirstOp, byte) || !WdConstOp(m, q.FirstOp + 1, ref key)) return false;
+    at++;
+    if (at != bb.FirstInst + bb.NInsts - 1) return false;
+    EInst br = m.Inst(at);
+    if (br.Op != WD_CONDBR || br.NOps != 3 || !WdOpIs(m, br.FirstOp, q.Result)) return false;
+    // the edge that goes on: true for cmp.ne (on while the byte differs)
+    bool onTrue = q.Op == WD_NE;
+    EOp on = m.Op(br.FirstOp + 2);
+    if (onTrue) on = m.Op(br.FirstOp + 1);
+    u32 from = body;
+    if (on.Ref - f.FirstBlock != h) {
+        // through a block that only branches back with j
+        u32 l = on.Ref - f.FirstBlock;
+        if (on.NArgs != 0 || npred.Get(l as usize) != 1) return false;
+        EBlock lb = m.Block(f.FirstBlock + l);
+        if (lb.NParams != 0 || lb.NInsts != 1) return false;
+        EInst lbr = m.Inst(lb.FirstInst);
+        if (lbr.Op != WD_BR || lbr.NOps != 1) return false;
+        on = m.Op(lbr.FirstOp);
+        if (on.Ref - f.FirstBlock != h) return false;
+        from = l;
+    }
+    if (on.NArgs != 1 || m.Arg(on.Args) != j) return false;
+    List<u32> inside = List<u32>.New();
+    inside.Push(h);
+    inside.Push(body);
+    inside.Push(from);
+    if (!WdOutside(m, f, len, inside) || !WdOutside(m, f, ptr, inside)) return false;
+    w.Kind = WIDE_FIND_BACK;
+    w.Idx = 0;
+    w.Ptr = ptr;
+    w.Len = len;
+    w.Key = key & 0xFF;
+    w.OnEqual = q.Op == WD_EQ;
+    back = from;
+    return true;
+}
+
+// `bounds u64 i, len; p = elemaddr u8 ptr, i; b = load u8 p` from instruction at; moves
+// at past them.
+bool WdAccess(in Module m, in EBlock bb, u32 i, ref u32 at, ref u32 len, ref u32 ptr, ref u32 byte) {
+    if (at + 3 >= bb.FirstInst + bb.NInsts) return false;
+    EInst bc = m.Inst(at);
+    if (bc.Op != WD_BOUNDS || bc.Ty != ET_U64 || bc.NOps != 2 || !WdOpIs(m, bc.FirstOp, i) || !WdValueOp(m, bc.FirstOp + 1, ref len)) return false;
+    EInst ea = m.Inst(at + 1);
+    if (ea.Op != WD_ELEM || ea.Ty != ET_U8 || ea.NOps != 2 || !WdValueOp(m, ea.FirstOp, ref ptr) || !WdOpIs(m, ea.FirstOp + 1, i)) return false;
+    EInst ld = m.Inst(at + 2);
+    if (ld.Op != WD_LOAD || ld.Ty != ET_U8 || ld.NOps != 1 || !WdOpIs(m, ld.FirstOp, ea.Result)) return false;
+    byte = ld.Result;
+    at = at + 3;
+    return true;
+}
+
+// Is instruction ti `condbr cond, body, ...` with no arguments to body? Sets body.
+bool WdCondTo(in Module m, in EFunc f, u32 ti, u32 cond, ref u32 body) {
+    EInst t = m.Inst(ti);
+    if (t.Op != WD_CONDBR || t.NOps != 3 || !WdOpIs(m, t.FirstOp, cond)) return false;
+    EOp tt = m.Op(t.FirstOp + 1);
+    if (tt.Kind != OK_TARGET || tt.NArgs != 0) return false;
+    body = tt.Ref - f.FirstBlock;
+    return true;
+}
+
+bool WdOpIs(in Module m, u32 o, u32 v) {
+    EOp op = m.Op(o);
+    return op.Kind == OK_VALUE && op.Ref == v;
+}
+
+bool WdValueOp(in Module m, u32 o, ref u32 v) {
+    EOp op = m.Op(o);
+    if (op.Kind != OK_VALUE) return false;
+    v = op.Ref;
+    return true;
+}
+
+// Is operand o a constant (written, or a `const`)? Sets v.
+bool WdConstOp(in Module m, u32 o, ref u64 v) {
+    EOp op = m.Op(o);
+    if (op.Kind == OK_INT) {
+        v = op.Int;
+        return true;
+    }
+    if (op.Kind != OK_VALUE) return false;
+    u32 di = m.Val(op.Ref).Inst;
+    if (di == 0 || m.Inst(di).Op != WD_CONST) return false;
+    v = m.Inst(di).Imm;
+    return true;
+}
+
+bool WdIsOne(in Module m, u32 o) {
+    u64 v = 0;
+    return WdConstOp(m, o, ref v) && v == 1;
+}
+
+// Is value v defined in none of the blocks in (relative)?
+bool WdOutside(in Module m, in EFunc f, u32 v, in List<u32> blocks) {
+    u32 b = m.Val(v).Block - f.FirstBlock;
+    for (usize k = 0; k < blocks.Len(); k++) {
+        if (blocks.Get(k) == b) return false;
+    }
+    return true;
+}
+
+// Appends `op ty a, b` (or a constant imm) to block blk and returns its value.
+u32 WdEmit(ref Module m, u32 blk, u16 op, u32 ty, u64 imm, u32 a, u32 b) {
+    u32 v = m.Vals.Len() as u32;
+    u32 firstOp = m.Ops.Len() as u32;
+    u32 n = 0;
+    if (a != NONE) {
+        m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = a, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+        n++;
+    }
+    if (b != NONE) {
+        m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = b, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+        n++;
+    }
+    u32 rty = ty;
+    if (op >= WD_EQ && op <= WD_GE) rty = ET_BOOL;
+    if (op == WD_ELEM) rty = ET_PTR;
+    m.Insts.Push(new EInst { Op = op, Ty = ty, Ty2 = 0, Result = v, FirstOp = firstOp, NOps = n, Block = blk, Imm = imm, Str = TextOf(""), Pos = 0, Src = 0 });
+    m.Vals.Push(new EVal { Type = rty, Block = blk, Inst = m.Insts.Len() as u32 - 1, Pos = 0 });
+    return v;
+}
+
+u32 WdEmitConv(ref Module m, u32 blk, u16 op, u32 from, u32 to, u32 a) {
+    u32 v = m.Vals.Len() as u32;
+    u32 firstOp = m.Ops.Len() as u32;
+    m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = a, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+    m.Insts.Push(new EInst { Op = op, Ty = from, Ty2 = to, Result = v, FirstOp = firstOp, NOps = 1, Block = blk, Imm = 0, Str = TextOf(""), Pos = 0, Src = 0 });
+    m.Vals.Push(new EVal { Type = to, Block = blk, Inst = m.Insts.Len() as u32 - 1, Pos = 0 });
+    return v;
+}
+
+// `condbr cond, yes, no(args)` (yes takes none).
+void WdCondBr(ref Module m, u32 blk, u32 cond, u32 yes, u32 no, in List<u32> args) {
+    u32 firstOp = m.Ops.Len() as u32;
+    m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = cond, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+    m.Ops.Push(new EOp { Kind = OK_TARGET, Ref = yes, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+    u32 a0 = m.Args.Len() as u32;
+    for (usize k = 0; k < args.Len(); k++) m.Args.Push(args.Get(k));
+    m.Ops.Push(new EOp { Kind = OK_TARGET, Ref = no, Int = 0, Str = TextOf(""), Args = a0, NArgs = args.Len() as u32, Pos = 0 });
+    m.Insts.Push(new EInst { Op = WD_CONDBR, Ty = 0, Ty2 = 0, Result = 0, FirstOp = firstOp, NOps = 3, Block = blk, Imm = 0, Str = TextOf(""), Pos = 0, Src = 0 });
+}
+
+// `condbr cond, yes(yesArgs), no(noArgs)`.
+void WdCondBr2(ref Module m, u32 blk, u32 cond, u32 yes, in List<u32> yesArgs, u32 no, in List<u32> noArgs) {
+    u32 firstOp = m.Ops.Len() as u32;
+    m.Ops.Push(new EOp { Kind = OK_VALUE, Ref = cond, Int = 0, Str = TextOf(""), Args = 0, NArgs = 0, Pos = 0 });
+    u32 a0 = m.Args.Len() as u32;
+    for (usize k = 0; k < yesArgs.Len(); k++) m.Args.Push(yesArgs.Get(k));
+    m.Ops.Push(new EOp { Kind = OK_TARGET, Ref = yes, Int = 0, Str = TextOf(""), Args = a0, NArgs = yesArgs.Len() as u32, Pos = 0 });
+    u32 a1 = m.Args.Len() as u32;
+    for (usize k = 0; k < noArgs.Len(); k++) m.Args.Push(noArgs.Get(k));
+    m.Ops.Push(new EOp { Kind = OK_TARGET, Ref = no, Int = 0, Str = TextOf(""), Args = a1, NArgs = noArgs.Len() as u32, Pos = 0 });
+    m.Insts.Push(new EInst { Op = WD_CONDBR, Ty = 0, Ty2 = 0, Result = 0, FirstOp = firstOp, NOps = 3, Block = blk, Imm = 0, Str = TextOf(""), Pos = 0, Src = 0 });
+}
+
+void WdBr(ref Module m, u32 blk, u32 to, in List<u32> args) {
+    u32 firstOp = m.Ops.Len() as u32;
+    u32 a0 = m.Args.Len() as u32;
+    for (usize k = 0; k < args.Len(); k++) m.Args.Push(args.Get(k));
+    m.Ops.Push(new EOp { Kind = OK_TARGET, Ref = to, Int = 0, Str = TextOf(""), Args = a0, NArgs = args.Len() as u32, Pos = 0 });
+    m.Insts.Push(new EInst { Op = WD_BR, Ty = 0, Ty2 = 0, Result = 0, FirstOp = firstOp, NOps = 1, Block = blk, Imm = 0, Str = TextOf(""), Pos = 0, Src = 0 });
+}

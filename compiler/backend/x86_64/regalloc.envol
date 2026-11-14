@@ -50,7 +50,7 @@ u32 ArgRegIndex(u32 k) {
 // defined), after the instruction at cs reads it? Then
 // a value living only there can share a's register: a's later uses are on paths that do
 // not pass through it. The instruction at cs may read a only as the first operand of an
-// add, sub, and, or or xor (which reads it before writing the result), and with strict,
+// add, sub, mul, and, or or xor (which reads it before writing the result), and with strict,
 // not at all.
 bool DeadThrough(in Module m, in EFunc f, u32 a, u32 cur, u32 cs, u32 ce, in List<u32> posBlock, in List<u32> posInst, in List<u32> bstart, in BitSets live, in BitSets liveOut, in BitSets defs, bool strict) {
     u32 cb = posBlock.Get(cs as usize);
@@ -288,7 +288,7 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 u32 v = inst.Result - f.FirstValue;
                 weight.Set(v as usize, weight.Get(v as usize) + wt);
                 u16 iop = inst.Op;
-                if ((iop == 5 || iop == 6 || iop == 8 || iop == 9 || iop == 14 || iop == 15 || iop == 16) && inst.NOps == 2 && m.Op(inst.FirstOp).Kind == OK_VALUE && !m.IsFloat(inst.Ty)) {
+                if ((iop == 5 || iop == 6 || iop == 7 || iop == 8 || iop == 9 || iop == 14 || iop == 15 || iop == 16) && inst.NOps == 2 && m.Op(inst.FirstOp).Kind == OK_VALUE && !m.IsFloat(inst.Ty)) {
                     op0.Set(v as usize, m.Op(inst.FirstOp).Ref - f.FirstValue);
                 }
                 defs.Add(bi, v);

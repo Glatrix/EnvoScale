@@ -14,7 +14,8 @@ The order: locals become values; arguments to functions that write no memory are
 without a copy; a temporary copied whole into a variable becomes the variable; every function is simplified once (and its common subexpressions merged), so a
 callee is measured at its real size; small functions are
 inlined; aggregate locals are split into scalars; locals become values again; then per function simplification, jump threading,
-common subexpressions, loop-invariant loads, checks that cannot fail, and block layout.
+common subexpressions, loop-invariant loads, checks that cannot fail, byte loops that take
+eight bytes a step, and block layout.
 
 ## `inline.envol`: inlining
 
@@ -130,6 +131,20 @@ compare, or its opposite, for integers) becomes a plain branch, and a `bounds` c
 of an index that a dominating unsigned `i < n` already bounds goes. Field and element
 addresses get value numbers, so loads through them match, but stay in place: the backend
 folds each into the one load or store after it.
+
+## `wide.envol`: byte loops, eight bytes a step
+
+Two loop shapes over the bytes of a `str` or slice, as the earlier passes leave them (the
+pointer and length hoisted): a count, `for (i = a; i < end; i++) if (s[i] & M == K) n++`
+(or `!= K`, with or without the mask), and a search back, `while (i > 0 && s[i - 1] != K)
+i--` (or `== K`). `diag.Column` has one of each. A loop goes in front of each: while the
+next eight bytes lie below both the loop's bound and the string's length, it loads them as
+one `u64` and works on all eight with word arithmetic: the bytes equal to K are the zero
+bytes of `x ^ K * 0x0101..`, and a byte of `z` is zero exactly when the top bit of
+`((z & 0x7F..) + 0x7F..) | z` is clear, so their number is a shift and a multiply away;
+the search moves back eight when no byte is K. Then the original loop does the rest from
+where that one stopped, so an index past the end still panics where it did, and a count
+that overflows still does.
 
 ## `layout.envol`: block order
 

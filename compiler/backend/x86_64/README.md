@@ -65,7 +65,7 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   uses, weighted by 8 for each loop around them) is the one that stays there. rax, rcx,
   rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed
-  to a parameter takes the parameter's, and the result of an add, sub, `and`, `or` or
+  to a parameter takes the parameter's, and the result of an add, sub, mul, `and`, `or` or
   `xor` takes its first operand's when that operand dies there, if each is free. A
   value may also share a register with one that is dead all through the value's interval
   (block liveness says no path from there reaches a use), which removes the copy of a

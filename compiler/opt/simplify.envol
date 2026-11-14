@@ -754,6 +754,7 @@ public void Optimize(ref Module m) {
         if (CseFunc(ref m, fi)) SimplifyFunc(ref m, fi);
         HoistLoads(ref m, fi);
         DropChecks(ref m, fi);
+        WidenByteLoops(ref m, fi);
         LayoutFunc(ref m, fi);
     }
 }
