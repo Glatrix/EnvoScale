@@ -1864,6 +1864,48 @@ void AppendHex(ref string b, u64 v) {
     }
 }
 
+// The functions a program can reach: from the entry point's (__rt_init, __main, __rt_exit),
+// the panic stubs' __rt_trap and the functions data points to, through every call and
+// function address in a function reached.
+List<bool> LiveFuncs(in Module m) {
+    u32 nf = m.Funcs.Len() as u32;
+    List<bool> live = List<bool>.New();
+    for (u32 i = 0; i < nf; i++) live.Push(false);
+    List<u32> work = List<u32>.New();
+    List<str> roots = List<str>.New();
+    roots.Push("__rt_init");
+    roots.Push("__main");
+    roots.Push("__rt_exit");
+    roots.Push("__rt_trap");
+    for (usize r = 0; r < roots.Len(); r++) {
+        u64? named = m.Names.Get(roots.Get(r));
+        if (named.IsSome() && named.Unwrap() >> 32 == NAME_FUNC) work.Push((named.Unwrap() & 0xFFFFFFFF) as u32);
+    }
+    for (usize k = 0; k < m.Inits.Len(); k++) {
+        EInit init = m.Inits.AsSlice()[k];
+        if (init.Kind != EI_ADDR) continue;
+        u64? named = m.Names.Get(TextStr(init.Bytes));
+        if (named.IsSome() && named.Unwrap() >> 32 == NAME_FUNC) work.Push((named.Unwrap() & 0xFFFFFFFF) as u32);
+    }
+    while (work.Len() > 0) {
+        u32 fi = work.Pop().Unwrap();
+        if (fi == 0 || fi >= nf || live.Get(fi as usize)) continue;
+        live.Set(fi as usize, true);
+        EFunc f = m.Func(fi);
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                if (inst.Op == OP_CALL || inst.Op == 2) {
+                    EOp rf = m.Op(inst.FirstOp);
+                    if (inst.Op == OP_CALL || rf.Int == NAME_FUNC) work.Push(rf.Ref);
+                }
+            }
+        }
+    }
+    return live;
+}
+
 // opt: -O2 code (registers and rematerialization) instead of -O0's. map, if wanted, gets
 // a link map: each function's address and name, one per line, in address order.
 public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref string map) {
@@ -1916,7 +1958,11 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
     u32 exitFn = g.FuncLabels.Get(g.FuncNamed(m, "__rt_exit") as usize);
     g.A.CallLabel(exitFn);
     g.A.Ud2();
-    for (u32 i = 1; i < m.Funcs.Len() as u32; i++) g.Func(ref m, i);
+    // only the functions something can reach: inlining leaves many with no caller
+    List<bool> live = LiveFuncs(m);
+    for (u32 i = 1; i < m.Funcs.Len() as u32; i++) {
+        if (live.Get(i as usize)) g.Func(ref m, i);
+    }
     // the panic stubs: __rt_trap(reason)
     u32 trap = g.FuncLabels.Get(g.FuncNamed(m, "__rt_trap") as usize);
     for (u64 r = 0; r < PANIC_COUNT; r++) {
@@ -1948,6 +1994,7 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         u64 section = ELF_HEADERS;      // from the load address (position-independent)
         if (target == TARGET_WINDOWS) section = IMAGE_BASE + PE_SECTION_RVA;
         for (u32 i = 1; i < m.Funcs.Len() as u32; i++) {
+            if (!live.Get(i as usize)) continue;
             AppendHex(ref map, section + g.A.LabelOffset(g.FuncLabels.Get(i as usize), 0));
             map.AppendByte(' ');
             map.Append(TextStr(m.Func(i).Name));

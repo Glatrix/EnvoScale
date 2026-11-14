@@ -86,6 +86,10 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   becomes such a copy.
 - **Compact frames.** Only values that got no register (and are not recomputed) have a
   stack slot, so frames are small and most offsets fit a byte.
+- **Reachable functions only.** A function is emitted only if the entry point's calls
+  (`__rt_init`, `__main`, `__rt_exit`), the panic stubs' `__rt_trap` or data can reach it
+  through calls and function addresses: inlining leaves many with no caller (in envoc
+  itself, 670 of 1,554, 5% of the code).
 - **No frame pointer.** The frame is addressed from rsp, so rbp is one more callee-saved
   register. Offsets are worked out from where rbp would be (the return address - 8) and
   moved to rsp's view, also while a call's stack arguments are reserved. The values'
