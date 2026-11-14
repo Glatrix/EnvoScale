@@ -1032,6 +1032,9 @@ struct Gen {
                 u8 ra = this.InReg(m, f + first + k, RAX);
                 this.A.Store(RSP, (8 * (k - NARGREGS)) as i32, ra, 8);
             }
+            // an argument may sit in an argument register: the target goes to rax first
+            // (the moves below use r11 only)
+            if (sh == SH_CALLIND) this.LoadOp(m, RAX, f + n - 1);
             List<u32> dst = List<u32>.New();
             List<u32> src = List<u32>.New();
             for (u32 k = 0; k < count && k < NARGREGS; k++) {
@@ -1045,12 +1048,8 @@ struct Gen {
                 EOp a = m.Op(f + first + k);
                 if (a.Kind != OK_VALUE) this.LoadOp(m, ArgReg(k), f + first + k);
             }
-            if (sh == SH_CALL) {
-                this.A.CallLabel(this.FuncLabels.Get(m.Op(f).Ref as usize));
-            } else {
-                this.LoadOp(m, RAX, f + n - 1);
-                this.A.CallR(RAX);
-            }
+            if (sh == SH_CALL) this.A.CallLabel(this.FuncLabels.Get(m.Op(f).Ref as usize));
+            else this.A.CallR(RAX);
             if (reserve > 0) this.A.AluImm(0, RSP, reserve);
             if (inst.Result != 0) this.StoreV(inst.Result, RAX);
         } else if (sh == SH_CALL || sh == SH_CALLIND) {
@@ -1346,8 +1345,21 @@ struct Gen {
             regs[3] = R10;
             regs[4] = R8;
             regs[5] = R9;
-            for (u32 k = 1; k < n; k++) this.LoadOp(m, regs[k - 1], f + k);
-            this.LoadOp(m, RAX, f);
+            // all at once: an operand may sit in another's register
+            List<u32> dst = List<u32>.New();
+            List<u32> src = List<u32>.New();
+            for (u32 k = 0; k < n; k++) {
+                EOp a = m.Op(f + k);
+                if (a.Kind != OK_VALUE || !this.Opt) continue;
+                if (k == 0) dst.Push(RAX as u32);
+                else dst.Push(regs[k - 1] as u32);
+                src.Push(a.Ref);
+            }
+            if (this.Opt) this.Resolve(dst, ref src);
+            for (u32 k = 1; k < n; k++) {
+                if (m.Op(f + k).Kind != OK_VALUE || !this.Opt) this.LoadOp(m, regs[k - 1], f + k);
+            }
+            if (m.Op(f).Kind != OK_VALUE || !this.Opt) this.LoadOp(m, RAX, f);
             this.A.Syscall();
         } else if (TextIs(inst.Str, "wincall") || TextIs(inst.Str, "wincallp")) {
             if (this.Target != TARGET_WINDOWS) Bug("x64: wincall on a non-Windows target");
@@ -1357,17 +1369,6 @@ struct Gen {
             if (args > 4) stackArgs = args - 4;
             i32 reserve = ((32 + 8 * stackArgs + 15) & ~15) as i32;
             this.A.AluImm(5, RSP, reserve);
-            if (viaPointer) {
-                // the function pointer, in r10 (not an argument register)
-                this.LoadOp(m, R10, f);
-            } else {
-                // the import's IAT slot: iat + 8 * k, in r10 (not an argument register)
-                this.A.LeaLabel(R10, this.Imports.Iat);
-                this.LoadOp(m, R11, f);
-                this.A.MovRI(RAX, 8);
-                this.A.ImulRR(R11, RAX);
-                this.A.Alu(ALU_ADD, R10, R11);
-            }
             for (u32 k = 4; k < args; k++) {
                 this.LoadOp(m, RAX, f + 1 + k);
                 this.A.Store(RSP, (32 + 8 * (k - 4)) as i32, RAX, 8);
@@ -1377,7 +1378,30 @@ struct Gen {
             regs[1] = RDX;
             regs[2] = R8;
             regs[3] = R9;
-            for (u32 k = 0; k < args && k < 4; k++) this.LoadOp(m, regs[k], f + 1 + k);
+            // the function pointer or import number into rax, then the register arguments
+            // all at once (an operand may sit in another's register; the moves use r11 only)
+            this.LoadOp(m, RAX, f);
+            List<u32> dst = List<u32>.New();
+            List<u32> src = List<u32>.New();
+            for (u32 k = 0; k < args && k < 4; k++) {
+                EOp a = m.Op(f + 1 + k);
+                if (a.Kind != OK_VALUE || !this.Opt) continue;
+                dst.Push(regs[k] as u32);
+                src.Push(a.Ref);
+            }
+            if (this.Opt) this.Resolve(dst, ref src);
+            for (u32 k = 0; k < args && k < 4; k++) {
+                if (m.Op(f + 1 + k).Kind != OK_VALUE || !this.Opt) this.LoadOp(m, regs[k], f + 1 + k);
+            }
+            if (viaPointer) {
+                // the function pointer, in r10 (not an argument register)
+                this.A.MovRR(R10, RAX);
+            } else {
+                // the import's IAT slot: iat + 8 * k, in r10 (not an argument register)
+                this.A.LeaLabel(R10, this.Imports.Iat);
+                this.A.ShiftImm(4, RAX, 3);
+                this.A.Alu(ALU_ADD, R10, RAX);
+            }
             if (viaPointer) this.A.CallR(R10);
             else this.A.CallMem(R10);
             this.A.AluImm(0, RSP, reserve);
@@ -1510,7 +1534,7 @@ struct Gen {
         // values are read from their slots
         List<u8> regs = List<u8>.New();
         for (usize j = lo; j < e; j++) {
-            u32 k = this.KeepVal.Get(j) & ~KEEP_NO_LOAD;
+            u32 k = this.KeepVal.Get(j);
             u8 r = this.Regs.Get(k as usize);
             regs.Push(r);
             this.A.Store(RBP, this.VOff(this.FirstValue + k), r, 8);
@@ -1518,10 +1542,10 @@ struct Gen {
         }
         this.Inst(m, i);
         for (usize j = lo; j < e; j++) {
-            u32 k = this.KeepVal.Get(j) & ~KEEP_NO_LOAD;
+            u32 k = this.KeepVal.Get(j);
             u8 r = regs.Get(j - lo);
             this.Regs.Set(k as usize, r);
-            if (this.KeepVal.Get(j) & KEEP_NO_LOAD == 0) this.A.Load(r, RBP, this.VOff(this.FirstValue + k), 8, false);
+            this.A.Load(r, RBP, this.VOff(this.FirstValue + k), 8, false);
         }
     }
 
@@ -1655,7 +1679,7 @@ struct Gen {
         // values kept in a register across calls have a stack slot too
         List<bool> slotToo = List<bool>.New();
         for (u32 k = 0; k < f.NValues; k++) slotToo.Push(false);
-        for (usize j = 0; j < this.KeepVal.Len(); j++) slotToo.Set((this.KeepVal.Get(j) & ~KEEP_NO_LOAD) as usize, true);
+        for (usize j = 0; j < this.KeepVal.Len(); j++) slotToo.Set(this.KeepVal.Get(j) as usize, true);
         u32 n = 0;
         for (u32 r = 0; r < this.Saved.Len() as u32 && r < NSAVED; r++) {
             if (this.Saved.Get(r as usize)) n++;

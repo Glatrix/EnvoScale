@@ -10,8 +10,8 @@ verifier runs after them, and every pass is deterministic.
 `envoc eir-check <file.eir> -O2` runs them on EIR text and prints the result; the goldens
 in `tests/golden/opt/` use it.
 
-The order: locals become values; a temporary copied whole into a variable becomes the
-variable; every function is simplified once (and its common subexpressions merged), so a
+The order: locals become values; arguments to functions that write no memory are passed
+without a copy; a temporary copied whole into a variable becomes the variable; every function is simplified once (and its common subexpressions merged), so a
 callee is measured at its real size; small functions are
 inlined; aggregate locals are split into scalars; locals become values again; then per function simplification, jump threading,
 common subexpressions, loop-invariant loads, checks that cannot fail, and block layout.
@@ -46,6 +46,15 @@ only by that copy right after, and the variable is used only where the copy has 
 variable's uses take the temporary and the copy goes. It runs before the first CSE, while
 the temporary still has just those two uses, so the struct is copied once and the later
 passes see one local.
+
+## `args.envol`: arguments passed without a copy
+
+An aggregate argument is passed as a pointer to a copy the callee owns. A function that
+writes no memory but its own slots (calling only such functions, or a panic, which ends
+the program) cannot change the original while it runs, so a call to one passes the
+original's address: the copy, made in the same block with nothing that writes memory
+between it and the call, goes. `Same(a, b)` and the other helpers that take a `str` then
+copy nothing.
 
 ## `thread.envol`: jump threading
 

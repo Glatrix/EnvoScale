@@ -1,0 +1,169 @@
+// -O2: an aggregate argument is passed as a pointer to a copy the callee owns. When the
+// callee writes no memory but its own locals (Same, Hash: most helpers that take a `str`),
+// nothing can change the original during the call, so the caller passes the original's
+// address and makes no copy.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 AC_STORE = 43;
+const u16 AC_COPY = 47;
+const u16 AC_ZERO = 48;
+const u16 AC_CALL = 52;
+const u16 AC_CALLIND = 53;
+const u16 AC_INTRINSIC = 54;
+const u16 AC_SLOTEND = 4;
+
+public void ElideArgCopies(ref Module m) {
+    u32 nf = m.Funcs.Len() as u32;
+    List<bool> ro = ReadOnlyFuncs(m);
+    for (u32 fi = 1; fi < nf; fi++) {
+        if (!m.Func(fi).Extern) ElideInFunc(ref m, fi, ro);
+    }
+}
+
+// Per function: does it write no memory but its own slots (a call to one that panics
+// aside: the program ends there)? Found by elimination, so recursion is allowed.
+List<bool> ReadOnlyFuncs(in Module m) {
+    u32 nf = m.Funcs.Len() as u32;
+    List<bool> ro = List<bool>.New();
+    for (u32 fi = 0; fi < nf; fi++) {
+        EFunc f = m.Func(fi);
+        ro.Push(fi != 0 && !f.Extern && f.NBlocks > 0);
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (u32 fi = 1; fi < nf; fi++) {
+            if (!ro.Get(fi as usize)) continue;
+            if (!WritesOnlyLocals(m, fi, ro)) {
+                ro.Set(fi as usize, false);
+                changed = true;
+            }
+        }
+    }
+    // the panics end the program: calling them leaves memory as it was, for all that
+    // follows
+    for (u32 fi = 1; fi < nf; fi++) {
+        if (IsPanicFunc(m, fi)) ro.Set(fi as usize, true);
+    }
+    return ro;
+}
+
+bool IsPanicFunc(in Module m, u32 fi) {
+    Text name = m.Func(fi).Name;
+    return TextIs(name, "__rt_panic_lit") || TextIs(name, "__rt_panic") || TextIs(name, "__rt_trap");
+}
+
+bool WritesOnlyLocals(in Module m, u32 fi, in List<bool> ro) {
+    EFunc f = m.Func(fi);
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            u16 op = inst.Op;
+            if (op == AC_CALLIND || op == AC_INTRINSIC) return false;
+            if (op == AC_CALL) {
+                u32 c = m.Op(inst.FirstOp).Ref;
+                if (!ro.Get(c as usize) && !IsPanicFunc(m, c)) return false;
+            } else if (op == AC_STORE) {
+                if (!LocalAddr(m, inst.FirstOp + 1)) return false;
+            } else if (op == AC_COPY || op == AC_ZERO) {
+                if (!LocalAddr(m, inst.FirstOp)) return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Is operand o an address inside one of the function's own slots?
+bool LocalAddr(in Module m, u32 o) {
+    EOp op = m.Op(o);
+    if (op.Kind != OK_VALUE) return false;
+    u32 v = op.Ref;
+    for (u32 guard = 0; guard < 64; guard++) {
+        u32 di = m.Val(v).Inst;
+        if (di == 0) return false;
+        EInst d = m.Inst(di);
+        if (d.Op == OP_SLOT) return true;
+        if ((d.Op != 44 && d.Op != 45 && d.Op != 46) || d.NOps == 0) return false;
+        EOp from = m.Op(d.FirstOp);
+        if (from.Kind != OK_VALUE) return false;
+        v = from.Ref;
+    }
+    return false;
+}
+
+void ElideInFunc(ref Module m, u32 fi, in List<bool> ro) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    // per value: the operands that use it (slot.end aside)
+    List<u32> nuse = List<u32>.New();
+    for (u32 k = 0; k < nv; k++) nuse.Push(0);
+    bool calls = false;
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op == AC_CALL) calls = true;
+            if (inst.Op == AC_SLOTEND) continue;
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) {
+                    u32 k = op.Ref - f.FirstValue;
+                    if (k < nv) nuse.Set(k as usize, nuse.Get(k as usize) + 1);
+                } else if (op.Kind == OK_TARGET) {
+                    // passed to a block: never elided
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        u32 k = m.Arg(op.Args + a) - f.FirstValue;
+                        if (k < nv) nuse.Set(k as usize, nuse.Get(k as usize) + 100);
+                    }
+                }
+            }
+        }
+    }
+    if (!calls) return;
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst call = m.Inst(i);
+            if (call.Op != AC_CALL) continue;
+            u32 c = m.Op(call.FirstOp).Ref;
+            if (!ro.Get(c as usize) || IsPanicFunc(m, c)) continue;
+            u32 first = call.FirstOp + 1;
+            if (call.Imm == 1) first++;         // the result's storage is written
+            for (u32 o = first; o < call.FirstOp + call.NOps; o++) {
+                EOp arg = m.Op(o);
+                if (arg.Kind != OK_VALUE) continue;
+                u32 t = arg.Ref - f.FirstValue;
+                if (t >= nv || nuse.Get(t as usize) != 2) continue;
+                u32 ti = m.Val(arg.Ref).Inst;
+                if (ti == 0 || m.Inst(ti).Op != OP_SLOT) continue;
+                u64 size = m.Ty(m.Inst(ti).Ty).Size as u64;
+                // the copy into it: earlier in this block, nothing that writes memory between
+                u32 j = i;
+                u32 found = NONE;
+                bool blocked = false;
+                while (j > blk.FirstInst && found == NONE && !blocked) {
+                    j--;
+                    EInst x = m.Inst(j);
+                    if (x.Op == AC_COPY && x.NOps == 3 && m.Op(x.FirstOp).Kind == OK_VALUE && m.Op(x.FirstOp).Ref == arg.Ref) {
+                        if (m.Op(x.FirstOp + 1).Kind == OK_VALUE && WholeSize(m, x.FirstOp + 2, size)) found = j;
+                        else blocked = true;
+                    } else if (x.Op == AC_STORE || x.Op == AC_COPY || x.Op == AC_ZERO || x.Op == AC_CALL || x.Op == AC_CALLIND || x.Op == AC_INTRINSIC) {
+                        blocked = true;
+                    }
+                }
+                if (found == NONE) continue;
+                EInst cp = m.Inst(found);
+                arg.Ref = m.Op(cp.FirstOp + 1).Ref;
+                m.Ops.Set(o as usize, arg);
+                cp.Op = 0;
+                cp.NOps = 0;
+                m.Insts.Set(found as usize, cp);
+                nuse.Set(t as usize, 0);
+            }
+        }
+    }
+}

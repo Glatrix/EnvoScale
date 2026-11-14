@@ -52,13 +52,16 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **Registers.** Linear scan over one interval per value (definition to last use,
   widened to every block where liveness says the value is live). rbx and r12-r15 are
   callee-saved and go to any value (a function pushes the ones it uses after rbp); rsi,
-  rdi and r8-r10 go only to values whose interval holds no call or system call (and rsi
-  and rdi no copy or fill), and need no saving. A value that crosses calls and finds no
-  callee-saved register may still take one of those when storing it to its slot before
-  each call it lives through and loading it after costs less than keeping it in memory;
-  a call alone on one arm of a branch (a list or string growing) counts 1/8. While such a
-  call sets up its arguments, it reads those values from their slots. A value that gets
-  no register keeps its stack slot. When registers run out, the value that would cost least in memory (its
+  rdi and r8-r10 go only to values that live across no call or system call (liveness at
+  each call says which do, so a value whose interval only spans a call it is dead at, or
+  that a call takes as an argument, may have one; and whose interval holds no copy or
+  fill that uses rsi and rdi), and need no saving. A call or system call moves its
+  register arguments all at once, so an argument may sit in another's register. After
+  the scan, a value left in memory that lives across calls on one arm of a branch only (a
+  list or string growing, an error path) takes a caller-saved register that is free over
+  its whole interval, when storing it to its slot before each of those calls and loading
+  it after costs less than memory; while such a call sets up its arguments, it reads the
+  value from the slot. A value that gets no register keeps its stack slot. When registers run out, the value that would cost least in memory (its
   uses, weighted by 8 for each loop around them) is the one that stays there. rax, rcx,
   rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed
