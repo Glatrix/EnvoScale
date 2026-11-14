@@ -53,8 +53,12 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   widened to every block where liveness says the value is live). rbx and r12-r15 are
   callee-saved and go to any value (a function pushes the ones it uses after rbp); rsi,
   rdi and r8-r10 go only to values whose interval holds no call or system call (and rsi
-  and rdi no copy or fill), and need no saving. A value that gets no register keeps its
-  stack slot. When registers run out, the value that would cost least in memory (its
+  and rdi no copy or fill), and need no saving. A value that crosses calls and finds no
+  callee-saved register may still take one of those when storing it to its slot before
+  each call it lives through and loading it after costs less than keeping it in memory;
+  a call alone on one arm of a branch (a list or string growing) counts 1/8. While such a
+  call sets up its arguments, it reads those values from their slots. A value that gets
+  no register keeps its stack slot. When registers run out, the value that would cost least in memory (its
   uses, weighted by 8 for each loop around them) is the one that stays there. rax, rcx,
   rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed

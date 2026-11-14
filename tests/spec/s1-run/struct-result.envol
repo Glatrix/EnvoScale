@@ -1,0 +1,39 @@
+// A struct a call returns, kept in a variable, is the variable's own copy: changing the
+// list it came from, or the variable, changes nothing else, on every pass of a loop.
+// expect: total 250
+// expect: list 100 100 100 100 100
+// expect: copies 8 0
+struct Big {
+    u32 A;
+    u32 B;
+    u32 C;
+    u32 D;
+    u32 E;
+    u32 F;
+    u32 G;
+    u32 H;
+    u32 I;
+    u32 J;
+}
+
+Big Make(u32 i) => new Big { A = i, B = i + 1, C = i + 2, D = i + 3, E = i + 4, F = i + 5, G = i + 6, H = i + 7, I = i + 8, J = i + 9 };
+
+List<Big> xs = List<Big>.New();
+for (u32 i = 0; i < 5; i++) xs.Push(Make(i * 10));
+u32 total = 0;
+for (usize i = 0; i < 5; i++) {
+    Big b = xs.Get(i);
+    xs.Set(i, Make(100));
+    b.A = b.A + 1;
+    total += b.A + b.J;
+}
+if (total == 250) print("total 250"); else print("total wrong");
+bool all = true;
+for (usize i = 0; i < 5; i++) {
+    if (xs.Get(i).A != 100 || xs.Get(i).J != 109) all = false;
+}
+if (all) print("list 100 100 100 100 100"); else print("list wrong");
+Big last = Make(7);
+Big other = last;
+other.B = 0;
+if (last.B == 8 && other.B == 0) print("copies 8 0"); else print("copies wrong");

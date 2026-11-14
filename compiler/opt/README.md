@@ -10,8 +10,9 @@ verifier runs after them, and every pass is deterministic.
 `envoc eir-check <file.eir> -O2` runs them on EIR text and prints the result; the goldens
 in `tests/golden/opt/` use it.
 
-The order: locals become values; every function is simplified once (and its common
-subexpressions merged), so a callee is measured at its real size; small functions are
+The order: locals become values; a temporary copied whole into a variable becomes the
+variable; every function is simplified once (and its common subexpressions merged), so a
+callee is measured at its real size; small functions are
 inlined; aggregate locals are split into scalars; locals become values again; then per function simplification, jump threading,
 common subexpressions, loop-invariant loads, checks that cannot fail, and block layout.
 
@@ -24,9 +25,11 @@ blocks and at most 16 instructions in all splits the caller's block: the callee'
 block ends the first part, its other blocks follow, and each `ret` becomes a branch to a
 new block that holds the rest of the caller's block and takes the call's result as its
 parameter. The callee's slots move to the caller's entry block (EIR allows slots only
-there), and the copy starts by zeroing them, as a call would. One level only, in function
-order: a callee inlined into a caller that comes later is already its own inlined version.
-Recursive callees stay calls. Constants and field addresses are not counted (they become
+there), and the copy starts by zeroing them, as a call would. Callees go first (the call
+graph bottom up), so a small callee is inlined with its own small callees already in it,
+while it stays within twice the limits; which functions are small is decided on them as
+written. Recursive callees stay calls, and so do calls on a path that panics (inlining
+the panic's helpers there would only add slots for each copy to zero). Constants and field addresses are not counted (they become
 immediates and addressing modes), and blocks that panic are counted apart, up to 8
 instructions, so a bounds check does not keep a small accessor from being inlined.
 `panic("text")` lowers to a call of `__rt_panic_lit` with the text's address and length,
@@ -34,6 +37,15 @@ so a panic path needs no slots.
 
 Most of these calls are accessors (`NodeAt`, `SymAt`, `Len`) and a call costs more than
 their body.
+
+## `merge.envol`: temporaries that become variables
+
+`Node n = list.Get(i);` writes the call's result into a temporary and copies it into `n`.
+When the temporary is written whole by one instruction (the call, a copy or a zero), read
+only by that copy right after, and the variable is used only where the copy has run, the
+variable's uses take the temporary and the copy goes. It runs before the first CSE, while
+the temporary still has just those two uses, so the struct is copied once and the later
+passes see one local.
 
 ## `thread.envol`: jump threading
 

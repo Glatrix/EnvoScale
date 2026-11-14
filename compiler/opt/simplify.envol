@@ -739,6 +739,7 @@ public void Optimize(ref Module m) {
     // cleaned up first, a callee is inlined at its real size
     for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
         if (m.Func(fi).Extern) continue;
+        MergeSlots(ref m, fi);
         SimplifyFunc(ref m, fi);
         if (CseFunc(ref m, fi)) SimplifyFunc(ref m, fi);
     }

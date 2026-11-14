@@ -1,0 +1,174 @@
+// -O2: a local that receives a result and is copied whole into a variable right after
+// (`Node n = list.Get(i);` writes the result into a temporary, then copies it) becomes the
+// variable itself: the copy goes, and the variable's reads read the temporary. Then the
+// struct is copied once, and splitting and load forwarding see one local, not two.
+namespace envoc.opt;
+
+use envoc.util;
+use envoc.eir;
+
+const u16 MG_SLOTEND = 4;
+const u16 MG_COPY = 47;
+const u16 MG_ZERO = 48;
+const u16 MG_CALL = 52;
+
+// Merges such pairs in function fi; true if any.
+bool MergeSlots(ref Module m, u32 fi) {
+    EFunc f = m.Func(fi);
+    u32 nv = f.NValues;
+    u32 nb = f.NBlocks;
+    if (nb == 0) return false;
+    // per value: how many operands use it (slot.end aside), the first two instructions
+    // using it, and whether a branch passes it
+    List<u32> nuse = List<u32>.New();
+    List<u32> use1 = List<u32>.New();
+    List<u32> use2 = List<u32>.New();
+    List<bool> passed = List<bool>.New();
+    for (u32 k = 0; k < nv; k++) {
+        nuse.Push(0);
+        use1.Push(NONE);
+        use2.Push(NONE);
+        passed.Push(false);
+    }
+    bool any = false;
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+            EInst inst = m.Inst(i);
+            if (inst.Op == MG_COPY) any = true;
+            if (inst.Op == MG_SLOTEND) continue;
+            for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                EOp op = m.Op(o);
+                if (op.Kind == OK_VALUE) {
+                    u32 k = op.Ref - f.FirstValue;
+                    if (k >= nv) continue;
+                    nuse.Set(k as usize, nuse.Get(k as usize) + 1);
+                    if (use1.Get(k as usize) == NONE) use1.Set(k as usize, i);
+                    else if (use2.Get(k as usize) == NONE) use2.Set(k as usize, i);
+                } else if (op.Kind == OK_TARGET) {
+                    for (u32 a = 0; a < op.NArgs; a++) {
+                        u32 k = m.Arg(op.Args + a) - f.FirstValue;
+                        if (k < nv) passed.Set(k as usize, true);
+                    }
+                }
+            }
+        }
+    }
+    if (!any) return false;
+    Cfg g = BuildCfg(m, f);
+    bool changed = false;
+    for (u32 b = 0; b < nb; b++) {
+        EBlock blk = m.Block(f.FirstBlock + b);
+        for (u32 c = blk.FirstInst; c < blk.FirstInst + blk.NInsts; c++) {
+            EInst copy = m.Inst(c);
+            if (copy.Op != MG_COPY || copy.NOps != 3) continue;
+            EOp dop = m.Op(copy.FirstOp);
+            EOp sop = m.Op(copy.FirstOp + 1);
+            if (dop.Kind != OK_VALUE || sop.Kind != OK_VALUE) continue;
+            u32 d = dop.Ref - f.FirstValue;
+            u32 s = sop.Ref - f.FirstValue;
+            if (d >= nv || s >= nv || d == s || passed.Get(d as usize) || passed.Get(s as usize)) continue;
+            u32 di = m.Val(dop.Ref).Inst;
+            u32 si = m.Val(sop.Ref).Inst;
+            if (di == 0 || si == 0 || m.Inst(di).Op != OP_SLOT || m.Inst(si).Op != OP_SLOT) continue;
+            if (m.Inst(di).Ty != m.Inst(si).Ty) continue;
+            u64 size = m.Ty(m.Inst(si).Ty).Size as u64;
+            if (size == 0 || !WholeSize(m, copy.FirstOp + 2, size)) continue;
+            // the temporary: written whole by one instruction just before, read by the copy
+            if (nuse.Get(s as usize) != 2) continue;
+            u32 w = use1.Get(s as usize);
+            if (w == c) w = use2.Get(s as usize);
+            if (w == NONE || w >= c || w < blk.FirstInst) continue;
+            if (!WritesWhole(m, w, sop.Ref, size)) continue;
+            // nothing between them uses the variable
+            bool clear = true;
+            for (u32 i = w + 1; i < c && clear; i++) {
+                if (UsesValue(m, i, dop.Ref)) clear = false;
+            }
+            if (!clear) continue;
+            // every other use of the variable comes after the copy
+            for (u32 ub = 0; ub < nb && clear; ub++) {
+                EBlock u = m.Block(f.FirstBlock + ub);
+                bool after = ub != b && g.Dom.Has(ub, b);
+                for (u32 i = u.FirstInst; i < u.FirstInst + u.NInsts && clear; i++) {
+                    if (i == c) continue;
+                    if (!UsesValue(m, i, dop.Ref)) continue;
+                    if (ub == b && i > c) continue;
+                    if (!after) clear = false;
+                }
+            }
+            if (!clear) continue;
+            // the variable's uses take the temporary; the temporary's own slot.end goes
+            for (u32 ub = 0; ub < nb; ub++) {
+                EBlock u = m.Block(f.FirstBlock + ub);
+                for (u32 i = u.FirstInst; i < u.FirstInst + u.NInsts; i++) {
+                    if (i == c) continue;
+                    EInst inst = m.Inst(i);
+                    if (inst.Op == MG_SLOTEND && inst.NOps >= 1 && m.Op(inst.FirstOp).Kind == OK_VALUE && m.Op(inst.FirstOp).Ref == sop.Ref) {
+                        inst.Op = 0;
+                        inst.NOps = 0;
+                        m.Insts.Set(i as usize, inst);
+                        continue;
+                    }
+                    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+                        EOp op = m.Op(o);
+                        if (op.Kind == OK_VALUE && op.Ref == dop.Ref) {
+                            op.Ref = sop.Ref;
+                            m.Ops.Set(o as usize, op);
+                        }
+                    }
+                }
+            }
+            copy.Op = 0;
+            copy.NOps = 0;
+            m.Insts.Set(c as usize, copy);
+            // both are spent: the temporary now has other uses, the variable none
+            nuse.Set(s as usize, 0);
+            nuse.Set(d as usize, 0);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+// Does instruction w write all size bytes of local v: a call returning an aggregate there,
+// or a whole copy or zero into it?
+bool WritesWhole(in Module m, u32 w, u32 v, u64 size) {
+    EInst inst = m.Inst(w);
+    if (inst.Op == MG_CALL) {
+        // the hidden first argument (after the callee) receives the result
+        return inst.Imm == 1 && inst.NOps >= 2 && m.Op(inst.FirstOp + 1).Kind == OK_VALUE && m.Op(inst.FirstOp + 1).Ref == v && !UsedAfterFirst(m, w, v);
+    }
+    if (inst.Op == MG_COPY && inst.NOps == 3) {
+        return m.Op(inst.FirstOp).Kind == OK_VALUE && m.Op(inst.FirstOp).Ref == v && WholeSize(m, inst.FirstOp + 2, size);
+    }
+    if (inst.Op == MG_ZERO && inst.NOps == 2) {
+        return m.Op(inst.FirstOp).Kind == OK_VALUE && m.Op(inst.FirstOp).Ref == v && WholeSize(m, inst.FirstOp + 1, size);
+    }
+    return false;
+}
+
+// Does call w pass v again, after its result argument?
+bool UsedAfterFirst(in Module m, u32 w, u32 v) {
+    EInst inst = m.Inst(w);
+    for (u32 o = inst.FirstOp + 2; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        if (op.Kind == OK_VALUE && op.Ref == v) return true;
+    }
+    return false;
+}
+
+// Does instruction i use value v (an operand or a branch argument)?
+bool UsesValue(in Module m, u32 i, u32 v) {
+    EInst inst = m.Inst(i);
+    for (u32 o = inst.FirstOp; o < inst.FirstOp + inst.NOps; o++) {
+        EOp op = m.Op(o);
+        if (op.Kind == OK_VALUE && op.Ref == v) return true;
+        if (op.Kind == OK_TARGET) {
+            for (u32 a = 0; a < op.NArgs; a++) {
+                if (m.Arg(op.Args + a) == v) return true;
+            }
+        }
+    }
+    return false;
+}
