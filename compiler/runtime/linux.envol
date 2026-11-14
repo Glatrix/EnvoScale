@@ -61,11 +61,24 @@ void __os_close(i32 fd) {
     __syscall(3, fd as i64, 0, 0, 0, 0, 0);
 }
 
-// Zeroed, page-aligned memory, or null.
-// How many times a large block's room the heap reserves after it to grow into (mappings
-// are lazy: untouched pages cost nothing).
-const usize __OS_RESERVE = 4;
+// How many times a large block's room the heap reserves after it to grow into.
+const usize __OS_RESERVE = 64;
 
+// Address space for n bytes, a large block with room to grow, its first `usable` bytes
+// usable. Mappings are lazy (untouched pages cost nothing),
+// and MAP_NORESERVE keeps the reservation out of the overcommit accounting.
+*u8 __os_reserve(usize n, usize usable) {
+    i64 r = __syscall(9, 0, n as i64, 3, 0x4022, -1, 0);    // mmap: RW, private, anonymous, no reserve
+    unsafe {
+        if (r < 0 && r >= -4095) return 0 as usize as *u8;
+        return r as isize as *u8;
+    }
+}
+
+// Makes [p, p + n) of a reservation usable: it already is.
+bool __os_commit(*u8 p, usize n) => true;
+
+// Zeroed, page-aligned memory, or null.
 *u8 __os_pages(usize n) {
     i64 r = __syscall(9, 0, n as i64, 3, 0x22, -1, 0);    // mmap: RW, private, anonymous
     unsafe {

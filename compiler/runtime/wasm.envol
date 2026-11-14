@@ -44,11 +44,17 @@ void __os_close(i32 fd) {
     __hostcall(8, fd as i64, 0, 0, 0);
 }
 
-// Zeroed memory (new pages are), or null.
 // How many times a large block's room the heap reserves to grow into: none, since memory
 // grown here is memory taken.
 const usize __OS_RESERVE = 1;
 
+// Memory for a large block: all of it taken (there is no reserving).
+*u8 __os_reserve(usize n, usize usable) => __os_pages(n);
+
+// Makes [p, p + n) of a reservation usable: it already is.
+bool __os_commit(*u8 p, usize n) => true;
+
+// Zeroed memory (new pages are), or null.
 *u8 __os_pages(usize n) {
     i64 r = __hostcall(0, n as i64, 0, 0, 0);
     unsafe {

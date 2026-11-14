@@ -201,9 +201,30 @@ void __os_close(i32 fd) {
     __wincall(__W_CLOSEHANDLE, fd as i64, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
-// How many times a large block's room the heap reserves after it to grow into (mappings
-// are lazy: untouched pages cost nothing).
-const usize __OS_RESERVE = 4;
+// How many times a large block's room the heap reserves after it to grow into.
+const usize __OS_RESERVE = 64;
+
+// Address space for n bytes, a large block with room to grow, its first `usable` bytes
+// usable: reserved, and only those committed (the rest counts against nothing).
+*u8 __os_reserve(usize n, usize usable) {
+    i64 p = __wincall(__W_VIRTUALALLOC, 0, n as i64, 0x2000, 4, 0, 0, 0, 0, 0, 0);  // reserve, RW
+    if (p == 0) {
+        unsafe { return 0 as usize as *u8; }
+    }
+    i64 c = __wincall(__W_VIRTUALALLOC, p, usable as i64, 0x1000, 4, 0, 0, 0, 0, 0, 0);    // commit, RW
+    unsafe {
+        if (c == 0) return 0 as usize as *u8;
+        return p as isize as *u8;
+    }
+}
+
+// Makes [p, p + n) of a reservation usable (commits it; committed pages stay as they are).
+bool __os_commit(*u8 p, usize n) {
+    unsafe {
+        i64 c = __wincall(__W_VIRTUALALLOC, p as usize as i64, n as i64, 0x1000, 4, 0, 0, 0, 0, 0, 0);
+        return c != 0;
+    }
+}
 
 *u8 __os_pages(usize n) {
     i64 p = __wincall(__W_VIRTUALALLOC, 0, n as i64, 0x3000, 4, 0, 0, 0, 0, 0, 0);   // commit | reserve, RW

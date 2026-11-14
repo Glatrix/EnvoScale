@@ -202,10 +202,10 @@ void __rt_heap_chunk(usize lo, usize hi) {
             }
         }
         if (b == 0 && k == __RT_LARGE) {
-            // its own mapping, with __OS_RESERVE times the room reserved after it: untouched
-            // pages cost nothing, and `realloc` grows the block there without copying
+            // its own mapping, with __OS_RESERVE times the room reserved after it (only the
+            // room usable yet), so `realloc` grows the block there without copying
             usize reserve = room * __OS_RESERVE;
-            *u8 q = __os_pages(reserve + 32);
+            *u8 q = __os_reserve(reserve + 32, room + 32);
             if (q as usize == 0) __rt_trap(3);
             __rt_heap_chunk(q as usize, q as usize + reserve + 32);
             *usize r = q as *usize;
@@ -282,7 +282,9 @@ bool __rt_heap_owns(*usize m, usize a) {
         if (w & ~0x3FF == __RT_MAGIC && w & __RT_DIRECT_BIT != 0 && w & __RT_FREE_BIT == 0) {
             *usize r = (a - 32) as *usize;
             usize want = (n + 15) & ~15;
-            if (want <= r[0]) {
+            // the block's mapping: grown into while the reservation lasts (and the OS
+            // makes the pages usable)
+            if (want <= r[0] && (want <= h[1] || __os_commit(r as *u8, want + 32))) {
                 if (want > h[1]) h[1] = want;
                 return p;
             }
