@@ -67,12 +67,17 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   stays there. rax, rcx,
   rdx and r11 are the code generator's scratch. Hints keep copies
   away: a block parameter takes a register one of its incoming values has, a value passed
-  to a parameter takes the parameter's, and the result of an add, sub, mul, `and`, `or` or
-  `xor` takes its first operand's when that operand dies there, if each is free. A
-  value may also share a register with one that is dead all through the value's interval
-  (block liveness says no path from there reaches a use), which removes the copy of a
-  loop counter that is returned after the loop; the register then stays reserved until
-  both are done. A branch edge whose arguments already sit in its parameters' places is
+  to a parameter takes the parameter's, and the result of an add, sub, mul, `and`, `or`,
+  `xor` or integer conversion takes its first operand's when that operand dies there, if
+  each is free. A value may also share a register with one that is dead all through the
+  value's interval (block liveness says no path from there reaches a use), which removes
+  the copy of a loop counter that is returned after the loop; the register then stays
+  reserved until both are done. A result whose operand shared a register that way, and
+  dies at it, goes on sharing it while the holder stays dead: `h = (h ^ b) *% p` keeps h
+  in one register.
+- **Conversions.** Values sit in registers normal for their type (zero- or sign-extended
+  to 64 bits), so widening an unsigned value, or sign-extending a signed one, is no
+  instruction at all. A branch edge whose arguments already sit in its parameters' places is
   taken by the `jcc` itself.
 - **Small copies and zeroing.** `copy` and `zero` of a constant size up to 256 bytes,
   and the zeroing of a frame's slots, become 8/4/2/1-byte moves through rax, with the

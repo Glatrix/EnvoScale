@@ -54,6 +54,10 @@ it) that is written whole in its block before anything can read it: by a whole c
 local's own uses can read it unless its address is stored or passed on as a value (a call
 it is passed to reads it during that call only).
 
+A function returning an aggregate (every direct call passes the result's storage first,
+and nothing takes its address) that ends in `return g(...)` passes its own storage to `g`
+when the temporary `g` wrote into is used for nothing else: the copy from it goes.
+
 ## `args.envol`: arguments passed without a copy
 
 An aggregate argument is passed as a pointer to a copy the callee owns. A function that

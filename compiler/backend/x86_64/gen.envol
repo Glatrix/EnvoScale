@@ -874,11 +874,14 @@ struct Gen {
             if (op == 32 || op == 41) {
                 this.A.Extend(d, to.Size, toSigned);
             } else if (op == 33) {
-                this.A.Extend(d, ty.Size, false);
-                this.A.Extend(d, to.Size, toSigned);
+                // values are kept normal for their type: an unsigned one is zero-extended
+                // already, and a widened value stays below the target's sign bit
+                if (signed) this.A.Extend(d, ty.Size, false);
             } else if (op == 34) {
-                this.A.Extend(d, ty.Size, true);
-                this.A.Extend(d, to.Size, toSigned);
+                // a signed one is sign-extended already; an unsigned target wants the bits
+                // above its size clear
+                if (!signed) this.A.Extend(d, ty.Size, true);
+                if (!toSigned) this.A.Extend(d, to.Size, false);
             }
             this.StoreV(inst.Result, d);
         } else if (sh == SH_CONV) {

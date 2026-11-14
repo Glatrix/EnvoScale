@@ -1,0 +1,47 @@
+// A function that returns a local it builds through calls, or another call's result,
+// gives the same string from every return: into a new variable, over an old one, or
+// straight into an argument.
+// expect: abc|abcabc|xyz
+// expect: 3 6 0
+// expect: old kept: keep
+// expect: twice: xyxy
+string Build(str part, usize times, bool early) {
+    string s = string.New();
+    if (early && times == 0) return s;
+    for (usize i = 0; i < times; i++) {
+        s.Append(part);
+        if (early && s.Len() >= 6) return s;
+    }
+    s.Append("");
+    return s;
+}
+
+usize LenOf(string s) => s.Len();
+
+string Twice(str part) {
+    if (part.Len == 0) return string.New();
+    return Build(part, 2, false);
+}
+
+string a = Build("abc", 1, false);
+string b = Build("abc", 5, true);
+string c = string.From("old");
+string keep = string.From("keep");
+c = Build("xyz", 1, false);
+string line = string.New();
+line.Append(a.AsStr());
+line.Append("|");
+line.Append(b.AsStr());
+line.Append("|");
+line.Append(c.AsStr());
+print(line.AsStr());
+usize la = LenOf(Build("abc", 1, true));
+usize lb = LenOf(Build("ab", 3, false));
+usize lc = LenOf(Build("q", 0, true));
+if (la == 3 && lb == 6 && lc == 0) print("3 6 0"); else print("lengths wrong");
+string kept = string.From("old kept: ");
+kept.Append(keep.AsStr());
+print(kept.AsStr());
+string tw = string.From("twice: ");
+tw.Append(Twice("xy").AsStr());
+print(tw.AsStr());

@@ -377,7 +377,10 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                 u32 v = inst.Result - f.FirstValue;
                 weight.Set(v as usize, weight.Get(v as usize) + wt);
                 u16 iop = inst.Op;
-                if ((iop == 5 || iop == 6 || iop == 7 || iop == 8 || iop == 9 || iop == 14 || iop == 15 || iop == 16) && inst.NOps == 2 && m.Op(inst.FirstOp).Kind == OK_VALUE && !m.IsFloat(inst.Ty)) {
+                bool alu = (iop == 5 || iop == 6 || iop == 7 || iop == 8 || iop == 9 || iop == 14 || iop == 15 || iop == 16) && inst.NOps == 2 && !m.IsFloat(inst.Ty);
+                // integer conversions extend in the result's register, which may be the operand's
+                bool conv = (iop == 32 || iop == 33 || iop == 34 || iop == 39 || iop == 40 || iop == 41) && inst.NOps == 1;
+                if ((alu || conv) && m.Op(inst.FirstOp).Kind == OK_VALUE) {
                     op0.Set(v as usize, m.Op(inst.FirstOp).Ref - f.FirstValue);
                 }
                 defs.Add(bi, v);
@@ -640,6 +643,11 @@ List<u8> AllocateRegs(in Module m, u32 fi, in List<u8> remat, ref List<bool> use
                         holder.Set(ri as usize, 0);
                         pick = ri;
                     } else if (allowed && holder.Get(ri as usize) == a + 1 && DeadThrough(m, f, a, cur, cs, ce, posBlock, posInst, bstart, live, liveOut, defs, false)) {
+                        pick = ri;
+                        shared = true;
+                    } else if (ri != NREGS && (ri < NSAVED || (forbid >> (ri - NSAVED)) & 1 == 0) && holder.Get(ri as usize) != 0 && holder.Get(ri as usize) != a + 1 && end.Get(a as usize) == cs && shareEnd.Get(ri as usize) == cs + 1 && DeadThrough(m, f, holder.Get(ri as usize) - 1, cur, cs, ce, posBlock, posInst, bstart, live, liveOut, defs, true)) {
+                        // the operand shared the register of a value dead there and ends here:
+                        // this one goes on sharing it while that value stays dead
                         pick = ri;
                         shared = true;
                     }

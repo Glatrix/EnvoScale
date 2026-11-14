@@ -280,3 +280,83 @@ bool DropDeadZeros(ref Module m, u32 fi) {
     }
     return changed;
 }
+
+// Per function: is its first parameter the storage its aggregate result goes to? So when
+// every direct call passes one (`Imm` 1) and nothing takes its address.
+List<bool> ResultFuncs(in Module m) {
+    u32 nf = m.Funcs.Len() as u32;
+    List<u32> withResult = List<u32>.New();
+    List<bool> other = List<bool>.New();
+    for (u32 fi = 0; fi < nf; fi++) {
+        withResult.Push(0);
+        other.Push(false);
+    }
+    for (u32 fi = 1; fi < nf; fi++) {
+        EFunc f = m.Func(fi);
+        if (f.Extern) continue;
+        for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+            EBlock blk = m.Block(b);
+            for (u32 i = blk.FirstInst; i < blk.FirstInst + blk.NInsts; i++) {
+                EInst inst = m.Inst(i);
+                if (inst.Op == MG_CALL) {
+                    u32 c = m.Op(inst.FirstOp).Ref;
+                    if (c >= nf) continue;
+                    if (inst.Imm == 1) withResult.Set(c as usize, withResult.Get(c as usize) + 1);
+                    else other.Set(c as usize, true);
+                } else if (inst.Op == 2) {
+                    EOp rf = m.Op(inst.FirstOp);
+                    if (rf.Int == NAME_FUNC && rf.Ref < nf) other.Set(rf.Ref as usize, true);
+                }
+            }
+        }
+    }
+    List<bool> res = List<bool>.New();
+    for (u32 fi = 0; fi < nf; fi++) res.Push(withResult.Get(fi as usize) > 0 && !other.Get(fi as usize) && m.Func(fi).NParams > 0);
+    return res;
+}
+
+// `return g(...)` of an aggregate: the call writes the result's storage itself, instead of
+// a temporary copied there right after.
+bool ForwardResult(ref Module m, u32 fi, in List<bool> resultFunc) {
+    if (!resultFunc.Get(fi as usize)) return false;
+    EFunc f = m.Func(fi);
+    u32 p0 = f.FirstValue;
+    bool changed = false;
+    for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks; b++) {
+        EBlock blk = m.Block(b);
+        if (blk.NInsts < 3) continue;
+        u32 ri = blk.FirstInst + blk.NInsts - 1;
+        if (m.Inst(ri).Op != 58 || m.Inst(ri).NOps != 0) continue;
+        EInst cp = m.Inst(ri - 1);
+        EInst call = m.Inst(ri - 2);
+        if (cp.Op != MG_COPY || cp.NOps != 3 || m.Op(cp.FirstOp).Kind != OK_VALUE || m.Op(cp.FirstOp).Ref != p0) continue;
+        EOp t = m.Op(cp.FirstOp + 1);
+        if (t.Kind != OK_VALUE || call.Op != MG_CALL || call.Imm != 1 || call.NOps < 2) continue;
+        if (m.Op(call.FirstOp + 1).Kind != OK_VALUE || m.Op(call.FirstOp + 1).Ref != t.Ref) continue;
+        u32 ti = m.Val(t.Ref).Inst;
+        if (ti == 0 || m.Inst(ti).Op != OP_SLOT) continue;
+        if (!WholeSize(m, cp.FirstOp + 2, m.Ty(m.Inst(ti).Ty).Size as u64)) continue;
+        // the temporary is used by these two only, and the call does not take the storage
+        bool alone = true;
+        for (u32 x = f.FirstBlock; x < f.FirstBlock + f.NBlocks && alone; x++) {
+            EBlock xb = m.Block(x);
+            for (u32 i = xb.FirstInst; i < xb.FirstInst + xb.NInsts && alone; i++) {
+                if (i == ri - 1 || i == ri - 2 || m.Inst(i).Op == MG_SLOTEND) continue;
+                if (UsesValue(m, i, t.Ref)) alone = false;
+            }
+        }
+        for (u32 o = call.FirstOp + 2; o < call.FirstOp + call.NOps && alone; o++) {
+            EOp op = m.Op(o);
+            if (op.Kind == OK_VALUE && (op.Ref == p0 || op.Ref == t.Ref)) alone = false;
+        }
+        if (!alone) continue;
+        EOp first = m.Op(call.FirstOp + 1);
+        first.Ref = p0;
+        m.Ops.Set((call.FirstOp + 1) as usize, first);
+        cp.Op = 0;
+        cp.NOps = 0;
+        m.Insts.Set((ri - 1) as usize, cp);
+        changed = true;
+    }
+    return changed;
+}

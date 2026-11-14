@@ -738,11 +738,13 @@ public void Optimize(ref Module m) {
     PromoteLocals(ref m);
     ElideArgCopies(ref m);
     // cleaned up first, a callee is inlined at its real size
+    List<bool> resultFunc = ResultFuncs(m);
     for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
         if (m.Func(fi).Extern) continue;
         MergeSlots(ref m, fi);
         SimplifyFunc(ref m, fi);
         if (CseFunc(ref m, fi)) SimplifyFunc(ref m, fi);
+        if (ForwardResult(ref m, fi, resultFunc)) SimplifyFunc(ref m, fi);
     }
     InlineSmall(ref m);
     SplitLocals(ref m);
