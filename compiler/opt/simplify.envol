@@ -750,7 +750,8 @@ public void Optimize(ref Module m) {
     for (u32 fi = 1; fi < m.Funcs.Len() as u32; fi++) {
         if (m.Func(fi).Extern) continue;
         SimplifyFunc(ref m, fi);
-        if (ThreadFunc(ref m, fi)) SimplifyFunc(ref m, fi);
+        // each round can expose the next edge of an `||` or `&&` chain
+        for (u32 r = 0; r < 4 && ThreadFunc(ref m, fi); r++) SimplifyFunc(ref m, fi);
         if (CseFunc(ref m, fi)) SimplifyFunc(ref m, fi);
         HoistLoads(ref m, fi);
         DropChecks(ref m, fi);

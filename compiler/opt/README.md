@@ -64,7 +64,9 @@ on its parameter. An edge into it whose argument is known where it leaves (a con
 the condition of the branch it leaves on) goes straight to the side that argument picks,
 and an unconditional branch into it gets a copy of its branch, so the compare before it
 fuses with the branch in the backend. It runs after simplification, which then runs again
-on the functions it changed. A block whose parameters are used past its branch is left
+on the functions it changed, and again (up to four rounds), since each round can expose the
+next edge of an `||` or `&&` chain: `a || b || c` then branches straight to its body from
+each compare. A block whose parameters are used past its branch is left
 alone.
 
 ## `mem2reg.envol`: locals become values

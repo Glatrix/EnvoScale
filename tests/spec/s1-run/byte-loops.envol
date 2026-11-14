@@ -3,6 +3,7 @@
 // expect: columns ok
 // expect: counts ok
 // expect: masked ok
+// expect: trimmed ok
 u32 Column(str text, usize off) {
     usize lineStart = off;
     while (lineStart > 0 && text[lineStart - 1] != 10) lineStart--;
@@ -27,6 +28,18 @@ u32 Others(str s, usize from, u8 k) {
         if (s[i] != k) n++;
     }
     return n;
+}
+
+// Where a run of spaces ending at `at` starts.
+usize SpacesFrom(str s, usize at) {
+    usize i = at;
+    while (i > 0 && s[i - 1] == 32) i--;
+    return i;
+}
+
+usize SpacesFromRec(str s, usize at) {
+    if (at == 0 || s[at - 1] != 32) return at;
+    return SpacesFromRec(s, at - 1);
 }
 
 // The same, recursively (no loops to widen).
@@ -86,3 +99,14 @@ for (usize from = 0; from < 30; from++) {
     if (Others(t, from, 0x61) != OthersRec(t, from, 0x61)) masked = false;
 }
 if (masked) print("masked ok"); else print("masked wrong");
+string sp = string.New();
+for (usize i = 0; i < 200; i++) {
+    if ((i * 31 + 7) % 37 < 3) sp.AppendByte(120);
+    else sp.AppendByte(32);
+}
+str ss = sp.AsStr();
+bool trimmed = true;
+for (usize at = 0; at <= ss.Len; at++) {
+    if (SpacesFrom(ss, at) != SpacesFromRec(ss, at)) trimmed = false;
+}
+if (trimmed) print("trimmed ok"); else print("trimmed wrong");
