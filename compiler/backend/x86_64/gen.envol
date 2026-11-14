@@ -53,6 +53,13 @@ struct Gen {
     List<u64> RematImm;
     List<bool> Saved;       // the callee-saved registers the function uses (AllocReg order)
     u32 SaveArea;           // their bytes, just below the saved rbp
+    // -O2: no frame pointer. The frame is addressed from rsp; offsets are written from
+    // where rbp would be (the return address - 8), so an access adds FrameBias, and while
+    // a call's stack arguments are reserved, RspDelta
+    i32 FrameBias;
+    u32 FrameSize;          // -O2: rsp's distance below the saved registers
+    u32 SlotBytes;          // -O2: the slots' bytes, above the values' spill slots
+    i32 RspDelta;
     List<u32> Uses;         // -O2: per value of the function, how many operands use it
     u32 NextBlock;          // the block emitted next (0 at the function's end): a jump there falls through
     u32 BlockEnd;           // one past the current block's last instruction
@@ -67,6 +74,29 @@ struct Gen {
 
     // ------------------------------------------------------------------ helpers
 
+    // The register frame offsets (from rbp's place) are relative to, and the displacement
+    // for offset off.
+    u8 FB(in this) {
+        if (this.Opt) return RSP;
+        return RBP;
+    }
+
+    i32 FD(in this, i32 off) {
+        if (this.Opt) return off + this.FrameBias + this.RspDelta;
+        return off;
+    }
+
+    // rsp moves down n bytes (a call's stack arguments) or back up.
+    void RspDown(ref this, i32 n) {
+        this.A.AluImm(5, RSP, n);
+        this.RspDelta += n;
+    }
+
+    void RspUp(ref this, i32 n) {
+        this.A.AluImm(0, RSP, n);
+        this.RspDelta -= n;
+    }
+
     // The rbp offset of value v: parameters are the caller's argument slots, others are
     // below the frame pointer.
     i32 VOff(in this, u32 v) {
@@ -77,7 +107,7 @@ struct Gen {
             // -O2: only values kept in memory have a slot
             u32 idx = this.SpillIdx.Get(k as usize);
             if (idx == NO_SPILL) Bug("x64: a value in a register has no stack slot");
-            return 0 - (this.SaveArea + 8 * (idx + 1)) as i32;
+            return 0 - (this.SaveArea + this.SlotBytes + 8 * (idx + 1)) as i32;
         }
         return 0 - (this.SaveArea + 8 * (k + 1)) as i32;
     }
@@ -91,7 +121,7 @@ struct Gen {
                 return;
             }
             if (rk == REMAT_FRAME) {
-                this.A.LeaRM(r, RBP, this.RematImm.Get(k) as i32);
+                this.A.LeaRM(r, this.FB(), this.FD(this.RematImm.Get(k) as i32));
                 return;
             }
             if (rk == REMAT_LABEL) {
@@ -110,7 +140,7 @@ struct Gen {
             if (r != this.SpillReg) this.A.MovRR(r, this.SpillReg);
             return;
         }
-        this.A.Load(r, RBP, off, 8, false);
+        this.A.Load(r, this.FB(), this.FD(off), 8, false);
     }
 
     void StoreV(ref this, u32 v, u8 r) {
@@ -122,7 +152,7 @@ struct Gen {
             }
         }
         i32 off = this.VOff(v);
-        this.A.Store(RBP, off, r, 8);
+        this.A.Store(this.FB(), this.FD(off), r, 8);
         if (this.Opt) {
             this.SpillV = v;
             this.SpillReg = r;
@@ -188,8 +218,8 @@ struct Gen {
         if (this.Opt && op.Kind == OK_VALUE) {
             usize k = (op.Ref - this.FirstValue) as usize;
             if (this.RematKind.Get(k) == REMAT_FRAME) {
-                disp = this.RematImm.Get(k) as i32;
-                return RBP;
+                disp = this.FD(this.RematImm.Get(k) as i32);
+                return this.FB();
             }
             if (this.RematKind.Get(k) == 0) {
                 u8 reg = this.Regs.Get(k);
@@ -612,7 +642,7 @@ struct Gen {
                 while (done.Get(j)) j++;
                 u32 dl = dst.Get(j);
                 if (dl < SLOT) this.A.MovRR(R11, dl as u8);
-                else this.A.Load(R11, RBP, this.SlotOff(dl), 8, false);
+                else this.A.Load(R11, this.FB(), this.FD(this.SlotOff(dl)), 8, false);
                 for (usize q = 0; q < n; q++) {
                     if (!done.Get(q) && this.SrcLoc(src.Get(q)) == dl) src.Set(q, PHYS | (R11 as u32));
                 }
@@ -637,7 +667,7 @@ struct Gen {
             if (sl < SLOT) rs = sl as u8;
         }
         if (rs != NOREG) {
-            if (dl >= SLOT) this.A.Store(RBP, this.SlotOff(dl), rs, 8);
+            if (dl >= SLOT) this.A.Store(this.FB(), this.FD(this.SlotOff(dl)), rs, 8);
             else if (dl != rs as u32) this.A.MovRR(dl as u8, rs);
             return;
         }
@@ -646,7 +676,7 @@ struct Gen {
             return;
         }
         this.LoadV(RAX, s);
-        this.A.Store(RBP, this.SlotOff(dl), RAX, 8);
+        this.A.Store(this.FB(), this.FD(this.SlotOff(dl)), RAX, 8);
     }
 
     // ------------------------------------------------------------------ instructions
@@ -674,7 +704,7 @@ struct Gen {
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_SLOT) {
             // the address was computed when the frame was laid out; see Func
-            this.A.LeaRM(RAX, RBP, inst.Imm as i32);
+            this.A.LeaRM(RAX, this.FB(), this.FD(inst.Imm as i32));
             this.StoreV(inst.Result, RAX);
         } else if (sh == SH_UNARY_V) {
             // slot.end: storage is never reused at -O0
@@ -1049,7 +1079,7 @@ struct Gen {
             u32 stackArgs = 0;
             if (count > NARGREGS) stackArgs = count - NARGREGS;
             i32 reserve = ((8 * stackArgs + 15) & ~15) as i32;
-            if (reserve > 0) this.A.AluImm(5, RSP, reserve);
+            if (reserve > 0) this.RspDown(reserve);
             for (u32 k = NARGREGS; k < count; k++) {
                 u8 ra = this.InReg(m, f + first + k, RAX);
                 this.A.Store(RSP, (8 * (k - NARGREGS)) as i32, ra, 8);
@@ -1072,7 +1102,7 @@ struct Gen {
             }
             if (sh == SH_CALL) this.A.CallLabel(this.FuncLabels.Get(m.Op(f).Ref as usize));
             else this.A.CallR(RAX);
-            if (reserve > 0) this.A.AluImm(0, RSP, reserve);
+            if (reserve > 0) this.RspUp(reserve);
             if (inst.Result != 0) this.StoreV(inst.Result, RAX);
         } else if (sh == SH_CALL || sh == SH_CALLIND) {
             u32 first = 1;
@@ -1150,6 +1180,16 @@ struct Gen {
                 k += 2;
             }
             this.Jump(m, f + n - 1, true);
+        } else if (sh == SH_RET && this.Opt) {
+            // -O2: the frame, then the saved registers
+            if (n == 1) this.LoadOp(m, RAX, f);
+            if (this.FrameSize > 0) this.A.AluImm(0, RSP, this.FrameSize as i32);
+            u32 r = NSAVED;
+            while (r > 0) {
+                r--;
+                if (this.Saved.Get(r as usize)) this.A.Pop(AllocReg(r));
+            }
+            this.A.RetNear();
         } else if (sh == SH_RET) {
             if (n == 1) this.LoadOp(m, RAX, f);
             if (this.SaveArea > 0) {
@@ -1390,7 +1430,7 @@ struct Gen {
             u32 stackArgs = 0;
             if (args > 4) stackArgs = args - 4;
             i32 reserve = ((32 + 8 * stackArgs + 15) & ~15) as i32;
-            this.A.AluImm(5, RSP, reserve);
+            this.RspDown(reserve);
             for (u32 k = 4; k < args; k++) {
                 this.LoadOp(m, RAX, f + 1 + k);
                 this.A.Store(RSP, (32 + 8 * (k - 4)) as i32, RAX, 8);
@@ -1426,7 +1466,7 @@ struct Gen {
             }
             if (viaPointer) this.A.CallR(R10);
             else this.A.CallMem(R10);
-            this.A.AluImm(0, RSP, reserve);
+            this.RspUp(reserve);
         } else {
             Bug("x64: portable intrinsics reach the backend only through the runtime");
         }
@@ -1460,17 +1500,42 @@ struct Gen {
             u64 align = st.Align as u64;
             if (align < 8) align = 8;
             slotArea = (slotArea + st.Size as u64 + align - 1) & ~(align - 1);
-            inst.Imm = 0 -% (save + valueArea + slotArea);      // rbp offset of the storage
+            // rbp offset of the storage; at -O2 the slots come first, so the values' spill
+            // slots are the ones next to rsp, in reach of one-byte displacements
+            if (this.Opt) inst.Imm = 0 -% (save + slotArea);
+            else inst.Imm = 0 -% (save + valueArea + slotArea);
             m.Insts.Set(i as usize, inst);
             if (this.Opt) this.RematImm.Set((inst.Result - f.FirstValue) as usize, inst.Imm);
         }
         u64 frame = ((save + valueArea + slotArea + 15) & ~15) - save;
+        this.SlotBytes = slotArea as u32;
+        if (this.Opt) {
+            // no frame pointer: below the saved registers, the frame (offsets count from the
+            // return address - 8, where rbp would be), rsp 16-aligned below it
+            frame = 8 + valueArea + slotArea;
+            if ((save + frame) % 16 != 8) frame += 8;
+            // a function that keeps nothing in its frame and calls nothing needs none
+            bool calls = false;
+            for (u32 b = f.FirstBlock; b < f.FirstBlock + f.NBlocks && !calls; b++) {
+                EBlock cb = m.Block(b);
+                for (u32 i = cb.FirstInst; i < cb.FirstInst + cb.NInsts; i++) {
+                    u16 cop = m.Inst(i).Op;
+                    if (cop == 52 || cop == 53 || cop == 54) calls = true;
+                }
+            }
+            if (valueArea + slotArea == 0 && !calls) frame = 0;
+        }
         if (save + frame > FRAME_MAX) ToolFail("a function's locals take more than 2 GiB of stack", EXIT_ERRORS);
-        this.A.Push(RBP);
-        this.A.MovRR(RBP, RSP);
+        if (!this.Opt) {
+            this.A.Push(RBP);
+            this.A.MovRR(RBP, RSP);
+        }
         for (u32 r = 0; r < this.Saved.Len() as u32 && r < NSAVED; r++) {
             if (this.Saved.Get(r as usize)) this.A.Push(AllocReg(r));
         }
+        this.FrameBias = (save + frame) as i32 - 8;
+        this.FrameSize = frame as u32;
+        this.RspDelta = 0;
         this.ReserveFrame(frame);
         if (slotArea > 0 && this.Opt) {
             // only the slots something may read before writing all of them (frame.envol)
@@ -1488,13 +1553,13 @@ struct Gen {
                     cleared = true;
                 }
                 if (size <= SMALL_BYTES) {
-                    this.ZeroBytes(RBP, inst.Imm as i32, size);
+                    this.ZeroBytes(this.FB(), this.FD(inst.Imm as i32), size);
                 } else {
                     if (!kept && f.NParams > 0) {
                         this.A.MovRR(R11, RDI);
                         kept = true;
                     }
-                    this.A.LeaRM(RDI, RBP, inst.Imm as i32);
+                    this.A.LeaRM(RDI, this.FB(), this.FD(inst.Imm as i32));
                     this.A.MovRI(RCX, size);
                     this.A.RepStosb();
                 }
@@ -1521,7 +1586,7 @@ struct Gen {
             this.Resolve(dst, ref src);
             for (u32 k = NARGREGS; k < f.NParams; k++) {
                 u8 reg = this.Regs.Get(k as usize);
-                if (reg != NOREG) this.A.Load(reg, RBP, (16 + 8 * (k - NARGREGS)) as i32, 8, false);
+                if (reg != NOREG) this.A.Load(reg, this.FB(), this.FD((16 + 8 * (k - NARGREGS)) as i32), 8, false);
             }
         }
         this.Fused = 0;
@@ -1559,7 +1624,7 @@ struct Gen {
             u32 k = this.KeepVal.Get(j);
             u8 r = this.Regs.Get(k as usize);
             regs.Push(r);
-            this.A.Store(RBP, this.VOff(this.FirstValue + k), r, 8);
+            this.A.Store(this.FB(), this.FD(this.VOff(this.FirstValue + k)), r, 8);
             this.Regs.Set(k as usize, NOREG);
         }
         this.Inst(m, i);
@@ -1567,7 +1632,7 @@ struct Gen {
             u32 k = this.KeepVal.Get(j);
             u8 r = regs.Get(j - lo);
             this.Regs.Set(k as usize, r);
-            this.A.Load(r, RBP, this.VOff(this.FirstValue + k), 8, false);
+            this.A.Load(r, this.FB(), this.FD(this.VOff(this.FirstValue + k)), 8, false);
         }
     }
 
@@ -1803,7 +1868,7 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         A = Asm.New(), Target = target, FuncLabels = List<u32>.New(), GlobalLabels = List<u32>.New(),
         BlockLabels = List<u32>.New(), Traps = List<u32>.New(), Func = 0, FirstValue = 0, NParams = 0,
         Imports = new WinImports { Dir = 0, Iat = 0 }, Opt = opt, Regs = List<u8>.New(),
-        RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0,
+        RematKind = List<u8>.New(), RematImm = List<u64>.New(), Saved = List<bool>.New(), SaveArea = 0, FrameBias = 0, FrameSize = 0, SlotBytes = 0, RspDelta = 0,
         Uses = List<u32>.New(), SpillIdx = List<u32>.New(), KeepInst = List<u32>.New(), KeepVal = List<u32>.New(), NSpill = 0, NextBlock = 0, BlockEnd = 0, Fused = 0, FoldedField = 0, FoldedInst = 0,
         SpillV = 0, SpillReg = 0, SpillAt = 0
     };
@@ -1855,6 +1920,8 @@ public string GenModule(ref Module m, u32 target, bool opt, bool wantMap, ref st
         u32 l = g.Traps.Get(r as usize);
         if (l == 0) continue;
         g.A.Bind(l);
+        // a leaf function at -O2 may leave rsp unaligned: align it here
+        if (opt) g.A.AluImm(4, RSP, -16);
         g.A.AluImm(5, RSP, 16);
         if (opt) {
             g.A.MovRI(ArgReg(0), r);

@@ -50,8 +50,8 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
 - **Jump tables.** A `switch` of at least 4 cases whose keys are dense jumps through a
   table indexed by the key; a sparse one stays a chain of compares.
 - **Registers.** Linear scan over one interval per value (definition to last use,
-  widened to every block where liveness says the value is live). rbx and r12-r15 are
-  callee-saved and go to any value (a function pushes the ones it uses after rbp); rsi,
+  widened to every block where liveness says the value is live). rbx, r12-r15 and rbp
+  are callee-saved and go to any value (a function pushes the ones it uses); rsi,
   rdi and r8-r10 go only to values that live across no call or system call (liveness at
   each call says which do, so a value whose interval only spans a call it is dead at, or
   that a call takes as an argument, may have one; and whose interval holds no copy or
@@ -81,6 +81,12 @@ never jumps past the stack's guard page; all three stages do this. `envoc build 
   becomes such a copy.
 - **Compact frames.** Only values that got no register (and are not recomputed) have a
   stack slot, so frames are small and most offsets fit a byte.
+- **No frame pointer.** The frame is addressed from rsp, so rbp is one more callee-saved
+  register. Offsets are worked out from where rbp would be (the return address - 8) and
+  moved to rsp's view, also while a call's stack arguments are reserved. The values'
+  spill slots sit next to rsp and the slots above them. A function that keeps nothing in
+  its frame and calls nothing does not move rsp at all (the panic stubs align it
+  themselves). `-O0` keeps rbp frames.
 - **Slots that need no zeroing.** A slot every path writes in full before reading it (or
   passing its address on) is not zeroed on entry (`frame.envol`). Stores, loads, copies
   and zeroing through the slot and field addresses inside it are followed byte by byte
